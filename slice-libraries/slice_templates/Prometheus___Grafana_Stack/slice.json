@@ -1,0 +1,98 @@
+{
+  "format": "fabric-slice-v1",
+  "name": "Prometheus + Grafana Stack",
+  "nodes": [
+    {
+      "name": "monitor",
+      "site": "@cluster",
+      "cores": 4,
+      "ram": 16,
+      "disk": 50,
+      "image": "default_ubuntu_22",
+      "boot_config": {
+        "uploads": [],
+        "commands": [
+          {
+            "id": "setup-monitor",
+            "command": "chmod +x ~/tools/setup-monitor.sh && ~/tools/setup-monitor.sh",
+            "order": 0
+          }
+        ],
+        "network": []
+      },
+      "components": [
+        {
+          "name": "FABNET",
+          "model": "NIC_Basic"
+        }
+      ]
+    },
+    {
+      "name": "worker1",
+      "site": "@cluster",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "boot_config": {
+        "uploads": [],
+        "commands": [
+          {
+            "id": "setup-exporter",
+            "command": "chmod +x ~/tools/setup-exporter.sh && ~/tools/setup-exporter.sh",
+            "order": 0
+          }
+        ],
+        "network": []
+      },
+      "components": [
+        {
+          "name": "FABNET",
+          "model": "NIC_Basic"
+        }
+      ]
+    },
+    {
+      "name": "worker2",
+      "site": "@cluster",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "boot_config": {
+        "uploads": [],
+        "commands": [
+          {
+            "id": "setup-exporter",
+            "command": "chmod +x ~/tools/setup-exporter.sh && ~/tools/setup-exporter.sh",
+            "order": 0
+          }
+        ],
+        "network": []
+      },
+      "components": [
+        {
+          "name": "FABNET",
+          "model": "NIC_Basic"
+        }
+      ]
+    }
+  ],
+  "networks": [
+    {
+      "name": "monitoring-net",
+      "type": "FABNetv4",
+      "interfaces": [
+        "monitor-FABNET-p1",
+        "worker1-FABNET-p1",
+        "worker2-FABNET-p1"
+      ],
+      "l3_config": {
+        "mode": "auto",
+        "route_mode": "default_fabnet",
+        "custom_routes": [],
+        "default_fabnet_subnet": "10.128.0.0/10"
+      }
+    }
+  ]
+}

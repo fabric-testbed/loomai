@@ -1,0 +1,251 @@
+/* FABRIC Web GUI — Global styles matching fabvis brand exactly */
+
+:root {
+  /* Official FABRIC brand colors (from fabvis/styles.py) */
+  --fabric-primary: #5798bc;
+  --fabric-primary-light: #8ac9ef;
+  --fabric-primary-dark: #1f6a8c;
+  --fabric-secondary: #838385;
+  --fabric-warning: #ff8542;
+  --fabric-warning-light: #ffa562;
+  --fabric-success: #008e7a;
+  --fabric-danger: #b00020;
+  --fabric-info: #a8c9dc;
+  --fabric-dark-slate: #374955;
+  --fabric-black: #212121;
+  --fabric-grey: #838385;
+  --fabric-light: #f8f9fa;
+  --fabric-white: #ffffff;
+  --fabric-bg-tint: #edf2f8;
+
+  /* Semantic aliases */
+  --fabric-border: rgba(138, 201, 239, 0.4);
+  --fabric-border-solid: #d6e4ed;
+  --fabric-text: #212121;
+  --fabric-text-muted: #838385;
+  --fabric-separator: rgba(138, 201, 239, 0.5);
+
+  /* State colors (from fabvis/styles.py) */
+  --state-active: #008e7a;
+  --state-active-bg: #e0f2f1;
+  --state-configuring: #ff8542;
+  --state-configuring-bg: #fff3e0;
+  --state-error: #b00020;
+  --state-error-bg: #fce4ec;
+  --state-nascent: #838385;
+  --state-nascent-bg: #f8f9fa;
+  --state-dead: #616161;
+  --state-dead-bg: #eeeeee;
+
+  /* Component colors */
+  --color-nic: #5798bc;
+  --color-gpu: #e65100;
+  --color-fpga: #7b1fa2;
+  --color-nvme: #374955;
+
+  /* Network colors */
+  --color-network-l2: #1f6a8c;
+  --color-network-l2-bg: #ddeaf2;
+  --color-network-l3: #008e7a;
+  --color-network-l3-bg: #e0f2f1;
+
+  /* Table row border */
+  --table-row-border: #edf2f8;
+
+  /* Scrollbar */
+  --scrollbar-track: #edf2f8;
+  --scrollbar-thumb: #8ac9ef;
+  --scrollbar-thumb-hover: #5798bc;
+}
+
+/* Dark mode overrides */
+[data-theme="dark"] {
+  --fabric-primary: #6db3d6;
+  --fabric-primary-light: #8ac9ef;
+  --fabric-primary-dark: #4a9cc0;
+  --fabric-secondary: #9999aa;
+  --fabric-warning: #ff9e6b;
+  --fabric-warning-light: #ffb88a;
+  --fabric-success: #2bb5a0;
+  --fabric-danger: #ef5350;
+  --fabric-info: #6db3d6;
+  --fabric-dark-slate: #8a9aa5;
+  --fabric-light: #1a1a2e;
+  --fabric-white: #16213e;
+  --fabric-bg-tint: #0f1628;
+
+  --fabric-border: rgba(90, 140, 180, 0.3);
+  --fabric-border-solid: #2a3a4e;
+  --fabric-text: #e0e0e0;
+  --fabric-text-muted: #8888aa;
+  --fabric-separator: rgba(90, 140, 180, 0.4);
+
+  --state-active: #4caf6a;
+  --state-active-bg: #1a3d2a;
+  --state-configuring: #ffb74d;
+  --state-configuring-bg: #3d2a10;
+  --state-error: #ef5350;
+  --state-error-bg: #3d1a1a;
+  --state-nascent: #888;
+  --state-nascent-bg: #2a2a3a;
+  --state-dead: #777;
+  --state-dead-bg: #252530;
+
+  --color-network-l2: #5bb8d9;
+  --color-network-l2-bg: #1a3050;
+  --color-network-l3: #2bb5a0;
+  --color-network-l3-bg: #1a3a30;
+
+  --table-row-border: #2a2a4a;
+
+  --scrollbar-track: #16213e;
+  --scrollbar-thumb: #3a5a7a;
+  --scrollbar-thumb-hover: #5a8ab0;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Montserrat', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color: var(--fabric-text);
+  background: var(--fabric-light);
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+#root,
+#__next {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Scrollbar styling (WebKit / Blink) — matches fabvis */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+  border: 1px solid var(--scrollbar-track);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+/* Common button styles — matches fabvis WIDGET_SOFT_CSS */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+button:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  background: var(--fabric-bg-tint);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+button.primary {
+  background: var(--fabric-primary);
+  color: white;
+  border-color: var(--fabric-primary);
+}
+button.primary:hover {
+  background: var(--fabric-primary-dark);
+  border-color: var(--fabric-primary-dark);
+}
+button.success {
+  background: var(--fabric-success);
+  color: white;
+  border-color: var(--fabric-success);
+}
+button.success:hover {
+  background: #00796b;
+}
+button.warning {
+  background: var(--fabric-warning);
+  color: white;
+  border-color: var(--fabric-warning);
+}
+button.danger {
+  background: var(--fabric-danger);
+  color: white;
+  border-color: var(--fabric-danger);
+}
+button.danger:hover {
+  background: #8c0018;
+}
+
+[data-theme="dark"] button {
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+[data-theme="dark"] button:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+[data-theme="dark"] button.primary:hover {
+  background: #3a86b0;
+  border-color: #3a86b0;
+}
+[data-theme="dark"] button.danger:hover {
+  background: #c43a30;
+}
+
+/* Form controls — matches fabvis widget styling */
+select, input[type="text"], input[type="number"], input[type="datetime-local"] {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 5px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 6px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+}
+[data-theme="dark"] select,
+[data-theme="dark"] input[type="text"],
+[data-theme="dark"] input[type="number"],
+[data-theme="dark"] input[type="datetime-local"] {
+  border-color: rgba(255, 255, 255, 0.12);
+  color-scheme: dark;
+}
+select:focus, input:focus {
+  outline: none;
+  border-color: var(--fabric-primary);
+  box-shadow: 0 0 0 2px rgba(87, 152, 188, 0.2);
+}
+
+label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fabric-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}

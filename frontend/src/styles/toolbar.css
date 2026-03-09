@@ -1,0 +1,400 @@
+/* Toolbar — grouped button layout */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--fabric-light);
+  border-bottom: 1px solid var(--fabric-border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  padding: 4px 8px 4px 8px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.toolbar-group-label {
+  display: none;
+}
+
+.toolbar select {
+  min-width: 200px;
+}
+
+.toolbar .status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.toolbar .status-badge.Active,
+.toolbar .status-badge.StableOK { background: var(--state-active-bg); color: var(--state-active); }
+.toolbar .status-badge.Configuring,
+.toolbar .status-badge.Ticketed,
+.toolbar .status-badge.ModifyOK { background: var(--state-configuring-bg); color: var(--state-configuring); }
+.toolbar .status-badge.Nascent { background: var(--state-nascent-bg); color: var(--state-nascent); }
+.toolbar .status-badge.StableError,
+.toolbar .status-badge.ModifyError { background: var(--state-error-bg); color: var(--state-error); }
+.toolbar .status-badge.Closing,
+.toolbar .status-badge.Dead { background: var(--state-dead-bg); color: var(--state-dead); }
+.toolbar .status-badge.Draft { background: rgba(87, 152, 188, 0.15); color: #5798bc; }
+.toolbar .status-badge.Draft.Modified { background: rgba(255, 133, 66, 0.15); color: #ff8542; }
+
+/* --- Status message with spinner --- */
+.toolbar-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+}
+
+.toolbar-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--fabric-border);
+  border-top-color: #5798bc;
+  border-radius: 50%;
+  animation: toolbar-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes toolbar-spin {
+  to { transform: rotate(360deg); }
+}
+
+.toolbar-status-text {
+  font-size: 12px;
+  color: var(--fabric-text-muted);
+  white-space: nowrap;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+/* --- Fixed-width toolbar buttons --- */
+.toolbar-btn {
+  min-width: 0;
+  text-align: center;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+.toolbar-btn-list {
+  width: 138px;
+}
+.toolbar-btn-load {
+  width: 108px;
+}
+.toolbar-btn-new {
+  width: 62px;
+}
+.toolbar-btn-submit {
+  width: 68px;
+}
+.toolbar-btn-delete {
+  width: 68px;
+}
+.toolbar-btn-clone {
+  width: 62px;
+  border-color: var(--fabric-primary, #5798bc);
+  color: var(--fabric-primary, #5798bc);
+}
+.toolbar-btn-clone:hover:not(:disabled) {
+  background: var(--fabric-primary, #5798bc);
+  color: white;
+}
+
+.toolbar-btn-save-template {
+  border-color: var(--fabric-teal, #008e7a);
+  color: var(--fabric-teal, #008e7a);
+}
+.toolbar-btn-save-template:hover:not(:disabled) {
+  background: var(--fabric-teal, #008e7a);
+  color: white;
+}
+
+.toolbar-btn-template {
+  width: 130px;
+}
+.toolbar-btn-resources {
+  width: 170px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+.toolbar-btn-resources:hover {
+  opacity: 1;
+}
+
+.toolbar-btn-auto-refresh {
+  font-size: 11px;
+  opacity: 0.5;
+  padding: 4px 8px;
+}
+.toolbar-btn-auto-refresh.active {
+  opacity: 1;
+  color: var(--fabric-teal);
+  border-color: var(--fabric-teal);
+}
+.toolbar-btn-auto-refresh:hover {
+  opacity: 1;
+}
+
+/* --- Slice combo box --- */
+.slice-combo {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 220px;
+}
+
+.slice-combo-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: 'Montserrat', sans-serif;
+  border: 1px solid var(--fabric-border);
+  border-right: none;
+  border-radius: 4px 0 0 4px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  outline: none;
+}
+.slice-combo-input:focus {
+  border-color: #5798bc;
+}
+.slice-combo-input::placeholder {
+  color: var(--fabric-text-muted);
+}
+
+.slice-combo-toggle {
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 0 4px 4px 0;
+  background: var(--fabric-white);
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  line-height: 1;
+  box-shadow: none;
+}
+.slice-combo-toggle:hover {
+  background: var(--fabric-bg-tint);
+  box-shadow: none;
+}
+
+.slice-combo-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 2px;
+  z-index: 900;
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+[data-theme="dark"] .slice-combo-dropdown {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.slice-combo-group-label {
+  padding: 6px 12px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--fabric-text-muted);
+  letter-spacing: 0.3px;
+}
+
+.slice-combo-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 13px;
+  font-family: 'Montserrat', sans-serif;
+  color: var(--fabric-text);
+  cursor: pointer;
+  box-shadow: none;
+  border-radius: 0;
+}
+.slice-combo-option:hover {
+  background: var(--fabric-bg-tint);
+  box-shadow: none;
+}
+.slice-combo-option.active {
+  background: rgba(87, 152, 188, 0.1);
+  font-weight: 600;
+}
+
+.slice-combo-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.slice-combo-state {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.slice-combo-state.Active,
+.slice-combo-state.StableOK { background: var(--state-active-bg); color: var(--state-active); }
+.slice-combo-state.Configuring,
+.slice-combo-state.Ticketed,
+.slice-combo-state.ModifyOK { background: var(--state-configuring-bg); color: var(--state-configuring); }
+.slice-combo-state.Nascent { background: var(--state-nascent-bg); color: var(--state-nascent); }
+.slice-combo-state.StableError,
+.slice-combo-state.ModifyError { background: var(--state-error-bg); color: var(--state-error); }
+.slice-combo-state.Closing,
+.slice-combo-state.Dead { background: var(--state-dead-bg); color: var(--state-dead); }
+.slice-combo-state.Draft { background: rgba(87, 152, 188, 0.15); color: #5798bc; }
+
+/* Terminal slice options — muted styling for clean deaths */
+.slice-combo-option-terminal {
+  opacity: 0.6;
+}
+.slice-combo-option-terminal:hover {
+  opacity: 0.85;
+}
+/* Terminal with errors — prominent red tint */
+.slice-combo-option-terminal.has-errors {
+  opacity: 1;
+  background: rgba(226, 82, 65, 0.06);
+}
+.slice-combo-option-terminal.has-errors:hover {
+  background: rgba(226, 82, 65, 0.12);
+}
+
+/* Red dot for slices with errors */
+.slice-combo-error-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--state-error, #e25241);
+  margin-right: 5px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.slice-combo-empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--fabric-text-muted);
+  text-align: center;
+}
+
+/* --- Modal dialogs (confirmations, create, open template) --- */
+.toolbar-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toolbar-modal {
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border);
+  border-radius: 8px;
+  padding: 20px;
+  min-width: 340px;
+  max-width: 480px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+[data-theme="dark"] .toolbar-modal {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.toolbar-modal h4 {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  color: var(--fabric-text);
+}
+
+.toolbar-modal p {
+  margin: 0 0 16px 0;
+  font-size: 13px;
+  color: var(--fabric-text-muted);
+  line-height: 1.4;
+}
+
+.toolbar-modal-input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: 'Montserrat', sans-serif;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  margin-bottom: 16px;
+  box-sizing: border-box;
+}
+.toolbar-modal-input:focus {
+  outline: none;
+  border-color: #5798bc;
+}
+
+.toolbar-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* Slice UUID display */
+.toolbar-slice-uuid {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+  background: rgba(87, 152, 188, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: default;
+  user-select: all;
+}
+
+/* Archive buttons */
+.toolbar-btn-archive,
+.toolbar-btn-archive-all {
+  background: var(--state-dead-bg, rgba(120, 120, 120, 0.15));
+  color: var(--state-dead, #888);
+  border: 1px solid var(--state-dead, #888);
+  font-size: 11px;
+}
+.toolbar-btn-archive:hover:not(:disabled),
+.toolbar-btn-archive-all:hover:not(:disabled) {
+  background: var(--state-dead, #888);
+  color: #fff;
+}

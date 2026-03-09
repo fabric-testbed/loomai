@@ -1,0 +1,120 @@
+/* Graph context menu */
+.graph-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  min-width: 160px;
+  padding: 4px 0;
+  font-size: 13px;
+  font-family: 'Montserrat', sans-serif;
+}
+
+[data-theme="dark"] .graph-context-menu {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.graph-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+  color: var(--fabric-text);
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  font-size: 13px;
+  font-family: inherit;
+  box-shadow: none;
+  border-radius: 0;
+}
+.graph-context-menu-item:hover {
+  background: var(--fabric-bg-tint);
+  box-shadow: none;
+}
+.graph-context-menu-item.danger {
+  color: var(--fabric-white);
+  background: var(--fabric-danger);
+}
+.graph-context-menu-item.danger:hover {
+  background: #c9392a;
+}
+.graph-context-menu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.graph-context-menu-item:disabled:hover {
+  background: none;
+}
+
+.graph-context-menu-sep {
+  height: 1px;
+  background: var(--fabric-border);
+  margin: 4px 0;
+}
+
+.graph-context-menu-label {
+  padding: 4px 14px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--fabric-text-muted);
+  pointer-events: none;
+}
+
+.graph-context-menu-item.component-delete {
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 5px 14px;
+}
+.graph-context-menu-item.component-delete .component-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+.graph-context-menu-item.component-delete .component-model {
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  font-weight: 400;
+}
+.graph-context-menu-item.component-delete .component-delete-icon {
+  color: var(--fabric-coral, #e25241);
+  font-size: 11px;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+.graph-context-menu-item.component-delete:hover .component-delete-icon {
+  opacity: 1;
+}
+
+/* Graph controls — toggle and separator */
+.graph-controls-sep {
+  display: inline-block;
+  width: 1px;
+  height: 16px;
+  background: var(--fabric-border);
+  margin: 0 4px;
+  vertical-align: middle;
+}
+
+.graph-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.graph-toggle input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--fabric-primary, #5798bc);
+  cursor: pointer;
+}

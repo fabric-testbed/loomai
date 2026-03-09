@@ -1,0 +1,8 @@
+{
+  "name": "Kubernetes Cluster",
+  "description": "3-node K8s cluster: 1 controller + 2 workers connected by FABNetv4. containerd + kubeadm pre-installed.",
+  "builtin": true,
+  "order": 9,
+  "node_count": 3,
+  "network_count": 1
+}

@@ -1,0 +1,18 @@
+{
+  "name": "Install Ollama LLM Server",
+  "version": "1.0.0",
+  "description": "Installs Ollama with Open WebUI in Docker, pulls llama3.2:3b model. For GPU support, ensure an NVIDIA GPU component is attached.",
+  "builtin": true,
+  "image_patterns": {
+    "ubuntu": "install_ollama_deb.sh",
+    "debian": "install_ollama_deb.sh",
+    "rocky": "install_ollama_rpm.sh",
+    "centos": "install_ollama_rpm.sh",
+    "*": "install_ollama_deb.sh"
+  },
+  "steps": [
+    { "type": "upload_scripts" },
+    { "type": "execute", "command": "chmod +x ~/.fabric/recipes/install_ollama/*.sh && sudo bash ~/.fabric/recipes/install_ollama/{script}" }
+  ],
+  "post_actions": []
+}

@@ -1,0 +1,194 @@
+{
+  "format": "fabric-slice-v1",
+  "name": "FRR OSPF Triangle",
+  "nodes": [
+    {
+      "name": "router1",
+      "site": "@site",
+      "cores": 2,
+      "ram": 4,
+      "disk": 10,
+      "vm_template": "FRR Router",
+      "components": [
+        {
+          "name": "nic-r2",
+          "model": "NIC_Basic"
+        },
+        {
+          "name": "nic-r3",
+          "model": "NIC_Basic"
+        },
+        {
+          "name": "nic-lan",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    },
+    {
+      "name": "router2",
+      "site": "@site",
+      "cores": 2,
+      "ram": 4,
+      "disk": 10,
+      "vm_template": "FRR Router",
+      "components": [
+        {
+          "name": "nic-r1",
+          "model": "NIC_Basic"
+        },
+        {
+          "name": "nic-r3",
+          "model": "NIC_Basic"
+        },
+        {
+          "name": "nic-lan",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    },
+    {
+      "name": "router3",
+      "site": "@site",
+      "cores": 2,
+      "ram": 4,
+      "disk": 10,
+      "vm_template": "FRR Router",
+      "components": [
+        {
+          "name": "nic-r1",
+          "model": "NIC_Basic"
+        },
+        {
+          "name": "nic-r2",
+          "model": "NIC_Basic"
+        },
+        {
+          "name": "nic-lan",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    },
+    {
+      "name": "host1",
+      "site": "@site",
+      "cores": 2,
+      "ram": 4,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    },
+    {
+      "name": "host2",
+      "site": "@site",
+      "cores": 2,
+      "ram": 4,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    },
+    {
+      "name": "host3",
+      "site": "@site",
+      "cores": 2,
+      "ram": 4,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    }
+  ],
+  "networks": [
+    {
+      "name": "link-r1-r2",
+      "type": "L2Bridge",
+      "interfaces": [
+        "router1-nic-r2-p1",
+        "router2-nic-r1-p1"
+      ]
+    },
+    {
+      "name": "link-r2-r3",
+      "type": "L2Bridge",
+      "interfaces": [
+        "router2-nic-r3-p1",
+        "router3-nic-r2-p1"
+      ]
+    },
+    {
+      "name": "link-r1-r3",
+      "type": "L2Bridge",
+      "interfaces": [
+        "router1-nic-r3-p1",
+        "router3-nic-r1-p1"
+      ]
+    },
+    {
+      "name": "lan1",
+      "type": "L2Bridge",
+      "interfaces": [
+        "router1-nic-lan-p1",
+        "host1-nic1-p1"
+      ]
+    },
+    {
+      "name": "lan2",
+      "type": "L2Bridge",
+      "interfaces": [
+        "router2-nic-lan-p1",
+        "host2-nic1-p1"
+      ]
+    },
+    {
+      "name": "lan3",
+      "type": "L2Bridge",
+      "interfaces": [
+        "router3-nic-lan-p1",
+        "host3-nic1-p1"
+      ]
+    }
+  ]
+}

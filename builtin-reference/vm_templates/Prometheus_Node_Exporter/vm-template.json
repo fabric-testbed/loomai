@@ -1,0 +1,32 @@
+{
+  "name": "Prometheus Node Exporter",
+  "description": "Rocky 8 with Docker running Prometheus node_exporter on port 9100 for metrics collection",
+  "image": "default_rocky_8",
+  "builtin": true,
+  "boot_config": {
+    "uploads": [],
+    "commands": [
+      {
+        "id": "1",
+        "command": "sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo",
+        "order": 0
+      },
+      {
+        "id": "2",
+        "command": "sudo dnf install -y docker-ce docker-ce-cli containerd.io",
+        "order": 1
+      },
+      {
+        "id": "3",
+        "command": "sudo systemctl enable docker && sudo systemctl start docker",
+        "order": 2
+      },
+      {
+        "id": "4",
+        "command": "sudo docker run -d --name node-exporter --restart always --net host --pid host -v /:/host:ro,rslave prom/node-exporter --path.rootfs=/host",
+        "order": 3
+      }
+    ],
+    "network": []
+  }
+}

@@ -1,0 +1,117 @@
+/* Geographic view */
+.geo-view {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.geo-map-container {
+  flex: 1;
+  position: relative;
+}
+
+.geo-detail-expand-btn {
+  width: 20px;
+  flex-shrink: 0;
+  border: none;
+  border-left: 1px solid var(--fabric-border);
+  background: var(--fabric-white);
+  color: var(--fabric-text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.geo-detail-expand-btn:hover {
+  background: var(--fabric-bg-tint);
+  color: var(--fabric-text);
+}
+
+.geo-map-container .leaflet-container {
+  width: 100%;
+  height: 100%;
+}
+
+.geo-controls {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1000;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  border-radius: 6px;
+  padding: 8px 12px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+}
+
+.geo-control-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.geo-group-label {
+  font-weight: 700;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--fabric-text-muted);
+  letter-spacing: 0.5px;
+}
+
+.geo-controls label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  text-transform: none;
+  font-weight: 500;
+}
+
+.geo-loading-indicator {
+  color: var(--fabric-text-muted);
+  font-style: italic;
+  font-size: 11px;
+  animation: geo-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes geo-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* Map dark/light toggle */
+.geo-theme-toggle {
+  background: none;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  color: var(--fabric-text);
+  transition: background 0.15s, color 0.15s;
+}
+.geo-theme-toggle:hover {
+  background: var(--fabric-hover);
+}
+.geo-theme-toggle.dark {
+  color: #ffc107;
+}
+.geo-theme-toggle.light {
+  color: #5798bc;
+}
+
+/* Site popup */
+.site-popup h3 {
+  font-size: 14px;
+  margin-bottom: 4px;
+  color: var(--fabric-primary-dark);
+}
+.site-popup p {
+  font-size: 12px;
+  margin: 2px 0;
+}

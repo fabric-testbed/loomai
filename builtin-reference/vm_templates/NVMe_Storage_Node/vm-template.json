@@ -1,0 +1,23 @@
+{
+  "name": "NVMe Storage Node",
+  "version": "1.0.0",
+  "description": "Ubuntu 22.04 with auto-detection of all NVMe devices, formatted ext4, mounted at /mnt/nvme0, /mnt/nvme1, etc. with persistent fstab entries. Add NVME_P4510 components to the node.",
+  "image": "default_ubuntu_22",
+  "builtin": true,
+  "boot_config": {
+    "uploads": [],
+    "commands": [
+      {
+        "id": "1",
+        "command": "sudo apt-get update && sudo apt-get install -y nvme-cli",
+        "order": 0
+      },
+      {
+        "id": "2",
+        "command": "COUNTER=0; for dev in $(lsblk -d -n -o NAME,TYPE | awk '$2==\"disk\" && $1~/^nvme/ {print $1}'); do MOUNT=\"/mnt/nvme${COUNTER}\"; echo \"Formatting /dev/${dev} as ext4 -> ${MOUNT}\"; sudo mkfs.ext4 -F \"/dev/${dev}\"; sudo mkdir -p \"${MOUNT}\"; sudo mount \"/dev/${dev}\" \"${MOUNT}\"; sudo chown $(whoami):$(whoami) \"${MOUNT}\"; grep -q \"/dev/${dev}\" /etc/fstab || echo \"/dev/${dev}  ${MOUNT}  ext4  defaults,nofail  0  2\" | sudo tee -a /etc/fstab > /dev/null; COUNTER=$((COUNTER + 1)); done; echo \"${COUNTER} NVMe device(s) formatted and mounted\"",
+        "order": 1
+      }
+    ],
+    "network": []
+  }
+}

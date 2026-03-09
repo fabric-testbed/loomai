@@ -1,0 +1,21 @@
+{
+  "format": "fabric-slice-v1",
+  "name": "Hello, FABRIC",
+  "nodes": [
+    {
+      "name": "node1",
+      "site": "auto",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    }
+  ],
+  "networks": []
+}

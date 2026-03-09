@@ -1,0 +1,21 @@
+{
+  "name": "Install P4 BMv2 Switch",
+  "version": "1.0.0",
+  "description": "Installs P4 BMv2 behavioral model switch and p4c compiler with a systemd timer to auto-connect new dataplane interfaces.",
+  "builtin": true,
+  "image_patterns": {
+    "ubuntu": "install_p4_bmv2_deb.sh",
+    "debian": "install_p4_bmv2_deb.sh",
+    "*": "install_p4_bmv2_deb.sh"
+  },
+  "steps": [
+    {
+      "type": "upload_scripts"
+    },
+    {
+      "type": "execute",
+      "command": "chmod +x ~/.fabric/recipes/install_p4_bmv2/*.sh && sudo bash ~/.fabric/recipes/install_p4_bmv2/{script}"
+    }
+  ],
+  "post_actions": []
+}

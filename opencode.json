@@ -1,0 +1,29 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "fabric": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "FABRIC AI",
+      "options": {
+        "baseURL": "https://ai.fabric-testbed.net/v1",
+        "apiKey": "{env:FABRIC_AI_API_KEY}"
+      },
+      "models": {
+        "claude-3-5-sonnet-20241022": {
+          "name": "Claude 3.5 Sonnet"
+        },
+        "claude-haiku-4-5-20251001": {
+          "name": "Claude Haiku 4.5"
+        },
+        "qwen3-coder-30b": {
+          "name": "Qwen3 Coder 30B"
+        },
+        "gpt-oss-20b": {
+          "name": "GPT OSS 20B"
+        }
+      }
+    }
+  },
+  "model": "fabric/claude-3-5-sonnet-20241022",
+  "small_model": "fabric/qwen3-coder-30b"
+}

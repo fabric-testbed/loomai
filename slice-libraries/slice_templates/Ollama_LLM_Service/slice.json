@@ -1,0 +1,27 @@
+{
+  "format": "fabric-slice-v1",
+  "name": "Ollama LLM Service",
+  "nodes": [
+    {
+      "name": "llm",
+      "site": "auto",
+      "cores": 16,
+      "ram": 32,
+      "disk": 100,
+      "image": "default_ubuntu_22",
+      "boot_config": {
+        "uploads": [],
+        "commands": [
+          {
+            "id": "setup-ollama",
+            "command": "chmod +x ~/tools/setup-ollama.sh && ~/tools/setup-ollama.sh",
+            "order": 0
+          }
+        ],
+        "network": []
+      },
+      "components": []
+    }
+  ],
+  "networks": []
+}

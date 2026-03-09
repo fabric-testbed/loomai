@@ -1,0 +1,19 @@
+{
+  "name": "Node Exporter",
+  "description": "Installs Prometheus node_exporter as a systemd service on port 9100 at first boot",
+  "version": "1.0.0",
+  "builtin": true,
+  "variants": {
+    "default_ubuntu_20": { "label": "Ubuntu 20.04", "dir": "ubuntu_20" },
+    "default_ubuntu_22": { "label": "Ubuntu 22.04", "dir": "ubuntu_22" },
+    "default_ubuntu_24": { "label": "Ubuntu 24.04", "dir": "ubuntu_24" },
+    "default_centos_8": { "label": "CentOS 8", "dir": "centos_8" },
+    "default_centos_9": { "label": "CentOS Stream 9", "dir": "centos_9" },
+    "default_rocky_8": { "label": "Rocky Linux 8", "dir": "rocky_8" },
+    "default_rocky_9": { "label": "Rocky Linux 9", "dir": "rocky_9" },
+    "default_debian_11": { "label": "Debian 11", "dir": "debian_11" },
+    "default_debian_12": { "label": "Debian 12", "dir": "debian_12" }
+  },
+  "setup_script": "setup.sh",
+  "remote_dir": "~/.fabric/vm-templates/node_exporter"
+}

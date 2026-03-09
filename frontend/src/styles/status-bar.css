@@ -1,0 +1,93 @@
+/* StatusBar — thin full-width bar at the very bottom */
+
+.status-bar {
+  flex-shrink: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  background: var(--fabric-light);
+  border-top: 1px solid var(--fabric-border);
+  font-size: 11px;
+  font-family: 'Montserrat', sans-serif;
+  color: var(--fabric-text-muted);
+  user-select: none;
+  gap: 12px;
+}
+
+.sb-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sb-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--fabric-border);
+  border-top-color: var(--fabric-teal);
+  border-radius: 50%;
+  animation: sb-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes sb-spin {
+  to { transform: rotate(360deg); }
+}
+
+.sb-status-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fabric-teal);
+  font-weight: 500;
+}
+
+.sb-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sb-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 8px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.sb-badge.ok {
+  background: rgba(76, 175, 106, 0.15);
+  color: #4caf6a;
+}
+.sb-badge.error {
+  background: rgba(226, 82, 65, 0.15);
+  color: #e25241;
+}
+.sb-badge.warn {
+  background: rgba(255, 183, 77, 0.15);
+  color: #ffb74d;
+}
+.sb-badge.info {
+  background: rgba(87, 152, 188, 0.15);
+  color: #5798bc;
+}
+.sb-badge.active {
+  background: rgba(255, 133, 66, 0.15);
+  color: #ff8542;
+}
+
+.sb-slice-state {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 8px;
+  line-height: 16px;
+  white-space: nowrap;
+  background: rgba(87, 152, 188, 0.12);
+  color: var(--fabric-text-muted);
+}

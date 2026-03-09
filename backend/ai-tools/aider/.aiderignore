@@ -1,0 +1,7 @@
+# Aider ignore — files that should never be edited by Aider
+fabric_config/*
+.opencode/*
+opencode.json
+.crush.json
+.aider*
+.mcp.json

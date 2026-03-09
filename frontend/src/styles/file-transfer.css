@@ -1,0 +1,320 @@
+/* Outer vertical wrapper: file panels + log */
+.ftv-outer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Dual-panel file transfer row */
+.file-transfer-view {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Each panel (left / right) */
+.ftv-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--fabric-border);
+  background: var(--fabric-white);
+}
+
+.ftv-left {
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+}
+
+.ftv-right {
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+}
+
+.ftv-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--fabric-primary-dark, #1f6a8c);
+  background: var(--fabric-bg-tint);
+  border-bottom: 1px solid var(--fabric-border);
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .ftv-panel-header {
+  color: var(--fabric-primary, #5798bc);
+}
+
+.ftv-node-select {
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  max-width: 180px;
+}
+
+/* Center transfer column */
+.ftv-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 8px;
+  width: 64px;
+  min-width: 64px;
+  flex-shrink: 0;
+  background: var(--fabric-bg-tint);
+  border-top: 1px solid var(--fabric-border);
+  border-bottom: 1px solid var(--fabric-border);
+}
+
+/* Arrow buttons */
+.ftv-arrow-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid var(--fabric-primary, #5798bc);
+  background: var(--fabric-white);
+  color: var(--fabric-primary, #5798bc);
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  box-shadow: none;
+  line-height: 1;
+}
+
+.ftv-arrow-btn:hover:not(:disabled) {
+  background: var(--fabric-primary, #5798bc);
+  color: white;
+  box-shadow: 0 2px 8px rgba(87, 152, 188, 0.3);
+}
+
+.ftv-arrow-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+  border-color: var(--fabric-border);
+  color: var(--fabric-text-muted);
+}
+
+/* Transfer progress */
+.ftv-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.ftv-progress-label {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--fabric-primary, #5798bc);
+  letter-spacing: 0.03em;
+}
+
+.ftv-progress-bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--fabric-border);
+  overflow: hidden;
+}
+
+.ftv-progress-fill {
+  height: 100%;
+  background: var(--fabric-primary, #5798bc);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.ftv-progress-text {
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  font-weight: 600;
+}
+
+.ftv-transfer-error {
+  font-size: 9px;
+  color: var(--fabric-coral, #e25241);
+  font-weight: 600;
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Reuse fb-* styles from file-browser.css within the panels */
+.ftv-panel .fb-breadcrumbs {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+
+.ftv-panel .fb-actions {
+  padding: 4px 10px;
+  gap: 4px;
+}
+
+.ftv-panel .fb-actions button {
+  padding: 3px 8px;
+  font-size: 10px;
+}
+
+.ftv-panel .fb-table {
+  font-size: 11px;
+}
+
+.ftv-panel .fb-table thead th {
+  padding: 4px 10px;
+  font-size: 10px;
+}
+
+.ftv-panel .fb-row td {
+  padding: 3px 10px;
+}
+
+.ftv-panel .fb-empty,
+.ftv-panel .fb-loading {
+  padding: 20px;
+  font-size: 12px;
+}
+
+.ftv-panel .fb-error {
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.ftv-panel .fb-new-folder input {
+  width: 100px;
+  font-size: 10px;
+}
+
+/* Bottom tabbed panel (Log + Container Terminal) */
+.ftv-bottom-panel {
+  flex-shrink: 0;
+  height: 220px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--fabric-border);
+  position: relative;
+}
+
+.ftv-resize-handle {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 10;
+}
+.ftv-resize-handle:hover,
+.ftv-resize-handle:active {
+  background: var(--fabric-primary, #5798bc);
+  opacity: 0.4;
+}
+
+.ftv-bottom-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: var(--fabric-bg-tint);
+  border-bottom: 1px solid var(--fabric-border);
+  flex-shrink: 0;
+  padding: 0 4px;
+}
+
+.ftv-bottom-tab {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--fabric-text-muted, #888);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: none;
+}
+.ftv-bottom-tab:hover {
+  color: var(--fabric-text);
+  background: var(--fabric-bg-tint, rgba(87,152,188,0.05));
+  box-shadow: none;
+}
+.ftv-bottom-tab.active {
+  color: var(--fabric-primary, #5798bc);
+  border-bottom-color: var(--fabric-primary, #5798bc);
+}
+
+.ftv-bottom-collapse {
+  border: none;
+  background: none;
+  color: var(--fabric-text-muted, #888);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  box-shadow: none;
+}
+.ftv-bottom-collapse:hover {
+  background: var(--fabric-border);
+  color: var(--fabric-text);
+  box-shadow: none;
+}
+
+.ftv-bottom-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  background: #1a1a2e;
+}
+
+.ftv-bottom-body .bp-terminal-container {
+  flex: 1;
+}
+
+/* Log panel — collapsed bar */
+.ftv-log-collapsed {
+  flex-shrink: 0;
+  padding: 6px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fabric-text-muted);
+  background: var(--fabric-bg-tint);
+  border-top: 1px solid var(--fabric-border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ftv-log-collapsed:hover {
+  color: var(--fabric-primary, #5798bc);
+  background: var(--hover-bg);
+}
+
+
+/* Drag-and-drop indicator for left panel */
+.ftv-panel.fb-dropzone-active {
+  outline: 2px dashed var(--fabric-primary, #5798bc);
+  outline-offset: -4px;
+  background: rgba(87, 152, 188, 0.06);
+}

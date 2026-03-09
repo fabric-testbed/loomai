@@ -1,0 +1,32 @@
+{
+  "name": "DPDK Host",
+  "description": "Ubuntu 22.04 with DPDK 23.11 built from source and hugepages configured. Needs ConnectX-5/6 SmartNIC component.",
+  "image": "default_ubuntu_22",
+  "builtin": true,
+  "boot_config": {
+    "uploads": [],
+    "commands": [
+      {
+        "id": "1",
+        "command": "sudo apt-get update",
+        "order": 0
+      },
+      {
+        "id": "2",
+        "command": "sudo apt-get install -y build-essential meson ninja-build python3-pyelftools libnuma-dev pkg-config",
+        "order": 1
+      },
+      {
+        "id": "3",
+        "command": "cd /opt && sudo wget https://fast.dpdk.org/rel/dpdk-23.11.tar.xz && sudo tar xf dpdk-23.11.tar.xz && cd dpdk-23.11 && sudo meson setup build && cd build && sudo ninja && sudo ninja install && sudo ldconfig",
+        "order": 2
+      },
+      {
+        "id": "4",
+        "command": "sudo bash -c 'echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages' && sudo mkdir -p /mnt/huge && sudo mount -t hugetlbfs nodev /mnt/huge",
+        "order": 3
+      }
+    ],
+    "network": []
+  }
+}

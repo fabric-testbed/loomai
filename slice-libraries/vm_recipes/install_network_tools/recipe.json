@@ -1,0 +1,23 @@
+{
+  "name": "Install Network Tools",
+  "version": "1.0.0",
+  "description": "Installs a comprehensive network research toolkit: iperf3, tcpdump, nmap, mtr, traceroute, hping3, tshark, netperf, socat, bwm-ng, iftop, nload, ethtool, arping.",
+  "builtin": true,
+  "image_patterns": {
+    "ubuntu": "install_network_tools_deb.sh",
+    "debian": "install_network_tools_deb.sh",
+    "rocky": "install_network_tools_rpm.sh",
+    "centos": "install_network_tools_rpm.sh",
+    "*": "install_network_tools_deb.sh"
+  },
+  "steps": [
+    {
+      "type": "upload_scripts"
+    },
+    {
+      "type": "execute",
+      "command": "chmod +x ~/.fabric/recipes/install_network_tools/*.sh && sudo bash ~/.fabric/recipes/install_network_tools/{script}"
+    }
+  ],
+  "post_actions": []
+}

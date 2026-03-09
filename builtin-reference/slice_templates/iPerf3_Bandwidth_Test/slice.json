@@ -1,0 +1,60 @@
+{
+  "format": "fabric-slice-v1",
+  "name": "iPerf3 Bandwidth Test",
+  "nodes": [
+    {
+      "name": "iperf-server",
+      "site": "@perf-a",
+      "cores": 4,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      },
+      "components": [
+        {
+          "name": "FABNET",
+          "model": "NIC_Basic"
+        }
+      ]
+    },
+    {
+      "name": "iperf-client",
+      "site": "@perf-b",
+      "cores": 4,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      },
+      "components": [
+        {
+          "name": "FABNET",
+          "model": "NIC_Basic"
+        }
+      ]
+    }
+  ],
+  "networks": [
+    {
+      "name": "net-server",
+      "type": "FABNetv4",
+      "interfaces": [
+        "iperf-server-FABNET-p1"
+      ]
+    },
+    {
+      "name": "net-client",
+      "type": "FABNetv4",
+      "interfaces": [
+        "iperf-client-FABNET-p1"
+      ]
+    }
+  ]
+}

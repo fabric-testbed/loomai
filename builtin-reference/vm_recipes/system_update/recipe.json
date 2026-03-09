@@ -1,0 +1,19 @@
+{
+  "name": "System Update & Reboot",
+  "description": "Updates all packages, reboots the VM, waits for it to come back, then re-runs boot config to restore networking.",
+  "builtin": true,
+  "image_patterns": {
+    "ubuntu": "update_ubuntu.sh",
+    "debian": "update_debian.sh",
+    "rocky": "update_rocky.sh",
+    "centos": "update_centos.sh",
+    "*": "update_ubuntu.sh"
+  },
+  "steps": [
+    { "type": "upload_scripts" },
+    { "type": "execute", "command": "chmod +x ~/.fabric/recipes/system_update/*.sh && sudo bash ~/.fabric/recipes/system_update/{script}" },
+    { "type": "reboot_and_wait", "timeout": 300 },
+    { "type": "execute_boot_config" }
+  ],
+  "post_actions": []
+}

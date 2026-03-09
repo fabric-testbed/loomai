@@ -1,0 +1,23 @@
+{
+  "name": "Install FRR Router",
+  "version": "1.0.0",
+  "description": "Installs FRRouting with OSPF/BGP/Zebra daemons, enables IP forwarding, and sets up a systemd timer to auto-detect and configure new dataplane interfaces.",
+  "builtin": true,
+  "image_patterns": {
+    "ubuntu": "install_frr_router_deb.sh",
+    "debian": "install_frr_router_deb.sh",
+    "rocky": "install_frr_router_rpm.sh",
+    "centos": "install_frr_router_rpm.sh",
+    "*": "install_frr_router_deb.sh"
+  },
+  "steps": [
+    {
+      "type": "upload_scripts"
+    },
+    {
+      "type": "execute",
+      "command": "chmod +x ~/.fabric/recipes/install_frr_router/*.sh && sudo bash ~/.fabric/recipes/install_frr_router/{script}"
+    }
+  ],
+  "post_actions": []
+}

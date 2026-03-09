@@ -1,0 +1,23 @@
+{
+  "name": "Install NVMe Storage",
+  "version": "1.0.0",
+  "description": "Detects all NVMe devices, formats them as ext4, and mounts at /mnt/nvme0, /mnt/nvme1, etc. with persistent fstab entries.",
+  "builtin": true,
+  "image_patterns": {
+    "ubuntu": "install_nvme_storage_deb.sh",
+    "debian": "install_nvme_storage_deb.sh",
+    "rocky": "install_nvme_storage_rpm.sh",
+    "centos": "install_nvme_storage_rpm.sh",
+    "*": "install_nvme_storage_deb.sh"
+  },
+  "steps": [
+    {
+      "type": "upload_scripts"
+    },
+    {
+      "type": "execute",
+      "command": "chmod +x ~/.fabric/recipes/install_nvme_storage/*.sh && sudo bash ~/.fabric/recipes/install_nvme_storage/{script}"
+    }
+  ],
+  "post_actions": []
+}

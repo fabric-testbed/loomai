@@ -1,0 +1,43 @@
+{
+  "name": "P4 BMv2 Switch",
+  "version": "1.0.0",
+  "description": "Ubuntu 20.04 with P4 BMv2 behavioral model switch, p4c compiler (Docker), and systemd timer that auto-detects new dataplane interfaces every 15 seconds.",
+  "image": "default_ubuntu_20",
+  "builtin": true,
+  "boot_config": {
+    "uploads": [],
+    "commands": [
+      {
+        "id": "1",
+        "command": "sudo apt-get update && sudo apt-get install -y docker.io && sudo systemctl enable --now docker",
+        "order": 0
+      },
+      {
+        "id": "2",
+        "command": "sudo docker pull pruth/fabric-images:0.0.2j",
+        "order": 1
+      },
+      {
+        "id": "3",
+        "command": "sudo docker pull p4lang/p4c:stable",
+        "order": 2
+      },
+      {
+        "id": "4",
+        "command": "sudo tee /usr/local/bin/p4c-wrapper > /dev/null <<'SCRIPT'\n#!/bin/bash\ndocker run --rm -v \"$(pwd):/work\" -w /work p4lang/p4c:stable p4c \"$@\"\nSCRIPT\nsudo chmod +x /usr/local/bin/p4c-wrapper",
+        "order": 3
+      },
+      {
+        "id": "5",
+        "command": "sudo tee /usr/local/bin/p4-auto-connect.sh > /dev/null <<'SCRIPT'\n#!/bin/bash\nKNOWN_FILE=\"/var/run/p4-known-interfaces\"\ntouch \"$KNOWN_FILE\"\nfor iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -v -E '^(lo|eth0|ens3|docker|br|ovs|veth|virbr)'); do\n    if ! grep -qx \"$iface\" \"$KNOWN_FILE\"; then\n        echo \"$iface\" >> \"$KNOWN_FILE\"\n        logger \"p4-auto-connect: detected new interface $iface\"\n    fi\ndone\nSCRIPT\nsudo chmod +x /usr/local/bin/p4-auto-connect.sh",
+        "order": 4
+      },
+      {
+        "id": "6",
+        "command": "sudo tee /etc/systemd/system/p4-auto-connect.service > /dev/null <<'EOF'\n[Unit]\nDescription=P4 BMv2 Auto-Connect Dataplane Interfaces\nAfter=docker.service\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/p4-auto-connect.sh\nEOF\nsudo tee /etc/systemd/system/p4-auto-connect.timer > /dev/null <<'EOF'\n[Unit]\nDescription=P4 BMv2 Auto-Connect Timer\n[Timer]\nOnBootSec=10\nOnUnitActiveSec=15\n[Install]\nWantedBy=timers.target\nEOF\nsudo systemctl daemon-reload && sudo systemctl enable --now p4-auto-connect.timer",
+        "order": 5
+      }
+    ],
+    "network": []
+  }
+}

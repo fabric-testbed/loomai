@@ -1,0 +1,150 @@
+/* ImageComboBox — searchable image + VM template selector */
+.image-combo {
+  position: relative;
+  min-width: 0;
+}
+.image-combo-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  padding: 0 8px;
+  background: var(--fabric-white);
+  cursor: pointer;
+  font-size: 12px;
+  min-height: 28px;
+}
+.image-combo-input:hover {
+  border-color: var(--fabric-primary);
+}
+.image-combo-filter {
+  border: none;
+  outline: none;
+  flex: 1;
+  font-size: 12px;
+  background: transparent;
+  padding: 4px 0;
+  min-width: 0;
+  color: var(--fabric-text);
+}
+.image-combo-display {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+.image-combo-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-combo-arrow {
+  flex-shrink: 0;
+  font-size: 8px;
+  color: var(--fabric-text-muted);
+  margin-left: 4px;
+}
+.image-combo-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border);
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  z-index: 100;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+.image-combo-group {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--fabric-text-muted);
+  text-transform: uppercase;
+  padding: 6px 10px 3px;
+  letter-spacing: 0.03em;
+}
+.image-combo-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.image-combo-option:hover {
+  background: var(--fabric-bg-tint);
+}
+.image-combo-option.selected {
+  background: rgba(87, 152, 188, 0.15);
+}
+.image-combo-opt-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.image-combo-opt-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-combo-opt-desc {
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-combo-empty {
+  padding: 12px;
+  text-align: center;
+  color: var(--fabric-text-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* Image/Template badges */
+.image-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.image-badge-img {
+  background: rgba(87, 152, 188, 0.15);
+  color: var(--fabric-primary);
+}
+.image-badge-tpl {
+  background: rgba(0, 142, 122, 0.15);
+  color: var(--fabric-teal, #008e7a);
+}
+.image-badge-variant {
+  background: rgba(255, 133, 66, 0.15);
+  color: var(--fabric-orange, #ff8542);
+}
+
+/* Expandable multi-variant entries */
+.image-combo-expandable {
+  font-weight: 600;
+}
+.image-combo-expand-arrow {
+  flex-shrink: 0;
+  font-size: 8px;
+  color: var(--fabric-text-muted);
+  width: 12px;
+  text-align: center;
+}
+.image-combo-variant-row {
+  padding-left: 28px;
+}

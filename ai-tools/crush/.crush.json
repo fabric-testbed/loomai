@@ -1,0 +1,5 @@
+{
+  "$schema": "https://charm.land/crush.json",
+  "providers": {},
+  "model": "fabric:qwen3-coder-30b"
+}

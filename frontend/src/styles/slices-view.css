@@ -1,0 +1,53 @@
+/* Slices View — sub-view tab wrapper */
+
+.slices-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Sub-tab bar */
+.slices-subtabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--fabric-border);
+}
+
+.slices-subtabs > .slices-subtab {
+  padding: 6px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  margin-bottom: -2px;
+  box-shadow: none;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.slices-subtabs > .slices-subtab:hover {
+  color: var(--fabric-text);
+  background: var(--fabric-bg-tint);
+  box-shadow: none;
+}
+
+.slices-subtabs > .slices-subtab.active {
+  color: var(--fabric-primary);
+  border-bottom-color: var(--fabric-primary);
+}
+
+/* Content area */
+.slices-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}

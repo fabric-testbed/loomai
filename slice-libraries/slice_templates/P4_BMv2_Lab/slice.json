@@ -1,0 +1,116 @@
+{
+  "format": "fabric-slice-v1",
+  "name": "P4 BMv2 Lab",
+  "nodes": [
+    {
+      "name": "switch1",
+      "site": "@lab",
+      "cores": 4,
+      "ram": 8,
+      "disk": 20,
+      "vm_template": "P4 BMv2 Switch",
+      "components": [
+        {
+          "name": "nic-host",
+          "model": "NIC_Basic"
+        },
+        {
+          "name": "nic-sw2",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    },
+    {
+      "name": "switch2",
+      "site": "@lab",
+      "cores": 4,
+      "ram": 8,
+      "disk": 20,
+      "vm_template": "P4 BMv2 Switch",
+      "components": [
+        {
+          "name": "nic-host",
+          "model": "NIC_Basic"
+        },
+        {
+          "name": "nic-sw1",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    },
+    {
+      "name": "host1",
+      "site": "@lab",
+      "cores": 2,
+      "ram": 4,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    },
+    {
+      "name": "host2",
+      "site": "@lab",
+      "cores": 2,
+      "ram": 4,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    }
+  ],
+  "networks": [
+    {
+      "name": "sw-link",
+      "type": "L2Bridge",
+      "interfaces": [
+        "switch1-nic-sw2-p1",
+        "switch2-nic-sw1-p1"
+      ]
+    },
+    {
+      "name": "host1-link",
+      "type": "L2Bridge",
+      "interfaces": [
+        "switch1-nic-host-p1",
+        "host1-nic1-p1"
+      ]
+    },
+    {
+      "name": "host2-link",
+      "type": "L2Bridge",
+      "interfaces": [
+        "switch2-nic-host-p1",
+        "host2-nic1-p1"
+      ]
+    }
+  ]
+}

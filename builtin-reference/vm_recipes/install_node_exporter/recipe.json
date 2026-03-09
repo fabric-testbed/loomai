@@ -1,0 +1,23 @@
+{
+  "name": "Install Node Exporter",
+  "version": "1.0.0",
+  "description": "Installs Prometheus node_exporter and enables it as a systemd service on port 9100.",
+  "builtin": true,
+  "image_patterns": {
+    "ubuntu": "install_node_exporter_deb.sh",
+    "debian": "install_node_exporter_deb.sh",
+    "rocky": "install_node_exporter_rpm.sh",
+    "centos": "install_node_exporter_rpm.sh",
+    "*": "install_node_exporter_deb.sh"
+  },
+  "steps": [
+    {
+      "type": "upload_scripts"
+    },
+    {
+      "type": "execute",
+      "command": "chmod +x ~/.fabric/recipes/install_node_exporter/*.sh && sudo bash ~/.fabric/recipes/install_node_exporter/{script}"
+    }
+  ],
+  "post_actions": []
+}

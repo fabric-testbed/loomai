@@ -1,0 +1,8 @@
+{
+  "name": "GPU Compute Pair",
+  "description": "2 GPU nodes at different sites connected by L2STS. RTX6000 GPUs with NVIDIA drivers pre-installed.",
+  "builtin": true,
+  "order": 10,
+  "node_count": 2,
+  "network_count": 1
+}

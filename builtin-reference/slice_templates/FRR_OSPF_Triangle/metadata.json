@@ -1,0 +1,8 @@
+{
+  "name": "FRR OSPF Triangle",
+  "description": "3 FRR routers in a triangle topology with 3 host nodes. OSPF routing with IP forwarding enabled.",
+  "builtin": true,
+  "order": 7,
+  "node_count": 6,
+  "network_count": 6
+}

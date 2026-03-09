@@ -1,0 +1,8 @@
+{
+  "name": "Hello, FABRIC",
+  "description": "Simplest possible slice \u2014 one Ubuntu 22.04 node. Great starting point for tutorials.",
+  "builtin": true,
+  "order": 0,
+  "node_count": 1,
+  "network_count": 0
+}

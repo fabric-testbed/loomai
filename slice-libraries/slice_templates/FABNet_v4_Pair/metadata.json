@@ -1,0 +1,8 @@
+{
+  "name": "L3 Network (FABNetv4)",
+  "description": "Two nodes each with their own FABNetv4 (Layer 3) gateway, providing internet-routable connectivity through the FABRIC testbed backbone. The L3 Config editor lets you choose Auto, Manual, or User Last Octet mode for IP assignment, and configure default FABNet or custom subnet routes.",
+  "builtin": true,
+  "order": 6,
+  "node_count": 2,
+  "network_count": 2
+}

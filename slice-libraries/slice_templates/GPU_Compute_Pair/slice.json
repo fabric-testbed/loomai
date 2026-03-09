@@ -1,0 +1,62 @@
+{
+  "format": "fabric-slice-v1",
+  "name": "GPU Compute Pair",
+  "nodes": [
+    {
+      "name": "gpu-node1",
+      "site": "@gpu-a",
+      "cores": 8,
+      "ram": 32,
+      "disk": 100,
+      "vm_template": "GPU + CUDA Host",
+      "components": [
+        {
+          "name": "gpu1",
+          "model": "GPU_RTX6000"
+        },
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    },
+    {
+      "name": "gpu-node2",
+      "site": "@gpu-b",
+      "cores": 8,
+      "ram": 32,
+      "disk": 100,
+      "vm_template": "GPU + CUDA Host",
+      "components": [
+        {
+          "name": "gpu1",
+          "model": "GPU_RTX6000"
+        },
+        {
+          "name": "nic1",
+          "model": "NIC_Basic"
+        }
+      ],
+      "boot_config": {
+        "uploads": [],
+        "commands": [],
+        "network": []
+      }
+    }
+  ],
+  "networks": [
+    {
+      "name": "gpu-link",
+      "type": "L2STS",
+      "interfaces": [
+        "gpu-node1-nic1-p1",
+        "gpu-node2-nic1-p1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+.jupyter-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.jupyter-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--fabric-light);
+  border-bottom: 1px solid var(--fabric-border);
+  font-size: 13px;
+  flex-shrink: 0;
+  color: var(--fabric-text);
+}
+
+.jupyter-toolbar label {
+  font-weight: 600;
+  color: var(--fabric-text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.jupyter-toolbar select {
+  padding: 4px 8px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  font-size: 13px;
+  font-family: inherit;
+  min-width: 200px;
+}
+
+.jupyter-toolbar button {
+  padding: 4px 14px;
+  border: 1px solid var(--fabric-primary);
+  border-radius: 4px;
+  background: var(--fabric-primary);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.jupyter-toolbar button:hover {
+  background: var(--fabric-primary-dark);
+}
+
+.jupyter-toolbar button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.jupyter-stop-btn {
+  background: var(--fabric-danger) !important;
+  border-color: var(--fabric-danger) !important;
+}
+
+.jupyter-stop-btn:hover {
+  opacity: 0.85;
+}
+
+.jupyter-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--fabric-border);
+}
+
+.jupyter-status {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.jupyter-status-active {
+  color: var(--fabric-success);
+}
+
+.jupyter-status-connecting {
+  color: var(--fabric-warning);
+}
+
+.jupyter-status-idle {
+  color: var(--fabric-text-muted);
+  font-weight: 400;
+}
+
+.jupyter-error {
+  padding: 8px 12px;
+  background: var(--state-error-bg);
+  border-bottom: 1px solid var(--fabric-danger);
+  color: var(--fabric-danger);
+  font-size: 13px;
+}
+
+.jupyter-iframe-wrap {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.jupyter-iframe-wrap iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.jupyter-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--fabric-text-muted);
+  font-size: 14px;
+  background: var(--fabric-white);
+  height: 100%;
+}
+
+.jupyter-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--fabric-border);
+  border-top-color: var(--fabric-primary);
+  border-radius: 50%;
+  animation: jupyter-spin 0.8s linear infinite;
+}
+
+@keyframes jupyter-spin {
+  to { transform: rotate(360deg); }
+}

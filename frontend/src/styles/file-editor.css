@@ -1,0 +1,104 @@
+/* File Editor — inline text editor with CodeMirror */
+
+.file-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.fe-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--fabric-border);
+  background: var(--fabric-light);
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.fe-filename {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fabric-primary-dark);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-theme="dark"] .fe-filename {
+  color: var(--fabric-primary);
+}
+
+.fe-modified-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fabric-orange, #ff8542);
+  flex-shrink: 0;
+}
+
+.fe-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.fe-actions button {
+  font-size: 11px;
+  padding: 4px 12px;
+}
+
+.fe-error {
+  font-size: 11px;
+  color: var(--fabric-coral, #e25241);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fe-saved {
+  font-size: 11px;
+  color: var(--fabric-teal, #008e7a);
+  font-weight: 600;
+}
+
+.fe-editor-container {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.fe-editor-container .cm-editor {
+  height: 100%;
+}
+
+.fe-editor-container .cm-scroller {
+  overflow: auto;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Light theme overrides for CodeMirror */
+.fe-editor-container .cm-editor .cm-gutters {
+  border-right: 1px solid var(--fabric-border);
+}
+
+.fe-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fabric-text-muted);
+  font-style: italic;
+  font-size: 13px;
+}

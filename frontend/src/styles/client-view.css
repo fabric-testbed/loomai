@@ -1,0 +1,135 @@
+.client-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.client-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--fabric-light);
+  border-bottom: 1px solid var(--fabric-border);
+  font-size: 13px;
+  flex-shrink: 0;
+  color: var(--fabric-text);
+}
+
+.client-toolbar label {
+  font-weight: 600;
+  color: var(--fabric-text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.client-toolbar select,
+.client-toolbar input {
+  padding: 4px 8px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.client-toolbar select {
+  min-width: 140px;
+}
+
+.client-toolbar input[type="number"] {
+  width: 72px;
+}
+
+.client-toolbar button {
+  padding: 4px 14px;
+  border: 1px solid var(--fabric-primary);
+  border-radius: 4px;
+  background: var(--fabric-primary);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.client-toolbar button:hover {
+  background: var(--fabric-primary-dark);
+}
+
+.client-toolbar .client-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--fabric-border);
+}
+
+.client-toolbar .client-url {
+  flex: 1;
+  font-size: 12px;
+  color: var(--fabric-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.client-iframe-wrap {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.client-iframe-wrap iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.client-placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fabric-text-muted);
+  font-size: 14px;
+  background: var(--fabric-white);
+}
+
+.client-disconnect-btn {
+  background: var(--fabric-danger) !important;
+  border-color: var(--fabric-danger) !important;
+}
+
+.client-disconnect-btn:hover {
+  opacity: 0.85;
+}
+
+.client-toolbar button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.client-status {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.client-status-connecting {
+  color: var(--fabric-warning);
+}
+
+.client-status-active {
+  color: var(--fabric-success);
+}
+
+.client-status-error {
+  color: var(--fabric-danger);
+}
+
+.client-error {
+  padding: 8px 12px;
+  background: var(--state-error-bg);
+  border-bottom: 1px solid var(--fabric-danger);
+  color: var(--fabric-danger);
+  font-size: 13px;
+}

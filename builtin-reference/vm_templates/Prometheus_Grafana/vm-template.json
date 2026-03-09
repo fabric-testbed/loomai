@@ -1,0 +1,58 @@
+{
+  "name": "Prometheus + Grafana",
+  "version": "1.0.0",
+  "description": "Ubuntu 22.04 with Prometheus + Grafana monitoring stack and auto-discovery of node_exporter targets. Deploy other nodes with Node Exporter template for automatic monitoring.",
+  "image": "default_ubuntu_22",
+  "builtin": true,
+  "boot_config": {
+    "uploads": [],
+    "commands": [
+      {
+        "id": "1",
+        "command": "sudo apt-get update && sudo apt-get install -y nmap apt-transport-https software-properties-common",
+        "order": 0
+      },
+      {
+        "id": "2",
+        "command": "PROM_VERSION=2.51.2 && ARCH=$(dpkg --print-architecture) && cd /tmp && curl -fsSL -o prometheus.tar.gz \"https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-${ARCH}.tar.gz\" && tar xzf prometheus.tar.gz && sudo useradd --no-create-home --shell /bin/false prometheus 2>/dev/null || true && sudo mkdir -p /etc/prometheus /var/lib/prometheus && cd \"prometheus-${PROM_VERSION}.linux-${ARCH}\" && sudo cp prometheus promtool /usr/local/bin/ && sudo cp -r consoles console_libraries /etc/prometheus/ && sudo chown -R prometheus:prometheus /etc/prometheus /var/lib/prometheus && rm -rf /tmp/prometheus*",
+        "order": 1
+      },
+      {
+        "id": "3",
+        "command": "sudo tee /etc/prometheus/prometheus.yml > /dev/null <<'EOF'\nglobal:\n  scrape_interval: 15s\n  evaluation_interval: 15s\nscrape_configs:\n  - job_name: prometheus\n    static_configs:\n      - targets: ['localhost:9090']\n  - job_name: node_exporter\n    file_sd_configs:\n      - files: ['/etc/prometheus/targets/*.json']\n        refresh_interval: 30s\nEOF\nsudo mkdir -p /etc/prometheus/targets && sudo chown -R prometheus:prometheus /etc/prometheus",
+        "order": 2
+      },
+      {
+        "id": "4",
+        "command": "sudo tee /usr/local/bin/prometheus-discover-targets.sh > /dev/null <<'SCRIPT'\n#!/bin/bash\nTARGETS_DIR=\"/etc/prometheus/targets\"\nTARGETS_FILE=\"${TARGETS_DIR}/auto_discovered.json\"\nmkdir -p \"$TARGETS_DIR\"\nTARGETS=\"[\"\nFIRST=true\nfor addr in $(ip -o -4 addr show | awk '{print $4}' | grep -v '127.0.0'); do\n    for ip in $(nmap -sn \"$addr\" 2>/dev/null | grep \"Nmap scan report\" | awk '{print $NF}' | tr -d '()'); do\n        if curl -s --connect-timeout 1 \"http://${ip}:9100/metrics\" &>/dev/null; then\n            if [ \"$FIRST\" = true ]; then FIRST=false; else TARGETS=\"${TARGETS},\"; fi\n            TARGETS=\"${TARGETS}{\\\"targets\\\":[\\\"${ip}:9100\\\"],\\\"labels\\\":{\\\"instance\\\":\\\"${ip}\\\"}}\"\n        fi\n    done\ndone\nTARGETS=\"${TARGETS}]\"\necho \"$TARGETS\" > \"$TARGETS_FILE\"\nchown prometheus:prometheus \"$TARGETS_FILE\"\nSCRIPT\nsudo chmod +x /usr/local/bin/prometheus-discover-targets.sh",
+        "order": 3
+      },
+      {
+        "id": "5",
+        "command": "sudo tee /etc/systemd/system/prometheus.service > /dev/null <<'EOF'\n[Unit]\nDescription=Prometheus Monitoring\nAfter=network-online.target\nWants=network-online.target\n[Service]\nUser=prometheus\nGroup=prometheus\nType=simple\nExecStart=/usr/local/bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/var/lib/prometheus/ --web.console.templates=/etc/prometheus/consoles --web.console.libraries=/etc/prometheus/console_libraries --web.listen-address=:9090\nRestart=on-failure\nRestartSec=5\n[Install]\nWantedBy=multi-user.target\nEOF",
+        "order": 4
+      },
+      {
+        "id": "6",
+        "command": "sudo tee /etc/systemd/system/prometheus-discover.service > /dev/null <<'EOF'\n[Unit]\nDescription=Prometheus Target Discovery\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/prometheus-discover-targets.sh\nEOF\nsudo tee /etc/systemd/system/prometheus-discover.timer > /dev/null <<'EOF'\n[Unit]\nDescription=Prometheus Target Discovery Timer\n[Timer]\nOnBootSec=30\nOnUnitActiveSec=60\n[Install]\nWantedBy=timers.target\nEOF",
+        "order": 5
+      },
+      {
+        "id": "7",
+        "command": "curl -fsSL https://apt.grafana.com/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/grafana-archive-keyring.gpg && echo 'deb [signed-by=/usr/share/keyrings/grafana-archive-keyring.gpg] https://apt.grafana.com stable main' | sudo tee /etc/apt/sources.list.d/grafana.list > /dev/null && sudo apt-get update && sudo apt-get install -y grafana",
+        "order": 6
+      },
+      {
+        "id": "8",
+        "command": "sudo mkdir -p /etc/grafana/provisioning/datasources && sudo tee /etc/grafana/provisioning/datasources/prometheus.yaml > /dev/null <<'EOF'\napiVersion: 1\ndatasources:\n  - name: Prometheus\n    type: prometheus\n    access: proxy\n    url: http://localhost:9090\n    isDefault: true\n    editable: true\nEOF",
+        "order": 7
+      },
+      {
+        "id": "9",
+        "command": "sudo systemctl daemon-reload && sudo systemctl enable --now prometheus && sudo systemctl enable --now grafana-server && sudo systemctl enable --now prometheus-discover.timer && sudo /usr/local/bin/prometheus-discover-targets.sh || true",
+        "order": 8
+      }
+    ],
+    "network": []
+  }
+}

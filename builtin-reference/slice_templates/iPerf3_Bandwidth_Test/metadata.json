@@ -1,0 +1,8 @@
+{
+  "name": "iPerf3 Bandwidth Test",
+  "description": "Two nodes at different sites with FABNetv4 connectivity. iPerf3 installed natively — server starts automatically in daemon mode. Use the install_iperf3 recipe to add to other nodes.",
+  "builtin": true,
+  "order": 5,
+  "node_count": 2,
+  "network_count": 2
+}

@@ -1,0 +1,53 @@
+/* Terminal panel — slides into bottom of graph area */
+.terminal-panel {
+  height: 280px;
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  border-top: 2px solid var(--fabric-success);
+  background: #1a1a2e;
+  flex-shrink: 0;
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: var(--fabric-success);
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.terminal-title {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.terminal-close {
+  background: none !important;
+  border: none !important;
+  color: white !important;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  opacity: 0.8;
+}
+.terminal-close:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.2) !important;
+  box-shadow: none !important;
+}
+
+.terminal-container {
+  flex: 1;
+  overflow: hidden;
+  padding: 4px;
+}
+
+.terminal-container .xterm {
+  height: 100%;
+}

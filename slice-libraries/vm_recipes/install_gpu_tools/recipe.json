@@ -1,0 +1,16 @@
+{
+  "name": "Install GPU Tools",
+  "version": "1.0.0",
+  "description": "Installs NVIDIA drivers, CUDA 12.6 toolkit, cuDNN, NCCL, and PyTorch with GPU support. Requires an NVIDIA GPU component attached to the node.",
+  "builtin": true,
+  "image_patterns": {
+    "ubuntu": "install_gpu_tools_deb.sh",
+    "debian": "install_gpu_tools_deb.sh",
+    "*": "install_gpu_tools_deb.sh"
+  },
+  "steps": [
+    { "type": "upload_scripts" },
+    { "type": "execute", "command": "chmod +x ~/.fabric/recipes/install_gpu_tools/*.sh && sudo bash ~/.fabric/recipes/install_gpu_tools/{script}" }
+  ],
+  "post_actions": []
+}

@@ -1,0 +1,299 @@
+/* Project View — full-window dashboard */
+
+.pv-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 28px;
+  gap: 16px;
+  background: var(--fabric-bg-tint);
+  color: var(--fabric-text);
+}
+
+.pv-empty,
+.pv-loading {
+  text-align: center;
+  color: var(--fabric-text-muted);
+  font-size: 13px;
+  padding: 40px 20px;
+  font-style: italic;
+}
+
+.pv-error {
+  text-align: center;
+  color: var(--fabric-coral, #e25241);
+  font-size: 13px;
+  padding: 40px 20px;
+}
+
+/* Header */
+.pv-header {
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  padding: 16px 20px;
+}
+
+.pv-header-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pv-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--fabric-text);
+}
+
+.pv-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pv-badge-type {
+  background: rgba(87, 152, 188, 0.15);
+  color: var(--fabric-primary);
+}
+
+.pv-badge-active {
+  background: rgba(0, 142, 122, 0.15);
+  color: var(--fabric-teal, #008e7a);
+}
+
+.pv-badge-inactive {
+  background: rgba(226, 82, 65, 0.15);
+  color: var(--fabric-coral, #e25241);
+}
+
+.pv-header-date {
+  font-size: 12px;
+  color: var(--fabric-text-muted);
+  margin-left: auto;
+}
+
+.pv-description {
+  font-size: 13px;
+  color: var(--fabric-text-muted);
+  line-height: 1.5;
+  margin-top: 8px;
+  word-break: break-word;
+}
+.pv-description p { margin: 0 0 4px; }
+.pv-description a { color: var(--fabric-primary); }
+/* Override inline styles from UIS HTML descriptions in dark mode */
+[data-theme="dark"] .pv-description,
+[data-theme="dark"] .pv-description * {
+  color: var(--fabric-text-muted) !important;
+}
+[data-theme="dark"] .pv-description a {
+  color: var(--fabric-primary) !important;
+}
+
+/* Stats row */
+.pv-stats-row {
+  display: flex;
+  gap: 12px;
+}
+
+.pv-stat-card {
+  flex: 1;
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  text-align: center;
+}
+
+.pv-stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--fabric-primary);
+  line-height: 1.2;
+}
+
+.pv-stat-label {
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+
+/* Two-column grid */
+.pv-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.pv-column {
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.pv-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fabric-text-muted);
+  margin-bottom: 10px;
+}
+
+.pv-muted {
+  font-size: 12px;
+  color: var(--fabric-text-muted);
+  font-style: italic;
+}
+
+/* Members */
+.pv-member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pv-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+.pv-member:hover {
+  background: var(--fabric-bg-tint);
+}
+.pv-member-lead {
+  background: rgba(255, 133, 66, 0.06);
+}
+.pv-member-lead:hover {
+  background: rgba(255, 133, 66, 0.12);
+}
+
+.pv-member-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pv-member-name {
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fabric-text);
+}
+
+.pv-member-email {
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-role-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+.pv-role-badge.lead {
+  background: rgba(255, 133, 66, 0.15);
+  color: var(--fabric-orange, #ff8542);
+}
+.pv-role-badge.owner {
+  background: rgba(87, 152, 188, 0.15);
+  color: var(--fabric-primary);
+}
+.pv-role-badge.member {
+  background: rgba(0, 142, 122, 0.12);
+  color: var(--fabric-teal, #008e7a);
+}
+.pv-role-badge.creator {
+  background: rgba(160, 160, 160, 0.15);
+  color: var(--fabric-text-muted);
+}
+
+/* Detail sections */
+.pv-detail-section {
+  margin-bottom: 16px;
+}
+.pv-detail-section:last-child {
+  margin-bottom: 0;
+}
+
+/* Tags */
+.pv-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pv-tag {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: var(--fabric-bg-tint);
+  color: var(--fabric-text-muted);
+  border: 1px solid var(--fabric-border);
+}
+
+/* Funding cards */
+.pv-funding-card {
+  padding: 8px 10px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  margin-bottom: 6px;
+  background: var(--fabric-bg-tint);
+}
+.pv-funding-card:last-child {
+  margin-bottom: 0;
+}
+
+.pv-funding-agency {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 3px;
+  color: var(--fabric-text);
+}
+
+.pv-funding-detail {
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+  line-height: 1.4;
+}
+
+/* Responsive */
+@media (max-width: 960px) {
+  .pv-grid {
+    grid-template-columns: 1fr;
+  }
+  .pv-stats-row {
+    flex-wrap: wrap;
+  }
+  .pv-stat-card {
+    min-width: 120px;
+  }
+}

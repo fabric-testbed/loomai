@@ -1,0 +1,422 @@
+/* VM Template Panel — follows template-panel.css pattern */
+.vmt-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+}
+
+.vmt-header {
+  padding: 10px 12px;
+  font-weight: 600;
+  font-size: 14px;
+  border-bottom: 1px solid var(--fabric-border);
+  color: var(--fabric-primary-dark);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+}
+[data-theme="dark"] .vmt-header {
+  color: var(--fabric-primary);
+}
+.vmt-header:hover {
+  background: var(--fabric-bg-tint);
+}
+
+.vmt-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Save section */
+.vmt-save-section {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--fabric-border);
+  flex-shrink: 0;
+}
+
+.vmt-save-btn {
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--fabric-primary);
+  background: transparent;
+  color: var(--fabric-primary);
+  cursor: pointer;
+  box-shadow: none;
+}
+.vmt-save-btn:hover:not(:disabled) {
+  background: var(--fabric-primary);
+  color: white;
+  box-shadow: none;
+}
+.vmt-save-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.vmt-save-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vmt-input {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  box-sizing: border-box;
+}
+.vmt-textarea {
+  resize: vertical;
+  font-family: inherit;
+  min-height: 36px;
+}
+
+.vmt-save-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.vmt-save-actions button {
+  font-size: 12px;
+  padding: 4px 12px;
+}
+
+/* Error */
+.vmt-error {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--fabric-coral, #e25241);
+  background: rgba(226, 82, 65, 0.08);
+  border-bottom: 1px solid var(--fabric-border);
+  flex-shrink: 0;
+}
+
+/* Search */
+.vmt-search-wrapper {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--fabric-border);
+  flex-shrink: 0;
+}
+.vmt-search-input {
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  box-sizing: border-box;
+}
+.vmt-search-input:focus {
+  outline: none;
+  border-color: var(--fabric-primary);
+}
+
+/* Add VM button — matches slice template Load button */
+.vmt-btn-add {
+  border: 1px solid var(--fabric-primary);
+  color: var(--fabric-primary);
+}
+.vmt-btn-add:hover:not(:disabled) {
+  background: var(--fabric-primary);
+  color: white;
+  box-shadow: none;
+}
+
+/* List */
+.vmt-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.vmt-empty {
+  text-align: center;
+  color: var(--fabric-text-muted);
+  font-size: 11px;
+  padding: 20px 12px;
+  font-style: italic;
+}
+.vmt-empty a {
+  color: var(--fabric-primary, #5798bc);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Card */
+.vmt-card {
+  margin: 4px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  background: var(--fabric-white);
+}
+.vmt-card:hover {
+  border-color: var(--fabric-primary);
+}
+
+.vmt-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.vmt-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vmt-badge-builtin {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(0, 142, 122, 0.15);
+  color: var(--fabric-teal, #008e7a);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+.vmt-card-desc {
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.vmt-card-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  margin-bottom: 6px;
+}
+
+.vmt-card-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vmt-btn-add,
+.vmt-btn-delete {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  box-shadow: none;
+  background: transparent;
+  text-align: center;
+}
+
+.vmt-btn-add:disabled,
+.vmt-btn-delete:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.vmt-btn-delete {
+  border: 1px solid var(--fabric-coral, #e25241);
+  color: var(--fabric-coral, #e25241);
+}
+.vmt-btn-delete:hover:not(:disabled) {
+  background: var(--fabric-coral, #e25241);
+  color: white;
+  box-shadow: none;
+}
+
+/* Modal */
+.vmt-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vmt-modal {
+  background: var(--fabric-white);
+  border-radius: 8px;
+  padding: 20px;
+  width: 340px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+.vmt-modal h4 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+.vmt-modal p {
+  font-size: 13px;
+  color: var(--fabric-text-muted);
+  margin: 0 0 12px;
+}
+
+.vmt-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.vmt-modal-actions button {
+  font-size: 12px;
+  padding: 5px 14px;
+}
+
+/* Version badge */
+.vmt-badge-version {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(87, 152, 188, 0.15);
+  color: var(--fabric-primary);
+  flex-shrink: 0;
+}
+
+/* Variant picker inline */
+.vmt-variant-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 0;
+}
+.vmt-variant-btn {
+  font-size: 10px;
+  padding: 3px 8px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 3px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  cursor: pointer;
+}
+.vmt-variant-btn:hover:not(:disabled) {
+  border-color: var(--fabric-primary);
+  color: var(--fabric-primary);
+}
+.vmt-variant-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.vmt-variant-cancel {
+  color: var(--fabric-text-muted);
+}
+
+/* Recipe Execution Console */
+.recipe-console {
+  margin: 8px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 250px;
+}
+.recipe-console-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--fabric-bg-tint);
+  border-bottom: 1px solid var(--fabric-border);
+  color: var(--fabric-text);
+}
+.recipe-console-close {
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  padding: 0 2px;
+}
+.recipe-console-close:hover:not(:disabled) {
+  color: var(--fabric-text);
+}
+.recipe-console-close:disabled {
+  color: var(--fabric-orange, #ff8542);
+  cursor: default;
+  animation: recipe-pulse 1s infinite;
+}
+@keyframes recipe-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.recipe-console-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  background: var(--fabric-white);
+}
+.recipe-console-line {
+  display: flex;
+  gap: 4px;
+  padding: 1px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.recipe-console-icon {
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+}
+.recipe-console-step {
+  color: var(--fabric-primary);
+}
+.recipe-console-output {
+  color: var(--fabric-text-muted);
+}
+.recipe-console-error {
+  color: var(--fabric-coral, #e25241);
+}
+
+/* Recipe star toggle */
+.recipe-star-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: #ff8542;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.recipe-star-btn:hover {
+  transform: scale(1.2);
+}

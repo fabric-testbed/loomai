@@ -1,0 +1,8 @@
+{
+  "name": "Prometheus + Grafana Stack",
+  "description": "3-node monitoring stack: 1 monitor node running Prometheus + Grafana (native install) with auto-discovery of worker node_exporter targets via FABNetv4, and 2 worker nodes running node_exporter.",
+  "builtin": true,
+  "order": 6,
+  "node_count": 3,
+  "network_count": 1
+}

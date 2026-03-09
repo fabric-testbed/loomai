@@ -1,0 +1,20 @@
+# Aider configuration for in-container FABRIC AI sessions
+# https://aider.chat/docs/config/aider_conf.html
+
+# Model settings (overridden at runtime by ai_terminal.py)
+# model: openai/qwen3-coder-30b
+
+# Behavior
+auto-commits: false
+dark-mode: true
+no-auto-lint: true
+no-auto-test: true
+map-tokens: 0
+suggest-shell-commands: true
+
+# FABRIC context — Aider will read these as reference files (read-only)
+read:
+  - AGENTS.md
+
+# File patterns to never edit (uses .aiderignore file, gitignore syntax)
+aiderignore: .aiderignore

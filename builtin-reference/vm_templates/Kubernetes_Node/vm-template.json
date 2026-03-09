@@ -1,0 +1,17 @@
+{
+  "name": "Kubernetes Node",
+  "description": "Ubuntu 22.04 with containerd + kubeadm/kubelet/kubectl installed and ready to join or init a cluster",
+  "image": "default_ubuntu_22",
+  "builtin": true,
+  "boot_config": {
+    "uploads": [],
+    "commands": [
+      {
+        "id": "1",
+        "command": "chmod +x ~/tools/k8s_setup.sh && ~/tools/k8s_setup.sh",
+        "order": 0
+      }
+    ],
+    "network": []
+  }
+}

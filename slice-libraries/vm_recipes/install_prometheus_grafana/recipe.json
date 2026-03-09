@@ -1,0 +1,18 @@
+{
+  "name": "Install Prometheus + Grafana",
+  "version": "1.0.0",
+  "description": "Installs Prometheus and Grafana monitoring stack with auto-discovery of node_exporter targets in the slice.",
+  "builtin": true,
+  "image_patterns": {
+    "ubuntu": "install_prometheus_grafana_deb.sh",
+    "debian": "install_prometheus_grafana_deb.sh",
+    "rocky": "install_prometheus_grafana_rpm.sh",
+    "centos": "install_prometheus_grafana_rpm.sh",
+    "*": "install_prometheus_grafana_deb.sh"
+  },
+  "steps": [
+    { "type": "upload_scripts" },
+    { "type": "execute", "command": "chmod +x ~/.fabric/recipes/install_prometheus_grafana/*.sh && sudo bash ~/.fabric/recipes/install_prometheus_grafana/{script}" }
+  ],
+  "post_actions": []
+}

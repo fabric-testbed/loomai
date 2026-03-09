@@ -1,0 +1,8 @@
+{
+  "name": "P4 BMv2 Lab",
+  "description": "2 BMv2 software switches and 2 hosts connected via L2Bridge networks for P4 programming experiments.",
+  "builtin": true,
+  "order": 8,
+  "node_count": 4,
+  "network_count": 3
+}

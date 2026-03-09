@@ -1,0 +1,8 @@
+{
+  "name": "L2 Bridge",
+  "description": "Two co-located nodes connected by an L2 bridge. Defaults to Auto IP (192.168.1.0/24). Change the network's IP mode to 'config' for user-defined IPs or 'none' for manual boot config.",
+  "builtin": true,
+  "order": 2,
+  "node_count": 2,
+  "network_count": 1
+}

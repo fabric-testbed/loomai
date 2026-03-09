@@ -1,0 +1,355 @@
+/* Guided Tour — Spotlight + Tooltip */
+
+.tour-spotlight {
+  position: fixed;
+  z-index: 9998;
+  border-radius: 8px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  transition: top 0.3s ease, left 0.3s ease, width 0.3s ease, height 0.3s ease;
+  pointer-events: none;
+}
+
+.tour-tooltip {
+  position: fixed;
+  z-index: 9999;
+  width: 360px;
+  background: #fff;
+  border: 2px solid #5798bc;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  padding: 20px;
+  transition: top 0.3s ease, left 0.3s ease;
+}
+
+.tour-tooltip-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #1f6a8c;
+}
+
+.tour-tooltip-content {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #333;
+  white-space: pre-line;
+}
+
+.tour-step-indicator {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 12px;
+}
+
+.tour-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tour-btn {
+  padding: 6px 16px;
+  border: 1px solid #5798bc;
+  border-radius: 6px;
+  background: #fff;
+  color: #5798bc;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tour-btn:hover {
+  background: #eef6fb;
+}
+
+.tour-btn.primary {
+  background: #5798bc;
+  color: #fff;
+  border-color: #5798bc;
+}
+
+.tour-btn.primary:hover {
+  background: #1f6a8c;
+  border-color: #1f6a8c;
+}
+
+.tour-btn.skip {
+  margin-left: auto;
+  border-color: transparent;
+  color: #999;
+  font-weight: 400;
+}
+
+.tour-btn.skip:hover {
+  color: #e25241;
+  background: transparent;
+}
+
+/* Completion indicator for interactive setup steps */
+.tour-completion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.tour-completion.complete {
+  background: rgba(0, 142, 122, 0.1);
+  color: #008e7a;
+  border: 1px solid rgba(0, 142, 122, 0.25);
+}
+
+.tour-completion.pending {
+  background: rgba(255, 133, 66, 0.08);
+  color: #cc6a30;
+  border: 1px solid rgba(255, 133, 66, 0.2);
+}
+
+.tour-completion-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.tour-completion-label {
+  font-weight: 500;
+}
+
+[data-theme="dark"] .tour-completion.complete {
+  background: rgba(0, 142, 122, 0.15);
+  color: #26c6b0;
+  border-color: rgba(0, 142, 122, 0.3);
+}
+
+[data-theme="dark"] .tour-completion.pending {
+  background: rgba(255, 133, 66, 0.12);
+  color: #ffaa70;
+  border-color: rgba(255, 133, 66, 0.25);
+}
+
+/* Arrow pointer — dynamically positioned via inline style */
+.tour-arrow {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border: 2px solid #5798bc;
+  transform: rotate(45deg);
+}
+
+.tour-arrow.arrow-top {
+  top: -8px;
+  border-right: none;
+  border-bottom: none;
+}
+
+.tour-arrow.arrow-bottom {
+  bottom: -8px;
+  border-left: none;
+  border-top: none;
+}
+
+.tour-arrow.arrow-left {
+  left: -8px;
+  border-top: none;
+  border-right: none;
+}
+
+.tour-arrow.arrow-right {
+  right: -8px;
+  border-bottom: none;
+  border-left: none;
+}
+
+/* Centered fallback (no arrow) */
+.tour-tooltip.centered {
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%);
+}
+
+.tour-tooltip.centered .tour-arrow {
+  display: none;
+}
+
+/* Help page "Start Tour" button */
+.help-tour-btn {
+  padding: 6px 18px;
+  border: 2px solid #5798bc;
+  border-radius: 6px;
+  background: #5798bc;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.help-tour-btn:hover {
+  background: #1f6a8c;
+  border-color: #1f6a8c;
+}
+
+/* Dark theme overrides */
+[data-theme="dark"] .tour-tooltip {
+  background: #1e1e2e;
+  border-color: #5798bc;
+  color: #cdd6f4;
+}
+
+[data-theme="dark"] .tour-arrow {
+  background: #1e1e2e;
+  border-color: #5798bc;
+}
+
+[data-theme="dark"] .tour-tooltip-title {
+  color: #89b4fa;
+}
+
+[data-theme="dark"] .tour-tooltip-content {
+  color: #bac2de;
+}
+
+[data-theme="dark"] .tour-step-indicator {
+  color: #6c7086;
+}
+
+[data-theme="dark"] .tour-btn {
+  background: #1e1e2e;
+  color: #89b4fa;
+  border-color: #5798bc;
+}
+
+[data-theme="dark"] .tour-btn:hover {
+  background: #313244;
+}
+
+[data-theme="dark"] .tour-btn.primary {
+  background: #5798bc;
+  color: #fff;
+}
+
+[data-theme="dark"] .tour-btn.primary:hover {
+  background: #1f6a8c;
+}
+
+[data-theme="dark"] .tour-btn.skip {
+  color: #6c7086;
+  border-color: transparent;
+}
+
+[data-theme="dark"] .tour-btn.skip:hover {
+  color: #e25241;
+}
+
+/* ---- Tour cards grid (Help page) ---- */
+
+.help-tours-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.help-tour-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 16px;
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  background: #fff;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.help-tour-card:hover {
+  border-color: #5798bc;
+  box-shadow: 0 2px 8px rgba(87, 152, 188, 0.15);
+}
+
+.help-tour-card-icon {
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.help-tour-card-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1f6a8c;
+  margin-bottom: 4px;
+}
+
+.help-tour-card-desc {
+  font-size: 13px;
+  color: #555;
+  line-height: 1.4;
+  margin-bottom: 12px;
+  flex: 1;
+}
+
+.help-tour-card .help-tour-btn {
+  align-self: flex-start;
+}
+
+/* Inline tour button in help sections */
+.help-inline-tours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.help-inline-tour-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border: 1px solid #5798bc;
+  border-radius: 14px;
+  background: #eef6fb;
+  color: #1f6a8c;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.help-inline-tour-btn:hover {
+  background: #5798bc;
+  color: #fff;
+}
+
+/* Dark theme overrides for tour cards */
+[data-theme="dark"] .help-tour-card {
+  background: #1e1e2e;
+  border-color: #45475a;
+}
+
+[data-theme="dark"] .help-tour-card:hover {
+  border-color: #89b4fa;
+  box-shadow: 0 2px 8px rgba(137, 180, 250, 0.15);
+}
+
+[data-theme="dark"] .help-tour-card-title {
+  color: #89b4fa;
+}
+
+[data-theme="dark"] .help-tour-card-desc {
+  color: #bac2de;
+}
+
+[data-theme="dark"] .help-inline-tour-btn {
+  background: #313244;
+  border-color: #5798bc;
+  color: #89b4fa;
+}
+
+[data-theme="dark"] .help-inline-tour-btn:hover {
+  background: #5798bc;
+  color: #fff;
+}

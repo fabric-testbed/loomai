@@ -1,0 +1,299 @@
+/* Infrastructure view */
+.infra-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.infra-subtabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--fabric-border);
+  flex-shrink: 0;
+  align-items: center;
+}
+.infra-subtab {
+  padding: 6px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  margin-bottom: -2px;
+}
+.infra-subtab:hover {
+  color: var(--fabric-text);
+  background: var(--fabric-bg-tint);
+}
+.infra-subtab.active {
+  color: var(--fabric-primary);
+  border-bottom-color: var(--fabric-primary);
+}
+.infra-refresh-btn {
+  margin-left: auto;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-bg);
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  margin-bottom: 2px;
+  margin-top: 2px;
+  margin-right: 8px;
+}
+.infra-refresh-btn:hover:not(:disabled) {
+  color: var(--fabric-text);
+  border-color: var(--fabric-primary);
+}
+.infra-refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.infra-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Resource Browser */
+.rb-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px;
+}
+.rb-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+.rb-search {
+  flex: 1;
+  max-width: 320px;
+  padding: 6px 12px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-bg);
+  color: var(--fabric-text);
+  font-size: 12px;
+}
+.rb-search:focus {
+  outline: none;
+  border-color: var(--fabric-primary);
+}
+.rb-count {
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+}
+.rb-table-wrap {
+  flex: 1;
+  overflow: auto;
+}
+.rb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.rb-table th {
+  text-align: left;
+  padding: 8px 12px;
+  font-weight: 700;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fabric-text-muted);
+  background: var(--fabric-bg-tint);
+  border-bottom: 2px solid var(--fabric-border);
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.rb-table td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--fabric-border);
+  color: var(--fabric-text);
+  vertical-align: middle;
+}
+.rb-row {
+  cursor: pointer;
+}
+.rb-row:hover {
+  background: rgba(87, 152, 188, 0.04);
+}
+.rb-row.expanded {
+  background: rgba(87, 152, 188, 0.06);
+  font-weight: 600;
+}
+.rb-expand-cell {
+  width: 20px;
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+}
+.rb-site-name {
+  font-weight: 600;
+}
+.rb-state {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.rb-state-active {
+  color: #2e7d32;
+  background: rgba(46, 125, 50, 0.1);
+}
+.rb-state-maintenance {
+  color: #f9a825;
+  background: rgba(249, 168, 37, 0.1);
+}
+
+/* Site detail expanded row */
+.rb-detail-row td {
+  padding: 12px 12px 16px 32px;
+  background: var(--fabric-bg-tint);
+  border-bottom: 2px solid var(--fabric-border);
+}
+.rb-site-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Resource cards grid — used for both site-level and host-level */
+.rb-resource-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.rb-resource-card {
+  background: var(--fabric-bg);
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  min-width: 120px;
+  max-width: 180px;
+}
+.rb-resource-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fabric-text-muted);
+  margin-bottom: 4px;
+}
+.rb-resource-value {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.rb-resource-cap {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--fabric-text-muted);
+}
+.rb-resource-card-empty .rb-no-components {
+  font-size: 12px;
+  color: var(--fabric-text-muted);
+}
+
+/* Availability bar */
+.rb-bar {
+  margin-top: 6px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--fabric-border);
+  overflow: hidden;
+}
+.rb-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+/* Hosts section within expanded site */
+.rb-hosts-section {
+  margin-top: 4px;
+}
+.rb-hosts-header {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fabric-text-muted);
+  margin-bottom: 6px;
+}
+.rb-host-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.rb-host-table th {
+  text-align: left;
+  padding: 6px 10px;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fabric-text-muted);
+  border-bottom: 1px solid var(--fabric-border);
+}
+.rb-host-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--fabric-border);
+}
+.rb-host-row {
+  cursor: pointer;
+}
+.rb-host-row:hover {
+  background: rgba(87, 152, 188, 0.06);
+}
+.rb-host-row.expanded {
+  background: rgba(87, 152, 188, 0.08);
+}
+.rb-host-name {
+  font-weight: 500;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+/* Host detail expanded row */
+.rb-host-detail-row td {
+  padding: 10px 10px 14px 28px;
+  background: var(--fabric-bg);
+  border-bottom: 1px solid var(--fabric-border);
+}
+.rb-resource-grid-host .rb-resource-card {
+  min-width: 100px;
+  max-width: 150px;
+  padding: 8px 12px;
+}
+.rb-resource-grid-host .rb-resource-value {
+  font-size: 15px;
+}
+
+.rb-no-components {
+  color: var(--fabric-text-muted);
+  font-size: 11px;
+}
+.rb-loading {
+  padding: 16px;
+  text-align: center;
+  color: var(--fabric-text-muted);
+  font-size: 12px;
+}
