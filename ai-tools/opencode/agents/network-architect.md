@@ -92,12 +92,13 @@ For facility ports and backbone link queries, use Python with `FablibManager()`.
 For site resource queries and web tunnels to network services:
 ```bash
 # Detailed site resources (including per-host availability)
-curl -s http://localhost:8000/api/resources/sites | python3 -m json.tool
-curl -s http://localhost:8000/api/resources/sites/STAR/hosts | python3 -m json.tool
+curl -s http://localhost:8000/api/sites | python3 -m json.tool
+curl -s http://localhost:8000/api/sites/STAR/hosts | python3 -m json.tool
 
 # Set up tunnel to a network monitoring service (e.g., Grafana)
-curl -X POST http://localhost:8000/api/slices/<id>/nodes/<node>/tunnels \
-  -H "Content-Type: application/json" -d '{"remote_port":3000,"label":"Grafana"}'
+curl -X POST http://localhost:8000/api/tunnels \
+  -H "Content-Type: application/json" \
+  -d '{"slice_name":"my-slice","node_name":"monitor","remote_port":3000,"label":"Grafana"}'
 ```
 
 ## Troubleshooting

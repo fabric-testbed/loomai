@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../api/client';
-import type { ConfigStatus, ProjectInfo, SliceKeySet } from '../types/fabric';
+import type { ConfigStatus, ProjectInfo, SliceKeySet, LoomAISettings, ToolConfigStatus } from '../types/fabric';
 import '../styles/configure.css';
 
 interface ConfigureViewProps {
@@ -50,6 +50,29 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     aider: true, opencode: true, crush: true, claude: false,
   });
 
+  // Unified settings and tool configs
+  const [settings, setSettings] = useState<LoomAISettings | null>(null);
+  const [toolConfigs, setToolConfigs] = useState<ToolConfigStatus[]>([]);
+
+  // Path settings
+  const [pathStorageDir, setPathStorageDir] = useState('');
+  const [pathConfigDir, setPathConfigDir] = useState('');
+  const [pathArtifactsDir, setPathArtifactsDir] = useState('');
+  const [pathSlicesDir, setPathSlicesDir] = useState('');
+  const [pathNotebooksDir, setPathNotebooksDir] = useState('');
+  const [pathAiToolsDir, setPathAiToolsDir] = useState('');
+  const [pathTokenFile, setPathTokenFile] = useState('');
+  const [pathBastionKeyFile, setPathBastionKeyFile] = useState('');
+  const [pathSliceKeysDir, setPathSliceKeysDir] = useState('');
+  const [pathSshConfigFile, setPathSshConfigFile] = useState('');
+  const [pathLogFile, setPathLogFile] = useState('');
+
+  // Service settings
+  const [aiServerUrl, setAiServerUrl] = useState('https://ai.fabric-testbed.net');
+  const [nrpServerUrl, setNrpServerUrl] = useState('https://ellm.nrp-nautilus.io');
+  const [jupyterPort, setJupyterPort] = useState(8889);
+  const [modelProxyPort, setModelProxyPort] = useState(9199);
+
   const tokenFileRef = useRef<HTMLInputElement>(null);
   const bastionKeyRef = useRef<HTMLInputElement>(null);
   const slicePrivKeyRef = useRef<HTMLInputElement>(null);
@@ -75,11 +98,59 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     }
   }, []);
 
+  const loadSettings = useCallback(async () => {
+    try {
+      const s = await api.getSettings();
+      setSettings(s);
+      // Populate form fields from settings
+      if (s.fabric.project_id) setSelectedProject(s.fabric.project_id);
+      if (s.fabric.bastion_username) setBastionLogin(s.fabric.bastion_username);
+      setCredmgrHost(s.fabric.hosts.credmgr);
+      setOrchestratorHost(s.fabric.hosts.orchestrator);
+      setCoreApiHost(s.fabric.hosts.core_api);
+      setBastionHost(s.fabric.hosts.bastion);
+      setAmHost(s.fabric.hosts.artifact_manager);
+      setLogLevel(s.fabric.logging.level);
+      setLogFile(s.paths.log_file);
+      setSshCommandLine(s.fabric.ssh_command_line);
+      setAvoidSet(new Set(s.fabric.avoid_sites));
+      setAiTools(s.ai.tools);
+      setAiServerUrl(s.ai.ai_server_url);
+      setNrpServerUrl(s.ai.nrp_server_url);
+      setJupyterPort(s.services.jupyter_port);
+      setModelProxyPort(s.services.model_proxy_port);
+      // Paths
+      setPathStorageDir(s.paths.storage_dir);
+      setPathConfigDir(s.paths.config_dir);
+      setPathArtifactsDir(s.paths.artifacts_dir);
+      setPathSlicesDir(s.paths.slices_dir);
+      setPathNotebooksDir(s.paths.notebooks_dir);
+      setPathAiToolsDir(s.paths.ai_tools_dir);
+      setPathTokenFile(s.paths.token_file);
+      setPathBastionKeyFile(s.paths.bastion_key_file);
+      setPathSliceKeysDir(s.paths.slice_keys_dir);
+      setPathSshConfigFile(s.paths.ssh_config_file);
+      setPathLogFile(s.paths.log_file);
+    } catch {
+      // Settings may not exist yet on first run
+    }
+  }, []);
+
+  const loadToolConfigs = useCallback(async () => {
+    try {
+      const configs = await api.getToolConfigs();
+      setToolConfigs(configs);
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     loadStatus();
     loadKeySets();
-    api.getAiTools().then(setAiTools).catch(() => {});
-  }, [loadStatus, loadKeySets]);
+    loadSettings();
+    loadToolConfigs();
+  }, [loadStatus, loadKeySets, loadSettings, loadToolConfigs]);
 
   // Load projects when token is available
   const loadProjects = useCallback(async () => {
@@ -255,9 +326,54 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     }
     setSaving(true);
     try {
-      // Save AI tool toggles
-      await api.setAiTools(aiTools).catch(() => {});
+      // Build unified settings object
+      const updatedSettings: LoomAISettings = {
+        schema_version: settings?.schema_version ?? 1,
+        paths: {
+          storage_dir: pathStorageDir || settings?.paths.storage_dir || '/home/fabric/work',
+          config_dir: pathConfigDir || settings?.paths.config_dir || '/home/fabric/work/fabric_config',
+          artifacts_dir: pathArtifactsDir || settings?.paths.artifacts_dir || '/home/fabric/work/my_artifacts',
+          slices_dir: pathSlicesDir || settings?.paths.slices_dir || '/home/fabric/work/my_slices',
+          notebooks_dir: pathNotebooksDir || settings?.paths.notebooks_dir || '/home/fabric/work/notebooks',
+          ai_tools_dir: pathAiToolsDir || settings?.paths.ai_tools_dir || '/home/fabric/work/.ai-tools',
+          token_file: pathTokenFile || settings?.paths.token_file || '/home/fabric/work/fabric_config/id_token.json',
+          bastion_key_file: pathBastionKeyFile || settings?.paths.bastion_key_file || '/home/fabric/work/fabric_config/fabric_bastion_key',
+          slice_keys_dir: pathSliceKeysDir || settings?.paths.slice_keys_dir || '/home/fabric/work/fabric_config/slice_keys',
+          ssh_config_file: pathSshConfigFile || settings?.paths.ssh_config_file || '/home/fabric/work/fabric_config/ssh_config',
+          log_file: pathLogFile || logFile,
+        },
+        fabric: {
+          project_id: selectedProject,
+          bastion_username: bastionLogin,
+          hosts: {
+            credmgr: credmgrHost,
+            orchestrator: orchestratorHost,
+            core_api: coreApiHost,
+            bastion: bastionHost,
+            artifact_manager: amHost,
+          },
+          logging: { level: logLevel },
+          avoid_sites: Array.from(avoidSet),
+          ssh_command_line: sshCommandLine,
+        },
+        ai: {
+          fabric_api_key: litellmApiKey || settings?.ai.fabric_api_key || '',
+          nrp_api_key: nrpApiKey || settings?.ai.nrp_api_key || '',
+          ai_server_url: aiServerUrl,
+          nrp_server_url: nrpServerUrl,
+          tools: aiTools,
+        },
+        services: {
+          jupyter_port: jupyterPort,
+          model_proxy_port: modelProxyPort,
+        },
+        tool_configs: settings?.tool_configs ?? {},
+      };
 
+      // Save via unified settings API (writes settings.json + regenerates fabric_rc + ssh_config)
+      await api.saveSettings(updatedSettings);
+
+      // Also save via legacy endpoint to ensure FABlib reset happens
       const result = await api.saveConfig({
         project_id: selectedProject,
         bastion_username: bastionLogin,
@@ -690,6 +806,15 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                 )}
               </div>
 
+              <p style={{ marginTop: 16, fontWeight: 600 }}>AI Server URLs</p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 6 }}>
+                Server endpoints for AI model access.
+              </p>
+              <p style={{ fontSize: 12, marginTop: 8 }}>FABRIC AI Server URL</p>
+              <input type="text" value={aiServerUrl} onChange={(e) => setAiServerUrl(e.target.value)} />
+              <p style={{ fontSize: 12, marginTop: 8 }}>NRP Server URL</p>
+              <input type="text" value={nrpServerUrl} onChange={(e) => setNrpServerUrl(e.target.value)} />
+
               <p style={{ marginTop: 12, fontWeight: 600, fontSize: 13 }} data-help-id="settings.ai-tools">Enabled Tools</p>
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 8 }}>
                 Choose which AI tools appear in the AI Companion launcher.
@@ -714,6 +839,70 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                   </label>
                 ))}
               </div>
+              <p style={{ marginTop: 16, fontWeight: 600 }}>Services</p>
+              <p style={{ fontSize: 12, marginTop: 8 }}>JupyterLab Port</p>
+              <input type="number" value={jupyterPort} onChange={(e) => setJupyterPort(Number(e.target.value))} />
+              <p style={{ fontSize: 12, marginTop: 8 }}>Model Proxy Port</p>
+              <input type="number" value={modelProxyPort} onChange={(e) => setModelProxyPort(Number(e.target.value))} />
+
+              <p style={{ marginTop: 16, fontWeight: 600 }}>Storage Paths</p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 6 }}>
+                Configure where application data is stored. Changes take effect on next startup.
+              </p>
+              {([
+                { label: 'Storage Dir', value: pathStorageDir, setter: setPathStorageDir },
+                { label: 'Config Dir', value: pathConfigDir, setter: setPathConfigDir },
+                { label: 'Artifacts Dir', value: pathArtifactsDir, setter: setPathArtifactsDir },
+                { label: 'Slices Dir', value: pathSlicesDir, setter: setPathSlicesDir },
+                { label: 'Notebooks Dir', value: pathNotebooksDir, setter: setPathNotebooksDir },
+                { label: 'AI Tools Dir', value: pathAiToolsDir, setter: setPathAiToolsDir },
+                { label: 'Token File', value: pathTokenFile, setter: setPathTokenFile },
+                { label: 'Bastion Key', value: pathBastionKeyFile, setter: setPathBastionKeyFile },
+                { label: 'Slice Keys Dir', value: pathSliceKeysDir, setter: setPathSliceKeysDir },
+                { label: 'SSH Config', value: pathSshConfigFile, setter: setPathSshConfigFile },
+                { label: 'Log File', value: pathLogFile, setter: setPathLogFile },
+              ] as const).map((item) => (
+                <div key={item.label} style={{ marginTop: 6 }}>
+                  <p style={{ fontSize: 12, marginBottom: 2 }}>{item.label}</p>
+                  <input type="text" value={item.value} onChange={(e) => item.setter(e.target.value)} style={{ fontSize: 12 }} />
+                </div>
+              ))}
+
+              {/* Tool Configurations */}
+              {toolConfigs.length > 0 && (
+                <>
+                  <p style={{ marginTop: 16, fontWeight: 600 }}>Tool Configurations</p>
+                  <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 8 }}>
+                    Per-tool configs are stored in .loomai/tools/. Reset replaces with Docker image defaults.
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {toolConfigs.map((tc) => (
+                      <div key={tc.tool} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                        <span style={{ minWidth: 100 }}>{tc.tool}</span>
+                        <span style={{ color: tc.has_config ? '#008e7a' : 'var(--text-muted)', fontSize: 12 }}>
+                          {tc.has_config ? `${tc.files.length} files` : 'not configured'}
+                        </span>
+                        {tc.has_config && (
+                          <button
+                            className="btn-sm"
+                            onClick={async () => {
+                              try {
+                                await api.resetToolConfig(tc.tool);
+                                setMessage({ text: `Reset ${tc.tool} config to defaults`, type: 'success' });
+                                loadToolConfigs();
+                              } catch (err: any) {
+                                setMessage({ text: `Reset failed: ${err.message}`, type: 'error' });
+                              }
+                            }}
+                          >
+                            Reset to Defaults
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -742,7 +931,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
               }}
               disabled={loading}
               data-help-id="settings.rebuild-storage"
-              title="Re-initialize storage and re-import all built-in templates"
+              title="Re-initialize application storage"
             >
               {loading ? 'Rebuilding...' : 'Rebuild Storage'}
             </button>

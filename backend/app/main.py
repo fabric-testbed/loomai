@@ -15,10 +15,9 @@ from app.tunnel_manager import get_tunnel_manager
 def _startup_storage():
     """One-time storage setup on startup.
 
-    1. Copy shipped slice-libraries to builtin-reference/ (once).
-    2. Migrate user artifacts from old per-type dirs to my_artifacts/.
-    3. Migrate .artifacts/ → my_artifacts/ (legacy layout).
-    4. Re-key .artifact-originals/ from dir_name to UUID.
+    1. Migrate user artifacts from old per-type dirs to my_artifacts/.
+    2. Migrate .artifacts/ → my_artifacts/ (legacy layout).
+    3. Re-key .artifact-originals/ from dir_name to UUID.
     """
     import json
     import shutil
@@ -27,20 +26,7 @@ def _startup_storage():
 
     storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
 
-    # --- 1) Copy reference artifacts (only first time) ---
-    ref_dir = os.path.join(storage, "builtin-reference")
-    if not os.path.isdir(ref_dir):
-        base = os.path.dirname(__file__)
-        for levels in [("..",), ("..", ".."), ("..", "..", "..")]:
-            candidate = os.path.realpath(os.path.join(base, *levels, "slice-libraries"))
-            if os.path.isdir(candidate):
-                shutil.copytree(candidate, ref_dir)
-                logger.info("Copied built-in reference artifacts to %s", ref_dir)
-                break
-        else:
-            logger.warning("slice-libraries source not found; builtin-reference not created")
-
-    # --- 2) Migrate artifacts from old per-type dirs to my_artifacts/ ---
+    # --- 1) Migrate artifacts from old per-type dirs to my_artifacts/ ---
     artifacts_dir = os.path.join(storage, "my_artifacts")
     os.makedirs(artifacts_dir, exist_ok=True)
 
@@ -62,22 +48,6 @@ def _startup_storage():
         for entry in list(os.listdir(old_dir)):
             src = os.path.join(old_dir, entry)
             if not os.path.isdir(src):
-                continue
-            is_builtin = False
-            for mf in ["metadata.json", "vm-template.json", "recipe.json", "experiment.json"]:
-                mpath = os.path.join(src, mf)
-                if os.path.isfile(mpath):
-                    try:
-                        with open(mpath) as f:
-                            meta = json.load(f)
-                        if meta.get("builtin"):
-                            is_builtin = True
-                    except Exception:
-                        pass
-                    break
-            if is_builtin:
-                shutil.rmtree(src)
-                logger.info("Removed old built-in: %s/%s", old_sub, entry)
                 continue
             dst = os.path.join(artifacts_dir, entry)
             if not os.path.exists(dst):
@@ -240,17 +210,64 @@ def _startup_ai_tools():
     import logging
     logger = logging.getLogger("startup")
     try:
+        from app.tool_installer import clean_stale_locks, fixup_jupyter_kernel
+        clean_stale_locks()
+        fixup_jupyter_kernel()
+    except Exception as e:
+        logger.warning("AI tools startup fixup failed (non-fatal): %s", e)
+    try:
         from app.routes.ai_terminal import seed_ai_tool_defaults
         seed_ai_tool_defaults()
     except Exception as e:
         logger.warning("AI tool seeding failed (non-fatal): %s", e)
 
 
+def _startup_settings():
+    """Load or migrate settings, regenerate derived files, apply env vars."""
+    import logging
+    logger = logging.getLogger("startup")
+    from app import settings_manager
+
+    if not os.path.isfile(settings_manager.get_settings_path()):
+        logger.info("No settings.json found — migrating from legacy config")
+        settings_manager.migrate_from_legacy()
+    else:
+        settings_manager.load_settings()
+
+    settings = settings_manager.load_settings()
+    settings_manager.apply_env_vars(settings)
+
+    # Only regenerate fabric_rc if the config dir exists and we have
+    # meaningful settings (bastion_username or project_id set)
+    if settings["fabric"].get("bastion_username") or settings["fabric"].get("project_id"):
+        try:
+            settings_manager.generate_fabric_rc(settings)
+            settings_manager.generate_ssh_config(settings)
+        except Exception as e:
+            logger.warning("Failed to regenerate derived config files: %s", e)
+
+    # Seed tool configs from Docker image defaults (only if not already present)
+    try:
+        settings_manager.seed_tool_configs()
+    except Exception as e:
+        logger.warning("Tool config seeding failed (non-fatal): %s", e)
+
+    logger.info("Settings loaded from %s", settings_manager.get_settings_path())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle: periodic tunnel cleanup + shutdown."""
     _startup_storage()
+    _startup_settings()
     _startup_ai_tools()
+
+    # Mark stale runs from previous container lifecycle
+    try:
+        from app.run_manager import recover_stale_runs
+        recover_stale_runs()
+    except Exception:
+        pass
 
     mgr = get_tunnel_manager()
 
@@ -263,6 +280,13 @@ async def lifespan(app: FastAPI):
     yield
     task.cancel()
     mgr.close_all()
+
+    # Back up Claude Code config to persistent storage on shutdown
+    try:
+        from app.routes.ai_terminal import _backup_claude_config
+        _backup_claude_config()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="FABRIC Web GUI API", version="0.1.0", lifespan=lifespan)

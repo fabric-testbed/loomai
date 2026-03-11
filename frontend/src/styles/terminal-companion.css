@@ -258,6 +258,179 @@
   font-weight: 600;
 }
 
+/* ── Folder picker ──────────────────────────────────────────────────────── */
+
+.tc-folder-picker {
+  margin-bottom: 10px;
+}
+
+.tc-folder-picker-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--fabric-border-solid);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fabric-text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  text-align: left;
+}
+
+.tc-folder-picker-toggle svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.tc-folder-picker-toggle:hover {
+  background: var(--fabric-bg-tint);
+}
+
+[data-theme="dark"] .tc-folder-picker-toggle {
+  border-color: rgba(255,255,255,0.1);
+}
+
+.tc-folder-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-folder-browser {
+  margin-top: 6px;
+  border: 1px solid var(--fabric-border-solid);
+  border-radius: 8px;
+  background: var(--fabric-white);
+  overflow: hidden;
+}
+
+[data-theme="dark"] .tc-folder-browser {
+  background: #16162a;
+  border-color: rgba(255,255,255,0.08);
+}
+
+.tc-folder-browser-path {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--fabric-bg-tint);
+  border-bottom: 1px solid var(--fabric-border-solid);
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  overflow: hidden;
+}
+
+[data-theme="dark"] .tc-folder-browser-path {
+  background: rgba(255,255,255,0.03);
+  border-color: rgba(255,255,255,0.06);
+}
+
+.tc-folder-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.tc-folder-nav-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.tc-folder-nav-btn:hover {
+  background: var(--fabric-bg-tint);
+  color: var(--fabric-text);
+}
+
+.tc-folder-current-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.tc-folder-list {
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.tc-folder-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 10px;
+  border: none;
+  background: transparent;
+  color: var(--fabric-text);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.tc-folder-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+
+.tc-folder-item:hover {
+  background: var(--fabric-bg-tint);
+}
+
+[data-theme="dark"] .tc-folder-item:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.tc-folder-loading,
+.tc-folder-empty {
+  padding: 12px 10px;
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+  text-align: center;
+}
+
+.tc-folder-actions {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--fabric-border-solid);
+}
+
+[data-theme="dark"] .tc-folder-actions {
+  border-color: rgba(255,255,255,0.06);
+}
+
+.tc-folder-hint {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  line-height: 1.4;
+}
+
+.tc-folder-hint strong {
+  color: var(--fabric-text);
+  font-weight: 500;
+  word-break: break-all;
+}
+
 /* ── Model picker ────────────────────────────────────────────────────────── */
 
 .tc-model-picker {
@@ -380,6 +553,37 @@
   color: var(--fabric-primary);
 }
 
+.tc-popout-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--fabric-border-solid);
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.tc-popout-btn:hover {
+  background: var(--fabric-bg-tint);
+  color: var(--fabric-primary);
+  border-color: var(--fabric-primary);
+}
+.tc-popout-btn svg {
+  width: 14px;
+  height: 14px;
+}
+[data-theme="dark"] .tc-popout-btn {
+  border-color: rgba(255,255,255,0.1);
+}
+.tc-popout-btn + .tc-refresh-btn {
+  margin-left: 0;
+}
+
 .tc-refresh-btn {
   margin-left: auto;
   background: none;
@@ -477,4 +681,201 @@
 
 .tc-loading-error {
   color: var(--fabric-coral, #e25241);
+}
+
+/* ── Claude Code config panel ──────────────────────────────────────────── */
+
+.tc-claude-config {
+  margin-top: 16px;
+  border-top: 1px solid var(--fabric-border-solid);
+  padding-top: 12px;
+}
+
+[data-theme="dark"] .tc-claude-config {
+  border-color: rgba(255,255,255,0.06);
+}
+
+.tc-config-toggle {
+  background: none;
+  border: none;
+  color: var(--fabric-text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 0;
+  width: 100%;
+  text-align: left;
+}
+
+.tc-config-toggle:hover {
+  color: var(--fabric-primary);
+}
+
+.tc-config-panel {
+  margin-top: 8px;
+}
+
+.tc-config-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fabric-text-muted);
+  margin-bottom: 10px;
+}
+
+.tc-config-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.tc-config-btn {
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--fabric-border-solid);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fabric-text);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.tc-config-btn:hover {
+  background: var(--fabric-bg-tint);
+}
+
+.tc-config-btn.danger {
+  color: var(--fabric-coral, #e25241);
+  border-color: var(--fabric-coral, #e25241);
+}
+
+.tc-config-btn.danger:hover {
+  background: rgba(226, 82, 65, 0.1);
+}
+
+.tc-config-btn.save {
+  background: var(--fabric-primary);
+  color: white;
+  border-color: var(--fabric-primary);
+}
+
+.tc-config-btn.save:hover {
+  opacity: 0.9;
+}
+
+[data-theme="dark"] .tc-config-btn {
+  border-color: rgba(255,255,255,0.1);
+}
+
+.tc-config-msg {
+  font-size: 11px;
+  color: var(--fabric-success, #008e7a);
+  margin-bottom: 8px;
+}
+
+.tc-config-files {
+  margin-bottom: 8px;
+}
+
+.tc-config-files-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fabric-text-muted);
+  margin-bottom: 6px;
+}
+
+.tc-config-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 0;
+}
+
+.tc-config-file-name {
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--fabric-text);
+}
+
+.tc-config-file-name.missing {
+  color: var(--fabric-text-muted);
+  font-style: italic;
+}
+
+.tc-config-file-btn {
+  font-size: 10px;
+  padding: 2px 8px;
+  border: 1px solid var(--fabric-border-solid);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fabric-primary);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.tc-config-file-btn:hover {
+  background: var(--fabric-bg-tint);
+}
+
+[data-theme="dark"] .tc-config-file-btn {
+  border-color: rgba(255,255,255,0.1);
+}
+
+.tc-config-editor {
+  margin-top: 8px;
+  border: 1px solid var(--fabric-border-solid);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+[data-theme="dark"] .tc-config-editor {
+  border-color: rgba(255,255,255,0.08);
+}
+
+.tc-config-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--fabric-bg-tint);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+[data-theme="dark"] .tc-config-editor-header {
+  background: rgba(255,255,255,0.04);
+}
+
+.tc-config-textarea {
+  width: 100%;
+  min-height: 120px;
+  max-height: 300px;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.5;
+  border: none;
+  background: var(--fabric-input-bg, #fff);
+  color: var(--fabric-text);
+  resize: vertical;
+}
+
+[data-theme="dark"] .tc-config-textarea {
+  background: #1a1a2e;
+}
+
+.tc-config-textarea:focus {
+  outline: none;
+}
+
+.tc-config-hint {
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  margin-top: 8px;
+  font-style: italic;
 }

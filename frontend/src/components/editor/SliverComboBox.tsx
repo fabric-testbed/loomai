@@ -53,6 +53,15 @@ function buildOptions(sliceData: SliceData | null, errorMessages?: SliceErrorMes
       hasFailed: failedNames.has(fp.name),
     });
   }
+  for (const pm of (sliceData.port_mirrors ?? [])) {
+    options.push({
+      key: `pm:${pm.name}`,
+      name: pm.name,
+      type: 'Mirror',
+      group: 'Port Mirrors',
+      hasFailed: failedNames.has(pm.name),
+    });
+  }
   return options;
 }
 
@@ -118,7 +127,7 @@ export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect,
               <>
                 <span className="sliver-combo-name">{selectedOption.name}</span>
                 {selectedOption.hasFailed && <span className="sliver-badge sliver-badge-failed">Failed</span>}
-                <span className={`sliver-badge sliver-badge-${selectedOption.type === 'VM' ? 'vm' : selectedOption.type === 'FP' ? 'fp' : 'net'}`}>
+                <span className={`sliver-badge sliver-badge-${selectedOption.type === 'VM' ? 'vm' : selectedOption.type === 'FP' ? 'fp' : selectedOption.type === 'Mirror' ? 'pm' : 'net'}`}>
                   {selectedOption.type}
                 </span>
               </>
@@ -152,7 +161,7 @@ export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect,
                   >
                     <span className="sliver-combo-opt-name">{opt.name}</span>
                     {opt.hasFailed && <span className="sliver-badge sliver-badge-failed">Failed</span>}
-                    <span className={`sliver-badge sliver-badge-${opt.type === 'VM' ? 'vm' : opt.type === 'FP' ? 'fp' : 'net'}`}>
+                    <span className={`sliver-badge sliver-badge-${opt.type === 'VM' ? 'vm' : opt.type === 'FP' ? 'fp' : opt.type === 'Mirror' ? 'pm' : 'net'}`}>
                       {opt.type}
                     </span>
                   </div>

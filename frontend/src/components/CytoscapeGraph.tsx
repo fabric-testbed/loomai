@@ -118,6 +118,14 @@ function buildStylesheet(dark: boolean): any[] {
       'text-wrap': 'wrap', 'text-max-width': '80px', 'color': l3Color,
       'font-family': 'Montserrat, sans-serif',
     }},
+    // Public ext L3 networks — dashed border, coral color to distinguish from private
+    { selector: '.network-l3-ext', style: {
+      'border-style': 'dashed',
+      'border-width': 2.5,
+      'border-color': dark ? '#ff8a80' : '#e25241',
+      'color': dark ? '#ff8a80' : '#e25241',
+      'background-color': dark ? '#3a1818' : '#fce4ec',
+    }},
     { selector: '.edge-l2', style: {
       'width': 3, 'line-color': l2Color, 'target-arrow-color': l2Color,
       'curve-style': 'unbundled-bezier', 'label': 'data(label)', 'font-size': '8px',
@@ -158,6 +166,30 @@ function buildStylesheet(dark: boolean): any[] {
       'border-width': 2, 'border-color': fpColor, 'label': 'data(label)',
       'text-valign': 'center', 'text-halign': 'center', 'font-size': '9px',
       'text-wrap': 'wrap', 'text-max-width': '70px', 'color': fpColor,
+      'font-family': 'Montserrat, sans-serif',
+    }},
+    // Port mirror service nodes — hexagon shape, coral/orange
+    { selector: '.port-mirror', style: {
+      'shape': 'hexagon', 'width': 90, 'height': 80,
+      'background-color': dark ? '#3a1818' : '#fce4ec',
+      'border-width': 2, 'border-style': 'dashed',
+      'border-color': dark ? '#ff8a80' : '#e25241',
+      'label': 'data(label)',
+      'text-valign': 'center', 'text-halign': 'center', 'font-size': '9px',
+      'text-wrap': 'wrap', 'text-max-width': '80px',
+      'color': dark ? '#ff8a80' : '#e25241',
+      'font-family': 'Montserrat, sans-serif',
+    }},
+    { selector: '.edge-port-mirror', style: {
+      'width': 2, 'line-color': dark ? '#ff8a80' : '#e25241',
+      'line-style': 'dotted',
+      'target-arrow-color': dark ? '#ff8a80' : '#e25241',
+      'target-arrow-shape': 'triangle',
+      'curve-style': 'unbundled-bezier',
+      'label': 'data(label)', 'font-size': '8px', 'text-rotation': 'autorotate',
+      'text-background-color': edgeLabelBg, 'text-background-opacity': 1,
+      'text-background-padding': '2px',
+      'color': dark ? '#ff8a80' : '#e25241',
       'font-family': 'Montserrat, sans-serif',
     }},
     { selector: ':selected', style: {
@@ -556,7 +588,7 @@ export default function CytoscapeGraph({
     (el) => el.element_type === 'node' && el.management_ip
   ) ?? [];
   const deletable = menu?.selected.filter(
-    (el) => el.element_type === 'node' || el.element_type === 'network' || el.element_type === 'facility-port'
+    (el) => el.element_type === 'node' || el.element_type === 'network' || el.element_type === 'facility-port' || el.element_type === 'port-mirror'
   ) ?? [];
 
   const singleVm = menu?.selected.length === 1 && menu.selected[0].element_type === 'node'

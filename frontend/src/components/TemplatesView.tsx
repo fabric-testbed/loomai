@@ -294,11 +294,7 @@ export default function TemplatesView({ onLoadSlice }: TemplatesViewProps) {
       <div key={t.dir_name} className={`tv-card ${isEditing ? 'tv-card-editing' : ''}`}>
         <div className="tv-card-header">
           <span className="tv-card-name">{t.name}</span>
-          {t.builtin ? (
-            <span className="tv-badge tv-badge-builtin">Built-in</span>
-          ) : (
-            <span className="tv-badge tv-badge-user">User</span>
-          )}
+          <span className="tv-badge tv-badge-user">User</span>
         </div>
         {t.description && <div className="tv-card-desc">{t.description}</div>}
         <div className="tv-card-meta">
@@ -343,11 +339,7 @@ export default function TemplatesView({ onLoadSlice }: TemplatesViewProps) {
       <div key={t.dir_name} className={`tv-card ${isEditing ? 'tv-card-editing' : ''}`}>
         <div className="tv-card-header">
           <span className="tv-card-name">{t.name}</span>
-          {t.builtin ? (
-            <span className="tv-badge tv-badge-builtin">Built-in</span>
-          ) : (
-            <span className="tv-badge tv-badge-user">User</span>
-          )}
+          <span className="tv-badge tv-badge-user">User</span>
         </div>
         {t.description && <div className="tv-card-desc">{t.description}</div>}
         <div className="tv-card-meta">
@@ -515,11 +507,7 @@ export default function TemplatesView({ onLoadSlice }: TemplatesViewProps) {
               <div key={r.dir_name} className="tv-card">
                 <div className="tv-card-header">
                   <span className="tv-card-name">{r.name}</span>
-                  {r.builtin ? (
-                    <span className="tv-badge tv-badge-builtin">Built-in</span>
-                  ) : (
-                    <span className="tv-badge tv-badge-user">User</span>
-                  )}
+                  <span className="tv-badge tv-badge-user">User</span>
                 </div>
                 {r.description && <div className="tv-card-desc">{r.description}</div>}
                 <div className="tv-card-meta">

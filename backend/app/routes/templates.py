@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -27,17 +26,6 @@ def _templates_dir() -> str:
     return get_artifacts_dir()
 
 
-def _builtin_templates_dir() -> str:
-    """Return the path to the builtin slice templates shipped with the repo."""
-    # Check two candidate paths: inside backend (Docker) and repo root (local dev)
-    base = os.path.dirname(__file__)
-    for levels in [("..", ".."), ("..", "..", "..")]:
-        candidate = os.path.realpath(os.path.join(base, *levels, "slice-libraries", "slice_templates"))
-        if os.path.isdir(candidate):
-            return candidate
-    return os.path.join(base, "..", "..", "slice-libraries", "slice_templates")
-
-
 def _sanitize_name(name: str) -> str:
     """Sanitize template name to safe directory name."""
     safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", name.strip())
@@ -54,79 +42,9 @@ def _validate_path(base: str, name: str) -> str:
     return path
 
 
-# ---------------------------------------------------------------------------
-# Builtin template helpers
-# ---------------------------------------------------------------------------
-
-def _builtin_hash(builtin_dir: str) -> str:
-    """Compute a hash of a builtin template directory for change detection."""
-    hashable: dict[str, Any] = {}
-    tmpl_path = os.path.join(builtin_dir, "slice.json")
-    if os.path.isfile(tmpl_path):
-        with open(tmpl_path) as f:
-            hashable["model"] = json.load(f)
-    # Include root deploy.sh
-    deploy_path = os.path.join(builtin_dir, "deploy.sh")
-    if os.path.isfile(deploy_path):
-        with open(deploy_path) as f:
-            hashable["_deploy_sh"] = f.read()
-    tools_dir = os.path.join(builtin_dir, "tools")
-    if os.path.isdir(tools_dir):
-        tools = []
-        for fn in sorted(os.listdir(tools_dir)):
-            fp = os.path.join(tools_dir, fn)
-            if os.path.isfile(fp):
-                with open(fp) as f:
-                    tools.append({"filename": fn, "content": f.read()})
-        hashable["_tools"] = tools
-    else:
-        hashable["_tools"] = []
-    # Include build/ directory (scripts, configs, dashboards used by deploy.sh)
-    build_dir = os.path.join(builtin_dir, "build")
-    if os.path.isdir(build_dir):
-        build_files = []
-        for fn in sorted(os.listdir(build_dir)):
-            fp = os.path.join(build_dir, fn)
-            if os.path.isfile(fp):
-                try:
-                    with open(fp) as f:
-                        build_files.append({"filename": fn, "content": f.read()})
-                except Exception:
-                    # Binary or very large files — hash by size + mtime
-                    st = os.stat(fp)
-                    build_files.append({"filename": fn, "size": st.st_size, "mtime": st.st_mtime})
-        hashable["_build"] = build_files
-    return hashlib.sha256(json.dumps(hashable, sort_keys=True).encode()).hexdigest()[:16]
-
-
-def _list_builtin_templates() -> list[dict[str, Any]]:
-    """Scan the builtin templates directory and return metadata for each."""
-    bdir = os.path.realpath(_builtin_templates_dir())
-    if not os.path.isdir(bdir):
-        return []
-    results = []
-    for entry in sorted(os.listdir(bdir)):
-        entry_dir = os.path.join(bdir, entry)
-        tmpl_path = os.path.join(entry_dir, "slice.json")
-        meta_path = os.path.join(entry_dir, "metadata.json")
-        if os.path.isfile(tmpl_path) and os.path.isfile(meta_path):
-            with open(meta_path) as f:
-                meta = json.load(f)
-            meta["_dir"] = entry_dir
-            meta["_entry"] = entry
-            results.append(meta)
-    return results
-
-
-def _seed_if_needed() -> None:
-    """Ensure the templates storage directory exists.
-
-    Built-in template seeding is disabled — users create or download
-    artifacts via the marketplace.  The original built-in templates are
-    preserved in the ``builtin-reference/`` folder in storage.
-    """
-    tdir = _templates_dir()
-    os.makedirs(tdir, exist_ok=True)
+def _ensure_dir() -> None:
+    """Ensure the templates storage directory exists."""
+    os.makedirs(_templates_dir(), exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +110,7 @@ def _list_tools(tmpl_dir: str) -> list[dict[str, str]]:
 @router.get("")
 def list_templates() -> list[dict[str, Any]]:
     """List weaves (dirs containing slice.json, deploy.sh, and/or run.sh)."""
-    _seed_if_needed()
+    _ensure_dir()
     tdir = _templates_dir()
     if not os.path.isdir(tdir):
         return []
@@ -244,6 +162,16 @@ def list_templates() -> list[dict[str, Any]]:
                 meta["has_template"] = has_template
                 meta["has_deploy"] = has_deploy
                 meta["has_run"] = has_run
+                # Read script argument manifests
+                for manifest_name, key in [("deploy.json", "deploy_args"), ("run.json", "run_args")]:
+                    manifest_path = os.path.join(entry_dir, manifest_name)
+                    if os.path.isfile(manifest_path):
+                        try:
+                            with open(manifest_path) as f:
+                                manifest = json.load(f)
+                            meta[key] = manifest.get("args", [])
+                        except Exception:
+                            pass
                 results.append(meta)
             except Exception:
                 pass
@@ -254,7 +182,7 @@ def list_templates() -> list[dict[str, Any]]:
 @router.post("")
 def save_template(req: SaveTemplateRequest) -> dict[str, Any]:
     """Save current slice as a reusable template."""
-    _seed_if_needed()
+    _ensure_dir()
     safe_name = _sanitize_name(req.name)
     tdir = _templates_dir()
     os.makedirs(tdir, exist_ok=True)
@@ -279,7 +207,6 @@ def save_template(req: SaveTemplateRequest) -> dict[str, Any]:
         "name": req.name,
         "description": req.description,
         "source_slice": req.slice_name,
-        "builtin": False,
         "created": datetime.now(timezone.utc).isoformat(),
         "node_count": len(model.get("nodes", [])),
         "network_count": len(model.get("networks", [])),
@@ -299,7 +226,7 @@ class CreateArtifactRequest(BaseModel):
 @router.post("/create-blank")
 def create_blank_artifact(req: CreateArtifactRequest) -> dict[str, Any]:
     """Create a new blank artifact directory with metadata."""
-    _seed_if_needed()
+    _ensure_dir()
     safe_name = _sanitize_name(req.name)
     tdir = _templates_dir()
     os.makedirs(tdir, exist_ok=True)
@@ -314,7 +241,6 @@ def create_blank_artifact(req: CreateArtifactRequest) -> dict[str, Any]:
         "name": req.name,
         "description": req.description,
         "category": req.category,
-        "builtin": False,
         "created": datetime.now(timezone.utc).isoformat(),
         "node_count": 0,
         "network_count": 0,
@@ -350,10 +276,65 @@ def resync_templates() -> list[dict[str, Any]]:
     return list_templates()
 
 
+@router.get("/runs")
+def list_background_runs():
+    """List all background runs (active and completed)."""
+    from app.run_manager import list_runs
+    return list_runs()
+
+
+@router.get("/runs/{run_id}")
+def get_background_run(run_id: str):
+    """Get status and metadata for a background run."""
+    from app.run_manager import get_run
+    meta = get_run(run_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return meta
+
+
+@router.get("/runs/{run_id}/output")
+def get_background_run_output(run_id: str, offset: int = 0):
+    """Get run output from the given byte offset.
+
+    Returns {"output": "...", "offset": N, "status": "..."} where offset
+    is the new position for the next poll. Status comes from meta so the
+    client knows when to stop polling.
+    """
+    from app.run_manager import get_run, get_run_output
+    meta = get_run(run_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Run not found")
+    output, new_offset = get_run_output(run_id, offset)
+    return {
+        "output": output,
+        "offset": new_offset,
+        "status": meta.get("status", "unknown"),
+    }
+
+
+@router.post("/runs/{run_id}/stop")
+def stop_background_run(run_id: str):
+    """Stop a running background run."""
+    from app.run_manager import stop_run
+    if stop_run(run_id):
+        return {"status": "stopped"}
+    raise HTTPException(status_code=404, detail="Run not found or already finished")
+
+
+@router.delete("/runs/{run_id}")
+def delete_background_run(run_id: str):
+    """Delete a completed run's data."""
+    from app.run_manager import delete_run
+    if delete_run(run_id):
+        return {"status": "deleted"}
+    raise HTTPException(status_code=404, detail="Run not found")
+
+
 @router.get("/{name}")
 def get_template(name: str) -> dict[str, Any]:
     """Get full template detail including model JSON and tools listing."""
-    _seed_if_needed()
+    _ensure_dir()
     safe_name = _sanitize_name(name)
     tdir = _templates_dir()
     tmpl_dir = _validate_path(tdir, safe_name)
@@ -377,7 +358,7 @@ def get_template(name: str) -> dict[str, Any]:
 @router.post("/{name}/load")
 def load_template(name: str, req: LoadTemplateRequest) -> dict[str, Any]:
     """Load a template as a new draft slice."""
-    _seed_if_needed()
+    _ensure_dir()
     safe_name = _sanitize_name(name)
     tdir = _templates_dir()
     tmpl_dir = _validate_path(tdir, safe_name)
@@ -572,14 +553,14 @@ logger = logging.getLogger(__name__)
 
 class RunScriptRequest(BaseModel):
     slice_name: str = ""
+    args: dict[str, str] = {}
 
 
 @router.post("/{name}/run-script/{script}")
 def run_weave_script(name: str, script: str, req: RunScriptRequest):
     """Run deploy.sh or run.sh from a weave artifact, streaming output as SSE.
 
-    The script is executed on the backend container with SLICE_NAME env var set
-    (may be empty for autonomous run scripts).
+    The script is executed on the backend container with args set as env vars.
     """
     if script not in ("deploy.sh", "run.sh"):
         raise HTTPException(status_code=400, detail="Only deploy.sh and run.sh are supported")
@@ -597,13 +578,18 @@ def run_weave_script(name: str, script: str, req: RunScriptRequest):
         def _sse(payload: dict) -> str:
             return "data: " + _json.dumps(payload) + "\n\n"
 
-        env = {**os.environ, "SLICE_NAME": req.slice_name}
-        label = f" for slice {req.slice_name!r}" if req.slice_name else ""
+        # Build env vars from args dict (with legacy slice_name fallback)
+        script_args = dict(req.args)
+        if req.slice_name and "SLICE_NAME" not in script_args:
+            script_args["SLICE_NAME"] = req.slice_name
+        env = {**os.environ, **script_args}
+        slice_name = script_args.get("SLICE_NAME", "")
+        label = f" for slice {slice_name!r}" if slice_name else ""
         step_msg = f"Running {script}{label}..."
         yield _sse({"type": "step", "message": step_msg})
         cmd = ["bash", script_path]
-        if req.slice_name:
-            cmd.append(req.slice_name)
+        if slice_name:
+            cmd.append(slice_name)
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -628,3 +614,57 @@ def run_weave_script(name: str, script: str, req: RunScriptRequest):
             yield _sse({"type": "error", "message": str(e)})
 
     return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Background runs — detached from HTTP connections
+# ---------------------------------------------------------------------------
+
+class StartRunRequest(BaseModel):
+    slice_name: str = ""
+    args: dict[str, str] = {}
+
+
+@router.post("/{name}/start-run/{script}")
+def start_background_run(name: str, script: str, req: StartRunRequest):
+    """Start a weave script as a background run, detached from the HTTP connection.
+
+    Returns a run_id that can be used to poll status and output.
+    """
+    if script not in ("deploy.sh", "run.sh"):
+        raise HTTPException(status_code=400, detail="Only deploy.sh and run.sh are supported")
+
+    safe_name = _sanitize_name(name)
+    tdir = _templates_dir()
+    tmpl_dir = _validate_path(tdir, safe_name)
+    script_path = os.path.join(tmpl_dir, script)
+    if not os.path.isfile(script_path):
+        raise HTTPException(status_code=404, detail=f"Script '{script}' not found in weave '{name}'")
+
+    # Read weave display name from metadata
+    meta_path = os.path.join(tmpl_dir, "metadata.json")
+    weave_name = name
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path) as f:
+                weave_name = json.load(f).get("name", name)
+        except Exception:
+            pass
+
+    # Build script args — merge legacy slice_name with new args dict
+    script_args = dict(req.args)
+    if req.slice_name and "SLICE_NAME" not in script_args:
+        script_args["SLICE_NAME"] = req.slice_name
+
+    from app.run_manager import start_run
+    run_id = start_run(
+        weave_dir_name=safe_name,
+        weave_name=weave_name,
+        script=script,
+        script_path=script_path,
+        cwd=tmpl_dir,
+        script_args=script_args,
+    )
+    return {"run_id": run_id, "status": "running"}
+
+

@@ -1,16 +1,18 @@
 'use client';
 import GeoView from './GeoView';
 import ResourceBrowser from './ResourceBrowser';
+import FacilityPortsBrowser from './FacilityPortsBrowser';
 import '../styles/infrastructure-view.css';
-import type { SiteInfo, LinkInfo, SiteMetrics, LinkMetrics } from '../types/fabric';
+import type { SiteInfo, LinkInfo, SiteMetrics, LinkMetrics, FacilityPortInfo } from '../types/fabric';
 
-type InfraSubView = 'map' | 'browse';
+type InfraSubView = 'map' | 'browse' | 'facility-ports';
 
 interface InfrastructureViewProps {
   subView: InfraSubView;
   onSubViewChange: (sv: InfraSubView) => void;
   sites: SiteInfo[];
   links: LinkInfo[];
+  facilityPorts: FacilityPortInfo[];
   linksLoading: boolean;
   siteMetricsCache: Record<string, SiteMetrics>;
   linkMetricsCache: Record<string, LinkMetrics>;
@@ -27,9 +29,10 @@ interface InfrastructureViewProps {
 const SUB_VIEWS: Array<{ key: InfraSubView; label: string }> = [
   { key: 'map', label: 'Map' },
   { key: 'browse', label: 'Browse' },
+  { key: 'facility-ports', label: 'Facility Ports' },
 ];
 
-export default function InfrastructureView({ subView, onSubViewChange, sites, links, linksLoading, siteMetricsCache, linkMetricsCache, metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading, selectedElement, onNodeClick, infraLoading, onRefreshInfrastructure }: InfrastructureViewProps) {
+export default function InfrastructureView({ subView, onSubViewChange, sites, links, facilityPorts, linksLoading, siteMetricsCache, linkMetricsCache, metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading, selectedElement, onNodeClick, infraLoading, onRefreshInfrastructure }: InfrastructureViewProps) {
   return (
     <div className="infra-view">
       <div className="infra-subtabs">
@@ -69,8 +72,10 @@ export default function InfrastructureView({ subView, onSubViewChange, sites, li
             collapsibleDetail
             hideInfraToggles
           />
-        ) : (
+        ) : subView === 'browse' ? (
           <ResourceBrowser sites={sites} />
+        ) : (
+          <FacilityPortsBrowser facilityPorts={facilityPorts} loading={infraLoading} />
         )}
       </div>
     </div>

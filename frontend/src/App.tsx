@@ -30,7 +30,7 @@ import HelpContextMenu from './components/HelpContextMenu';
 import GuidedTour from './components/GuidedTour';
 import { tours } from './data/tourSteps';
 import * as api from './api/client';
-import type { SliceSummary, SliceData, SiteInfo, LinkInfo, ComponentModel, SiteMetrics, LinkMetrics, ValidationIssue, ProjectInfo, VMTemplateSummary, BootConfig, RecipeSummary } from './types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, LinkInfo, ComponentModel, SiteMetrics, LinkMetrics, ValidationIssue, ProjectInfo, VMTemplateSummary, BootConfig, RecipeSummary, FacilityPortInfo } from './types/fabric';
 
 export default function App() {
   const [slices, setSlices] = useState<SliceSummary[]>([]);
@@ -50,10 +50,10 @@ export default function App() {
   const [sliceBootNodeStatus, setSliceBootNodeStatus] = useState<Record<string, Record<string, 'pending' | 'running' | 'done' | 'error'>>>({});
   type TopView = 'landing' | 'slices' | 'artifacts' | 'infrastructure' | 'jupyter' | 'ai';
   type SlicesSubView = 'topology' | 'table' | 'storage' | 'map' | 'apps';
-  type InfraSubView = 'map' | 'browse';
+  type InfraSubView = 'map' | 'browse' | 'facility-ports';
   const [currentView, setCurrentView] = useState<TopView>('landing');
   const [slicesSubView, setSlicesSubView] = useState<SlicesSubView>('topology');
-  const [infraSubView, setInfraSubView] = useState<InfraSubView>('map');
+  const [infraSubView, setInfraSubView] = useState<InfraSubView>('browse');
   const [editingArtifactDirName, setEditingArtifactDirName] = useState('');
   const [jupyterPath, setJupyterPath] = useState<string | undefined>(undefined);
   const [selectedAiTool, setSelectedAiTool] = useState<string | null>(null);
@@ -219,10 +219,11 @@ export default function App() {
   const autoRefreshRef = useRef(autoRefresh);
   autoRefreshRef.current = autoRefresh;
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [consoleFullWidth, setConsoleFullWidth] = useState(true);
+  const [consoleFullWidth, setConsoleFullWidth] = useState(false);
   const [consoleExpanded, setConsoleExpanded] = useState(false);
   const [consoleHeight, setConsoleHeight] = useState(260);
   const [openBootLogSlices, setOpenBootLogSlices] = useState<string[]>([]);
+  const [activeRuns, setActiveRuns] = useState<api.BackgroundRun[]>([]);
   // Side console panel state (tabs tracked here, layout managed by panel system)
   const [sideConsoleTabs, setSideConsoleTabs] = useState<string[]>([]);
   const [dropIndicator, setDropIndicator] = useState<{ panelId: PanelId; edge: 'left' | 'right' } | null>(null);
@@ -249,6 +250,7 @@ export default function App() {
   // --- Global cache: infrastructure ---
   const [infraSites, setInfraSites] = useState<SiteInfo[]>([]);
   const [infraLinks, setInfraLinks] = useState<LinkInfo[]>([]);
+  const [infraFacilityPorts, setInfraFacilityPorts] = useState<FacilityPortInfo[]>([]);
   const [infraLoading, setInfraLoading] = useState(false);
 
   // --- Global cache: static data (fetched once on mount) ---
@@ -509,10 +511,11 @@ export default function App() {
     setStatusMessage('Loading sites and links...');
     const IGNORED = new Set(['AWS', 'AZURE', 'GCP', 'OCI', 'AL2S']);
     try {
-      const [allSites, links] = await Promise.all([api.listSites(), api.listLinks()]);
+      const [allSites, links, facilityPorts] = await Promise.all([api.listSites(), api.listLinks(), api.listFacilityPorts().catch(() => [] as FacilityPortInfo[])]);
       const filteredSites = allSites.filter((s) => !IGNORED.has(s.name) && s.lat !== 0 && s.lon !== 0);
       setInfraSites(filteredSites);
       setInfraLinks(links);
+      setInfraFacilityPorts(facilityPorts);
 
       setStatusMessage('Loading metrics...');
       // Refresh all site metrics in parallel
@@ -618,6 +621,28 @@ export default function App() {
     }
   }, []);
 
+  // Helper: protect slices being deleted from having their state overwritten by
+  // stale FABRIC data. Mutates the list in-place: if a slice is in the deleting
+  // set and FABRIC still reports a non-terminal state, force it to "Closing".
+  const protectDeletingSlices = useCallback((list: SliceSummary[]) => {
+    const DELETING_TIMEOUT = 120_000;
+    const now = Date.now();
+    for (const [key, ts] of deletingSlicesRef.current.entries()) {
+      if (now - ts > DELETING_TIMEOUT) {
+        deletingSlicesRef.current.delete(key);
+        continue;
+      }
+      const entry = list.find(s => s.id === key || s.name === key);
+      if (entry) {
+        if (entry.state === 'Dead' || entry.state === 'Closing') {
+          deletingSlicesRef.current.delete(key);
+        } else {
+          entry.state = 'Closing';
+        }
+      }
+    }
+  }, []);
+
   // Helper: after receiving a fresh slice list from FABRIC, update sliceData.state
   // if the current slice's state in the list differs. Ensures the toolbar badge
   // stays current even when only the list is refreshed (not the full slice).
@@ -638,6 +663,11 @@ export default function App() {
 
   // Track which slices have already had boot configs auto-executed
   const bootConfigRanRef = useRef<Set<string>>(new Set());
+
+  // Track slices being deleted — prevent polling from overwriting their state
+  // back to StableOK before FABRIC orchestrator processes the delete.
+  // Maps slice id/name → timestamp when delete was initiated.
+  const deletingSlicesRef = useRef<Map<string, number>>(new Map());
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
@@ -710,6 +740,7 @@ export default function App() {
       try {
         // Refresh slice list
         const list = await api.listSlices();
+        protectDeletingSlices(list);
         setSlices(list);
         setListLoaded(true);
         syncStateFromList(list);
@@ -811,6 +842,7 @@ export default function App() {
       }
       // Re-check slice list and restart polling if needed
       api.listSlices().then(list => {
+        protectDeletingSlices(list);
         setSlices(list);
         syncStateFromList(list);
         const hasTransitional = list.some(s => POLL_STATES.has(s.state));
@@ -837,6 +869,7 @@ export default function App() {
     setStatusMessage('Refreshing slice list...');
     try {
       const list = await api.listSlices();
+      protectDeletingSlices(list);
       setSlices(list);
       setListLoaded(true);
 
@@ -1026,6 +1059,7 @@ export default function App() {
     try {
       // Refresh the slice list
       const list = await api.listSlices();
+      protectDeletingSlices(list);
       setSlices(list);
       setListLoaded(true);
       syncStateFromList(list);
@@ -1059,6 +1093,8 @@ export default function App() {
           data = await api.removeNetwork(selectedSliceId, el.name);
         } else if (el.element_type === 'facility-port') {
           data = await api.removeFacilityPort(selectedSliceId, el.name);
+        } else if (el.element_type === 'port-mirror') {
+          data = await api.removePortMirror(selectedSliceId, el.name);
         }
       }
       updateSliceAndValidate(data);
@@ -1078,6 +1114,11 @@ export default function App() {
     setLoading(true);
     setStatusMessage('Deleting slice...');
     try {
+      // Register as deleting so polling won't overwrite state back to StableOK
+      if (!wasDraft) {
+        deletingSlicesRef.current.set(deletedId, Date.now());
+        if (deletedName) deletingSlicesRef.current.set(deletedName, Date.now());
+      }
       await api.deleteSlice(deletedId);
       setSliceData(null);
       setSelectedSliceId('');
@@ -1097,6 +1138,7 @@ export default function App() {
       for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         try {
           const list = await api.listSlices();
+          protectDeletingSlices(list);
           if (wasDraft) {
             setSlices(list);
             setListLoaded(true);
@@ -1132,6 +1174,11 @@ export default function App() {
   const handleDeleteSliceByName = useCallback(async (name: string) => {
     const slice = slices.find(s => s.name === name);
     const wasDraft = slice?.state === 'Draft';
+    // Register as deleting so polling won't overwrite state back to StableOK
+    if (!wasDraft) {
+      deletingSlicesRef.current.set(name, Date.now());
+      if (slice?.id) deletingSlicesRef.current.set(slice.id, Date.now());
+    }
     await api.deleteSlice(name);
     // If deleting the currently-selected slice, clear selection
     if (name === selectedSliceName) {
@@ -1463,7 +1510,8 @@ export default function App() {
   }, [runValidation]);
 
   // Deploy weave: load template → submit → poll → boot config (all automatic)
-  const handleDeployWeave = useCallback(async (templateDirName: string, sliceNameForDeploy: string) => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const handleDeployWeave = useCallback(async (templateDirName: string, sliceNameForDeploy: string, _args: Record<string, string> = {}) => {
     setLoading(true);
     setStatusMessage('Loading weave template...');
 
@@ -1549,9 +1597,56 @@ export default function App() {
     }
   }, [appendBuildLog, startPolling, handleRunBootConfigStream]);
 
-  // Run weave script: execute run.sh autonomously, streaming output to build log
-  const runWeaveAbortRef = useRef<AbortController | null>(null);
-  const handleRunWeaveScript = useCallback((templateDirName: string, weaveName: string) => {
+  // Run weave script: execute run.sh as a background run (survives browser disconnect)
+  const runPollTimers = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+
+  const pollBackgroundRun = useCallback((runId: string, logKey: string) => {
+    let offset = 0;
+
+    const poll = async () => {
+      try {
+        const resp = await api.getBackgroundRunOutput(runId, offset);
+        if (resp.output) {
+          // Split into lines and append each
+          const lines = resp.output.split('\n');
+          for (const line of lines) {
+            if (!line) continue;
+            if (line.startsWith('### PROGRESS:')) {
+              appendBuildLog(logKey, { type: 'build', message: `\u25B6 ${line.slice(13).trim()}` });
+            } else {
+              appendBuildLog(logKey, { type: 'output', message: line });
+            }
+          }
+          offset = resp.offset;
+        }
+        if (resp.status !== 'running') {
+          // Run finished — stop polling
+          const timer = runPollTimers.current.get(runId);
+          if (timer) {
+            clearInterval(timer);
+            runPollTimers.current.delete(runId);
+          }
+          if (resp.status === 'done') {
+            appendBuildLog(logKey, { type: 'build', message: '\u2713 run.sh complete' });
+          } else {
+            appendBuildLog(logKey, { type: 'error', message: `run.sh exited (status: ${resp.status})` });
+          }
+          setSliceBootRunning(prev => ({ ...prev, [logKey]: false }));
+          // Refresh active runs list so LibrariesPanel updates the badge
+          api.listBackgroundRuns().then(setActiveRuns).catch(() => {});
+        }
+      } catch {
+        // Network error — keep polling, we might reconnect
+      }
+    };
+
+    // Poll immediately, then every 2 seconds
+    poll();
+    const timer = setInterval(poll, 2000);
+    runPollTimers.current.set(runId, timer);
+  }, [appendBuildLog]);
+
+  const handleRunWeaveScript = useCallback((templateDirName: string, weaveName: string, args: Record<string, string>) => {
     const logKey = `run:${weaveName}`;
 
     // Open build log tab for this run
@@ -1559,22 +1654,106 @@ export default function App() {
     setConsoleExpanded(true);
     setSliceBootRunning(prev => ({ ...prev, [logKey]: true }));
     setSliceBootLogs(prev => ({ ...prev, [logKey]: [] }));
-    appendBuildLog(logKey, { type: 'build', message: `Executing run.sh from "${weaveName}"...` });
+    appendBuildLog(logKey, { type: 'build', message: `Executing run.sh from "${weaveName}" (background)...` });
 
-    runWeaveAbortRef.current = api.runWeaveScript(templateDirName, 'run.sh', undefined, (data) => {
-      if (data.type === 'error') {
-        appendBuildLog(logKey, { type: 'error', message: data.message });
-        setSliceBootRunning(prev => ({ ...prev, [logKey]: false }));
-      } else if (data.type === 'done') {
-        appendBuildLog(logKey, { type: 'build', message: `\u2713 ${data.message}` });
-        setSliceBootRunning(prev => ({ ...prev, [logKey]: false }));
-      } else if (data.type === 'progress') {
-        appendBuildLog(logKey, { type: 'build', message: `\u25B6 ${data.message}` });
-      } else {
-        appendBuildLog(logKey, { type: 'output', message: data.message });
-      }
+    // Start as background run
+    api.startBackgroundRun(templateDirName, 'run.sh', args).then((resp) => {
+      appendBuildLog(logKey, { type: 'build', message: `Run started: ${resp.run_id}` });
+      pollBackgroundRun(resp.run_id, logKey);
+      // Refresh active runs list so LibrariesPanel shows the running badge
+      api.listBackgroundRuns().then(setActiveRuns).catch(() => {});
+    }).catch((err) => {
+      appendBuildLog(logKey, { type: 'error', message: `Failed to start: ${err.message}` });
+      setSliceBootRunning(prev => ({ ...prev, [logKey]: false }));
     });
-  }, [appendBuildLog]);
+  }, [appendBuildLog, pollBackgroundRun]);
+
+  // Orchestrated run: deploy first (if deploy.sh exists), wait, then run run.sh
+  // Stores pending run-after-deploy info keyed by slice name
+  const pendingRunAfterDeploy = useRef<Map<string, { templateDirName: string; weaveName: string; args: Record<string, string> }>>(new Map());
+
+  const handleRunExperiment = useCallback((templateDirName: string, weaveName: string, args: Record<string, string>) => {
+    const sliceName = args.SLICE_NAME || weaveName || templateDirName;
+    // Stash the run info — will trigger after deploy completes
+    pendingRunAfterDeploy.current.set(sliceName, { templateDirName, weaveName, args });
+    // Start deploy
+    handleDeployWeave(templateDirName, sliceName, args);
+  }, [handleDeployWeave]);
+
+  // Watch for deploy completion and auto-trigger pending run.sh
+  useEffect(() => {
+    for (const [sliceName, runInfo] of pendingRunAfterDeploy.current.entries()) {
+      const stillRunning = sliceBootRunning[sliceName];
+      if (stillRunning === false) {
+        // Deploy finished — check if it was successful (has log entries, last one is success)
+        const logs = sliceBootLogs[sliceName] || [];
+        const lastLog = logs.length > 0 ? logs[logs.length - 1] : null;
+        const deploySucceeded = lastLog?.message?.includes('Deploy complete') || lastLog?.message?.includes('Build complete');
+        pendingRunAfterDeploy.current.delete(sliceName);
+        if (deploySucceeded) {
+          appendBuildLog(sliceName, { type: 'build', message: 'Deploy succeeded — starting run.sh...' });
+          handleRunWeaveScript(runInfo.templateDirName, runInfo.weaveName, runInfo.args);
+        } else {
+          appendBuildLog(sliceName, { type: 'error', message: 'Deploy did not complete successfully — skipping run.sh' });
+        }
+      }
+    }
+  }, [sliceBootRunning, sliceBootLogs, handleRunWeaveScript, appendBuildLog]);
+
+  // On mount, check for active background runs and resume polling
+  useEffect(() => {
+    api.listBackgroundRuns().then((runs) => {
+      setActiveRuns(runs);
+      for (const run of runs) {
+        if (run.status === 'running') {
+          const logKey = `run:${run.weave_name}`;
+          setOpenBootLogSlices(prev => prev.includes(logKey) ? prev : [...prev, logKey]);
+          setSliceBootRunning(prev => ({ ...prev, [logKey]: true }));
+          appendBuildLog(logKey, { type: 'build', message: `Reconnected to background run: ${run.run_id}` });
+          pollBackgroundRun(run.run_id, logKey);
+        }
+      }
+    }).catch(() => {});
+
+    // Periodically refresh active runs list (for badge updates in LibrariesPanel)
+    const runsInterval = setInterval(() => {
+      api.listBackgroundRuns().then(setActiveRuns).catch(() => {});
+    }, 10_000);
+
+    return () => {
+      clearInterval(runsInterval);
+      // Cleanup poll timers on unmount
+      for (const timer of runPollTimers.current.values()) clearInterval(timer);
+      runPollTimers.current.clear();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // View output of a running or completed weave run — opens the build log tab
+  const handleViewRunOutput = useCallback((weaveName: string) => {
+    const logKey = `run:${weaveName}`;
+    setOpenBootLogSlices(prev => prev.includes(logKey) ? prev : [...prev, logKey]);
+    setConsoleExpanded(true);
+  }, []);
+
+  // Stop a background run
+  const handleStopRun = useCallback(async (runId: string) => {
+    try {
+      await api.stopBackgroundRun(runId);
+      // Refresh active runs list
+      api.listBackgroundRuns().then(setActiveRuns).catch(() => {});
+    } catch (err: any) {
+      setErrors(prev => [...prev, `Failed to stop run: ${err.message}`]);
+    }
+  }, []);
+
+  // Reset/revert a published artifact to its original version
+  const handleResetArtifact = useCallback(async (dirName: string) => {
+    try {
+      await api.revertArtifact(dirName);
+    } catch (err: any) {
+      setErrors(prev => [...prev, `Failed to reset artifact: ${err.message}`]);
+    }
+  }, []);
 
   const handleLaunchNotebook = useCallback((path: string) => {
     setJupyterPath(path);
@@ -1647,6 +1826,7 @@ export default function App() {
             onBootConfigErrors={setBootConfigErrors}
             onRunBootConfig={handleRunBootConfigStream}
             bootRunning={!!sliceBootRunning[selectedSliceName]}
+            facilityPorts={infraFacilityPorts}
           />
         );
       case 'template':
@@ -1656,6 +1836,11 @@ export default function App() {
             onSliceImported={handleSliceImported}
             onDeployWeave={handleDeployWeave}
             onRunWeaveScript={handleRunWeaveScript}
+            onRunExperiment={handleRunExperiment}
+            activeRuns={activeRuns}
+            onViewRunOutput={handleViewRunOutput}
+            onStopRun={handleStopRun}
+            onResetArtifact={handleResetArtifact}
             onCollapse={() => toggleCollapse('template')}
             dragHandleProps={dragProps}
             panelIcon={icon}
@@ -2068,6 +2253,11 @@ export default function App() {
                 onClearPublishArtifact={() => setPublishArtifactIntent(undefined)}
                 initialMarketplaceCategory={marketplaceCategory}
                 onClearMarketplaceCategory={() => setMarketplaceCategory(undefined)}
+                onNavigateToSlicesView={(dirName) => {
+                  setCurrentView('slices');
+                  // Ensure side panel shows Weaves tab by uncollapsing the template panel
+                  setPanelLayout(prev => ({ ...prev, template: { ...prev.template, collapsed: false } }));
+                }}
               />
             )
           ) : currentView === 'infrastructure' ? (
@@ -2076,6 +2266,7 @@ export default function App() {
               onSubViewChange={setInfraSubView}
               sites={infraSites}
               links={infraLinks}
+              facilityPorts={infraFacilityPorts}
               linksLoading={infraLoading}
               siteMetricsCache={siteMetricsCache}
               linkMetricsCache={linkMetricsCache}

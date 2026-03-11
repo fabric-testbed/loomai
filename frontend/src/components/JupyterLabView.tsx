@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../api/client';
+import ToolInstallOverlay from './ToolInstallOverlay';
 import '../styles/jupyter-view.css';
 
 interface JupyterLabViewProps {
@@ -12,13 +13,36 @@ export default function JupyterLabView({ initialPath, dark }: JupyterLabViewProp
   const [status, setStatus] = useState<'loading' | 'running' | 'error'>('loading');
   const [port, setPort] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
+  const [installing, setInstalling] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const startAfterInstall = useCallback(async () => {
+    setInstalling(false);
+    setStatus('loading');
+    try {
+      const res = await api.startJupyter();
+      if (res.status === 'running' && res.port) {
+        setPort(res.port);
+        setStatus('running');
+      } else {
+        setErrorMsg(res.error || 'Failed to start JupyterLab');
+        setStatus('error');
+      }
+    } catch (e: any) {
+      setErrorMsg(e.message || 'Failed to start JupyterLab');
+      setStatus('error');
+    }
+  }, []);
 
   const launch = useCallback(async () => {
     setStatus('loading');
     setErrorMsg('');
     try {
       const res = await api.startJupyter();
+      if (res.install_required) {
+        setInstalling(true);
+        return;
+      }
       if (res.status === 'running' && res.port) {
         setPort(res.port);
         setStatus('running');
@@ -61,6 +85,18 @@ export default function JupyterLabView({ initialPath, dark }: JupyterLabViewProp
 
   return (
     <div className="jupyter-view">
+      {installing && (
+        <ToolInstallOverlay
+          toolId="jupyterlab"
+          onComplete={startAfterInstall}
+          onError={(msg) => {
+            setInstalling(false);
+            setErrorMsg(msg);
+            setStatus('error');
+          }}
+        />
+      )}
+
       <div className="jupyter-toolbar">
         <span className="jupyter-toolbar-title">JupyterLab</span>
         {status === 'running' && (

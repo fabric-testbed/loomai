@@ -18,6 +18,7 @@ interface LibrariesViewProps {
   onClearPublishArtifact?: () => void;
   initialMarketplaceCategory?: CategoryFilter;  // pre-set marketplace tab + category filter
   onClearMarketplaceCategory?: () => void;
+  onNavigateToSlicesView?: (dirName: string) => void;
 }
 
 type TabId = 'my-artifacts' | 'published' | 'community';
@@ -29,7 +30,7 @@ const BtnText = ({ full, short }: { full: string; short: string }) => (
   <><span className="tv-btn-full">{full}</span><span className="tv-btn-short">{short}</span></>
 );
 
-export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArtifact, initialPublishNotebook, onClearPublishNotebook, initialPublishArtifact, onClearPublishArtifact, initialMarketplaceCategory, onClearMarketplaceCategory }: LibrariesViewProps) {
+export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArtifact, initialPublishNotebook, onClearPublishNotebook, initialPublishArtifact, onClearPublishArtifact, initialMarketplaceCategory, onClearMarketplaceCategory, onNavigateToSlicesView }: LibrariesViewProps) {
   const [tab, setTab] = useState<TabId>('my-artifacts');
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
@@ -42,6 +43,9 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   const [myLoading, setMyLoading] = useState(false);
   const [myError, setMyError] = useState('');
   const [myCategoryFilter, setMyCategoryFilter] = useState<CategoryFilter>('all');
+
+  // Overflow menu state
+  const [overflowOpen, setOverflowOpen] = useState<string | null>(null);
 
   // Loading a template
   const [loadingName, setLoadingName] = useState<string | null>(null);
@@ -592,7 +596,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     try {
       const result = await api.startJupyter();
       if (result.status === 'running') {
-        onLaunchNotebook?.(`/jupyter/lab/tree/artifacts/${encodeURIComponent(dirName)}`);
+        onLaunchNotebook?.(`/jupyter/lab/tree/my_artifacts/${encodeURIComponent(dirName)}`);
       }
     } catch (e: any) {
       alert(`Failed to open in JupyterLab: ${e.message}`);
@@ -1088,10 +1092,63 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     </div>
   );
 
+  // --- Unified action helpers ---
+  const handleOpenArtifact = (art: LocalArtifact) => {
+    if (art.category === 'weave' && onNavigateToSlicesView) onNavigateToSlicesView(art.dir_name);
+    else if (art.category === 'notebook') handleEditInJupyter(art.dir_name);
+    else onEditArtifact?.(art.dir_name);
+  };
+  const handlePublishArtifact = (art: LocalArtifact) => {
+    if (art.category === 'notebook') openPublishNotebook(art.dir_name, art.name, art.description || '');
+    else openPublish(art.dir_name, art.category, art.name, art.description || '');
+  };
+  const canPublish = (art: LocalArtifact) => art.remote_status === 'not_linked';
+
+  // Simple inline overflow menu for artifact cards
+  const ArtifactOverflow = ({ art, menuKey }: { art: LocalArtifact; menuKey: string }) => {
+    const wrapRef = useRef<HTMLDivElement>(null);
+    const isOpen = overflowOpen === menuKey;
+    useEffect(() => {
+      if (!isOpen) return;
+      const handleClick = (e: MouseEvent) => {
+        if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOverflowOpen(null);
+      };
+      const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOverflowOpen(null); };
+      document.addEventListener('mousedown', handleClick);
+      document.addEventListener('keydown', handleKey);
+      return () => { document.removeEventListener('mousedown', handleClick); document.removeEventListener('keydown', handleKey); };
+    }, [isOpen]);
+    const items: { label: string; onClick: () => void; disabled?: boolean; danger?: boolean; separator?: boolean }[] = [
+      { label: 'Open', onClick: () => handleOpenArtifact(art) },
+      { label: 'Publish', onClick: () => handlePublishArtifact(art), disabled: !canPublish(art) },
+      { label: 'Edit', onClick: () => onEditArtifact?.(art.dir_name), disabled: !onEditArtifact },
+      { label: 'Delete', onClick: () => handleDeleteLocal(art), danger: true },
+      { label: '', onClick: () => {}, separator: true },
+      { label: 'JupyterLab', onClick: () => handleEditInJupyter(art.dir_name), disabled: launchingNotebook === art.dir_name },
+      { label: 'Details', onClick: () => { setViewMode('preview'); setPreviewSelected(`${art.category}-${art.dir_name}`); } },
+    ];
+    return (
+      <div className="tv-overflow-wrap" ref={wrapRef}>
+        <button className="tv-overflow-btn" onClick={() => setOverflowOpen(isOpen ? null : menuKey)} title="More actions">{'\u22EF'}</button>
+        {isOpen && (
+          <div className="tv-overflow-menu">
+            {items.map((item, i) => {
+              if (item.separator) return <div key={`sep-${i}`} className="tv-overflow-sep" />;
+              return (
+                <button key={item.label} className={`tv-overflow-item${item.danger ? ' tv-overflow-danger' : ''}`}
+                  disabled={item.disabled} onClick={() => { item.onClick(); setOverflowOpen(null); }}>
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // My Artifacts card
   const renderMyArtifactCard = (art: LocalArtifact) => {
-    const canLoad = art.category === 'weave';
-    const isNotebook = art.category === 'notebook';
     const isLoadInput = showLoadInput === art.dir_name;
     return (
       <div key={`${art.category}-${art.dir_name}`} className="tv-card">
@@ -1103,7 +1160,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           {art.is_author && <span className="tv-badge tv-badge-source-author">Author</span>}
           {art.is_from_marketplace && !art.is_author && <span className="tv-badge tv-badge-source-downloaded">Installed</span>}
           {!art.is_from_marketplace && !art.is_author && <span className="tv-badge tv-badge-source-local">Local</span>}
-          {art.builtin && <span className="tv-badge tv-badge-builtin">Built-in</span>}
+
         </div>
         {art.description && <div className="tv-card-desc">{art.description}</div>}
         <div className="tv-card-meta">
@@ -1118,7 +1175,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           {art.remote_status === 'remote_deleted' && <span className="tv-meta-warn">Remote artifact deleted</span>}
         </div>
 
-        {isNotebook && resetConfirmNotebook === art.dir_name && (
+        {art.category === 'notebook' && resetConfirmNotebook === art.dir_name && (
           <div className="tv-load-row" style={{ background: 'var(--fabric-bg-warning, #fff3e0)', padding: '6px 8px', borderRadius: 4, fontSize: 12 }}>
             <span>Reset to original? Changes will be lost.</span>
             <button className="tv-btn tv-btn-danger" onClick={() => handleResetNotebook(art.dir_name)} disabled={resettingNotebook === art.dir_name}>
@@ -1141,38 +1198,13 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           </div>
         ) : (
           <div className="tv-card-actions">
-            {canLoad && (
-              <button className="tv-btn tv-btn-primary" onClick={() => { setShowLoadInput(art.dir_name); setLoadSliceName(''); }}>Load</button>
-            )}
-            {isNotebook && (
-              <>
-                <button className="tv-btn tv-btn-primary" onClick={() => handleEditInJupyter(art.dir_name)} disabled={launchingNotebook === art.dir_name}>
-                  {launchingNotebook === art.dir_name ? 'Opening...' : <BtnText full="JupyterLab" short="Jup" />}
-                </button>
-                <button className="tv-btn" style={{ background: '#008e7a', color: '#fff', border: 'none' }}
-                  onClick={() => openPublishNotebook(art.dir_name, art.name, art.description || '')}>
-                  <BtnText full="Publish" short="Pub" />
-                </button>
-                <button className="tv-btn" onClick={() => setResetConfirmNotebook(art.dir_name)}>Reset</button>
-              </>
-            )}
-            {!art.builtin && art.remote_status === 'not_linked' && !isNotebook && (
-              <button className="tv-btn tv-btn-publish" onClick={() => openPublish(art.dir_name, art.category, art.name, art.description || '')}>
-                <BtnText full="Publish" short="Pub" />
-              </button>
-            )}
-            {!isNotebook && (
-              <>
-                <button className="tv-btn" onClick={() => onEditArtifact?.(art.dir_name)}>Edit</button>
-                <button className="tv-btn" onClick={() => handleEditInJupyter(art.dir_name)}
-                  disabled={launchingNotebook === art.dir_name}>
-                  {launchingNotebook === art.dir_name ? 'Opening...' : <BtnText full="JupyterLab" short="Jup" />}
-                </button>
-              </>
-            )}
-            {!art.builtin && (
-              <button className="tv-btn tv-btn-danger" onClick={() => handleDeleteLocal(art)}><BtnText full="Delete" short="Del" /></button>
-            )}
+            <button className="tv-btn tv-btn-primary" onClick={() => handleOpenArtifact(art)}>Open</button>
+            <button className="tv-btn tv-btn-publish" onClick={() => handlePublishArtifact(art)} disabled={!canPublish(art)}>
+              <BtnText full="Publish" short="Pub" />
+            </button>
+            <button className="tv-btn" onClick={() => onEditArtifact?.(art.dir_name)}>Edit</button>
+            <button className="tv-btn tv-btn-danger" onClick={() => handleDeleteLocal(art)}><BtnText full="Delete" short="Del" /></button>
+            <ArtifactOverflow art={art} menuKey={`card-${art.category}-${art.dir_name}`} />
           </div>
         )}
       </div>
@@ -1253,12 +1285,10 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         </tr></thead>
         <tbody>
           {filteredMyArtifacts.map(art => {
-            const canLoad = art.category === 'weave';
             return (
               <tr key={`${art.category}-${art.dir_name}`}>
                 <td className="tv-table-name">
                   <span className="tv-table-name-text">{art.name}</span>
-                  {art.builtin && <span className="tv-badge tv-badge-builtin" style={{ marginLeft: 6 }}>Built-in</span>}
                 </td>
                 <td><span className={`tv-badge tv-badge-cat tv-badge-cat-${art.category}`}>{categoryLabel(art.category)}</span></td>
                 <td>{sourceLabel(art)}</td>
@@ -1267,33 +1297,13 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                 <td>{art.remote_artifact?.artifact_downloads_active ?? '—'}</td>
                 <td>{art.remote_status === 'linked' ? 'Linked' : art.remote_status === 'remote_deleted' ? 'Remote Deleted' : 'Local Only'}</td>
                 <td className="tv-table-actions">
-                  {canLoad && (
-                    <button className="tv-btn tv-btn-primary" onClick={() => {
-                      setShowLoadInput(art.dir_name); setLoadSliceName('');
-                    }} disabled={!!loadingName}>Load</button>
-                  )}
-                  {art.category === 'notebook' && (
-                    <>
-                      <button className="tv-btn tv-btn-primary" onClick={() => handleEditInJupyter(art.dir_name)} disabled={launchingNotebook === art.dir_name}>
-                        {launchingNotebook === art.dir_name ? '...' : <BtnText full="JupyterLab" short="Jup" />}
-                      </button>
-                      <button className="tv-btn" style={{ background: '#008e7a', color: '#fff', border: 'none' }}
-                        onClick={() => openPublishNotebook(art.dir_name, art.name, art.description || '')}><BtnText full="Publish" short="Pub" /></button>
-                    </>
-                  )}
-                  {!art.builtin && art.remote_status === 'not_linked' && art.category !== 'notebook' && (
-                    <button className="tv-btn tv-btn-publish" onClick={() => openPublish(art.dir_name, art.category, art.name, art.description || '')}><BtnText full="Publish" short="Pub" /></button>
-                  )}
-                  {art.category !== 'notebook' && (
-                    <>
-                      <button className="tv-btn" onClick={() => onEditArtifact?.(art.dir_name)}>Edit</button>
-                      <button className="tv-btn" onClick={() => handleEditInJupyter(art.dir_name)}
-                        disabled={launchingNotebook === art.dir_name}>
-                        {launchingNotebook === art.dir_name ? '...' : <BtnText full="JupyterLab" short="Jup" />}
-                      </button>
-                    </>
-                  )}
-                  {!art.builtin && <button className="tv-btn tv-btn-danger" onClick={() => handleDeleteLocal(art)}><BtnText full="Delete" short="Del" /></button>}
+                  <button className="tv-btn tv-btn-primary" onClick={() => handleOpenArtifact(art)}>Open</button>
+                  <button className="tv-btn tv-btn-publish" onClick={() => handlePublishArtifact(art)} disabled={!canPublish(art)}>
+                    <BtnText full="Publish" short="Pub" />
+                  </button>
+                  <button className="tv-btn" onClick={() => onEditArtifact?.(art.dir_name)}>Edit</button>
+                  <button className="tv-btn tv-btn-danger" onClick={() => handleDeleteLocal(art)}><BtnText full="Delete" short="Del" /></button>
+                  <ArtifactOverflow art={art} menuKey={`tbl-${art.category}-${art.dir_name}`} />
                 </td>
               </tr>
             );
@@ -1343,7 +1353,6 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   // ---------------------------------------------------------------------------
 
   const renderLocalDetail = (art: LocalArtifact) => {
-    const canLoad = art.category === 'weave';
     const r = art.remote_artifact;
     const isDetailEdit = detailEditing === art.dir_name;
     return (
@@ -1373,7 +1382,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         )}
         <div className="tv-pv-detail-badges">
           <span className={`tv-badge tv-badge-cat tv-badge-cat-${art.category}`}>{categoryLabel(art.category)}</span>
-          {art.builtin && <span className="tv-badge tv-badge-builtin">Built-in</span>}
+
           {art.is_author && <span className="tv-badge tv-badge-source-author">Author</span>}
           {art.is_from_marketplace && !art.is_author && <span className="tv-badge tv-badge-source-downloaded">Installed</span>}
           {!art.is_from_marketplace && !art.is_author && <span className="tv-badge tv-badge-source-local">Local</span>}
@@ -1395,39 +1404,16 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           )}
         </div>
         <div className="tv-pv-detail-actions">
-          {canLoad && (
-            <button className="tv-btn tv-btn-primary" onClick={() => { setShowLoadInput(art.dir_name); setLoadSliceName(''); }}>Load</button>
-          )}
-          {art.category === 'notebook' && (
-            <>
-              <button className="tv-btn tv-btn-primary" onClick={() => handleEditInJupyter(art.dir_name)} disabled={launchingNotebook === art.dir_name}>
-                {launchingNotebook === art.dir_name ? 'Opening...' : <BtnText full="JupyterLab" short="Jup" />}
-              </button>
-              <button className="tv-btn" style={{ background: '#008e7a', color: '#fff', border: 'none' }}
-                onClick={() => openPublishNotebook(art.dir_name, art.name, art.description || '')}>
-                <BtnText full="Publish" short="Pub" />
-              </button>
-              <button className="tv-btn" onClick={() => setResetConfirmNotebook(art.dir_name)}>Reset</button>
-            </>
-          )}
-          {!art.builtin && art.remote_status === 'not_linked' && art.category !== 'notebook' && (
-            <button className="tv-btn tv-btn-publish" onClick={() => openPublish(art.dir_name, art.category, art.name, art.description || '')}>
-              <BtnText full="Publish" short="Pub" />
-            </button>
-          )}
+          <button className="tv-btn tv-btn-primary" onClick={() => handleOpenArtifact(art)}>Open</button>
+          <button className="tv-btn tv-btn-publish" onClick={() => handlePublishArtifact(art)} disabled={!canPublish(art)}>Publish</button>
           {!isDetailEdit && (
             <button className="tv-btn" onClick={() => openDetailEdit(art)}>Edit Info</button>
           )}
-          {art.category !== 'notebook' && (
-            <>
-              <button className="tv-btn" onClick={() => onEditArtifact?.(art.dir_name)}>Edit</button>
-              <button className="tv-btn" onClick={() => handleEditInJupyter(art.dir_name)}
-                disabled={launchingNotebook === art.dir_name}>
-                {launchingNotebook === art.dir_name ? 'Opening...' : <BtnText full="JupyterLab" short="Jup" />}
-              </button>
-            </>
-          )}
-          {!art.builtin && <button className="tv-btn tv-btn-danger" onClick={() => handleDeleteLocal(art)}><BtnText full="Delete" short="Del" /></button>}
+          <button className="tv-btn" onClick={() => onEditArtifact?.(art.dir_name)}>Edit</button>
+          <button className="tv-btn" onClick={() => handleEditInJupyter(art.dir_name)} disabled={launchingNotebook === art.dir_name}>
+            {launchingNotebook === art.dir_name ? 'Opening...' : 'JupyterLab'}
+          </button>
+          <button className="tv-btn tv-btn-danger" onClick={() => handleDeleteLocal(art)}>Delete</button>
         </div>
       </div>
     );
@@ -1789,7 +1775,6 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           <button className="tv-btn" onClick={closeEditor}>Back</button>
           <h1 className="tv-title" style={{ fontSize: '16px' }}>{editing.name}</h1>
           <span className={`tv-badge tv-badge-cat tv-badge-cat-${editing.category}`}>{categoryLabel(editing.category)}</span>
-          {editing.builtin && <span className="tv-badge tv-badge-builtin">Built-in</span>}
         </div>
 
         {editError && <div className="tv-error" style={{ textAlign: 'left' }}>{editError}</div>}
@@ -1816,7 +1801,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
             {renderVersionsEditor(r.uuid, editing.dir_name, editing.category)}
           </>
         )}
-        {!r && !editing.builtin && editing.remote_status === 'not_linked' && (
+        {!r && editing.remote_status === 'not_linked' && (
           <div className="tv-editor-section">
             <div className="tv-editor-section-title">Publishing</div>
             <button className="tv-btn tv-btn-publish" onClick={() => openPublish(editing.dir_name, editing.category, editing.name, editing.description || '')}>

@@ -8,7 +8,6 @@ Storage: FABRIC_STORAGE_DIR/my_artifacts/{name}/
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -29,17 +28,6 @@ def _vm_templates_dir() -> str:
     return get_artifacts_dir()
 
 
-def _builtin_templates_dir() -> str:
-    """Return the path to the builtin VM templates shipped with the repo."""
-    # Check two candidate paths: inside backend (Docker) and repo root (local dev)
-    base = os.path.dirname(__file__)
-    for levels in [("..", ".."), ("..", "..", "..")]:
-        candidate = os.path.realpath(os.path.join(base, *levels, "slice-libraries", "vm_templates"))
-        if os.path.isdir(candidate):
-            return candidate
-    return os.path.join(base, "..", "..", "slice-libraries", "vm_templates")
-
-
 def _sanitize_name(name: str) -> str:
     safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", name.strip())
     if not safe:
@@ -54,75 +42,9 @@ def _validate_path(base: str, name: str) -> str:
     return path
 
 
-# ---------------------------------------------------------------------------
-# Builtin template helpers
-# ---------------------------------------------------------------------------
-
-def _builtin_hash(builtin_dir: str) -> str:
-    """Compute a hash of a builtin VM template directory for change detection."""
-    hashable: dict[str, Any] = {}
-    tmpl_path = os.path.join(builtin_dir, "vm-template.json")
-    if os.path.isfile(tmpl_path):
-        with open(tmpl_path) as f:
-            data = json.load(f)
-        hashable["image"] = data.get("image", "")
-        hashable["boot_config"] = data.get("boot_config", {})
-        hashable["variants"] = data.get("variants", {})
-        hashable["setup_script"] = data.get("setup_script", "")
-        hashable["remote_dir"] = data.get("remote_dir", "")
-        hashable["version"] = data.get("version", "")
-    tools_dir = os.path.join(builtin_dir, "tools")
-    if os.path.isdir(tools_dir):
-        tools = []
-        for fn in sorted(os.listdir(tools_dir)):
-            fp = os.path.join(tools_dir, fn)
-            if os.path.isfile(fp):
-                with open(fp) as f:
-                    tools.append({"filename": fn, "content": f.read()})
-        hashable["_tools"] = tools
-    else:
-        hashable["_tools"] = []
-    # Hash variant subdirectory contents
-    variants = data.get("variants", {}) if os.path.isfile(tmpl_path) else {}
-    for _img_key, vinfo in sorted(variants.items()):
-        vdir = os.path.join(builtin_dir, vinfo.get("dir", ""))
-        if os.path.isdir(vdir):
-            vfiles = []
-            for fn in sorted(os.listdir(vdir)):
-                fp = os.path.join(vdir, fn)
-                if os.path.isfile(fp):
-                    with open(fp) as f:
-                        vfiles.append({"filename": fn, "content": f.read()})
-            hashable[f"_variant_{vinfo['dir']}"] = vfiles
-    return hashlib.sha256(json.dumps(hashable, sort_keys=True).encode()).hexdigest()[:16]
-
-
-def _list_builtin_templates() -> list[dict[str, Any]]:
-    """Scan the builtin VM templates directory and return info for each."""
-    bdir = os.path.realpath(_builtin_templates_dir())
-    if not os.path.isdir(bdir):
-        return []
-    results = []
-    for entry in sorted(os.listdir(bdir)):
-        entry_dir = os.path.join(bdir, entry)
-        tmpl_path = os.path.join(entry_dir, "vm-template.json")
-        if os.path.isfile(tmpl_path):
-            with open(tmpl_path) as f:
-                data = json.load(f)
-            data["_dir"] = entry_dir
-            data["_entry"] = entry
-            results.append(data)
-    return results
-
-
-def _seed_if_needed() -> None:
-    """Ensure the VM templates storage directory exists.
-
-    Built-in template seeding is disabled — users create or download
-    artifacts via the marketplace.
-    """
-    tdir = _vm_templates_dir()
-    os.makedirs(tdir, exist_ok=True)
+def _ensure_dir() -> None:
+    """Ensure the VM templates storage directory exists."""
+    os.makedirs(_vm_templates_dir(), exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +114,7 @@ def _validate_tool_filename(filename: str) -> str:
 @router.get("")
 def list_vm_templates() -> list[dict[str, Any]]:
     """List VM templates (dirs containing vm-template.json)."""
-    _seed_if_needed()
+    _ensure_dir()
     tdir = _vm_templates_dir()
     if not os.path.isdir(tdir):
         return []
@@ -243,7 +165,7 @@ def list_vm_templates() -> list[dict[str, Any]]:
 @router.get("/{name}")
 def get_vm_template(name: str) -> dict[str, Any]:
     """Get full VM template detail including boot_config."""
-    _seed_if_needed()
+    _ensure_dir()
     safe = _sanitize_name(name)
     tdir = _vm_templates_dir()
     tmpl_dir = _validate_path(tdir, safe)
@@ -265,7 +187,7 @@ def get_vm_template_variant(name: str, image: str) -> dict[str, Any]:
     The boot_config uploads the variant directory to ``remote_dir`` and runs
     the ``setup_script``.
     """
-    _seed_if_needed()
+    _ensure_dir()
     safe = _sanitize_name(name)
     tdir = _vm_templates_dir()
     tmpl_dir = _validate_path(tdir, safe)
@@ -350,7 +272,7 @@ def resync_vm_templates() -> list[dict[str, Any]]:
 @router.post("")
 def create_vm_template(req: CreateVMTemplateRequest) -> dict[str, Any]:
     """Create a new VM template."""
-    _seed_if_needed()
+    _ensure_dir()
     safe = _sanitize_name(req.name)
     tdir = _vm_templates_dir()
     os.makedirs(tdir, exist_ok=True)
@@ -364,7 +286,6 @@ def create_vm_template(req: CreateVMTemplateRequest) -> dict[str, Any]:
         "name": req.name,
         "description": req.description,
         "image": req.image,
-        "builtin": False,
         "created": datetime.now(timezone.utc).isoformat(),
         "boot_config": req.boot_config,
     }
@@ -438,7 +359,7 @@ def update_vm_template(name: str, req: UpdateVMTemplateRequest) -> dict[str, Any
 
 @router.delete("/{name}")
 def delete_vm_template(name: str) -> dict[str, str]:
-    """Delete a VM template (builtins cannot be deleted)."""
+    """Delete a VM template."""
     safe = _sanitize_name(name)
     tdir = _vm_templates_dir()
     tmpl_dir = _validate_path(tdir, safe)

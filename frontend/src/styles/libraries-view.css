@@ -239,10 +239,6 @@
   letter-spacing: 0.03em;
   flex-shrink: 0;
 }
-.tv-badge-builtin {
-  background: rgba(87, 152, 188, 0.15);
-  color: var(--fabric-primary);
-}
 .tv-badge-user {
   background: rgba(0, 142, 122, 0.12);
   color: var(--fabric-teal, #008e7a);
@@ -1623,4 +1619,69 @@
 @container (max-width: 280px) {
   .tv-btn-full { display: none; }
   .tv-btn-short { display: inline; }
+}
+
+/* ─── Overflow menu on artifact cards ─── */
+.tv-overflow-wrap {
+  position: relative;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.tv-overflow-btn {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  font-size: 16px;
+  cursor: pointer;
+  color: var(--fabric-text-muted);
+  line-height: 1;
+  border-radius: 3px;
+}
+.tv-overflow-btn:hover {
+  background: var(--fabric-bg-tint);
+  color: var(--fabric-text);
+}
+.tv-overflow-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 140px;
+  z-index: 100;
+  padding: 4px 0;
+}
+.tv-overflow-item {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: var(--fabric-text);
+  white-space: nowrap;
+}
+.tv-overflow-item:hover {
+  background: var(--fabric-bg-tint);
+}
+.tv-overflow-item.tv-overflow-danger {
+  color: var(--fabric-coral, #e25241);
+}
+.tv-overflow-item.tv-overflow-danger:hover {
+  background: rgba(226, 82, 65, 0.08);
+}
+.tv-overflow-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.tv-overflow-sep {
+  height: 1px;
+  background: var(--fabric-border);
+  margin: 4px 0;
 }

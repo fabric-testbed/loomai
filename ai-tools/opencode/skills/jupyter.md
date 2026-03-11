@@ -57,13 +57,16 @@ as artifacts appear in the WebUI Libraries panel and can be opened in JupyterLab
    {
      "name": "My Experiment Notebook",
      "description": "Measures bandwidth across FABRIC sites",
-     "builtin": false,
      "order": 99
    }
    ```
 
 6. **Save** the `.ipynb` file to `$ARTIFACTS_DIR/<Notebook_Name>/`.
    The notebook appears in the WebUI Libraries panel immediately.
+
+7. **Open in JupyterLab**: Start JupyterLab via
+   `curl -X POST http://localhost:8000/api/jupyter/start`, then open at
+   `/jupyter/lab/tree/my_artifacts/<Notebook_Name>`.
 
 **Common FABlib patterns for notebooks:**
 ```python

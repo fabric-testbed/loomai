@@ -60,10 +60,10 @@ def _resolve_vm_template(name: str) -> dict | None:
     disk.  If the template has a ``tools/`` directory, an extra
     ``_tools_source`` key is added with its path.
     """
-    from app.routes.vm_templates import _seed_if_needed, _sanitize_name, _vm_templates_dir
+    from app.routes.vm_templates import _ensure_dir, _sanitize_name, _vm_templates_dir
     import json as _json
 
-    _seed_if_needed()
+    _ensure_dir()
     try:
         safe = _sanitize_name(name)
     except Exception:
@@ -415,6 +415,7 @@ class SliceModelImport(BaseModel):
     nodes: List[Dict[str, Any]] = []
     networks: List[Dict[str, Any]] = []
     facility_ports: List[Dict[str, Any]] = []
+    port_mirrors: List[Dict[str, Any]] = []
 
 
 class UpdateNodeRequest(BaseModel):
@@ -431,6 +432,13 @@ class CreateFacilityPortRequest(BaseModel):
     site: str
     vlan: str = ""
     bandwidth: int = 10
+
+
+class CreatePortMirrorRequest(BaseModel):
+    name: str
+    mirror_interface_name: str       # interface to mirror (string name)
+    receive_interface_name: str      # interface to receive capture (string name)
+    mirror_direction: str = "both"   # "both" | "ingress" | "egress"
 
 
 class ResolveSitesRequest(BaseModel):
@@ -1288,7 +1296,7 @@ def validate_slice(slice_name: str) -> dict[str, Any]:
 
     # Validate IP hints for L3 networks
     l3_net_types = {"FABNetv4", "FABNetv6", "FABNetv4Ext", "FABNetv6Ext",
-                    "IPv4", "IPv6", "IPv4Ext", "IPv6Ext"}
+                    "IPv4", "IPv6", "IPv4Ext", "IPv6Ext", "L3VPN"}
     all_hints = _get_all_ip_hints(slice_name)
     for net in networks:
         net_name = net.get("name", "?")
@@ -1485,6 +1493,70 @@ def remove_facility_port(slice_name: str, fp_name: str) -> dict[str, Any]:
                 fp.delete()
                 return _serialize(slice_obj, dirty=True)
         raise HTTPException(status_code=404, detail=f"Facility port '{fp_name}' not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Port mirror operations ---
+
+@router.post("/slices/{slice_name}/port-mirrors")
+def add_port_mirror(slice_name: str, req: CreatePortMirrorRequest) -> dict[str, Any]:
+    """Add a port mirror service to a slice."""
+    slice_name = _resolve_slice_name(slice_name)
+    if req.mirror_direction not in ("both", "ingress", "egress"):
+        raise HTTPException(status_code=400, detail="mirror_direction must be 'both', 'ingress', or 'egress'")
+    try:
+        slice_obj = _get_slice_obj(slice_name)
+        # Resolve the receive interface object from its name
+        receive_iface = None
+        for node in slice_obj.get_nodes():
+            for iface in node.get_interfaces():
+                if iface.get_name() == req.receive_interface_name:
+                    receive_iface = iface
+                    break
+            if receive_iface:
+                break
+        if receive_iface is None:
+            raise HTTPException(status_code=404, detail=f"Receive interface '{req.receive_interface_name}' not found")
+
+        slice_obj.add_port_mirror_service(
+            name=req.name,
+            mirror_interface_name=req.mirror_interface_name,
+            receive_interface=receive_iface,
+            mirror_direction=req.mirror_direction,
+        )
+        return _serialize(slice_obj, dirty=True)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/slices/{slice_name}/port-mirrors/{pm_name}")
+def remove_port_mirror(slice_name: str, pm_name: str) -> dict[str, Any]:
+    """Remove a port mirror service from a slice."""
+    slice_name = _resolve_slice_name(slice_name)
+    try:
+        slice_obj = _get_slice_obj(slice_name)
+        # Try dedicated method first
+        if hasattr(slice_obj, 'get_port_mirror_services'):
+            for pm in (slice_obj.get_port_mirror_services() or []):
+                if pm.get_name() == pm_name:
+                    pm.delete()
+                    return _serialize(slice_obj, dirty=True)
+        # Fallback: try via network services
+        for svc in (slice_obj.get_network_services() or []):
+            if svc.get_name() == pm_name:
+                try:
+                    svc_type = str(svc.get_type())
+                    if "PortMirror" in svc_type:
+                        svc.delete()
+                        return _serialize(slice_obj, dirty=True)
+                except Exception:
+                    pass
+        raise HTTPException(status_code=404, detail=f"Port mirror '{pm_name}' not found")
     except HTTPException:
         raise
     except Exception as e:
@@ -2277,6 +2349,16 @@ def build_slice_model(slice_name: str) -> dict:
             fp_model["interfaces"] = [i["name"] for i in fp["interfaces"]]
         model.setdefault("facility_ports", []).append(fp_model)
 
+    # Export port mirrors if present
+    for pm in data.get("port_mirrors", []):
+        pm_model: dict[str, Any] = {
+            "name": pm["name"],
+            "mirror_interface_name": pm.get("mirror_interface_name", ""),
+            "receive_interface_name": pm.get("receive_interface_name", ""),
+            "mirror_direction": pm.get("mirror_direction", "both"),
+        }
+        model.setdefault("port_mirrors", []).append(pm_model)
+
     return model
 
 
@@ -2446,6 +2528,29 @@ def import_slice(model: SliceModelImport) -> dict[str, Any]:
                         if iname in iface_ips:
                             iface.set_mode("config")
                             iface.set_ip_addr(addr=iface_ips[iname])
+
+        # Add port mirrors if present
+        for pm_def in (model.port_mirrors if hasattr(model, 'port_mirrors') else []):
+            try:
+                # Resolve receive interface
+                recv_iface = None
+                recv_name = pm_def.get("receive_interface_name", "")
+                for node in slice_obj.get_nodes():
+                    for iface in node.get_interfaces():
+                        if iface.get_name() == recv_name:
+                            recv_iface = iface
+                            break
+                    if recv_iface:
+                        break
+                if recv_iface:
+                    slice_obj.add_port_mirror_service(
+                        name=pm_def["name"],
+                        mirror_interface_name=pm_def.get("mirror_interface_name", ""),
+                        receive_interface=recv_iface,
+                        mirror_direction=pm_def.get("mirror_direction", "both"),
+                    )
+            except Exception as ex:
+                logger.warning("Import: could not add port mirror %s: %s", pm_def.get("name", "?"), ex)
 
         # Add facility ports if present
         for fp_def in model.facility_ports:

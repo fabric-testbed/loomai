@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SliceData, VMTemplateSummary, RecipeSummary } from '../types/fabric';
-import type { TemplateSummary } from '../api/client';
+import type { TemplateSummary, ScriptArg, BackgroundRun } from '../api/client';
 import * as api from '../api/client';
 import Tooltip from './Tooltip';
 import '../styles/template-panel.css';
@@ -17,9 +17,19 @@ interface LibrariesPanelProps {
   // Slice template props
   onSliceImported: (data: SliceData) => void;
   // Deploy weave callback — loads template + submits + polls + boot config
-  onDeployWeave?: (templateDirName: string, sliceName: string) => void;
-  // Run weave script callback — executes run.sh autonomously (no slice needed)
-  onRunWeaveScript?: (templateDirName: string, weaveName: string) => void;
+  onDeployWeave?: (templateDirName: string, sliceName: string, args: Record<string, string>) => void;
+  // Run weave script callback — executes run.sh with args from run.json
+  onRunWeaveScript?: (templateDirName: string, weaveName: string, args: Record<string, string>) => void;
+  // Orchestrated run: deploy first (if has deploy.sh), then run run.sh
+  onRunExperiment?: (templateDirName: string, weaveName: string, args: Record<string, string>) => void;
+  // Active background runs (for showing "running" state on weave cards)
+  activeRuns?: BackgroundRun[];
+  // View output of a running/completed weave run
+  onViewRunOutput?: (weaveName: string) => void;
+  // Stop a running background run
+  onStopRun?: (runId: string) => void;
+  // Reset/revert a published artifact to its original version
+  onResetArtifact?: (dirName: string) => Promise<void>;
   // VM template props
   onVmTemplatesChanged: () => void;
   sliceName: string;
@@ -48,12 +58,77 @@ interface LibrariesPanelProps {
 
 type TabId = 'weaves' | 'vm' | 'recipes' | 'notebooks';
 
+interface OverflowMenuItem {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+  separator?: boolean;
+}
+
+function OverflowMenu({ items, isOpen, onToggle, onClose }: {
+  items: OverflowMenuItem[];
+  isOpen: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [above, setAbove] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) onClose();
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (!isOpen || !wrapRef.current) return;
+    const rect = wrapRef.current.getBoundingClientRect();
+    setAbove(window.innerHeight - rect.bottom < 200);
+  }, [isOpen]);
+
+  return (
+    <div className="tp-overflow-wrap" ref={wrapRef}>
+      <button className="tp-overflow-btn" onClick={onToggle} title="More actions">{'\u22EF'}</button>
+      {isOpen && (
+        <div className={`tp-overflow-menu${above ? ' tp-overflow-above' : ''}`}>
+          {items.map((item, i) => {
+            if (item.separator) return <div key={`sep-${i}`} className="tp-overflow-sep" />;
+            return (
+              <button
+                key={item.label}
+                className={`tp-overflow-item${item.danger ? ' tp-overflow-danger' : ''}`}
+                disabled={item.disabled}
+                onClick={() => { item.onClick(); onClose(); }}
+              >
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function LibrariesPanel({
-  onSliceImported, onDeployWeave, onRunWeaveScript, onVmTemplatesChanged, sliceName, sliceData, onNodeAdded,
+  onSliceImported, onDeployWeave, onRunWeaveScript, onRunExperiment, activeRuns, onViewRunOutput, onStopRun, onResetArtifact,
+  onVmTemplatesChanged, sliceName, sliceData, onNodeAdded,
   onExecuteRecipe, executingRecipe, onRecipesChanged, onLaunchNotebook, onPublishNotebook,
   onPublishArtifact, onNavigateToMarketplace, onEditArtifact, onCollapse, dragHandleProps, panelIcon,
 }: LibrariesPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('weaves');
+  const [overflowOpen, setOverflowOpen] = useState<string | null>(null);
 
   // ─── Slice Templates state ───
   const [sliceTemplates, setSliceTemplates] = useState<TemplateSummary[]>([]);
@@ -171,21 +246,73 @@ export default function LibrariesPanel({
   const [deleteConfirm, setDeleteConfirm] = useState<{ dirName: string; name: string; category: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // ─── Deploy modal state ───
-  const [deployingTemplate, setDeployingTemplate] = useState<string | null>(null); // display name
-  const [deployingTemplateDirName, setDeployingTemplateDirName] = useState<string | null>(null);
-  const [deploySliceName, setDeploySliceName] = useState('');
+  // ─── Script args modal state (shared by Deploy and Run) ───
+  const DEFAULT_DEPLOY_ARGS: ScriptArg[] = [
+    { name: 'SLICE_NAME', label: 'Slice Name', type: 'string', required: true, default: '', description: 'Name for the new slice' },
+  ];
+  const DEFAULT_RUN_ARGS: ScriptArg[] = [
+    { name: 'SLICE_NAME', label: 'Slice Name', type: 'string', required: true, default: '', description: 'Passed to the script as SLICE_NAME — may be used to create a new slice or reference an existing one' },
+  ];
 
-  const handleDeployWeave = () => {
-    if (!deployingTemplateDirName || !onDeployWeave) return;
-    const name = deploySliceName.trim() || deployingTemplate || deployingTemplateDirName;
-    setDeployingTemplate(null);
-    setDeployingTemplateDirName(null);
-    onDeployWeave(deployingTemplateDirName, name);
+  const [scriptModal, setScriptModal] = useState<{
+    mode: 'deploy' | 'run';
+    weaveName: string;
+    dirName: string;
+    argDefs: ScriptArg[];
+  } | null>(null);
+  const [scriptArgValues, setScriptArgValues] = useState<Record<string, string>>({});
+
+  const uniqueSliceName = (base: string) => {
+    const suffix = Math.random().toString(36).slice(2, 6);
+    return `${base}-${suffix}`;
   };
 
-  const handleRunWeave = (dirName: string, weaveName: string) => {
-    onRunWeaveScript?.(dirName, weaveName);
+  const openDeployModal = (t: TemplateSummary) => {
+    const argDefs = t.deploy_args?.length ? t.deploy_args : DEFAULT_DEPLOY_ARGS;
+    const defaults: Record<string, string> = {};
+    for (const arg of argDefs) {
+      defaults[arg.name] = arg.name === 'SLICE_NAME' ? uniqueSliceName(t.name || 'slice') : (arg.default || '');
+    }
+    setScriptArgValues(defaults);
+    setScriptModal({ mode: 'deploy', weaveName: t.name, dirName: t.dir_name, argDefs });
+  };
+
+  const openRunModal = (t: TemplateSummary) => {
+    const argDefs = t.run_args?.length ? t.run_args : DEFAULT_RUN_ARGS;
+    const defaults: Record<string, string> = {};
+    for (const arg of argDefs) {
+      defaults[arg.name] = arg.name === 'SLICE_NAME' ? uniqueSliceName(t.name || 'slice') : (arg.default || '');
+    }
+    setScriptArgValues(defaults);
+    setScriptModal({ mode: 'run', weaveName: t.name, dirName: t.dir_name, argDefs });
+  };
+
+  const scriptModalValid = scriptModal?.argDefs.every(
+    (a) => !a.required || scriptArgValues[a.name]?.trim()
+  ) ?? false;
+
+  const confirmScriptModal = () => {
+    if (!scriptModal || !scriptModalValid) return;
+    const { mode, dirName, weaveName, argDefs } = scriptModal;
+    // Build trimmed args, only include non-empty values
+    const args: Record<string, string> = {};
+    for (const a of argDefs) {
+      const v = scriptArgValues[a.name]?.trim() || '';
+      if (v) args[a.name] = v;
+    }
+    setScriptModal(null);
+    if (mode === 'deploy') {
+      const deploySliceName = args.SLICE_NAME || weaveName || dirName;
+      onDeployWeave?.(dirName, deploySliceName, args);
+    } else {
+      // Orchestrated run: if weave also has deploy.sh, use onRunExperiment which deploys first
+      const tmpl = sliceTemplates.find(t => t.dir_name === dirName);
+      if (tmpl?.has_deploy && onRunExperiment) {
+        onRunExperiment(dirName, weaveName, args);
+      } else {
+        onRunWeaveScript?.(dirName, weaveName, args);
+      }
+    }
   };
 
   const refreshRecipes = useCallback(async () => {
@@ -249,7 +376,7 @@ export default function LibrariesPanel({
     try {
       const result = await api.startJupyter();
       if (result.status === 'running') {
-        onLaunchNotebook?.(`/jupyter/lab/tree/artifacts/${encodeURIComponent(dirName)}`);
+        onLaunchNotebook?.(`/jupyter/lab/tree/my_artifacts/${encodeURIComponent(dirName)}`);
       }
     } catch (e: any) {
       alert(`Failed to open in JupyterLab: ${e.message}`);
@@ -471,11 +598,53 @@ export default function LibrariesPanel({
                 const q = sliceSearchFilter.toLowerCase();
                 return t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q);
               })
-              .map((t) => (
+              .map((t) => {
+              const weaveRuns = (activeRuns || []).filter(r => r.weave_dir_name === t.dir_name);
+              const isRunning = weaveRuns.some(r => r.status === 'running');
+              const hasCompleted = weaveRuns.some(r => r.status === 'done' || r.status === 'error' || r.status === 'interrupted');
+              const lastRun = weaveRuns.length > 0 ? weaveRuns[weaveRuns.length - 1] : null;
+              const activeRunId = weaveRuns.find(r => r.status === 'running')?.run_id;
+
+              // Determine ▶ button: Run > Deploy > Load priority
+              const playMode = t.has_run ? 'run' : t.has_deploy ? 'deploy' : 'load';
+              const playLabel = playMode === 'run' ? 'Run' : playMode === 'deploy' ? 'Deploy' : 'Load';
+              const playDisabled = isRunning;
+
+              const handlePlay = () => {
+                if (playMode === 'run' && onRunWeaveScript) openRunModal(t);
+                else if (playMode === 'deploy' && onDeployWeave) openDeployModal(t);
+                else if (t.has_template !== false) {
+                  setLoadSliceName(t.name);
+                  setLoadingTemplate(t.name);
+                  setLoadingTemplateDirName(t.dir_name);
+                }
+              };
+
+              return (
               <div className="template-card" key={t.dir_name}>
                 <div className="template-card-header">
                   <span className="template-card-name">{t.name}</span>
-                  {t.builtin && <span className="template-builtin-badge">built-in</span>}
+                  {isRunning && <span className="tp-status-badge tp-status-running">{'\u25CF'} running</span>}
+                  {!isRunning && lastRun?.status === 'done' && <span className="tp-status-badge tp-status-done">{'\u2713'} done</span>}
+                  {!isRunning && (lastRun?.status === 'error' || lastRun?.status === 'interrupted') && <span className="tp-status-badge tp-status-error">{'\u2717'} error</span>}
+                  <OverflowMenu
+                    isOpen={overflowOpen === `weave-${t.dir_name}`}
+                    onToggle={() => setOverflowOpen(overflowOpen === `weave-${t.dir_name}` ? null : `weave-${t.dir_name}`)}
+                    onClose={() => setOverflowOpen(null)}
+                    items={[
+                      { label: 'Load...', onClick: () => { setLoadSliceName(t.name); setLoadingTemplate(t.name); setLoadingTemplateDirName(t.dir_name); }, disabled: t.has_template === false },
+                      { label: 'Deploy...', onClick: () => openDeployModal(t), disabled: !t.has_deploy || !onDeployWeave || isRunning },
+                      { label: 'Run...', onClick: () => openRunModal(t), disabled: !t.has_run || !onRunWeaveScript || isRunning },
+                      { label: 'Stop', onClick: () => activeRunId && onStopRun?.(activeRunId), disabled: !isRunning || !activeRunId || !onStopRun },
+                      { label: 'Reset', onClick: async () => { if (confirm(`Reset "${t.name}" to its original version? Local changes will be lost.`)) { await onResetArtifact?.(t.dir_name); refreshSliceTemplates(); } }, disabled: !hasCompleted || !onResetArtifact },
+                      { label: 'Open Log', onClick: () => onViewRunOutput?.(t.name), disabled: weaveRuns.length === 0 || !onViewRunOutput },
+                      { label: '', onClick: () => {}, separator: true },
+                      { label: 'Edit', onClick: () => onEditArtifact?.(t.dir_name), disabled: !onEditArtifact },
+                      { label: 'JupyterLab', onClick: () => handleEditInJupyter(t.dir_name), disabled: launchingNotebook === t.dir_name },
+                      { label: '', onClick: () => {}, separator: true },
+                      { label: 'Delete', onClick: () => setDeleteConfirm({ dirName: t.dir_name, name: t.name, category: 'weave' }), danger: true },
+                    ]}
+                  />
                 </div>
                 {t.description && (
                   <div className="template-card-desc">{t.description}</div>
@@ -486,81 +655,45 @@ export default function LibrariesPanel({
                   <span>{formatDate(t.created)}</span>
                 </div>
                 <div className="template-card-actions">
-                  {t.has_template !== false && (
-                    <Tooltip text="Create a new draft slice from this template with pre-configured nodes and networks">
+                  <div className="tp-transport-group">
+                    <Tooltip text={playMode === 'run' ? 'Execute run.sh' : playMode === 'deploy' ? 'Deploy this weave' : 'Load as new draft slice'}>
                       <button
-                        className="template-btn-load"
-                        onClick={() => {
-                          setLoadSliceName(t.name);
-                          setLoadingTemplate(t.name);
-                          setLoadingTemplateDirName(t.dir_name);
-                        }}
+                        className="tp-transport-btn tp-transport-play"
+                        disabled={playDisabled}
+                        onClick={handlePlay}
                         data-help-id="templates.load"
                       >
-                        Load
+                        {'\u25B6'} {playLabel}
                       </button>
                     </Tooltip>
-                  )}
-                  {t.has_template !== false && t.has_deploy && onDeployWeave && (
-                    <Tooltip text="Load this weave as a new slice, submit it to FABRIC, and run boot configuration">
+                    <Tooltip text="Stop the running script">
                       <button
-                        className="template-btn-load"
-                        style={{ background: 'rgba(0,142,122,0.08)', color: '#008e7a', borderColor: '#008e7a' }}
-                        onClick={() => {
-                          setDeploySliceName(t.name);
-                          setDeployingTemplate(t.name);
-                          setDeployingTemplateDirName(t.dir_name);
+                        className="tp-transport-btn tp-transport-stop"
+                        disabled={!isRunning || !activeRunId || !onStopRun}
+                        onClick={() => activeRunId && onStopRun?.(activeRunId)}
+                      >
+                        {'\u25A0'} Stop
+                      </button>
+                    </Tooltip>
+                    <Tooltip text="Reset to original version">
+                      <button
+                        className="tp-transport-btn tp-transport-reset"
+                        disabled={!hasCompleted || !onResetArtifact}
+                        onClick={async () => {
+                          if (confirm(`Reset "${t.name}" to its original version? Local changes will be lost.`)) {
+                            await onResetArtifact?.(t.dir_name);
+                            refreshSliceTemplates();
+                          }
                         }}
                       >
-                        Deploy
+                        {'\u21BA'} Reset
                       </button>
                     </Tooltip>
-                  )}
-                  {t.has_run && onRunWeaveScript && (
-                    <Tooltip text="Execute run.sh — the script manages its own slices, experiments, and data collection">
-                      <button
-                        className="template-btn-load"
-                        style={{ background: 'rgba(255,133,66,0.08)', color: '#ff8542', borderColor: '#ff8542' }}
-                        onClick={() => handleRunWeave(t.dir_name, t.name)}
-                      >
-                        Run
-                      </button>
-                    </Tooltip>
-                  )}
-                  {!t.builtin && (
-                    <Tooltip text="Open this artifact's folder in JupyterLab for editing">
-                      <button
-                        className="template-btn-load"
-                        onClick={() => handleEditInJupyter(t.dir_name)}
-                        disabled={launchingNotebook === t.dir_name}
-                      >
-                        {launchingNotebook === t.dir_name ? 'Opening...' : 'JupyterLab'}
-                      </button>
-                    </Tooltip>
-                  )}
-                  {!t.builtin && onEditArtifact && (
-                    <Tooltip text="Open the artifact editor for this weave">
-                      <button
-                        className="template-btn-load"
-                        onClick={() => onEditArtifact(t.dir_name)}
-                      >
-                        Edit
-                      </button>
-                    </Tooltip>
-                  )}
-                  {!t.builtin && (
-                    <Tooltip text="Delete this weave">
-                      <button
-                        className="template-btn-load template-btn-delete"
-                        onClick={() => setDeleteConfirm({ dirName: t.dir_name, name: t.name, category: 'weave' })}
-                      >
-                        Delete
-                      </button>
-                    </Tooltip>
-                  )}
+                  </div>
                 </div>
               </div>
-            ))}
+            );
+            })}
           </div>
 
           {/* Load Modal */}
@@ -586,24 +719,60 @@ export default function LibrariesPanel({
             </div>
           )}
 
-          {/* Deploy Modal */}
-          {deployingTemplate && (
-            <div className="template-modal-overlay" onClick={() => setDeployingTemplate(null)}>
+          {/* Deploy / Run Args Modal */}
+          {scriptModal && (
+            <div className="template-modal-overlay" onClick={() => setScriptModal(null)}>
               <div className="template-modal" onClick={(e) => e.stopPropagation()}>
-                <h4>Deploy Weave</h4>
-                <p>Load, submit, and configure <strong>{deployingTemplate}</strong> as a new slice.</p>
-                <input
-                  type="text"
-                  className="template-input"
-                  placeholder="Slice name..."
-                  value={deploySliceName}
-                  onChange={(e) => setDeploySliceName(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleDeployWeave()}
-                  autoFocus
-                />
+                <h4>{scriptModal.mode === 'deploy' ? 'Deploy Weave' : 'Run Experiment'}</h4>
+                <p>
+                  {scriptModal.mode === 'deploy'
+                    ? <>Load, submit, and configure <strong>{scriptModal.weaveName}</strong> as a new slice.</>
+                    : (() => {
+                        const tmpl = sliceTemplates.find(t => t.dir_name === scriptModal.dirName);
+                        return tmpl?.has_deploy
+                          ? <>Deploy <strong>{scriptModal.weaveName}</strong> then run <strong>run.sh</strong>.</>
+                          : <>Execute <strong>run.sh</strong> from <strong>{scriptModal.weaveName}</strong>.</>;
+                      })()}
+                </p>
+                {scriptModal.argDefs.map((arg, i) => (
+                  <div key={arg.name} style={{ marginBottom: 8 }}>
+                    <label style={{ display: 'block', fontSize: 12, color: '#8aa', marginBottom: 2 }}>
+                      {arg.label}{arg.required ? ' *' : ''}
+                    </label>
+                    {arg.description && (
+                      <div style={{ fontSize: 11, color: '#688', marginBottom: 3 }}>{arg.description}</div>
+                    )}
+                    {arg.type === 'boolean' ? (
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                        <input
+                          type="checkbox"
+                          checked={scriptArgValues[arg.name] === 'true'}
+                          onChange={(e) => setScriptArgValues(prev => ({ ...prev, [arg.name]: e.target.checked ? 'true' : 'false' }))}
+                        />
+                        {arg.label}
+                      </label>
+                    ) : (
+                      <input
+                        type={arg.type === 'number' ? 'number' : 'text'}
+                        className="template-input"
+                        placeholder={arg.placeholder || `${arg.label}...`}
+                        value={scriptArgValues[arg.name] || ''}
+                        onChange={(e) => setScriptArgValues(prev => ({ ...prev, [arg.name]: e.target.value }))}
+                        onKeyDown={(e) => e.key === 'Enter' && scriptModalValid && confirmScriptModal()}
+                        autoFocus={i === 0}
+                      />
+                    )}
+                  </div>
+                ))}
                 <div className="template-modal-actions">
-                  <button onClick={() => setDeployingTemplate(null)}>Cancel</button>
-                  <button className="primary" style={{ background: '#008e7a' }} onClick={() => handleDeployWeave()}>Deploy</button>
+                  <button onClick={() => setScriptModal(null)}>Cancel</button>
+                  <button
+                    className="primary"
+                    onClick={confirmScriptModal}
+                    disabled={!scriptModalValid}
+                  >
+                    {scriptModal.mode === 'deploy' ? 'Deploy' : 'Run'}
+                  </button>
                 </div>
               </div>
             </div>
@@ -672,8 +841,17 @@ export default function LibrariesPanel({
               <div className="vmt-card" key={t.dir_name}>
                 <div className="vmt-card-header">
                   <span className="vmt-card-name">{t.name}</span>
-                  {t.builtin && <span className="vmt-badge-builtin">built-in</span>}
                   {t.version && <span className="vmt-badge-version">v{t.version}</span>}
+                  <OverflowMenu
+                    isOpen={overflowOpen === `vm-${t.dir_name}`}
+                    onToggle={() => setOverflowOpen(overflowOpen === `vm-${t.dir_name}` ? null : `vm-${t.dir_name}`)}
+                    onClose={() => setOverflowOpen(null)}
+                    items={[
+                      { label: 'Edit', onClick: () => handleEditInJupyter(t.dir_name), disabled: launchingNotebook === t.dir_name },
+                      { label: '', onClick: () => {}, separator: true },
+                      { label: 'Delete', onClick: () => setDeleteConfirm({ dirName: t.dir_name, name: t.name, category: 'vm-template' }), danger: true },
+                    ]}
+                  />
                 </div>
                 {t.description && (
                   <div className="vmt-card-desc">{t.description}</div>
@@ -706,6 +884,7 @@ export default function LibrariesPanel({
                   <Tooltip text={!sliceName ? 'Select or create a slice first' : 'Add a new node to the current slice using this VM template configuration'}>
                     <button
                       className="vmt-btn-add"
+                      style={{ width: '100%' }}
                       disabled={!sliceName || addingTemplate === t.dir_name}
                       onClick={() => {
                         if (t.variant_count > 0) {
@@ -719,27 +898,6 @@ export default function LibrariesPanel({
                       {addingTemplate === t.dir_name ? 'Adding...' : 'Add VM'}
                     </button>
                   </Tooltip>
-                  {!t.builtin && (
-                    <Tooltip text="Open this artifact's folder in JupyterLab for editing">
-                      <button
-                        className="vmt-btn-add"
-                        onClick={() => handleEditInJupyter(t.dir_name)}
-                        disabled={launchingNotebook === t.dir_name}
-                      >
-                        {launchingNotebook === t.dir_name ? 'Opening...' : 'Edit'}
-                      </button>
-                    </Tooltip>
-                  )}
-                  {!t.builtin && (
-                    <Tooltip text="Delete this VM template">
-                      <button
-                        className="vmt-btn-add vmt-btn-delete"
-                        onClick={() => setDeleteConfirm({ dirName: t.dir_name, name: t.name, category: 'vm-template' })}
-                      >
-                        Delete
-                      </button>
-                    </Tooltip>
-                  )}
                 </div>
               </div>
             ))}
@@ -790,7 +948,16 @@ export default function LibrariesPanel({
                     {r.starred ? '\u2605' : '\u2606'}
                   </button>
                   <span className="vmt-card-name">{r.name}</span>
-                  {r.builtin && <span className="vmt-badge-builtin">built-in</span>}
+                  <OverflowMenu
+                    isOpen={overflowOpen === `recipe-${r.dir_name}`}
+                    onToggle={() => setOverflowOpen(overflowOpen === `recipe-${r.dir_name}` ? null : `recipe-${r.dir_name}`)}
+                    onClose={() => setOverflowOpen(null)}
+                    items={[
+                      { label: 'Edit', onClick: () => handleEditInJupyter(r.dir_name), disabled: launchingNotebook === r.dir_name },
+                      { label: '', onClick: () => {}, separator: true },
+                      { label: 'Delete', onClick: () => setDeleteConfirm({ dirName: r.dir_name, name: r.name, category: 'recipe' }), danger: true },
+                    ]}
+                  />
                 </div>
                 {r.description && (
                   <div className="vmt-card-desc">{r.description}</div>
@@ -818,33 +985,13 @@ export default function LibrariesPanel({
                   <Tooltip text={!sliceName || !sliceData?.nodes.length ? 'Need a slice with nodes first' : 'Apply this recipe to a node'}>
                     <button
                       className="vmt-btn-add"
+                      style={{ width: '100%' }}
                       disabled={!sliceName || !sliceData?.nodes.length || executingRecipe === r.dir_name}
                       onClick={() => setRecipeNodePicker(r.dir_name)}
                     >
                       {executingRecipe === r.dir_name ? 'Applying...' : 'Apply'}
                     </button>
                   </Tooltip>
-                  {!r.builtin && (
-                    <Tooltip text="Open this artifact's folder in JupyterLab for editing">
-                      <button
-                        className="vmt-btn-add"
-                        onClick={() => handleEditInJupyter(r.dir_name)}
-                        disabled={launchingNotebook === r.dir_name}
-                      >
-                        {launchingNotebook === r.dir_name ? 'Opening...' : 'Edit'}
-                      </button>
-                    </Tooltip>
-                  )}
-                  {!r.builtin && (
-                    <Tooltip text="Delete this recipe">
-                      <button
-                        className="vmt-btn-add vmt-btn-delete"
-                        onClick={() => setDeleteConfirm({ dirName: r.dir_name, name: r.name, category: 'recipe' })}
-                      >
-                        Delete
-                      </button>
-                    </Tooltip>
-                  )}
                 </div>
               </div>
             ))}
@@ -888,6 +1035,16 @@ export default function LibrariesPanel({
               <div className="vmt-card" key={n.dir_name}>
                 <div className="vmt-card-header">
                   <span className="vmt-card-name">{n.name}</span>
+                  <OverflowMenu
+                    isOpen={overflowOpen === `nb-${n.dir_name}`}
+                    onToggle={() => setOverflowOpen(overflowOpen === `nb-${n.dir_name}` ? null : `nb-${n.dir_name}`)}
+                    onClose={() => setOverflowOpen(null)}
+                    items={[
+                      ...(onPublishNotebook ? [{ label: 'Publish', onClick: () => onPublishNotebook(n.dir_name) }] : []),
+                      { label: '', onClick: () => {}, separator: true },
+                      { label: 'Delete', onClick: () => setDeleteConfirm({ dirName: n.dir_name, name: n.name, category: 'notebook' }), danger: true },
+                    ]}
+                  />
                 </div>
                 {n.description && (
                   <div className="vmt-card-desc">{n.description}</div>
@@ -901,18 +1058,11 @@ export default function LibrariesPanel({
                   <Tooltip text="Open this notebook's folder in JupyterLab">
                     <button
                       className="vmt-btn-add"
+                      style={{ width: '100%' }}
                       onClick={() => handleEditInJupyter(n.dir_name)}
                       disabled={launchingNotebook === n.dir_name}
                     >
                       {launchingNotebook === n.dir_name ? 'Opening...' : 'JupyterLab'}
-                    </button>
-                  </Tooltip>
-                  <Tooltip text="Delete this notebook">
-                    <button
-                      className="vmt-btn-add vmt-btn-delete"
-                      onClick={() => setDeleteConfirm({ dirName: n.dir_name, name: n.name, category: 'notebook' })}
-                    >
-                      Delete
                     </button>
                   </Tooltip>
                 </div>

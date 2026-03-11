@@ -1,6 +1,7 @@
 """Resource and site information API routes."""
 
 from __future__ import annotations
+import ast
 import asyncio
 import threading
 import time
@@ -68,6 +69,10 @@ COMPONENT_MODELS = [
     {"model": "GPU_A40", "type": "GPU", "description": "NVIDIA A40"},
     {"model": "FPGA_Xilinx_U280", "type": "FPGA", "description": "Xilinx Alveo U280"},
     {"model": "NVME_P4510", "type": "Storage", "description": "Intel P4510 NVMe"},
+    {"model": "NIC_ConnectX_7_100", "type": "SmartNIC", "description": "Mellanox ConnectX-7 100Gbps (dual port)"},
+    {"model": "NIC_ConnectX_7_400", "type": "SmartNIC", "description": "Mellanox ConnectX-7 400Gbps"},
+    {"model": "NIC_BlueField_2_ConnectX_6", "type": "SmartNIC", "description": "NVIDIA BlueField-2 DPU with ConnectX-6"},
+    {"model": "FPGA_Xilinx_SN1022", "type": "FPGA", "description": "Xilinx SN1022 FPGA"},
 ]
 
 # Available OS images
@@ -489,6 +494,81 @@ async def get_resources() -> dict[str, Any]:
                         }
                 except Exception:
                     result[site_name] = {"error": "unavailable"}
+            return result
+    try:
+        return await asyncio.to_thread(_do)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/facility-ports")
+async def list_facility_ports() -> list[dict[str, Any]]:
+    """List available FABRIC facility ports with VLAN availability."""
+    cached = _cache.get("facility_ports")
+    if cached and time.time() - cached[0] < CACHE_TTL:
+        return cached[1]
+
+    def _do():
+        with _fablib_lock:
+            fablib = get_fablib()
+            fp_obj = fablib.get_facility_ports()
+            # ResourcesV2 stores facility ports as a list of dicts in _facility_ports_data
+            raw = getattr(fp_obj, '_facility_ports_data', None)
+            if raw is None:
+                raw = fp_obj.list_facility_ports(output='list') or []
+
+            # Try to load FIM topology for richer data (device_name, region)
+            fim_lookup: dict[str, dict[str, Any]] = {}
+            try:
+                fp_obj._ensure_topology_loaded()
+                topo = fp_obj.get_topology()
+                if topo and hasattr(topo, 'facilities'):
+                    for fp_name, fp_node in topo.facilities.items():
+                        for iface in fp_node.interface_list:
+                            labels = iface.labels
+                            if labels:
+                                fim_lookup[fp_name] = {
+                                    "device_name": labels.device_name or "",
+                                    "region": labels.region or "",
+                                    "local_name": labels.local_name or "",
+                                }
+                            break
+            except Exception:
+                pass
+
+            result = []
+            for fp in raw:
+                fp_name = fp.get("name", "")
+                # Extract local_name from the switch field (e.g. "port+cern-data-sw:HundredGigE0/0/0/8")
+                switch = fp.get("switch", "")
+                local_name = switch.split(":")[-1] if ":" in switch else switch
+                # Parse vlans string (e.g. "['800-1000']") into a list
+                vlans_raw = fp.get("vlans", "")
+                if isinstance(vlans_raw, list):
+                    vlan_range = vlans_raw
+                elif isinstance(vlans_raw, str) and vlans_raw.startswith("["):
+                    try:
+                        vlan_range = ast.literal_eval(vlans_raw)
+                    except Exception:
+                        vlan_range = [vlans_raw]
+                else:
+                    vlan_range = [vlans_raw] if vlans_raw else []
+
+                # Enrich with FIM topology data
+                fim = fim_lookup.get(fp_name, {})
+                result.append({
+                    "name": fp_name,
+                    "site": fp.get("site", ""),
+                    "interfaces": [{
+                        "name": fp.get("port", ""),
+                        "vlan_range": vlan_range,
+                        "local_name": fim.get("local_name") or local_name,
+                        "device_name": fim.get("device_name", ""),
+                        "allocated_vlans": [],
+                        "region": fim.get("region", ""),
+                    }],
+                })
+            _cache["facility_ports"] = (time.time(), result)
             return result
     try:
         return await asyncio.to_thread(_do)

@@ -13,6 +13,7 @@ import termios
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from app.tool_installer import AI_TOOLS_DIR
 import paramiko
 
 from app.slice_registry import resolve_slice_name
@@ -285,8 +286,15 @@ async def container_terminal_ws(websocket: WebSocket):
         # Create a pseudo-terminal
         master_fd, slave_fd = pty.openpty()
 
-        # Start bash in the container, defaulting to /home/fabric/work
-        cwd = "/home/fabric/work" if os.path.isdir("/home/fabric/work") else os.path.expanduser("~")
+        # Start bash in the container, defaulting to storage dir
+        from app.settings_manager import get_storage_dir as _storage
+        cwd = _storage() if os.path.isdir(_storage()) else os.path.expanduser("~")
+        # Always include AI tool paths so tools installed mid-session are accessible
+        shell_env = {**os.environ, "TERM": "xterm-256color"}
+        venv_bin = os.path.join(AI_TOOLS_DIR, "venv", "bin")
+        npm_bin = os.path.join(AI_TOOLS_DIR, "npm", "bin")
+        shell_env["PATH"] = f"{venv_bin}:{npm_bin}:{os.environ.get('PATH', '')}"
+
         proc = subprocess.Popen(
             ["/bin/bash"],
             stdin=slave_fd,
@@ -294,7 +302,7 @@ async def container_terminal_ws(websocket: WebSocket):
             stderr=slave_fd,
             cwd=cwd,
             preexec_fn=os.setsid,
-            env={**os.environ, "TERM": "xterm-256color"},
+            env=shell_env,
         )
         os.close(slave_fd)
 
@@ -366,19 +374,8 @@ async def logs_ws(websocket: WebSocket):
     """Stream the FABlib log file to the client, tail -f style."""
     await websocket.accept()
 
-    config_dir = os.environ.get("FABRIC_CONFIG_DIR", DEFAULT_CONFIG_DIR)
-
-    # Check fabric_rc for log file path
-    log_file = "/tmp/fablib/fablib.log"
-    rc_path = os.path.join(config_dir, "fabric_rc")
-    if os.path.isfile(rc_path):
-        with open(rc_path) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("export FABRIC_LOG_FILE="):
-                    val = line.split("=", 1)[1].strip('"').strip("'")
-                    if val:
-                        log_file = val
+    from app.settings_manager import get_log_file
+    log_file = get_log_file()
 
     try:
         # Send initial tail of existing log (last 200 lines)

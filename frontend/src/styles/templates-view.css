@@ -148,10 +148,6 @@
   letter-spacing: 0.03em;
   flex-shrink: 0;
 }
-.tv-badge-builtin {
-  background: rgba(87, 152, 188, 0.15);
-  color: var(--fabric-primary);
-}
 .tv-badge-user {
   background: rgba(0, 142, 122, 0.12);
   color: var(--fabric-teal, #008e7a);

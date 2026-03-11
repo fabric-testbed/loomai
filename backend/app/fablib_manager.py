@@ -11,6 +11,11 @@ from fabrictestbed_extensions.fablib.fablib import FablibManager
 _lock = threading.Lock()
 _fablib: Optional[FablibManager] = None
 
+def _default_config_dir() -> str:
+    from app.settings_manager import get_config_dir
+    return get_config_dir()
+
+# Keep a string constant for backward compat with imports
 DEFAULT_CONFIG_DIR = "/home/fabric/work/fabric_config"
 
 
@@ -132,8 +137,8 @@ def get_slice_key_path(config_dir: str, key_name: str) -> Tuple[str, str]:
 
 def is_configured() -> bool:
     """Check whether minimum FABRIC config files exist."""
-    from app.user_context import get_token_path
-    config_dir = os.environ.get("FABRIC_CONFIG_DIR", DEFAULT_CONFIG_DIR)
+    from app.settings_manager import get_token_path, get_config_dir
+    config_dir = get_config_dir()
     rc_path = os.path.join(config_dir, "fabric_rc")
     return os.path.isfile(rc_path) and os.path.isfile(get_token_path())
 
@@ -144,7 +149,8 @@ def reset_fablib() -> None:
     with _lock:
         _fablib = None
     # Re-load fabric_rc env vars so FABlib picks up new settings
-    config_dir = os.environ.get("FABRIC_CONFIG_DIR", DEFAULT_CONFIG_DIR)
+    from app.settings_manager import get_config_dir
+    config_dir = get_config_dir()
     rc_path = os.path.join(config_dir, "fabric_rc")
     _load_fabric_rc(rc_path)
     # Also force-correct the slice key paths in case fabric_rc has stale ones
@@ -163,7 +169,8 @@ def get_fablib() -> FablibManager:
     if _fablib is None:
         with _lock:
             if _fablib is None:
-                config_dir = os.environ.get("FABRIC_CONFIG_DIR", DEFAULT_CONFIG_DIR)
+                from app.settings_manager import get_config_dir as _get_config
+                config_dir = _get_config()
                 rc_path = os.path.join(config_dir, "fabric_rc")
                 if not os.path.isfile(rc_path):
                     raise RuntimeError(

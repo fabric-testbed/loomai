@@ -120,22 +120,37 @@ For reusable installs across different OS:
 3. Use `image_patterns` to map OS → script
 4. Test on both Ubuntu and Rocky if possible
 
+## Background Runs (Preferred for Weave Scripts)
+
+Weave `run.sh` and `deploy.sh` scripts now run as **background runs** that are
+fully detached from the browser. Use the REST API to start and monitor:
+```bash
+# Start a background run
+curl -X POST http://localhost:8000/api/templates/My_Weave/start-run/run.sh \
+  -H "Content-Type: application/json" \
+  -d '{"args": {"SLICE_NAME": "my-exp"}}'
+# Returns: {"run_id": "run-abc123", "status": "running"}
+
+# Poll output incrementally
+curl "http://localhost:8000/api/templates/runs/run-abc123/output?offset=0"
+```
+Background runs survive browser disconnects. Use `### PROGRESS:` markers in
+scripts for status updates visible in the WebUI Build Log.
+
+Scripts can declare their arguments via `run.json` — a manifest file in the weave
+directory. The WebUI Run modal dynamically renders input fields from `run.json`.
+Each arg becomes an environment variable passed to the script.
+
 ## Persistent Sessions with tmux
 
-For long-running deployments (multi-hour builds, large data transfers):
+For ad-hoc long-running commands (not weave scripts), use tmux:
 ```bash
-# Start a named session for the deployment
 tmux new-session -d -s deploy "bash deploy_all_nodes.sh"
-
-# Monitor progress
-tmux attach -t deploy
-# Detach: Ctrl+B then D
-
-# List all sessions
+tmux attach -t deploy   # Check progress (Ctrl+B D to detach)
 tmux list-sessions
 ```
-tmux sessions survive WebSocket disconnects — the deployment continues even if
-the browser tab closes. Prefer tmux over `nohup` or `&` for visibility.
+tmux sessions survive WebSocket disconnects. Prefer background runs for weave
+scripts, tmux for ad-hoc tasks.
 
 ## Backend REST API
 
@@ -145,15 +160,29 @@ Use the backend at `http://localhost:8000` for automation:
 curl -X POST http://localhost:8000/api/files/boot-config/<slice_id>/<node>/execute-all
 
 # Stream boot config execution (SSE)
-curl -N http://localhost:8000/api/files/boot-config/<slice_id>/<node>/execute-all-stream
+curl -N -X POST http://localhost:8000/api/files/boot-config/my-slice/execute-all-stream
 
-# Run a recipe on nodes
-curl -X POST http://localhost:8000/api/recipes/<name>/execute/ \
-  -H "Content-Type: application/json" -d '{"slice_id":"...","node_names":["node1"]}'
+# Run a recipe on a node
+curl -X POST http://localhost:8000/api/recipes/install_docker/execute/my-slice/node1
 
 # Set up web tunnel to a service
-curl -X POST http://localhost:8000/api/slices/<id>/nodes/<node>/tunnels \
-  -H "Content-Type: application/json" -d '{"remote_port":3000,"label":"Dashboard"}'
+curl -X POST http://localhost:8000/api/tunnels \
+  -H "Content-Type: application/json" \
+  -d '{"slice_name":"my-slice","node_name":"node1","remote_port":3000,"label":"Dashboard"}'
+
+# Start a background weave run (survives browser disconnect)
+curl -X POST http://localhost:8000/api/templates/My_Weave/start-run/run.sh \
+  -H "Content-Type: application/json" \
+  -d '{"args": {"SLICE_NAME": "my-exp"}}'
+
+# Poll run output (incremental)
+curl "http://localhost:8000/api/templates/runs/{run_id}/output?offset=0"
+
+# List all background runs
+curl http://localhost:8000/api/templates/runs
+
+# Stop a background run
+curl -X POST http://localhost:8000/api/templates/runs/{run_id}/stop
 ```
 
 ## Artifact Storage

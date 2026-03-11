@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { startOpenCodeWeb, stopOpenCodeWeb, getOpenCodeWebStatus, getAiModels } from '../api/client';
+import ToolInstallOverlay from './ToolInstallOverlay';
 import '../styles/terminal-companion.css';
 
 function SidebarIcon() {
@@ -39,6 +40,7 @@ export default function OpenCodeWebView({ visible = true }: Props) {
   const [status, setStatus] = useState<'loading' | 'running' | 'error'>('loading');
   const [port, setPort] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
+  const [installing, setInstalling] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // Model picker
@@ -57,11 +59,33 @@ export default function OpenCodeWebView({ visible = true }: Props) {
     }).catch(() => {}).finally(() => setModelsLoading(false));
   }, []);
 
+  const startAfterInstall = useCallback(async () => {
+    setInstalling(false);
+    setStatus('loading');
+    try {
+      const res = await startOpenCodeWeb(selectedModelRef.current);
+      if (res.status === 'running' && res.port) {
+        setPort(res.port);
+        setStatus('running');
+      } else {
+        setErrorMsg(res.error || 'Failed to start OpenCode');
+        setStatus('error');
+      }
+    } catch (e: any) {
+      setErrorMsg(e.message || 'Failed to start OpenCode');
+      setStatus('error');
+    }
+  }, []);
+
   const launch = useCallback(async (model?: string) => {
     setStatus('loading');
     setErrorMsg('');
     try {
       const res = await startOpenCodeWeb(model);
+      if (res.install_required) {
+        setInstalling(true);
+        return;
+      }
       if (res.status === 'running' && res.port) {
         setPort(res.port);
         setStatus('running');
@@ -108,6 +132,17 @@ export default function OpenCodeWebView({ visible = true }: Props) {
 
   return (
     <div className="tc-layout">
+      {installing && (
+        <ToolInstallOverlay
+          toolId="opencode"
+          onComplete={startAfterInstall}
+          onError={(msg) => {
+            setInstalling(false);
+            setErrorMsg(msg);
+            setStatus('error');
+          }}
+        />
+      )}
       <div className={`tc-sidebar ${sidebarOpen ? '' : 'collapsed'}`}>
         <div className="tc-sidebar-header">
           <span className="tc-sidebar-icon opencode">OC</span>
@@ -173,6 +208,13 @@ export default function OpenCodeWebView({ visible = true }: Props) {
           )}
           <span className="tc-header-title">OpenCode</span>
           <span className="tc-header-badge">Web</span>
+          <button className="tc-popout-btn" onClick={() => window.open(iframeUrl || `http://${window.location.hostname}:9198`, '_blank')} title="Open in new tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+          </button>
           <button className="tc-refresh-btn" onClick={refreshIframe} title="Reload OpenCode web UI">
             <RefreshIcon />
           </button>

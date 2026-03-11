@@ -95,6 +95,13 @@ export interface SliceErrorMessage {
   message: string;
 }
 
+export interface SlicePortMirror {
+  name: string;
+  mirror_interface_name: string;
+  receive_interface_name: string;
+  mirror_direction: string;
+}
+
 export interface SliceData {
   name: string;
   id: string;
@@ -106,6 +113,7 @@ export interface SliceData {
   nodes: SliceNode[];
   networks: SliceNetwork[];
   facility_ports: SliceFacilityPort[];
+  port_mirrors: SlicePortMirror[];
   graph: CyGraph;
 }
 
@@ -294,7 +302,6 @@ export interface VMTemplateSummary {
   description: string;
   image: string;
   created: string;
-  builtin: boolean;
   dir_name: string;
   images: string[];
   variant_count: number;
@@ -383,7 +390,6 @@ export interface RecipeSummary {
   description: string;
   image_patterns: Record<string, string>;
   dir_name: string;
-  builtin: boolean;
   starred: boolean;
 }
 
@@ -400,6 +406,72 @@ export interface UpdateInfo {
   update_available: boolean;
   docker_hub_url: string;
   published_at: string | null;
+}
+
+export interface FacilityPortInterface {
+  name: string;
+  vlan_range: string[];
+  local_name: string;
+  device_name: string;
+  allocated_vlans: string[];
+  region: string;
+}
+
+export interface FacilityPortInfo {
+  name: string;
+  site: string;
+  interfaces: FacilityPortInterface[];
+}
+
+// -- LoomAI Settings --------------------------------------------------------
+
+export interface LoomAISettings {
+  schema_version: number;
+  paths: {
+    storage_dir: string;
+    config_dir: string;
+    artifacts_dir: string;
+    slices_dir: string;
+    notebooks_dir: string;
+    ai_tools_dir: string;
+    token_file: string;
+    bastion_key_file: string;
+    slice_keys_dir: string;
+    ssh_config_file: string;
+    log_file: string;
+  };
+  fabric: {
+    project_id: string;
+    bastion_username: string;
+    hosts: {
+      credmgr: string;
+      orchestrator: string;
+      core_api: string;
+      bastion: string;
+      artifact_manager: string;
+    };
+    logging: { level: string };
+    avoid_sites: string[];
+    ssh_command_line: string;
+  };
+  ai: {
+    fabric_api_key: string;
+    nrp_api_key: string;
+    ai_server_url: string;
+    nrp_server_url: string;
+    tools: Record<string, boolean>;
+  };
+  services: {
+    jupyter_port: number;
+    model_proxy_port: number;
+  };
+  tool_configs: Record<string, object>;
+}
+
+export interface ToolConfigStatus {
+  tool: string;
+  has_config: boolean;
+  files: string[];
 }
 
 

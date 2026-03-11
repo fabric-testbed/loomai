@@ -91,7 +91,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     type: 'leaf',
     id: nextNodeId(),
     tabIds: [...FIXED_TABS],
-    activeTabId: 'validation',
+    activeTabId: 'local-terminal',
   }));
   const [dragState, setDragState] = useState<DragState | null>(null);
 
@@ -128,7 +128,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
     type: 'leaf',
     id: nextNodeId(),
     tabIds: [...FIXED_TABS],
-    activeTabId: 'validation',
+    activeTabId: 'local-terminal',
   }), []);
 
   // --- Local terminal management ---

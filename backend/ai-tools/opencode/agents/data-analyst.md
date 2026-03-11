@@ -83,13 +83,13 @@ plt.savefig('results.png')
 Query slice and resource data via the backend at `http://localhost:8000`:
 ```bash
 # List all slices with state and metadata
-curl -s http://localhost:8000/api/slices/ | python3 -m json.tool
+curl -s http://localhost:8000/api/slices | python3 -m json.tool
 
 # Site resource availability
-curl -s http://localhost:8000/api/resources/sites | python3 -m json.tool
+curl -s http://localhost:8000/api/sites | python3 -m json.tool
 
 # Per-host resources at a site
-curl -s http://localhost:8000/api/resources/sites/STAR/hosts | python3 -m json.tool
+curl -s http://localhost:8000/api/sites/STAR/hosts | python3 -m json.tool
 ```
 
 ## Saving Analysis as Artifacts
@@ -99,7 +99,10 @@ Save notebooks and results as artifacts for sharing:
 ARTIFACTS_DIR="/home/fabric/work/my_artifacts"
 mkdir -p "$ARTIFACTS_DIR/My_Analysis"
 # Write .ipynb file there — detected as notebook artifact
-# Publish: curl -X POST http://localhost:8000/api/artifacts/My_Analysis/publish ...
+# Publish: curl -X POST http://localhost:8000/api/artifacts/publish \
+#   -H "Content-Type: application/json" \
+#   -d '{"dir_name":"My_Analysis","category":"notebook","title":"My Analysis","description":"..."}'
+# Open in JupyterLab: /jupyter/lab/tree/my_artifacts/My_Analysis
 ```
 
 ## Tips

@@ -124,25 +124,47 @@ The backend at `http://localhost:8000` provides 230+ endpoints. Use when FABlib
 tools don't cover an operation:
 ```bash
 # Slice operations
-curl -s http://localhost:8000/api/slices/ | python3 -m json.tool
-curl -X POST http://localhost:8000/api/slices/<id>/refresh
-curl -X POST http://localhost:8000/api/slices/<id>/submit
+curl -s http://localhost:8000/api/slices | python3 -m json.tool
+curl -X POST http://localhost:8000/api/slices/my-slice/refresh
+curl -X POST http://localhost:8000/api/slices/my-slice/submit
+curl -s http://localhost:8000/api/slices/my-slice/validate
+
+# Node/component/network management (drafts)
+curl -X POST http://localhost:8000/api/slices/my-slice/nodes \
+  -H "Content-Type: application/json" -d '{"name":"n1","site":"auto","cores":4,"ram":16,"disk":50,"image":"default_ubuntu_22"}'
+curl -X POST http://localhost:8000/api/slices/my-slice/nodes/n1/components \
+  -H "Content-Type: application/json" -d '{"name":"gpu1","model":"GPU_RTX6000"}'
+curl -X POST http://localhost:8000/api/slices/my-slice/networks \
+  -H "Content-Type: application/json" -d '{"name":"net1","type":"L2Bridge","interfaces":["n1-nic1-p1","n2-nic1-p1"]}'
 
 # Boot config execution
-curl -X POST http://localhost:8000/api/files/boot-config/<slice_id>/<node>/execute-all
+curl -X POST http://localhost:8000/api/files/boot-config/my-slice/execute-all-stream
+curl -X POST http://localhost:8000/api/files/boot-config/my-slice/node1/execute
+
+# Recipe execution
+curl -X POST http://localhost:8000/api/recipes/install_docker/execute/my-slice/node1
 
 # Artifact management
-curl -s http://localhost:8000/api/artifacts/ | python3 -m json.tool
-curl -X POST http://localhost:8000/api/artifacts/<name>/publish \
-  -H "Content-Type: application/json" -d '{"title":"...","description":"..."}'
+curl -s http://localhost:8000/api/artifacts/local | python3 -m json.tool
+curl -s http://localhost:8000/api/artifacts/remote | python3 -m json.tool
+curl -X POST http://localhost:8000/api/artifacts/publish \
+  -H "Content-Type: application/json" \
+  -d '{"dir_name":"My_Weave","category":"weave","title":"...","description":"..."}'
+curl -X POST http://localhost:8000/api/artifacts/download \
+  -H "Content-Type: application/json" -d '{"uuid":"artifact-uuid"}'
 
 # Web tunnels to VM services
-curl -X POST http://localhost:8000/api/slices/<id>/nodes/<node>/tunnels \
-  -H "Content-Type: application/json" -d '{"remote_port":3000,"label":"My Service"}'
+curl -X POST http://localhost:8000/api/tunnels \
+  -H "Content-Type: application/json" \
+  -d '{"slice_name":"my-slice","node_name":"node1","remote_port":3000,"label":"My Service"}'
 
 # Resource availability
-curl -s http://localhost:8000/api/resources/sites | python3 -m json.tool
-curl -s http://localhost:8000/api/resources/sites/<name>/hosts | python3 -m json.tool
+curl -s http://localhost:8000/api/sites | python3 -m json.tool
+curl -s http://localhost:8000/api/sites/STAR/hosts | python3 -m json.tool
+
+# JupyterLab
+curl -X POST http://localhost:8000/api/jupyter/start
+# Open artifact: /jupyter/lab/tree/my_artifacts/<name>
 ```
 
 ## Persistent Sessions with tmux

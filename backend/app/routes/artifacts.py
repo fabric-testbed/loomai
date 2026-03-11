@@ -110,8 +110,23 @@ _CATEGORY_MARKERS = {
     "notebook": "[LoomAI Notebook]",
 }
 
+_CATEGORY_TAGS: dict[str, str] = {
+    "weave": "loomai:weave",
+    "vm-template": "loomai:vm",
+    "recipe": "loomai:recipe",
+}
 
-def _make_descriptions(description: str, title: str, category: str) -> tuple[str, str]:
+
+def _ensure_category_tag(tags: list[str], category: str) -> list[str]:
+    """Add the category-specific loomai: tag if not already present."""
+    cat_tag = _CATEGORY_TAGS.get(category)
+    if cat_tag and cat_tag not in tags:
+        tags = tags + [cat_tag]
+    return tags
+
+
+def _make_descriptions(description: str, title: str, category: str,
+                       description_long: str = "") -> tuple[str, str]:
     """Build (description_short, description_long) for the FABRIC Artifact API.
 
     - description_short: 5–255 chars, plain user text (no marker)
@@ -130,8 +145,9 @@ def _make_descriptions(description: str, title: str, category: str) -> tuple[str
     if len(desc_short) < 5:
         desc_short = desc_short.ljust(5)
 
-    # description_long: user's full text + category marker
-    long_text = full or title
+    # description_long: use explicit long description if provided, else fall back to short
+    long_base = description_long.strip() if description_long else ""
+    long_text = long_base or full or title
     if marker and marker.lower() not in long_text.lower():
         desc_long = f"{long_text}\n{marker}"
     else:
@@ -256,6 +272,7 @@ class PublishRequest(BaseModel):
     category: str
     title: str
     description: str = ""
+    description_long: str = ""
     tags: list[str] = []
     visibility: str = "author"
     project_uuid: str = ""
@@ -264,6 +281,7 @@ class PublishRequest(BaseModel):
 class UpdateArtifactRequest(BaseModel):
     title: str = ""
     description: str = ""
+    description_long: str = ""
     visibility: str = ""
     tags: list[str] = []
     project_uuid: str = ""
@@ -395,36 +413,51 @@ async def download_artifact(req: DownloadRequest):
             )
         shutil.rmtree(dest_dir)
 
+    os.makedirs(dest_dir, exist_ok=True)
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        tar_path = os.path.join(tmpdir, "artifact.tar.gz")
-        with open(tar_path, "wb") as f:
+        raw_path = os.path.join(tmpdir, "artifact_download")
+        with open(raw_path, "wb") as f:
             f.write(r.content)
 
-        extract_dir = os.path.join(tmpdir, "extracted")
-        os.makedirs(extract_dir, exist_ok=True)
+        extracted = False
         try:
-            with tarfile.open(tar_path, "r:gz") as tf:
+            with tarfile.open(raw_path, "r:*") as tf:
                 for member in tf.getmembers():
                     if member.name.startswith("/") or ".." in member.name:
                         raise HTTPException(status_code=400, detail="Artifact contains unsafe paths")
+                extract_dir = os.path.join(tmpdir, "extracted")
+                os.makedirs(extract_dir, exist_ok=True)
                 tf.extractall(extract_dir)
-        except tarfile.TarError as e:
-            raise HTTPException(status_code=400, detail=f"Failed to extract artifact: {e}")
+                extracted = True
+        except tarfile.TarError:
+            pass
 
-        contents = os.listdir(extract_dir)
-        if len(contents) == 1 and os.path.isdir(os.path.join(extract_dir, contents[0])):
-            src_dir = os.path.join(extract_dir, contents[0])
-        else:
-            src_dir = extract_dir
-
-        os.makedirs(dest_dir, exist_ok=True)
-        for item in os.listdir(src_dir):
-            s = os.path.join(src_dir, item)
-            d = os.path.join(dest_dir, item)
-            if os.path.isdir(s):
-                shutil.copytree(s, d)
+        if extracted:
+            contents = os.listdir(extract_dir)
+            if len(contents) == 1 and os.path.isdir(os.path.join(extract_dir, contents[0])):
+                src_dir = os.path.join(extract_dir, contents[0])
             else:
-                shutil.copy2(s, d)
+                src_dir = extract_dir
+
+            for item in os.listdir(src_dir):
+                s = os.path.join(src_dir, item)
+                d = os.path.join(dest_dir, item)
+                if os.path.isdir(s):
+                    shutil.copytree(s, d)
+                else:
+                    shutil.copy2(s, d)
+        else:
+            # Not a recognized archive — drop the raw file for manual extraction
+            content_type = r.headers.get("content-type", "")
+            filename = local_name
+            if "zip" in content_type:
+                filename += ".zip"
+            elif "gzip" in content_type or "x-gzip" in content_type:
+                filename += ".tar.gz"
+            else:
+                filename += ".bin"
+            shutil.copy2(raw_path, os.path.join(dest_dir, filename))
 
     meta_path = os.path.join(dest_dir, "metadata.json")
     if not os.path.isfile(meta_path):
@@ -433,7 +466,7 @@ async def download_artifact(req: DownloadRequest):
             "description": art.get("description_long", "") or art.get("description_short", ""),
             "source": "artifact-manager",
             "artifact_uuid": req.uuid,
-            "builtin": False,
+
             "created": datetime.now(timezone.utc).isoformat(),
             "tags": tag_strs,
         }
@@ -590,7 +623,10 @@ async def publish_artifact(req: PublishRequest):
         raise HTTPException(status_code=404, detail=f"Local artifact '{req.dir_name}' not found in {req.category}")
 
     # Build short + long descriptions for the FABRIC Artifact API
-    desc_short, desc_long = _make_descriptions(req.description, req.title, req.category)
+    desc_short, desc_long = _make_descriptions(req.description, req.title, req.category, req.description_long)
+
+    # Ensure the category-specific loomai: tag is present
+    publish_tags = _ensure_category_tag(list(req.tags), req.category)
 
     # Step 1: Create artifact record (include title and tags upfront)
     create_body: dict[str, Any] = {
@@ -599,8 +635,8 @@ async def publish_artifact(req: PublishRequest):
         "description_long": desc_long,
         "visibility": req.visibility,
     }
-    if req.tags:
-        create_body["tags"] = req.tags
+    if publish_tags:
+        create_body["tags"] = publish_tags
     if req.project_uuid:
         create_body["project_uuid"] = req.project_uuid
     try:
@@ -628,8 +664,8 @@ async def publish_artifact(req: PublishRequest):
         "description_long": desc_long,
         "visibility": req.visibility,
     }
-    if req.tags:
-        update_body["tags"] = req.tags
+    if publish_tags:
+        update_body["tags"] = publish_tags
     if req.project_uuid:
         update_body["project_uuid"] = req.project_uuid
 
@@ -823,14 +859,14 @@ async def update_remote_artifact(uuid: str, req: UpdateArtifactRequest):
     update_body: dict[str, Any] = {}
     if req.title:
         update_body["title"] = req.title
-    if req.description:
-        desc_short, desc_long = _make_descriptions(req.description, req.title or "", req.category)
+    if req.description or req.description_long:
+        desc_short, desc_long = _make_descriptions(req.description, req.title or "", req.category, req.description_long)
         update_body["description_short"] = desc_short
         update_body["description_long"] = desc_long
     if req.visibility:
         update_body["visibility"] = req.visibility
-    if req.tags:
-        update_body["tags"] = req.tags
+    if req.tags is not None:
+        update_body["tags"] = _ensure_category_tag(list(req.tags), req.category)
     if req.project_uuid:
         update_body["project_uuid"] = req.project_uuid
     if req.authors:
@@ -1010,27 +1046,22 @@ async def revert_local_artifact(dir_name: str, req: RevertRequest):
 
     # 6. Extract to a temp directory
     with tempfile.TemporaryDirectory() as tmpdir:
-        tar_path = os.path.join(tmpdir, "artifact.tar.gz")
-        with open(tar_path, "wb") as f:
+        raw_path = os.path.join(tmpdir, "artifact_download")
+        with open(raw_path, "wb") as f:
             f.write(r.content)
 
-        extract_dir = os.path.join(tmpdir, "extracted")
-        os.makedirs(extract_dir, exist_ok=True)
+        extracted = False
         try:
-            with tarfile.open(tar_path, "r:gz") as tf:
+            with tarfile.open(raw_path, "r:*") as tf:
                 for member in tf.getmembers():
                     if member.name.startswith("/") or ".." in member.name:
                         raise HTTPException(status_code=400, detail="Artifact contains unsafe paths")
+                extract_dir = os.path.join(tmpdir, "extracted")
+                os.makedirs(extract_dir, exist_ok=True)
                 tf.extractall(extract_dir)
-        except tarfile.TarError as e:
-            raise HTTPException(status_code=400, detail=f"Failed to extract artifact: {e}")
-
-        # Determine actual content root (handle single-directory tarballs)
-        contents = os.listdir(extract_dir)
-        if len(contents) == 1 and os.path.isdir(os.path.join(extract_dir, contents[0])):
-            src_dir = os.path.join(extract_dir, contents[0])
-        else:
-            src_dir = extract_dir
+                extracted = True
+        except tarfile.TarError:
+            pass
 
         # 7. Clear the local artifact directory completely
         for item in os.listdir(local_dir):
@@ -1040,14 +1071,33 @@ async def revert_local_artifact(dir_name: str, req: RevertRequest):
             else:
                 os.remove(item_path)
 
-        # 8. Copy extracted contents into the local artifact directory
-        for item in os.listdir(src_dir):
-            s = os.path.join(src_dir, item)
-            d = os.path.join(local_dir, item)
-            if os.path.isdir(s):
-                shutil.copytree(s, d)
+        if extracted:
+            # Determine actual content root (handle single-directory tarballs)
+            contents = os.listdir(extract_dir)
+            if len(contents) == 1 and os.path.isdir(os.path.join(extract_dir, contents[0])):
+                src_dir = os.path.join(extract_dir, contents[0])
             else:
-                shutil.copy2(s, d)
+                src_dir = extract_dir
+
+            # 8. Copy extracted contents into the local artifact directory
+            for item in os.listdir(src_dir):
+                s = os.path.join(src_dir, item)
+                d = os.path.join(local_dir, item)
+                if os.path.isdir(s):
+                    shutil.copytree(s, d)
+                else:
+                    shutil.copy2(s, d)
+        else:
+            # Not a recognized archive — drop the raw file for manual extraction
+            content_type = r.headers.get("content-type", "")
+            filename = dir_name
+            if "zip" in content_type:
+                filename += ".zip"
+            elif "gzip" in content_type or "x-gzip" in content_type:
+                filename += ".tar.gz"
+            else:
+                filename += ".bin"
+            shutil.copy2(raw_path, os.path.join(local_dir, filename))
 
     # 9. Re-write metadata.json preserving the artifact_uuid link
     tag_strs = _normalize_tags(art.get("tags", []))
@@ -1057,7 +1107,6 @@ async def revert_local_artifact(dir_name: str, req: RevertRequest):
         "description": art.get("description_long", "") or art.get("description_short", ""),
         "source": "artifact-manager",
         "artifact_uuid": artifact_uuid,
-        "builtin": False,
         "created": datetime.now(timezone.utc).isoformat(),
         "tags": tag_strs,
     }

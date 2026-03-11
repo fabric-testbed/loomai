@@ -4,7 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { buildWsUrl } from '../utils/wsUrl';
-import { getAiModels } from '../api/client';
+import { getAiModels, getClaudeConfigFiles, updateClaudeConfigFile, triggerClaudeBackup, resetToolConfig, browseAiFolders, type ClaudeConfigFile, type FolderBrowseResult } from '../api/client';
 import '../styles/terminal-companion.css';
 
 const TERM_THEME = {
@@ -101,6 +101,22 @@ function RefreshIcon() {
   );
 }
 
+function FolderIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+function ChevronUpIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="18 15 12 9 6 15" />
+    </svg>
+  );
+}
+
 interface Props {
   toolId: string;
   visible?: boolean;
@@ -121,6 +137,38 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
   const [modelsLoading, setModelsLoading] = useState(false);
   const selectedModelRef = useRef('');
 
+  // Claude Code config state
+  const [configFiles, setConfigFiles] = useState<ClaudeConfigFile[]>([]);
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [accountEmail, setAccountEmail] = useState<string | null>(null);
+  const [editingFile, setEditingFile] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState('');
+  const [configMsg, setConfigMsg] = useState('');
+  const [showConfig, setShowConfig] = useState(false);
+
+  // Folder picker state (Claude Code)
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [selectedFolder, setSelectedFolder] = useState('');
+  const selectedFolderRef = useRef('');
+  const [browseResult, setBrowseResult] = useState<FolderBrowseResult | null>(null);
+  const [browsing, setBrowsing] = useState(false);
+
+  const loadClaudeConfig = useCallback(() => {
+    if (toolId !== 'claude') return;
+    getClaudeConfigFiles().then((data) => {
+      setConfigFiles(data.files);
+      setLoggedIn(data.logged_in);
+      setAccountEmail(data.account_email);
+    }).catch(() => {});
+  }, [toolId]);
+
+  const browseTo = useCallback((path?: string) => {
+    setBrowsing(true);
+    browseAiFolders(path).then((result) => {
+      setBrowseResult(result);
+    }).catch(() => {}).finally(() => setBrowsing(false));
+  }, []);
+
   useEffect(() => {
     if (toolId === 'opencode') {
       setModelsLoading(true);
@@ -131,7 +179,10 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
         selectedModelRef.current = def;
       }).catch(() => {}).finally(() => setModelsLoading(false));
     }
-  }, [toolId]);
+    if (toolId === 'claude') {
+      loadClaudeConfig();
+    }
+  }, [toolId, loadClaudeConfig]);
 
   const restartSession = useCallback(() => {
     // Close existing connection and terminal
@@ -162,10 +213,15 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
 
     term.writeln(`\x1b[36m[${info.name}] Connecting...\x1b[0m`);
 
-    const modelParam = toolId === 'opencode' && selectedModelRef.current
-      ? `?model=${encodeURIComponent(selectedModelRef.current)}`
-      : '';
-    const wsUrl = buildWsUrl(`/ws/terminal/ai/${encodeURIComponent(toolId)}${modelParam}`);
+    const params = new URLSearchParams();
+    if (toolId === 'opencode' && selectedModelRef.current) {
+      params.set('model', selectedModelRef.current);
+    }
+    if (toolId === 'claude' && selectedFolderRef.current) {
+      params.set('cwd', selectedFolderRef.current);
+    }
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const wsUrl = buildWsUrl(`/ws/terminal/ai/${encodeURIComponent(toolId)}${qs}`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -263,6 +319,89 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
             <span className={`tc-sidebar-badge ${info.badgeClass}`}>{info.badge}</span>
           </div>
           <div className="tc-sidebar-desc">{info.desc}</div>
+          {toolId === 'claude' && (
+            <div className="tc-folder-picker">
+              <button
+                className="tc-folder-picker-toggle"
+                onClick={() => {
+                  const opening = !showFolderPicker;
+                  setShowFolderPicker(opening);
+                  if (opening) browseTo(selectedFolder || undefined);
+                }}
+              >
+                <FolderIcon />
+                <span className="tc-folder-picker-label">
+                  {selectedFolder ? selectedFolder.split('/').pop() || selectedFolder : 'Default workspace'}
+                </span>
+              </button>
+              {showFolderPicker && browseResult && (
+                <div className="tc-folder-browser">
+                  <div className="tc-folder-browser-path">
+                    {browseResult.parent !== null && (
+                      <button
+                        className="tc-folder-nav-btn"
+                        onClick={() => browseTo(browseResult.parent!)}
+                        title="Go up"
+                        disabled={browsing}
+                      >
+                        <ChevronUpIcon />
+                      </button>
+                    )}
+                    <span className="tc-folder-current-path" title={browseResult.path}>
+                      {browseResult.path}
+                    </span>
+                  </div>
+                  <div className="tc-folder-list">
+                    {browsing ? (
+                      <div className="tc-folder-loading">Loading...</div>
+                    ) : browseResult.folders.length === 0 ? (
+                      <div className="tc-folder-empty">No subfolders</div>
+                    ) : (
+                      browseResult.folders.map((folder) => (
+                        <button
+                          key={folder}
+                          className="tc-folder-item"
+                          onClick={() => browseTo(`${browseResult.path}/${folder}`)}
+                        >
+                          <FolderIcon />
+                          {folder}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  <div className="tc-folder-actions">
+                    <button
+                      className="tc-config-btn save"
+                      onClick={() => {
+                        setSelectedFolder(browseResult.path);
+                        selectedFolderRef.current = browseResult.path;
+                        setShowFolderPicker(false);
+                      }}
+                    >
+                      Select This Folder
+                    </button>
+                    {selectedFolder && (
+                      <button
+                        className="tc-config-btn"
+                        onClick={() => {
+                          setSelectedFolder('');
+                          selectedFolderRef.current = '';
+                          setShowFolderPicker(false);
+                        }}
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+              {selectedFolder && (
+                <div className="tc-folder-hint">
+                  Session will start in: <strong>{selectedFolder}</strong>
+                </div>
+              )}
+            </div>
+          )}
           <button className="tc-new-session-btn" onClick={restartSession} title="Restart terminal session">
             <PlusIcon />
             New Session
@@ -303,6 +442,92 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
               {info.tips}
             </div>
           )}
+          {toolId === 'claude' && (
+            <div className="tc-claude-config">
+              <button
+                className="tc-config-toggle"
+                onClick={() => { setShowConfig(!showConfig); if (!showConfig) loadClaudeConfig(); }}
+              >
+                {showConfig ? '▾' : '▸'} Settings
+              </button>
+              {showConfig && (
+                <div className="tc-config-panel">
+                  <div className="tc-config-status">
+                    <span className={`tc-status-dot ${loggedIn ? 'connected' : 'disconnected'}`} />
+                    {loggedIn ? (accountEmail || 'Logged in') : 'Not logged in'}
+                  </div>
+                  <div className="tc-config-actions">
+                    <button className="tc-config-btn" onClick={() => {
+                      triggerClaudeBackup().then(() => {
+                        setConfigMsg('Config backed up');
+                        loadClaudeConfig();
+                        setTimeout(() => setConfigMsg(''), 3000);
+                      }).catch(() => setConfigMsg('Backup failed'));
+                    }}>Save Current Config</button>
+                    <button className="tc-config-btn danger" onClick={() => {
+                      if (confirm('Reset Claude Code config to defaults? You will need to log in again.')) {
+                        resetToolConfig('claude-code').then(() => {
+                          setConfigMsg('Reset to defaults');
+                          loadClaudeConfig();
+                          setTimeout(() => setConfigMsg(''), 3000);
+                        }).catch(() => setConfigMsg('Reset failed'));
+                      }
+                    }}>Reset to Defaults</button>
+                  </div>
+                  {configMsg && <div className="tc-config-msg">{configMsg}</div>}
+                  <div className="tc-config-files">
+                    <div className="tc-config-files-label">Config Files <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>(persisted across rebuilds)</span></div>
+                    {configFiles.map((cf) => (
+                      <div key={cf.name} className="tc-config-file-row">
+                        <span className={`tc-config-file-name ${cf.content === null ? 'missing' : ''}`}>
+                          {cf.name}
+                        </span>
+                        {cf.content !== null ? (
+                          <button className="tc-config-file-btn" onClick={() => {
+                            if (editingFile === cf.name) {
+                              setEditingFile(null);
+                            } else {
+                              setEditingFile(cf.name);
+                              setEditContent(cf.content || '');
+                            }
+                          }}>{editingFile === cf.name ? 'Close' : 'Edit'}</button>
+                        ) : (
+                          <button className="tc-config-file-btn" onClick={() => {
+                            setEditingFile(cf.name);
+                            setEditContent(cf.name.endsWith('.json') ? '{}' : '');
+                          }}>Create</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {editingFile && (
+                    <div className="tc-config-editor">
+                      <div className="tc-config-editor-header">
+                        <span>{editingFile}</span>
+                        <button className="tc-config-btn save" onClick={() => {
+                          updateClaudeConfigFile(editingFile, editContent).then(() => {
+                            setConfigMsg(`Saved ${editingFile}`);
+                            setEditingFile(null);
+                            loadClaudeConfig();
+                            setTimeout(() => setConfigMsg(''), 3000);
+                          }).catch((err) => setConfigMsg(`Save failed: ${err.message}`));
+                        }}>Save</button>
+                      </div>
+                      <textarea
+                        className="tc-config-textarea"
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        spellCheck={false}
+                      />
+                    </div>
+                  )}
+                  <div className="tc-config-hint">
+                    Changes take effect on next session. Click &ldquo;New Session&rdquo; to apply.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
       <div className="tc-main">
@@ -314,6 +539,13 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
           )}
           <span className="tc-header-title">{info.name}</span>
           <span className="tc-header-badge">Terminal</span>
+          <button className="tc-popout-btn" onClick={() => window.open(`/popout?tool=${encodeURIComponent(toolId)}`, '_blank')} title="Open in new tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+          </button>
           <button className="tc-refresh-btn" onClick={refreshTerminal} title="Refresh terminal display">
             <RefreshIcon />
           </button>

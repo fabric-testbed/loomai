@@ -4,7 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { buildWsUrl } from '../utils/wsUrl';
-import { getConfig, getAiTools } from '../api/client';
+import { getConfig, getAiTools, getToolInstallStatus, type ToolInstallInfo } from '../api/client';
 import ContainerFileBrowser from './ContainerFileBrowser';
 import TerminalCompanionView from './TerminalCompanionView';
 import OpenCodeWebView from './OpenCodeWebView';
@@ -107,6 +107,7 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [showWarning, setShowWarning] = useState<ToolDef | null>(null);
+  const [installStatus, setInstallStatus] = useState<Record<string, ToolInstallInfo>>({});
 
   // Resizable split pane
   const [splitPercent, setSplitPercent] = useState(50);
@@ -116,6 +117,7 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
   useEffect(() => {
     getConfig().then((s) => setHasKey(!!s.ai_api_key_set)).catch(() => setHasKey(false));
     getAiTools().then(setEnabledTools).catch(() => {});
+    getToolInstallStatus().then(setInstallStatus).catch(() => {});
   }, []);
 
   const visibleTools = TOOLS.filter((t) => enabledTools[t.id] !== false);
@@ -202,6 +204,8 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
         <div className="ai-cards">
           {visibleTools.map((tool) => {
             const ready = tool.needsKey ? hasKey : true;
+            const toolStatus = installStatus[tool.id];
+            const isInstalled = !toolStatus || toolStatus.installed;
             const badge = tool.id === 'claude'
               ? { cls: 'your-account', text: 'Paid Subscription' }
               : tool.id === 'loomai'
@@ -209,6 +213,9 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
                 : ready
                   ? { cls: 'free', text: 'Free \u2022 API Key Required' }
                   : { cls: 'key-required', text: 'API Key Required' };
+            const installBadge = toolStatus && !toolStatus.installed
+              ? { cls: 'not-installed', text: `Install \u2022 ${toolStatus.size_estimate}` }
+              : null;
 
             return (
               <div className="ai-card" key={tool.id} onClick={() => onToolChange?.(tool.id)}>
@@ -219,12 +226,13 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
                 <div className="ai-card-desc">{tool.desc}</div>
                 <div className="ai-card-footer">
                   <span className={`ai-badge ${badge.cls}`}>{badge.text}</span>
+                  {installBadge && <span className={`ai-badge ${installBadge.cls}`}>{installBadge.text}</span>}
                   <button
                     className="ai-launch-btn"
                     disabled={tool.needsKey && !ready}
                     onClick={(e) => { e.stopPropagation(); onToolChange?.(tool.id); }}
                   >
-                    Launch
+                    {installBadge ? 'Install & Launch' : 'Launch'}
                   </button>
                 </div>
               </div>

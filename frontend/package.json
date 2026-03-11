@@ -1,7 +1,7 @@
 {
   "name": "fabric-webgui",
   "private": true,
-  "version": "0.1.32",
+  "version": "0.1.34",
   "type": "module",
   "scripts": {
     "dev": "next dev -p 3000",
@@ -35,6 +35,7 @@
     "react-markdown": "^10.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/cytoscape": "^3.21.8",
     "@types/leaflet": "^1.9.12",
     "@types/node": "^20",

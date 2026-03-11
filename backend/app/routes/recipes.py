@@ -9,12 +9,10 @@ Storage: FABRIC_STORAGE_DIR/my_artifacts/{name}/
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
 import re
-import shutil
 import time
 from typing import Any
 
@@ -37,16 +35,6 @@ def _recipes_dir() -> str:
     return get_artifacts_dir()
 
 
-def _builtin_recipes_dir() -> str:
-    """Return the path to the builtin VM recipes shipped with the repo."""
-    base = os.path.dirname(__file__)
-    for levels in [("..", ".."), ("..", "..", "..")]:
-        candidate = os.path.realpath(os.path.join(base, *levels, "slice-libraries", "vm_recipes"))
-        if os.path.isdir(candidate):
-            return candidate
-    return os.path.join(base, "..", "..", "slice-libraries", "vm_recipes")
-
-
 def _sanitize_name(name: str) -> str:
     safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", name.strip())
     if not safe:
@@ -61,57 +49,9 @@ def _validate_path(base: str, name: str) -> str:
     return path
 
 
-# ---------------------------------------------------------------------------
-# Builtin recipe helpers
-# ---------------------------------------------------------------------------
-
-def _builtin_hash(builtin_dir: str) -> str:
-    """Compute a hash of a builtin recipe directory for change detection."""
-    hashable: dict[str, Any] = {}
-    recipe_path = os.path.join(builtin_dir, "recipe.json")
-    if os.path.isfile(recipe_path):
-        with open(recipe_path) as f:
-            hashable["recipe"] = json.load(f)
-    scripts_dir = os.path.join(builtin_dir, "scripts")
-    if os.path.isdir(scripts_dir):
-        scripts = []
-        for fn in sorted(os.listdir(scripts_dir)):
-            fp = os.path.join(scripts_dir, fn)
-            if os.path.isfile(fp):
-                with open(fp) as f:
-                    scripts.append({"filename": fn, "content": f.read()})
-        hashable["_scripts"] = scripts
-    else:
-        hashable["_scripts"] = []
-    return hashlib.sha256(json.dumps(hashable, sort_keys=True).encode()).hexdigest()[:16]
-
-
-def _list_builtin_recipes() -> list[dict[str, Any]]:
-    """Scan the builtin VM recipes directory and return info for each."""
-    bdir = os.path.realpath(_builtin_recipes_dir())
-    if not os.path.isdir(bdir):
-        return []
-    results = []
-    for entry in sorted(os.listdir(bdir)):
-        entry_dir = os.path.join(bdir, entry)
-        recipe_path = os.path.join(entry_dir, "recipe.json")
-        if os.path.isfile(recipe_path):
-            with open(recipe_path) as f:
-                data = json.load(f)
-            data["_dir"] = entry_dir
-            data["_entry"] = entry
-            results.append(data)
-    return results
-
-
-def _seed_if_needed() -> None:
-    """Ensure the recipes storage directory exists.
-
-    Built-in recipe seeding is disabled — users create or download
-    artifacts via the marketplace.
-    """
-    rdir = _recipes_dir()
-    os.makedirs(rdir, exist_ok=True)
+def _ensure_dir() -> None:
+    """Ensure the recipes storage directory exists."""
+    os.makedirs(_recipes_dir(), exist_ok=True)
 
 
 def _match_image(image: str, patterns: dict[str, str]) -> str | None:
@@ -136,28 +76,25 @@ def _match_image(image: str, patterns: dict[str, str]) -> str | None:
 @router.get("")
 def list_recipes() -> list[dict[str, Any]]:
     """List recipe artifacts (dirs containing recipe.json)."""
-    _seed_if_needed()
+    _ensure_dir()
+
+    results: list[dict[str, Any]] = []
     rdir = _recipes_dir()
     if not os.path.isdir(rdir):
         return []
-    results = []
     for entry in sorted(os.listdir(rdir)):
         entry_dir = os.path.join(rdir, entry)
         if not os.path.isdir(entry_dir):
             continue
         recipe_path = os.path.join(entry_dir, "recipe.json")
         if not os.path.isfile(recipe_path):
-            continue  # Not a recipe artifact
+            continue
 
         try:
             with open(recipe_path) as f:
                 data = json.load(f)
-            # Auto-populate required fields
-            changed = False
             if "name" not in data:
                 data["name"] = entry
-                changed = True
-            if changed:
                 with open(recipe_path, "w") as f:
                     json.dump(data, f, indent=2)
             results.append({
@@ -170,35 +107,40 @@ def list_recipes() -> list[dict[str, Any]]:
             })
         except Exception:
             pass
-    return results
+
+    return sorted(results, key=lambda r: r.get("name", ""))
+
+
+def _find_recipe_dir(name: str) -> str:
+    """Find a recipe directory by name."""
+    safe = _sanitize_name(name)
+    rdir = _recipes_dir()
+    recipe_dir = _validate_path(rdir, safe)
+    if os.path.isfile(os.path.join(recipe_dir, "recipe.json")):
+        return recipe_dir
+    raise HTTPException(status_code=404, detail=f"Recipe '{name}' not found")
 
 
 @router.get("/{name}")
 def get_recipe(name: str) -> dict[str, Any]:
     """Get full recipe detail including steps."""
-    _seed_if_needed()
-    safe = _sanitize_name(name)
-    rdir = _recipes_dir()
-    recipe_dir = _validate_path(rdir, safe)
+    _ensure_dir()
+    recipe_dir = _find_recipe_dir(name)
     recipe_path = os.path.join(recipe_dir, "recipe.json")
-    if not os.path.isfile(recipe_path):
-        raise HTTPException(status_code=404, detail=f"Recipe '{name}' not found")
     with open(recipe_path) as f:
         data = json.load(f)
-    data["dir_name"] = safe
+    data["dir_name"] = _sanitize_name(name)
     return data
 
 
 @router.patch("/{name}")
 def update_recipe(name: str, body: dict[str, Any]) -> dict[str, Any]:
     """Update mutable recipe fields (currently only 'starred')."""
-    _seed_if_needed()
+    _ensure_dir()
     safe = _sanitize_name(name)
-    rdir = _recipes_dir()
-    recipe_dir = _validate_path(rdir, safe)
+    recipe_dir = _find_recipe_dir(name)
     recipe_path = os.path.join(recipe_dir, "recipe.json")
-    if not os.path.isfile(recipe_path):
-        raise HTTPException(status_code=404, detail=f"Recipe '{name}' not found")
+
     with open(recipe_path) as f:
         data = json.load(f)
     if "starred" in body:
@@ -213,13 +155,10 @@ def update_recipe(name: str, body: dict[str, Any]) -> dict[str, Any]:
 async def execute_recipe(name: str, slice_name: str, node_name: str):
     """Upload scripts and execute a recipe on a VM node, streaming SSE progress."""
     slice_name = resolve_slice_name(slice_name)
-    _seed_if_needed()
+    _ensure_dir()
     safe = _sanitize_name(name)
-    rdir = _recipes_dir()
-    recipe_dir = _validate_path(rdir, safe)
+    recipe_dir = _find_recipe_dir(name)
     recipe_path = os.path.join(recipe_dir, "recipe.json")
-    if not os.path.isfile(recipe_path):
-        raise HTTPException(status_code=404, detail=f"Recipe '{name}' not found")
 
     with open(recipe_path) as f:
         recipe = json.load(f)

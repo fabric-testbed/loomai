@@ -19,6 +19,22 @@ each VM at boot time and handles software installation and configuration.
 
 4. **Verify**: Read back the script to confirm it's correct.
 
+5. **Optional: Write deploy.json** — argument manifest:
+   If the deploy script needs user-provided parameters beyond the default
+   slice name, create a `deploy.json` in the template's root directory:
+   ```json
+   {
+     "description": "Deploy an iPerf3 test",
+     "args": [
+       {"name": "SLICE_NAME", "label": "Slice Name", "type": "string", "required": true, "default": ""},
+       {"name": "NUM_WORKERS", "label": "Worker Count", "type": "number", "required": false, "default": "2"}
+     ]
+   }
+   ```
+   Each arg becomes an environment variable. The WebUI Deploy modal renders
+   input fields dynamically. If no `deploy.json` exists, the modal defaults
+   to a single "Slice Name" field.
+
 ### PROGRESS marker format:
 ```bash
 ### PROGRESS: Installing dependencies

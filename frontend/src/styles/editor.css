@@ -327,6 +327,10 @@
   background: rgba(255, 133, 66, 0.15);
   color: var(--fabric-orange, #ff8542);
 }
+.sliver-badge-pm {
+  background: rgba(226, 82, 65, 0.15);
+  color: var(--fabric-coral, #e25241);
+}
 .sliver-badge-failed {
   background: rgba(226, 82, 65, 0.2);
   color: #e25241;
@@ -524,6 +528,13 @@
 .editor-panel .form-group input,
 .editor-panel .form-group select {
   width: 100%;
+}
+.editor-panel .form-value {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fabric-primary);
+  padding: 4px 0;
 }
 
 .editor-panel .form-group input[type="range"] {
@@ -1669,4 +1680,118 @@
   font-size: 10px;
   color: var(--fabric-text-muted);
   margin-left: 4px;
+}
+
+/* Facility Port searchable dropdown */
+.fp-searchable-dropdown {
+  position: relative;
+}
+.fp-dropdown-input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-bg);
+  color: var(--fabric-text);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+.fp-dropdown-input:focus {
+  outline: none;
+  border-color: var(--fabric-primary);
+}
+.fp-dropdown-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--fabric-bg);
+  border: 1px solid var(--fabric-border);
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.fp-dropdown-site-header {
+  padding: 4px 10px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fabric-primary);
+  background: var(--fabric-bg-tint);
+  border-top: 1px solid var(--fabric-border);
+  position: sticky;
+  top: 0;
+}
+.fp-dropdown-item {
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.fp-dropdown-item:hover {
+  background: rgba(87, 152, 188, 0.08);
+}
+.fp-dropdown-item.selected {
+  background: rgba(87, 152, 188, 0.15);
+  font-weight: 600;
+}
+.fp-dropdown-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fp-dropdown-item-vlan {
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  font-family: monospace;
+  white-space: nowrap;
+}
+.fp-dropdown-empty {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+  text-align: center;
+}
+.fp-readonly-input {
+  opacity: 0.7;
+  cursor: default;
+}
+/* VLAN dropdown items */
+.fp-vlan-list {
+  max-height: 200px;
+}
+.fp-vlan-item {
+  font-family: monospace;
+  font-size: 12px;
+}
+.fp-vlan-item.allocated {
+  color: var(--fabric-text-muted);
+  opacity: 0.5;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+.fp-vlan-item.allocated:hover {
+  background: none;
+}
+.fp-vlan-allocated-label {
+  font-size: 9px;
+  font-family: sans-serif;
+  text-transform: uppercase;
+  color: var(--fabric-text-muted);
+  text-decoration: none;
+}
+.fp-vlan-range-hint {
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  margin-top: 3px;
+  font-family: monospace;
 }

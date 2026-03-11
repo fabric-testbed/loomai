@@ -1,8 +1,0 @@
-{
-  "name": "Ollama LLM Service",
-  "description": "Single node running Ollama + Open WebUI (no login required). GPU optional — add a GPU component for accelerated inference, otherwise runs on CPU. Accessible via Client View on port 3000.",
-  "builtin": true,
-  "order": 11,
-  "node_count": 1,
-  "network_count": 0
-}

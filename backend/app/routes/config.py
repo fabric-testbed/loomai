@@ -104,43 +104,25 @@ def _file_exists(name: str) -> bool:
 
 
 def _get_ai_api_key() -> str:
-    """Read the FABRIC_AI_API_KEY value from fabric_rc."""
-    rc_path = os.path.join(_config_dir(), "fabric_rc")
-    if os.path.isfile(rc_path):
-        with open(rc_path) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("export FABRIC_AI_API_KEY="):
-                    return line.split("=", 1)[1]
-    return ""
+    """Return FABRIC AI API key from settings."""
+    from app.settings_manager import get_fabric_api_key
+    return get_fabric_api_key()
 
 
 def _get_nrp_api_key() -> str:
-    """Read the NRP_API_KEY value from fabric_rc."""
-    rc_path = os.path.join(_config_dir(), "fabric_rc")
-    if os.path.isfile(rc_path):
-        with open(rc_path) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("export NRP_API_KEY="):
-                    return line.split("=", 1)[1]
-    return ""
+    """Return NRP API key from settings."""
+    from app.settings_manager import get_nrp_api_key
+    return get_nrp_api_key()
 
 
 def _read_project_id_from_rc() -> str:
-    """Read FABRIC_PROJECT_ID from fabric_rc file (stable on disk).
+    """Return FABRIC project ID from settings (stable on disk).
 
     Unlike os.environ, this is not affected by temporary env var mutations
     in reconcile_projects.
     """
-    rc_path = os.path.join(_config_dir(), "fabric_rc")
-    if os.path.isfile(rc_path):
-        with open(rc_path) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("export FABRIC_PROJECT_ID="):
-                    return line.split("=", 1)[1]
-    return os.environ.get("FABRIC_PROJECT_ID", "")
+    from app.settings_manager import get_project_id
+    return get_project_id()
 
 
 def _storage_dir() -> str:
@@ -201,24 +183,12 @@ def get_config_status():
         except Exception:
             token_info = {"error": "Could not decode token"}
 
-    # Check fabric_rc for project_id and AI API key
-    project_id = ""
-    bastion_username = ""
-    ai_api_key = ""
-    nrp_api_key = ""
-    rc_path = os.path.join(config_dir, "fabric_rc")
-    if os.path.isfile(rc_path):
-        with open(rc_path) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("export FABRIC_PROJECT_ID="):
-                    project_id = line.split("=", 1)[1]
-                elif line.startswith("export FABRIC_BASTION_USERNAME="):
-                    bastion_username = line.split("=", 1)[1]
-                elif line.startswith("export FABRIC_AI_API_KEY="):
-                    ai_api_key = line.split("=", 1)[1]
-                elif line.startswith("export NRP_API_KEY="):
-                    nrp_api_key = line.split("=", 1)[1]
+    # Read settings from settings_manager
+    from app import settings_manager
+    project_id = settings_manager.get_project_id()
+    bastion_username = settings_manager.get_bastion_username()
+    ai_api_key = settings_manager.get_fabric_api_key()
+    nrp_api_key = settings_manager.get_nrp_api_key()
 
     # Read public key contents for display
     bastion_pub_key = ""
@@ -708,24 +678,11 @@ def switch_project(req: ProjectSwitchRequest):
     except Exception:
         pass  # Token refresh is best-effort
 
-    # Persist to fabric_rc
-    config_dir = _config_dir()
-    rc_path = os.path.join(config_dir, "fabric_rc")
-    if os.path.isfile(rc_path):
-        with open(rc_path) as f:
-            lines = f.readlines()
-        new_lines = []
-        found = False
-        for line in lines:
-            if line.strip().startswith("export FABRIC_PROJECT_ID="):
-                new_lines.append(f"export FABRIC_PROJECT_ID={req.project_id}\n")
-                found = True
-            else:
-                new_lines.append(line)
-        if not found:
-            new_lines.append(f"export FABRIC_PROJECT_ID={req.project_id}\n")
-        with open(rc_path, "w") as f:
-            f.writelines(new_lines)
+    # Persist to settings.json (which also regenerates fabric_rc)
+    from app import settings_manager
+    settings = settings_manager.load_settings()
+    settings["fabric"]["project_id"] = req.project_id
+    settings_manager.save_settings(settings)
 
     result: dict = {"status": "ok", "project_id": req.project_id, "token_refreshed": token_refreshed}
     if not token_refreshed:
@@ -775,64 +732,33 @@ class ConfigSaveRequest(BaseModel):
 
 @router.post("/api/config/save")
 def save_config(req: ConfigSaveRequest):
-    d = _ensure_config_dir()
-
     if not os.path.isfile(get_token_path()):
         raise HTTPException(status_code=400, detail="Token is required before saving configuration")
-
-    # Resolve ssh_command_line config_dir placeholder
-    ssh_cmd = req.ssh_command_line.replace("{config_dir}", d)
-
-    # Get default key paths for fabric_rc
-    _migrate_legacy_keys(d)
-    priv_path, pub_path = get_default_slice_key_path(d)
 
     # Preserve existing keys if the fields are empty (user didn't change them)
     ai_key = req.litellm_api_key or _get_ai_api_key()
     nrp_key = req.nrp_api_key or _get_nrp_api_key()
 
-    fabric_rc = f"""export FABRIC_CREDMGR_HOST={req.credmgr_host}
-export FABRIC_ORCHESTRATOR_HOST={req.orchestrator_host}
-export FABRIC_CORE_API_HOST={req.core_api_host}
-export FABRIC_AM_HOST={req.am_host}
-export FABRIC_TOKEN_LOCATION={d}/id_token.json
-export FABRIC_BASTION_HOST={req.bastion_host}
-export FABRIC_BASTION_USERNAME={req.bastion_username}
-export FABRIC_BASTION_KEY_LOCATION={d}/fabric_bastion_key
-export FABRIC_BASTION_SSH_CONFIG_FILE={d}/ssh_config
-export FABRIC_SLICE_PUBLIC_KEY_FILE={pub_path}
-export FABRIC_SLICE_PRIVATE_KEY_FILE={priv_path}
-export FABRIC_PROJECT_ID={req.project_id}
-export FABRIC_LOG_LEVEL={req.log_level}
-export FABRIC_LOG_FILE={req.log_file}
-export FABRIC_AVOID={req.avoid}
-export FABRIC_SSH_COMMAND_LINE="{ssh_cmd}"
-export FABRIC_AI_API_KEY={ai_key}
-export NRP_API_KEY={nrp_key}
-"""
+    # Update settings.json (which also regenerates fabric_rc + ssh_config)
+    from app import settings_manager
+    settings = settings_manager.load_settings()
 
-    rc_path = os.path.join(d, "fabric_rc")
-    with open(rc_path, "w") as f:
-        f.write(fabric_rc)
+    settings["fabric"]["project_id"] = req.project_id
+    settings["fabric"]["bastion_username"] = req.bastion_username
+    settings["fabric"]["hosts"]["credmgr"] = req.credmgr_host
+    settings["fabric"]["hosts"]["orchestrator"] = req.orchestrator_host
+    settings["fabric"]["hosts"]["core_api"] = req.core_api_host
+    settings["fabric"]["hosts"]["bastion"] = req.bastion_host
+    settings["fabric"]["hosts"]["artifact_manager"] = req.am_host
+    settings["fabric"]["logging"]["level"] = req.log_level
+    settings["paths"]["log_file"] = req.log_file
+    settings["fabric"]["avoid_sites"] = [s.strip() for s in req.avoid.split(",") if s.strip()] if req.avoid else []
+    settings["fabric"]["ssh_command_line"] = req.ssh_command_line
+    settings["ai"]["fabric_api_key"] = ai_key
+    settings["ai"]["nrp_api_key"] = nrp_key
 
-    # Write ssh_config for bastion proxy jump
-    ssh_config = f"""UserKnownHostsFile /dev/null
-StrictHostKeyChecking no
-ServerAliveInterval 120
-
-Host bastion.fabric-testbed.net
-    User {req.bastion_username}
-    ForwardAgent yes
-    Hostname %h
-    IdentityFile {d}/fabric_bastion_key
-    IdentitiesOnly yes
-
-Host * !bastion.fabric-testbed.net
-    ProxyJump {req.bastion_username}@bastion.fabric-testbed.net:22
-"""
-    ssh_config_path = os.path.join(d, "ssh_config")
-    with open(ssh_config_path, "w") as f:
-        f.write(ssh_config)
+    settings_manager.save_settings(settings)
+    settings_manager.apply_env_vars(settings)
 
     # Reset FABlib so it picks up the new config
     reset_fablib()
@@ -952,44 +878,142 @@ def check_update():
 # AI Companion tool toggles
 # ---------------------------------------------------------------------------
 
-_DEFAULT_AI_TOOLS = {"aider": True, "opencode": True, "crush": True, "claude": True}
-
-
-def _ai_tools_path() -> str:
-    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
-    return os.path.join(storage, ".ai_tools.json")
-
-
-def _load_ai_tools() -> dict[str, bool]:
-    path = _ai_tools_path()
-    if os.path.isfile(path):
-        try:
-            with open(path) as f:
-                data = json.load(f)
-            # Merge with defaults so new tools are always present
-            merged = dict(_DEFAULT_AI_TOOLS)
-            merged.update({k: bool(v) for k, v in data.items() if k in _DEFAULT_AI_TOOLS})
-            return merged
-        except Exception:
-            pass
-    return dict(_DEFAULT_AI_TOOLS)
-
-
 @router.get("/api/config/ai-tools")
 def get_ai_tools() -> dict[str, bool]:
     """Return which AI companion tools are enabled."""
-    return _load_ai_tools()
+    from app.settings_manager import get_ai_tools
+    return get_ai_tools()
 
 
 @router.post("/api/config/ai-tools")
-def set_ai_tools(body: dict[str, bool]) -> dict[str, bool]:
+def set_ai_tools_endpoint(body: dict[str, bool]) -> dict[str, bool]:
     """Update AI companion tool toggles."""
-    current = _load_ai_tools()
-    for k in current:
-        if k in body:
-            current[k] = bool(body[k])
-    path = _ai_tools_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    from app import settings_manager
+    settings_manager.set_ai_tools(body)
+    return settings_manager.get_ai_tools()
+
+
+# ---------------------------------------------------------------------------
+# GET /api/settings — full settings.json
+# PUT /api/settings — replace settings
+# ---------------------------------------------------------------------------
+
+@router.get("/api/settings")
+def get_settings():
+    """Return the full settings.json contents."""
+    from app import settings_manager
+    return settings_manager.load_settings()
+
+
+@router.put("/api/settings")
+def put_settings(body: dict):
+    """Replace settings, regenerate derived files, reset FABlib."""
+    from app import settings_manager
+    settings_manager.save_settings(body)
+    settings_manager.apply_env_vars(body)
+    reset_fablib()
+    return settings_manager.load_settings()
+
+
+# ---------------------------------------------------------------------------
+# Tool configuration management
+# ---------------------------------------------------------------------------
+
+@router.get("/api/config/tool-configs")
+def get_tool_configs():
+    """List per-tool config status."""
+    from app import settings_manager
+    return settings_manager.get_tool_config_status()
+
+
+@router.post("/api/config/tool-configs/{tool}/reset")
+def reset_tool_config(tool: str):
+    """Reset a tool's config to Docker image defaults."""
+    from app import settings_manager
+    try:
+        settings_manager.reset_tool_config(tool)
+        return {"status": "ok", "tool": tool}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Claude Code config file management
+# ---------------------------------------------------------------------------
+
+_CLAUDE_EDITABLE_FILES = [
+    "settings.json",
+    "settings.local.json",
+    "CLAUDE.md",
+    ".mcp.json",
+]
+
+
+@router.get("/api/config/claude-code/files")
+def get_claude_config_files():
+    """List Claude Code config files in persistent storage with content."""
+    from app import settings_manager
+    backup_dir = settings_manager.get_tool_config_dir("claude-code")
+    files = []
+    for fname in _CLAUDE_EDITABLE_FILES:
+        path = os.path.join(backup_dir, fname)
+        if os.path.isfile(path):
+            try:
+                with open(path, "r") as f:
+                    content = f.read()
+                files.append({"name": fname, "content": content})
+            except Exception:
+                files.append({"name": fname, "content": ""})
+        else:
+            files.append({"name": fname, "content": None})
+    # Include login status from .credentials.json
+    creds_path = os.path.join(backup_dir, ".credentials.json")
+    logged_in = False
+    account_email = None
+    if os.path.isfile(creds_path):
+        try:
+            with open(creds_path) as f:
+                creds = json.load(f)
+            logged_in = bool(creds.get("claudeAiOauth", {}).get("accessToken"))
+        except Exception:
+            pass
+    claude_json_path = os.path.join(backup_dir, ".claude.json")
+    if os.path.isfile(claude_json_path):
+        try:
+            with open(claude_json_path) as f:
+                cj = json.load(f)
+            account_email = cj.get("oauthAccount", {}).get("emailAddress")
+        except Exception:
+            pass
+    return {"files": files, "logged_in": logged_in, "account_email": account_email}
+
+
+class ClaudeConfigUpdate(BaseModel):
+    content: str
+
+
+@router.put("/api/config/claude-code/files/{filename:path}")
+def update_claude_config_file(filename: str, body: ClaudeConfigUpdate):
+    """Update a Claude Code config file in persistent storage."""
+    if filename not in _CLAUDE_EDITABLE_FILES:
+        raise HTTPException(status_code=400, detail=f"File '{filename}' is not editable")
+    from app import settings_manager
+    backup_dir = settings_manager.get_tool_config_dir("claude-code")
+    path = os.path.join(backup_dir, filename)
+    # Validate JSON files
+    if filename.endswith(".json"):
+        try:
+            json.loads(body.content)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
     with open(path, "w") as f:
-        json.dump(current, f, indent=2)
-    return current
+        f.write(body.content)
+    return {"status": "ok", "filename": filename}
+
+
+@router.post("/api/config/claude-code/backup")
+def trigger_claude_backup():
+    """Manually trigger a backup of Claude Code config from ~/.claude/ to persistent storage."""
+    from app.routes.ai_terminal import _backup_claude_config
+    _backup_claude_config()
+    return {"status": "ok"}

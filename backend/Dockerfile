@@ -2,44 +2,32 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system deps for FABlib (SSH, etc.) + sudo
+# Install system deps + Node.js + Python deps in one layer
+# Build deps (gcc, python3-dev, libffi-dev) are purged after pip install
+COPY requirements.txt .
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc python3-dev libffi-dev libssl-dev openssh-client git tmux sudo \
-    && rm -rf /var/lib/apt/lists/*
+    gcc python3-dev libffi-dev libssl-dev \
+    openssh-client git tmux sudo curl \
+    vim less htop tree wget jq net-tools iputils-ping dnsutils procps nano \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && pip install --no-cache-dir -r requirements.txt \
+    && apt-get purge -y gcc python3-dev libffi-dev \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /root/.cache
 
 # Create fabric user with passwordless sudo
 RUN useradd -m -s /bin/bash -d /home/fabric fabric && \
     echo "fabric ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/fabric && \
     chmod 0440 /etc/sudoers.d/fabric
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Install Node.js for AI CLI tools
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install AI CLI tools
-RUN pip install --no-cache-dir aider-chat streamlit
-RUN pip install --no-cache-dir jupyterlab
-# Default JupyterLab terminals to bash
-RUN mkdir -p /etc/jupyter && \
-    echo "c.ServerApp.terminado_settings = {'shell_command': ['/bin/bash']}" \
-    > /etc/jupyter/jupyter_server_config.py
-RUN npm install -g @anthropic-ai/claude-code @charmland/crush opencode-ai
+# Copy AI tool configurations (skills, agents, prompts, shared context)
+COPY ai-tools/ ai-tools/
 
 COPY scripts/ scripts/
 COPY app/ app/
 
 COPY VERSION /app/VERSION
-
-# Copy AI tool configurations (skills, agents, prompts, shared context)
-COPY ai-tools/ ai-tools/
-
-# Copy builtin slice-libraries (slice templates, VM templates, recipes) — synced before build
-COPY slice-libraries/ slice-libraries/
 
 RUN mkdir -p /home/fabric/work/fabric_config && chown -R fabric:fabric /home/fabric
 ENV FABRIC_CONFIG_DIR=/home/fabric/work/fabric_config

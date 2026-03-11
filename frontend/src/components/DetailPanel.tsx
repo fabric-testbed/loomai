@@ -56,6 +56,7 @@ export default function DetailPanel({
     slice: 'Slice',
     site: 'Site',
     infra_link: 'Link',
+    'port-mirror': 'Port Mirror',
   };
 
   const hasTabs = elementType === 'site' || elementType === 'infra_link';
@@ -75,6 +76,7 @@ export default function DetailPanel({
         {elementType === 'node' && sliceData && <NodeDetail node={findNode(sliceData, selectedElement.name)} data={selectedElement} />}
         {elementType === 'network' && sliceData && <NetworkDetail network={findNetwork(sliceData, selectedElement.name)} data={selectedElement} />}
         {elementType === 'interface' && <InterfaceDetail data={selectedElement} />}
+        {elementType === 'port-mirror' && <PortMirrorDetail data={selectedElement} />}
         {elementType === 'slice' && sliceData && <SliceDetailView data={selectedElement} sliceData={sliceData} />}
         {elementType === 'site' && (
           <SiteTabbedDetail
@@ -221,6 +223,17 @@ function InterfaceDetail({ data }: { data: Record<string, string> }) {
       ['MAC', data.mac || '—'],
       ['IP', data.ip_addr || '—'],
       ['Bandwidth', data.bandwidth || '—'],
+    ]} />
+  );
+}
+
+function PortMirrorDetail({ data }: { data: Record<string, string> }) {
+  return (
+    <PropTable rows={[
+      ['Name', data.name],
+      ['Mirror Interface', data.mirror_interface_name || '—'],
+      ['Receive Interface', data.receive_interface_name || '—'],
+      ['Direction', data.mirror_direction || 'both'],
     ]} />
   );
 }

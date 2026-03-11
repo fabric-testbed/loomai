@@ -177,10 +177,10 @@ curl -s http://localhost:8000/api/slices/<slice_id> | python3 -m json.tool
 curl -X POST http://localhost:8000/api/slices/<slice_id>/refresh
 
 # Check site resources
-curl -s http://localhost:8000/api/resources/sites | python3 -m json.tool
+curl -s http://localhost:8000/api/sites | python3 -m json.tool
 
 # Check web tunnel status
-curl -s http://localhost:8000/api/slices/<slice_id>/nodes/<node>/tunnels
+curl -s http://localhost:8000/api/tunnels
 ```
 
 ## Long-Running Diagnostics with tmux

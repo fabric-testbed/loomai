@@ -16,13 +16,31 @@ import time
 import urllib.request
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 
-from app.routes.config import _get_ai_api_key, _get_nrp_api_key
+from app.settings_manager import get_fabric_api_key as _get_ai_api_key, get_nrp_api_key as _get_nrp_api_key
+from app.tool_installer import (
+    is_tool_installed, install_tool, get_tool_binary_path,
+    get_tool_env, get_all_tool_status, TOOL_REGISTRY,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+def _ai_server_url() -> str:
+    from app.settings_manager import get_ai_server_url
+    return get_ai_server_url()
+
+def _nrp_server_url() -> str:
+    from app.settings_manager import get_nrp_server_url
+    return get_nrp_server_url()
+
+def _model_proxy_port() -> int:
+    from app.settings_manager import get_model_proxy_port
+    return get_model_proxy_port()
+
+# Keep string constants for backward compat with existing references
 AI_SERVER_URL = "https://ai.fabric-testbed.net"
 NRP_SERVER_URL = "https://ellm.nrp-nautilus.io"
 
@@ -45,7 +63,7 @@ _PREFERRED_SMALL = [
 
 def _fetch_models(api_key: str) -> list[str]:
     """Query the FABRIC AI server for available model IDs."""
-    url = f"{AI_SERVER_URL}/v1/models"
+    url = f"{_ai_server_url()}/v1/models"
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {api_key}",
     })
@@ -60,7 +78,7 @@ def _fetch_models(api_key: str) -> list[str]:
 
 def _fetch_nrp_models(api_key: str) -> list[str]:
     """Query the NRP LLM server for available model IDs."""
-    url = f"{NRP_SERVER_URL}/v1/models"
+    url = f"{_nrp_server_url()}/v1/models"
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {api_key}",
     })
@@ -107,7 +125,7 @@ def _build_opencode_config(
         default = "qwen3-coder-30b"
         logger.info("No models from server, using fallback: %s", default)
     else:
-        logger.info("Available models from %s: %s", AI_SERVER_URL, models)
+        logger.info("Available models from %s: %s", _ai_server_url(), models)
         default = _pick_model(models, _PREFERRED_MODELS, "qwen3-coder-30b")
 
     small = _pick_model(models, _PREFERRED_SMALL, default) if models else default
@@ -126,7 +144,7 @@ def _build_opencode_config(
             "npm": "@ai-sdk/openai-compatible",
             "name": "FABRIC AI",
             "options": {
-                "baseURL": f"{AI_SERVER_URL}/v1",
+                "baseURL": f"{_ai_server_url()}/v1",
                 "apiKey": "{env:FABRIC_AI_API_KEY}",
             },
             "models": models_dict,
@@ -143,7 +161,7 @@ def _build_opencode_config(
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "NRP",
                 "options": {
-                    "baseURL": f"{NRP_SERVER_URL}/v1",
+                    "baseURL": f"{_nrp_server_url()}/v1",
                     "apiKey": "{env:NRP_API_KEY}",
                 },
                 "models": nrp_models_dict,
@@ -173,7 +191,7 @@ _MODEL_PROXY_SCRIPT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
     "scripts", "model_proxy.py",
 )
-_MODEL_PROXY_PORT = 9199
+_MODEL_PROXY_PORT = 9199  # Fallback; prefer _model_proxy_port() accessor
 
 # Paths to AI tool assets (inside the container)
 _APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -408,7 +426,7 @@ def _setup_crush_workspace(cwd: str, api_key: str) -> None:
     providers: dict = {
         "fabric": {
             "id": "fabric",
-            "base_url": f"{AI_SERVER_URL}/v1",
+            "base_url": f"{_ai_server_url()}/v1",
             "type": "openai",
             "api_key": api_key,
             "models": fabric_models,
@@ -421,7 +439,7 @@ def _setup_crush_workspace(cwd: str, api_key: str) -> None:
         if nrp_models:
             providers["nrp"] = {
                 "id": "nrp",
-                "base_url": f"{NRP_SERVER_URL}/v1",
+                "base_url": f"{_nrp_server_url()}/v1",
                 "type": "openai",
                 "api_key": nrp_key,
                 "models": [{"id": m, "name": m} for m in nrp_models],
@@ -460,11 +478,13 @@ def _start_model_proxy(
         logger.warning("Model proxy script not found: %s", _MODEL_PROXY_SCRIPT)
         return None
 
+    proxy_port = _model_proxy_port()
+    server_url = _ai_server_url()
     allowed_csv = ",".join(allowed_models) if allowed_models else default_model
     cmd = [
         "python3", _MODEL_PROXY_SCRIPT,
-        str(_MODEL_PROXY_PORT),
-        f"{AI_SERVER_URL}/v1",
+        str(proxy_port),
+        f"{server_url}/v1",
         default_model,
         allowed_csv,
     ]
@@ -477,7 +497,7 @@ def _start_model_proxy(
         )
         logger.info(
             "Model proxy started (pid=%d) on :%d → %s (default=%s, allowed=%s)",
-            proc.pid, _MODEL_PROXY_PORT, AI_SERVER_URL, default_model, allowed_csv,
+            proc.pid, proxy_port, server_url, default_model, allowed_csv,
         )
         return proc
     except Exception:
@@ -489,7 +509,7 @@ TOOL_CONFIGS = {
     "aider": {
         "env": lambda key: {
             "OPENAI_API_KEY": key,
-            "OPENAI_API_BASE": "https://ai.fabric-testbed.net/v1",
+            "OPENAI_API_BASE": f"{_ai_server_url()}/v1",
         },
         "cmd": [
             "aider",
@@ -505,7 +525,7 @@ TOOL_CONFIGS = {
         "env": lambda key: {
             "OPENAI_API_KEY": key,
             "FABRIC_AI_API_KEY": key,
-            "OPENAI_BASE_URL": "https://ai.fabric-testbed.net/v1",
+            "OPENAI_BASE_URL": f"{_ai_server_url()}/v1",
         },
         "cmd": ["opencode"],
         "needs_key": True,
@@ -513,13 +533,13 @@ TOOL_CONFIGS = {
     "crush": {
         "env": lambda key: {
             "OPENAI_API_KEY": key,
-            "OPENAI_BASE_URL": f"{AI_SERVER_URL}/v1",
+            "OPENAI_BASE_URL": f"{_ai_server_url()}/v1",
         },
         "cmd": ["crush"],
         "needs_key": True,
     },
     "claude": {
-        "env": lambda key: {},
+        "env": lambda key: {"NODE_OPTIONS": "--dns-result-order=ipv4first"},
         "cmd": ["claude"],
         "needs_key": False,
     },
@@ -529,6 +549,84 @@ TOOL_CONFIGS = {
 _OPENCODE_WEB_PORT = 9198
 _opencode_web_proc: subprocess.Popen | None = None
 _opencode_web_proxy: subprocess.Popen | None = None
+
+
+@router.get("/api/ai/tools/status")
+async def tool_install_status():
+    """Return install status of all lazy-installed AI tools."""
+    return get_all_tool_status()
+
+
+@router.post("/api/ai/tools/{tool_id}/install")
+async def trigger_tool_install(tool_id: str):
+    """Trigger installation of an AI tool. Returns when complete."""
+    if tool_id not in TOOL_REGISTRY:
+        return {"error": f"Unknown tool: {tool_id}", "status": "error"}
+    if is_tool_installed(tool_id):
+        return {"status": "already_installed", "tool": tool_id}
+    lines: list[str] = []
+    async def collect(line: str):
+        lines.append(line)
+    success = await install_tool(tool_id, progress_callback=collect)
+    return {
+        "status": "installed" if success else "error",
+        "tool": tool_id,
+        "output": "".join(lines),
+    }
+
+
+@router.post("/api/ai/tools/{tool_id}/install-stream")
+async def trigger_tool_install_stream(tool_id: str):
+    """Stream tool installation progress as SSE events."""
+    if tool_id not in TOOL_REGISTRY:
+        async def _err():
+            yield f"data: {json.dumps({'type': 'error', 'message': f'Unknown tool: {tool_id}'})}\n\n"
+        return StreamingResponse(_err(), media_type="text/event-stream")
+
+    info = TOOL_REGISTRY[tool_id]
+
+    if is_tool_installed(tool_id):
+        async def _already():
+            yield f"data: {json.dumps({'type': 'done', 'status': 'already_installed', 'tool': tool_id})}\n\n"
+        return StreamingResponse(_already(), media_type="text/event-stream")
+
+    async def _stream():
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+        async def progress_cb(line: str):
+            await queue.put(line)
+
+        async def run_install():
+            try:
+                success = await install_tool(tool_id, progress_callback=progress_cb)
+                await queue.put(None)  # sentinel
+                await queue.put("__SUCCESS__" if success else "__FAIL__")
+            except Exception as e:
+                await queue.put(f"Error: {e}\r\n")
+                await queue.put(None)
+                await queue.put("__FAIL__")
+
+        task = asyncio.create_task(run_install())
+
+        # Emit tool info as the first event
+        yield f"data: {json.dumps({'type': 'start', 'tool': tool_id, 'display_name': info['display_name'], 'size_estimate': info['size_estimate']})}\n\n"
+
+        while True:
+            line = await queue.get()
+            if line is None:
+                break
+            # Strip ANSI escape codes for the JSON output
+            clean = line.replace("\x1b[36m", "").replace("\x1b[32m", "").replace("\x1b[31m", "").replace("\x1b[0m", "").rstrip("\r\n")
+            if clean:
+                yield f"data: {json.dumps({'type': 'output', 'message': clean})}\n\n"
+
+        # Get final result
+        result = await queue.get()
+        await task
+        status = "installed" if result == "__SUCCESS__" else "error"
+        yield f"data: {json.dumps({'type': 'done', 'status': status, 'tool': tool_id})}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
 @router.post("/api/ai/opencode-web/start")
@@ -544,7 +642,11 @@ async def start_opencode_web(model: str = ""):
     if not api_key:
         return {"error": "AI API key not configured", "status": "error"}
 
-    cwd = "/home/fabric/work" if os.path.isdir("/home/fabric/work") else os.path.expanduser("~")
+    if not is_tool_installed("opencode"):
+        return {"install_required": True, "tool": "opencode", "status": "not_installed"}
+
+    from app.settings_manager import get_storage_dir as _storage
+    cwd = _storage() if os.path.isdir(_storage()) else os.path.expanduser("~")
     _ensure_git_ready(cwd)
 
     # Set up workspace (skills, agents, MCP, AGENTS.md) and build config
@@ -562,7 +664,7 @@ async def start_opencode_web(model: str = ""):
         "TERM": "xterm-256color",
         "OPENAI_API_KEY": api_key,
         "FABRIC_AI_API_KEY": api_key,
-        "OPENAI_BASE_URL": f"{AI_SERVER_URL}/v1",
+        "OPENAI_BASE_URL": f"{_ai_server_url()}/v1",
     }
     nrp_key = _get_nrp_api_key()
     if nrp_key:
@@ -574,13 +676,17 @@ async def start_opencode_web(model: str = ""):
     )
     if _opencode_web_proxy:
         await asyncio.sleep(0.3)
-        tool_env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{_MODEL_PROXY_PORT}/v1"
+        tool_env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{_model_proxy_port()}/v1"
 
     cmd = [
         "opencode", "web",
         "--port", str(_OPENCODE_WEB_PORT),
         "--hostname", "0.0.0.0",
     ]
+    installed_path = get_tool_binary_path("opencode")
+    if installed_path:
+        cmd[0] = installed_path
+    tool_env.update({k: v for k, v in get_tool_env().items() if k == "PATH"})
     try:
         _opencode_web_proc = subprocess.Popen(
             cmd, cwd=cwd, env=tool_env,
@@ -641,7 +747,11 @@ async def start_aider_web(model: str = ""):
     if not api_key:
         return {"error": "AI API key not configured", "status": "error"}
 
-    cwd = "/home/fabric/work" if os.path.isdir("/home/fabric/work") else os.path.expanduser("~")
+    if not is_tool_installed("aider"):
+        return {"install_required": True, "tool": "aider", "status": "not_installed"}
+
+    from app.settings_manager import get_storage_dir as _storage
+    cwd = _storage() if os.path.isdir(_storage()) else os.path.expanduser("~")
     _ensure_git_ready(cwd)
     _setup_aider_workspace(cwd)
 
@@ -652,7 +762,7 @@ async def start_aider_web(model: str = ""):
     tool_env = {
         **os.environ,
         "OPENAI_API_KEY": api_key,
-        "OPENAI_API_BASE": f"{AI_SERVER_URL}/v1",
+        "OPENAI_API_BASE": f"{_ai_server_url()}/v1",
     }
 
     cmd = [
@@ -662,6 +772,10 @@ async def start_aider_web(model: str = ""):
         "--no-auto-test",
         "--no-git-commit-verify",
     ]
+    installed_path = get_tool_binary_path("aider")
+    if installed_path:
+        cmd[0] = installed_path
+    tool_env.update({k: v for k, v in get_tool_env().items() if k == "PATH"})
     # Streamlit needs server config via env or CLI args
     tool_env["STREAMLIT_SERVER_PORT"] = str(_AIDER_WEB_PORT)
     tool_env["STREAMLIT_SERVER_ADDRESS"] = "0.0.0.0"
@@ -727,8 +841,44 @@ async def list_ai_models():
     return {"models": models, "default": default, "nrp_models": nrp_models}
 
 
+@router.get("/api/ai/browse-folders")
+async def browse_folders(path: str = ""):
+    """Return subdirectories of the given path for folder picking.
+
+    If *path* is empty, returns children of the storage root directory.
+    Only allows browsing within the storage root.
+    """
+    from app.settings_manager import get_storage_dir as _storage
+    root = _storage()
+
+    if not path:
+        path = root
+
+    # Security: ensure path is within root
+    real_path = os.path.realpath(path)
+    real_root = os.path.realpath(root)
+    if not real_path.startswith(real_root):
+        return {"error": "Access denied", "path": root, "folders": []}
+
+    if not os.path.isdir(real_path):
+        return {"error": "Not a directory", "path": root, "folders": []}
+
+    folders = []
+    try:
+        for entry in sorted(os.listdir(real_path)):
+            if entry.startswith("."):
+                continue
+            full = os.path.join(real_path, entry)
+            if os.path.isdir(full):
+                folders.append(entry)
+    except PermissionError:
+        return {"error": "Permission denied", "path": real_path, "folders": []}
+
+    return {"path": real_path, "parent": os.path.dirname(real_path) if real_path != real_root else None, "folders": folders}
+
+
 @router.websocket("/ws/terminal/ai/{tool}")
-async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = ""):
+async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = "", cwd: str = ""):
     """WebSocket endpoint for interactive AI tool terminal."""
     if tool not in TOOL_CONFIGS:
         await websocket.close(code=4000, reason=f"Unknown tool: {tool}")
@@ -758,7 +908,19 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = ""):
         tool_env = {**os.environ, "TERM": "xterm-256color"}
         tool_env.update(config["env"](api_key))
 
-        cwd = "/home/fabric/work" if os.path.isdir("/home/fabric/work") else os.path.expanduser("~")
+        from app.settings_manager import get_storage_dir as _storage
+        default_cwd = _storage() if os.path.isdir(_storage()) else os.path.expanduser("~")
+
+        # Use requested cwd if valid and within storage root
+        if cwd and os.path.isdir(cwd):
+            real_cwd = os.path.realpath(cwd)
+            real_root = os.path.realpath(default_cwd)
+            if real_cwd.startswith(real_root):
+                cwd = real_cwd
+            else:
+                cwd = default_cwd
+        else:
+            cwd = default_cwd
 
         # Add NRP key to environment if available (all tools can use it)
         nrp_key = _get_nrp_api_key()
@@ -799,12 +961,43 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = ""):
                 )
                 if proxy_proc:
                     time.sleep(0.3)  # let the proxy bind
-                    tool_env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{_MODEL_PROXY_PORT}/v1"
+                    tool_env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{_model_proxy_port()}/v1"
             except OSError:
                 pass
 
+        # --- Lazy install: if tool binary not found, install it first ---
+        tool_registry_id = tool  # tool IDs match between TOOL_CONFIGS and TOOL_REGISTRY
+        if not is_tool_installed(tool_registry_id):
+            await websocket.send_text(
+                f"\x1b[36m[ai] {tool} is not installed. Installing now...\x1b[0m\r\n"
+            )
+            async def ws_progress(line: str):
+                try:
+                    await websocket.send_text(line)
+                except Exception:
+                    pass
+            success = await install_tool(tool_registry_id, progress_callback=ws_progress)
+            if not success:
+                await websocket.send_text(
+                    "\x1b[31mInstallation failed. Please check your network connection and try again.\x1b[0m\r\n"
+                )
+                await websocket.close()
+                return
+            await websocket.send_text(
+                f"\x1b[32mInstallation complete. Launching {tool}...\x1b[0m\r\n"
+            )
+
+        # Resolve binary path — prefer lazy-installed, fall back to system
+        run_cmd = list(config["cmd"])
+        installed_path = get_tool_binary_path(tool)
+        if installed_path:
+            run_cmd[0] = installed_path
+
+        # Merge lazy-install env (PATH with venv/bin and npm/bin)
+        tool_env.update({k: v for k, v in get_tool_env().items() if k == "PATH"})
+
         proc = subprocess.Popen(
-            config["cmd"],
+            run_cmd,
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
@@ -871,6 +1064,12 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = ""):
                     proxy_proc.kill()
                 except Exception:
                     pass
+        # Back up Claude Code config on session close
+        if tool == "claude":
+            try:
+                _backup_claude_config()
+            except Exception:
+                pass
 
 
 def _ensure_git_ready(cwd: str) -> None:
@@ -908,6 +1107,86 @@ def _ensure_git_ready(cwd: str) -> None:
         )
 
 
+# Subdirs inside ~/.claude/ that are session-local and should NOT be persisted
+_CLAUDE_SKIP_DIRS = {"cache", "backups", "projects", "conversations", "todos"}
+
+
+def _backup_claude_config() -> None:
+    """Back up the entire ~/.claude/ directory and ~/.claude.json to persistent storage."""
+    from app.settings_manager import get_tool_config_dir, get_storage_dir
+    home = os.path.expanduser("~")
+    claude_dir = os.path.join(home, ".claude")
+    backup_dir = get_tool_config_dir("claude-code")
+
+    # Copy all files from ~/.claude/ (skip session-local subdirs)
+    if os.path.isdir(claude_dir):
+        for entry in os.listdir(claude_dir):
+            if entry in _CLAUDE_SKIP_DIRS:
+                continue
+            src = os.path.join(claude_dir, entry)
+            dst = os.path.join(backup_dir, entry)
+            if os.path.isfile(src):
+                shutil.copy2(src, dst)
+            elif os.path.isdir(src):
+                if os.path.exists(dst):
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+
+    # Back up ~/.claude.json (account/auth state stored at home root)
+    claude_json = os.path.join(home, ".claude.json")
+    if os.path.isfile(claude_json):
+        shutil.copy2(claude_json, os.path.join(backup_dir, ".claude.json"))
+
+    # Also back up workspace .mcp.json
+    mcp_src = os.path.join(get_storage_dir(), ".mcp.json")
+    if os.path.isfile(mcp_src):
+        shutil.copy2(mcp_src, os.path.join(backup_dir, ".mcp.json"))
+
+
+def _restore_claude_config() -> bool:
+    """Restore Claude Code config from persistent storage to ~/.claude/.
+
+    Returns True if config was restored (i.e. backup had meaningful content).
+    """
+    from app.settings_manager import get_tool_config_dir, get_storage_dir
+    home = os.path.expanduser("~")
+    claude_dir = os.path.join(home, ".claude")
+    backup_dir = get_tool_config_dir("claude-code")
+
+    # Only restore if backup has settings.json or .credentials.json
+    has_settings = os.path.isfile(os.path.join(backup_dir, "settings.json"))
+    has_creds = os.path.isfile(os.path.join(backup_dir, ".credentials.json"))
+    if not has_settings and not has_creds:
+        return False
+
+    os.makedirs(claude_dir, exist_ok=True)
+
+    # Copy all files/dirs from backup into ~/.claude/ (except .claude.json and .mcp.json)
+    for entry in os.listdir(backup_dir):
+        if entry in (".claude.json", ".mcp.json"):
+            continue
+        src = os.path.join(backup_dir, entry)
+        dst = os.path.join(claude_dir, entry)
+        if os.path.isfile(src):
+            shutil.copy2(src, dst)
+        elif os.path.isdir(src):
+            if os.path.exists(dst):
+                shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+
+    # Restore ~/.claude.json (account/auth state at home root)
+    claude_json_backup = os.path.join(backup_dir, ".claude.json")
+    if os.path.isfile(claude_json_backup):
+        shutil.copy2(claude_json_backup, os.path.join(home, ".claude.json"))
+
+    # Restore workspace .mcp.json
+    mcp_backup = os.path.join(backup_dir, ".mcp.json")
+    if os.path.isfile(mcp_backup):
+        shutil.copy2(mcp_backup, os.path.join(get_storage_dir(), ".mcp.json"))
+
+    return True
+
+
 def seed_ai_tool_defaults() -> None:
     """Seed AI tool configs into their default locations at container startup.
 
@@ -918,52 +1197,56 @@ def seed_ai_tool_defaults() -> None:
     - Crush:       ~/.config/crush/crush.json
     - All tools:   <cwd>/AGENTS.md (shared FABRIC context)
     """
+    from app.settings_manager import get_storage_dir as _storage
     home = os.path.expanduser("~")
-    cwd = "/home/fabric/work" if os.path.isdir("/home/fabric/work") else home
+    cwd = _storage() if os.path.isdir(_storage()) else home
 
     # --- Shared FABRIC context (AGENTS.md in workspace) ---
     agents_dst = os.path.join(cwd, "AGENTS.md")
     if os.path.isfile(_FABRIC_AI_MD_PATH):
         shutil.copy2(_FABRIC_AI_MD_PATH, agents_dst)
 
-    # --- Claude Code: ~/.claude/CLAUDE.md + ~/.claude/settings.json + .mcp.json ---
-    claude_dir = os.path.join(home, ".claude")
-    os.makedirs(claude_dir, exist_ok=True)
+    # --- Claude Code: ~/.claude/ + .mcp.json (restore from persistent or seed fresh) ---
+    restored = _restore_claude_config()
+    if not restored:
+        # First run or reset — seed from Docker image defaults
+        claude_dir = os.path.join(home, ".claude")
+        os.makedirs(claude_dir, exist_ok=True)
 
+        src_claude_md = os.path.join(_CLAUDE_DEFAULTS_DIR, "CLAUDE.md")
+        if os.path.isfile(src_claude_md):
+            shutil.copy2(src_claude_md, os.path.join(claude_dir, "CLAUDE.md"))
+
+        # settings.json — empty if not present
+        settings_path = os.path.join(claude_dir, "settings.json")
+        if not os.path.isfile(settings_path):
+            with open(settings_path, "w") as f:
+                json.dump({}, f)
+
+        # .mcp.json in workspace — only fabric-reports MCP. fabric-api MCP is
+        # intentionally excluded: in-container tools should use FABlib directly.
+        from app.user_context import get_token_path as _gtp
+        token_file = _gtp()
+        mcp_json_path = os.path.join(cwd, ".mcp.json")
+        py_cmd = f'import json; print(json.load(open("{token_file}"))["id_token"])'
+        mcp_servers = {}
+        for sname, url in [
+            ("fabric-reports", "https://reports.fabric-testbed.net/mcp"),
+        ]:
+            mcp_servers[sname] = {
+                "command": "bash",
+                "args": [
+                    "-c",
+                    f"TOKEN=$(python3 -c '{py_cmd}') && "
+                    f"exec npx -y mcp-remote \"{url}\" "
+                    f"--header \"Authorization: Bearer $TOKEN\"",
+                ],
+            }
+        with open(mcp_json_path, "w") as f:
+            json.dump({"mcpServers": mcp_servers}, f, indent=2)
+
+    # Always ensure CLAUDE.md in workspace and project .claude/ dir
     src_claude_md = os.path.join(_CLAUDE_DEFAULTS_DIR, "CLAUDE.md")
-    if os.path.isfile(src_claude_md):
-        shutil.copy2(src_claude_md, os.path.join(claude_dir, "CLAUDE.md"))
-
-    # settings.json — empty if not present
-    settings_path = os.path.join(claude_dir, "settings.json")
-    if not os.path.isfile(settings_path):
-        with open(settings_path, "w") as f:
-            json.dump({}, f)
-
-    # .mcp.json in workspace — MCP servers for FABRIC API
-    from app.user_context import get_token_path as _gtp
-    token_file = _gtp()
-    # .mcp.json in workspace — only fabric-reports MCP. fabric-api MCP is
-    # intentionally excluded: in-container tools should use FABlib directly.
-    mcp_json_path = os.path.join(cwd, ".mcp.json")
-    py_cmd = f'import json; print(json.load(open("{token_file}"))["id_token"])'
-    mcp_servers = {}
-    for sname, url in [
-        ("fabric-reports", "https://reports.fabric-testbed.net/mcp"),
-    ]:
-        mcp_servers[sname] = {
-            "command": "bash",
-            "args": [
-                "-c",
-                f"TOKEN=$(python3 -c '{py_cmd}') && "
-                f"exec npx -y mcp-remote \"{url}\" "
-                f"--header \"Authorization: Bearer $TOKEN\"",
-            ],
-        }
-    with open(mcp_json_path, "w") as f:
-        json.dump({"mcpServers": mcp_servers}, f, indent=2)
-
-    # Also write CLAUDE.md to the workspace for project-level instructions
     proj_claude_dir = os.path.join(cwd, ".claude")
     os.makedirs(proj_claude_dir, exist_ok=True)
     if os.path.isfile(src_claude_md):

@@ -35,7 +35,8 @@ _BASE_STORAGE: str | None = None
 def _base_storage() -> str:
     global _BASE_STORAGE
     if _BASE_STORAGE is None:
-        _BASE_STORAGE = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+        from app.settings_manager import get_storage_dir
+        _BASE_STORAGE = get_storage_dir()
     return _BASE_STORAGE
 
 
@@ -46,24 +47,12 @@ def _base_storage() -> str:
 def get_token_path() -> str:
     """Return the path to the FABRIC id_token JSON file.
 
-    Resolution order:
-    1. ``FABRIC_TOKEN_FILE`` env var (explicit override)
-    2. ``~/.tokens.json`` if it exists (JupyterHub convention)
-    3. ``{FABRIC_CONFIG_DIR}/id_token.json`` (legacy / FABlib default)
+    Delegates to ``settings_manager.get_token_path()`` which preserves
+    the same resolution order: FABRIC_TOKEN_FILE env → ~/.tokens.json →
+    settings-based config_dir/id_token.json.
     """
-    explicit = os.environ.get("FABRIC_TOKEN_FILE")
-    if explicit:
-        return explicit
-
-    home_tokens = os.path.join(os.path.expanduser("~"), ".tokens.json")
-    if os.path.isfile(home_tokens):
-        return home_tokens
-
-    config_dir = os.environ.get(
-        "FABRIC_CONFIG_DIR",
-        os.path.join(_base_storage(), "fabric_config"),
-    )
-    return os.path.join(config_dir, "id_token.json")
+    from app.settings_manager import get_token_path as _get
+    return _get()
 
 
 # ---------------------------------------------------------------------------
@@ -71,25 +60,15 @@ def get_token_path() -> str:
 # ---------------------------------------------------------------------------
 
 def get_artifacts_dir() -> str:
-    """Return the local artifacts directory.
-
-    All artifact types (weaves, VM templates, recipes, notebooks) are stored
-    in ``{FABRIC_STORAGE_DIR}/my_artifacts/``.
-    """
-    d = os.path.join(_base_storage(), "my_artifacts")
-    os.makedirs(d, exist_ok=True)
-    return d
+    """Return the local artifacts directory — delegates to settings_manager."""
+    from app.settings_manager import get_artifacts_dir as _get
+    return _get()
 
 
 def get_slices_dir() -> str:
-    """Return the slices directory for drafts and registry.
-
-    Drafts and the slice registry are stored in:
-    ``{FABRIC_STORAGE_DIR}/my_slices/``.
-    """
-    d = os.path.join(_base_storage(), "my_slices")
-    os.makedirs(d, exist_ok=True)
-    return d
+    """Return the slices directory for drafts and registry — delegates to settings_manager."""
+    from app.settings_manager import get_slices_dir as _get
+    return _get()
 
 
 # ---------------------------------------------------------------------------

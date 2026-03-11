@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 
-export type AddSliverType = 'node' | 'l2network' | 'l3network' | 'facility-port';
+export type AddSliverType = 'node' | 'l2network' | 'l3network' | 'facility-port' | 'port-mirror';
 
 interface AddSliverMenuProps {
   onSelect: (type: AddSliverType) => void;
@@ -11,6 +11,7 @@ const options: { type: AddSliverType; label: string; desc: string }[] = [
   { type: 'l2network', label: 'Network (L2)', desc: 'Layer 2 Ethernet network (Bridge, STS, PTP)' },
   { type: 'l3network', label: 'Network (L3)', desc: 'Layer 3 IP-routed network (IPv4, IPv6)' },
   { type: 'facility-port', label: 'Facility Port', desc: 'External network connection via VLAN' },
+  { type: 'port-mirror', label: 'Port Mirror', desc: 'Mirror traffic from one interface to another for capture' },
 ];
 
 export default function AddSliverMenu({ onSelect }: AddSliverMenuProps) {

@@ -19,9 +19,11 @@ remote web services accessible through the WebUI's "Web Apps" panel.
 
 2. **Create the tunnel via REST API**:
    ```bash
-   curl -X POST http://localhost:8000/api/slices/<slice_id>/nodes/<node_name>/tunnels \
+   curl -X POST http://localhost:8000/api/tunnels \
      -H "Content-Type: application/json" \
      -d '{
+       "slice_name": "my-slice",
+       "node_name": "monitor",
        "remote_port": 3000,
        "label": "Grafana Dashboard"
      }'
@@ -37,12 +39,12 @@ remote web services accessible through the WebUI's "Web Apps" panel.
 
 4. **List active tunnels**:
    ```bash
-   curl -s http://localhost:8000/api/slices/<slice_id>/nodes/<node_name>/tunnels
+   curl -s http://localhost:8000/api/tunnels
    ```
 
 5. **Remove a tunnel**:
    ```bash
-   curl -X DELETE http://localhost:8000/api/slices/<slice_id>/nodes/<node_name>/tunnels/<local_port>
+   curl -X DELETE http://localhost:8000/api/tunnels/<tunnel_id>
    ```
 
 ## Common Services to Tunnel

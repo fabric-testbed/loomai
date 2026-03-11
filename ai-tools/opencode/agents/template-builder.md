@@ -26,12 +26,12 @@ mkdir -p "$ARTIFACTS_DIR"
 ```
 
 Artifact type is determined by the marker file inside each subdirectory:
-- **Weave**: `slice.json` (+ optional `metadata.json`, `deploy.sh`, `run.sh`)
+- **Weave**: `slice.json` (+ optional `metadata.json`, `deploy.sh`, `deploy.json`, `run.sh`, `run.json`)
 - **VM Template**: `vm-template.json`
 - **Recipe**: `recipe.json`
 - **Notebook**: any `.ipynb` file
 
-Builtin templates in `/app/slice-libraries/` are read-only references.
+Reference templates in `/app/slice-libraries/` are read-only examples.
 
 ## Template File Structure
 
@@ -40,8 +40,12 @@ Slice templates (weaves) live in `$ARTIFACTS_DIR/<DirName>/`:
 <DirName>/
   metadata.json            # Display name, description, node/network counts
   slice.json               # Topology: nodes, components, networks, boot_config
+  deploy.sh                # Optional: deployment script (runs on container)
+  deploy.json              # Optional: declares args for Deploy modal
+  run.sh                   # Optional: autonomous experiment script (background)
+  run.json                 # Optional: declares args for Run modal
   tools/                   # Deployment scripts (uploaded to ~/tools/ on VMs)
-    deploy.sh              # Main deploy script
+    deploy.sh              # Per-VM deploy script
     setup-worker.sh        # Role-specific scripts as needed
 ```
 
@@ -134,7 +138,6 @@ Single-node configs in `$ARTIFACTS_DIR/<DirName>/` (identified by `vm-template.j
   "version": "1.0.0",
   "description": "What this VM does",
   "image": "default_ubuntu_22",
-  "builtin": false,
   "cores": 4,
   "ram": 16,
   "disk": 40,
@@ -157,7 +160,6 @@ Post-provisioning scripts in `$ARTIFACTS_DIR/<DirName>/` (identified by `recipe.
   "name": "Install Something",
   "version": "1.0.0",
   "description": "Installs X on existing VMs",
-  "builtin": false,
   "image_patterns": {
     "ubuntu": "install_ubuntu.sh",
     "rocky": "install_rocky.sh",
@@ -185,6 +187,102 @@ Artifacts without a marker default to "notebook". Tags are optional user labels.
 Study existing templates in `/app/slice-libraries/slice_templates/` for patterns.
 See AGENTS.md for complete field schemas, network types, and component models.
 
+## Background Runs
+
+Weave scripts (`run.sh`, `deploy.sh`) execute as **background runs** that survive
+browser disconnects. The process runs detached on the container — no timeout can
+kill it. Users can close the browser, reopen later, and resume viewing output.
+
+### How It Works
+- **Start**: `POST /api/templates/{name}/start-run/{script}` → returns `{run_id}`
+- **Poll output**: `GET /api/templates/runs/{run_id}/output?offset=N` → incremental output
+- **List runs**: `GET /api/templates/runs` → all active and completed runs
+- **Stop**: `POST /api/templates/runs/{run_id}/stop`
+- **Delete**: `DELETE /api/templates/runs/{run_id}`
+
+Run data (output log + metadata) is stored in `{FABRIC_STORAGE_DIR}/.runs/{run_id}/`.
+
+### run.sh Best Practices
+
+**Key principle**: `run.sh` is fully autonomous — it creates its own slices,
+deploys software, runs experiments, collects results, and optionally cleans up.
+It may create one slice, multiple slices in sequence, or parallel slices. The
+user provides parameters (slice name/prefix, test config) via `run.json` and
+the script handles everything else.
+
+```bash
+#!/bin/bash
+set -e
+SLICE_NAME="${1:-${SLICE_NAME}}"
+DURATION="${DURATION:-30}"
+DELETE_AFTER="${DELETE_AFTER:-true}"
+if [ -z "$SLICE_NAME" ]; then echo "ERROR: SLICE_NAME not set" >&2; exit 1; fi
+TEMPLATE_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+### PROGRESS: Creating slice from template
+# Read slice.json from $TEMPLATE_DIR, create via FABlib, submit, wait
+
+### PROGRESS: Deploying software
+# Install and configure on provisioned nodes
+
+### PROGRESS: Running experiment (duration: ${DURATION}s)
+# ... collect data ...
+
+### PROGRESS: Saving results
+# Save to /home/fabric/work/my_artifacts/ for persistence
+
+if [ "$DELETE_AFTER" = "true" ]; then
+  ### PROGRESS: Cleaning up
+  # Delete the slice
+fi
+### PROGRESS: Experiment complete
+```
+- All args from `run.json` are set as environment variables
+- `SLICE_NAME` is also passed as `$1` for backward compatibility
+- The script reads `slice.json` from its own weave directory to create slices
+- For multi-slice experiments, use SLICE_NAME as a prefix (e.g. `${SLICE_NAME}-1`)
+- Use `### PROGRESS:` markers — they appear as status updates in the Build Log
+- Output is captured to a log file, so use stdout/stderr freely
+- The script runs in the weave directory as cwd
+
+### run.json / deploy.json (Argument Manifests)
+
+Weaves can include `run.json` and/or `deploy.json` to declare what arguments
+their scripts need. The WebUI dynamically renders input fields in the Run/Deploy
+modal from these manifests.
+
+```json
+{
+  "description": "What this script does",
+  "args": [
+    {"name": "SLICE_NAME", "label": "Slice Name", "type": "string", "required": true, "default": ""},
+    {"name": "DURATION", "label": "Duration (sec)", "type": "number", "required": false, "default": "30"}
+  ]
+}
+```
+
+Each arg becomes an environment variable. Types: `"string"`, `"number"`, `"boolean"`.
+If no manifest exists, the modal shows a single "Slice Name" field (backward compatible).
+
+### Creating a Background Run via curl
+```bash
+# Start a background run
+curl -X POST http://localhost:8000/api/templates/My_Weave/start-run/run.sh \
+  -H "Content-Type: application/json" \
+  -d '{"args": {"SLICE_NAME": "my-exp"}}'
+# Returns: {"run_id": "run-abc123", "status": "running"}
+
+# Poll for output (incremental)
+curl "http://localhost:8000/api/templates/runs/run-abc123/output?offset=0"
+# Returns: {"output": "...", "offset": 1234, "status": "running"}
+
+# List all runs
+curl http://localhost:8000/api/templates/runs
+
+# Stop a run
+curl -X POST http://localhost:8000/api/templates/runs/run-abc123/stop
+```
+
 ## Artifact Marketplace
 
 Users can publish artifacts to the FABRIC community:
@@ -196,5 +294,5 @@ Users can publish artifacts to the FABRIC community:
 The Artifacts side panel in the Topology view provides quick access:
 - **Load**: Create draft from weave
 - **Deploy**: One-click provisioning (load + submit + boot config)
-- **Run**: Execute autonomous experiment scripts
+- **Run**: Execute autonomous experiment scripts (background, survives disconnect)
 - **JupyterLab**: Open artifact folder for editing

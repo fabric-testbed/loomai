@@ -22,7 +22,6 @@ on existing VMs after provisioning.
   "name": "Install Docker",
   "version": "1.0.0",
   "description": "Installs Docker Engine and adds user to docker group.",
-  "builtin": false,
   "image_patterns": {
     "ubuntu": "install_docker_ubuntu.sh",
     "rocky": "install_docker_rocky.sh",

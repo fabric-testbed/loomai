@@ -12,13 +12,17 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from app.routes.config import _get_ai_api_key
+from app.settings_manager import get_fabric_api_key as _get_ai_api_key
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-AI_SERVER_URL = "https://ai.fabric-testbed.net"
+AI_SERVER_URL = "https://ai.fabric-testbed.net"  # Fallback; prefer _ai_server_url()
+
+def _ai_server_url() -> str:
+    from app.settings_manager import get_ai_server_url
+    return get_ai_server_url()
 _MAX_TOOL_ROUNDS = 50  # generous limit; stops only truly runaway loops
 
 _APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -530,6 +534,89 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the internet using DuckDuckGo. Returns titles, URLs, and snippets for each result. Use this to find documentation, tutorials, troubleshooting guides, or any information from the web.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query string"},
+                    "max_results": {"type": "integer", "description": "Maximum number of results to return (default 5, max 10)", "default": 5},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_webpage",
+            "description": "Fetch and extract the main text content from a webpage URL. Use this after web_search to read the full content of a promising result. Returns plain text (HTML tags stripped).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to fetch"},
+                    "max_length": {"type": "integer", "description": "Maximum characters to return (default 4000)", "default": 4000},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "start_background_run",
+            "description": "Start a weave script (run.sh or deploy.sh) as a background run that survives browser disconnects. Returns a run_id for polling status and output.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "weave_dir_name": {"type": "string", "description": "Directory name of the weave (e.g. 'My_Weave')"},
+                    "script": {"type": "string", "enum": ["run.sh", "deploy.sh"], "description": "Which script to run"},
+                    "slice_name": {"type": "string", "description": "Slice name to pass to the script (optional)", "default": ""},
+                },
+                "required": ["weave_dir_name", "script"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_background_runs",
+            "description": "List all background runs (active and completed) with their status, timestamps, and weave info.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_background_run_output",
+            "description": "Get output from a background run. Pass offset=0 for all output, or the last offset for incremental reads.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string", "description": "The run ID returned by start_background_run"},
+                    "offset": {"type": "integer", "description": "Byte offset to read from (0 for all output)", "default": 0},
+                },
+                "required": ["run_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stop_background_run",
+            "description": "Stop a running background run.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string", "description": "The run ID to stop"},
+                },
+                "required": ["run_id"],
+            },
+        },
+    },
 ]
 
 
@@ -847,12 +934,125 @@ async def execute_tool(name: str, arguments: dict) -> str:
             else:
                 return json.dumps({"error": f"Unknown jupyter action: {action}"})
 
+        # --- Background Runs ---
+        elif name == "start_background_run":
+            from app.routes.templates import start_background_run, StartRunRequest, _sanitize_name, _templates_dir, _validate_path
+            result = start_background_run(
+                arguments["weave_dir_name"],
+                arguments["script"],
+                StartRunRequest(slice_name=arguments.get("slice_name", "")),
+            )
+            return json.dumps(result, default=str)
+
+        elif name == "list_background_runs":
+            from app.routes.templates import list_background_runs
+            result = list_background_runs()
+            return json.dumps(result, default=str)
+
+        elif name == "get_background_run_output":
+            from app.routes.templates import get_background_run_output
+            result = get_background_run_output(
+                arguments["run_id"],
+                arguments.get("offset", 0),
+            )
+            return json.dumps(result, default=str)
+
+        elif name == "stop_background_run":
+            from app.routes.templates import stop_background_run
+            result = stop_background_run(arguments["run_id"])
+            return json.dumps(result, default=str)
+
+        # --- Web Search & Fetch ---
+        elif name == "web_search":
+            result = await _execute_web_search(
+                arguments["query"],
+                arguments.get("max_results", 5),
+            )
+            return result
+
+        elif name == "fetch_webpage":
+            result = await _execute_fetch_webpage(
+                arguments["url"],
+                arguments.get("max_length", 4000),
+            )
+            return result
+
         else:
             return json.dumps({"error": f"Unknown tool: {name}"})
 
     except Exception as e:
         logger.warning("Tool %s failed: %s", name, e)
         return json.dumps({"error": str(e)})
+
+
+# ---------------------------------------------------------------------------
+# Web search & fetch helpers
+# ---------------------------------------------------------------------------
+
+async def _execute_web_search(query: str, max_results: int = 5) -> str:
+    """Search the web using DuckDuckGo and return results as JSON."""
+    max_results = min(max(1, max_results), 10)
+    try:
+        from duckduckgo_search import DDGS
+
+        def _search():
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=max_results))
+            return [
+                {
+                    "title": r.get("title", ""),
+                    "url": r.get("href", ""),
+                    "snippet": r.get("body", ""),
+                }
+                for r in results
+            ]
+
+        results = await asyncio.to_thread(_search)
+        return json.dumps({"query": query, "results": results}, default=str)
+    except Exception as e:
+        logger.warning("Web search failed: %s", e)
+        return json.dumps({"error": f"Search failed: {e}"})
+
+
+async def _execute_fetch_webpage(url: str, max_length: int = 4000) -> str:
+    """Fetch a webpage and return its text content (HTML stripped)."""
+    max_length = min(max(500, max_length), 8000)
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0, connect=5.0),
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; LooMAI/1.0)"},
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
+            if "text/html" in content_type:
+                text = _extract_text_from_html(resp.text)
+            else:
+                text = resp.text
+            if len(text) > max_length:
+                text = text[:max_length] + "\n\n[... truncated]"
+            return json.dumps({"url": url, "content": text}, default=str)
+    except Exception as e:
+        logger.warning("Fetch webpage failed: %s", e)
+        return json.dumps({"error": f"Fetch failed: {e}"})
+
+
+def _extract_text_from_html(html: str) -> str:
+    """Extract readable text from HTML, stripping tags, scripts, and styles."""
+    import re
+    # Remove script and style blocks
+    text = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    # Remove HTML tags
+    text = re.sub(r'<[^>]+>', ' ', text)
+    # Decode common HTML entities
+    text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+    text = text.replace('&quot;', '"').replace('&#39;', "'").replace('&nbsp;', ' ')
+    # Collapse whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    # Re-add paragraph breaks at likely boundaries
+    text = re.sub(r' {2,}', '\n\n', text)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -905,9 +1105,14 @@ async def chat_stream(request: Request):
         "- Manage artifacts (list local, publish to FABRIC marketplace)\n"
         "- Execute commands on VMs via SSH and read/write files on VMs via SFTP\n"
         "- List and manage recipes for VM configuration\n"
-        "- Control JupyterLab (start, stop, status)\n\n"
+        "- Control JupyterLab (start, stop, status)\n"
+        "- Search the web for documentation, tutorials, and troubleshooting info\n"
+        "- Fetch and read webpage content from URLs\n"
+        "- Start, monitor, and stop background weave runs (run.sh/deploy.sh that survive browser disconnects)\n\n"
         "Use tools when the user asks to perform operations. After using tools, summarize what you did clearly.\n"
-        "For creating artifacts, write files under 'my_artifacts/<artifact_name>/' in the container filesystem."
+        "For creating artifacts, write files under 'my_artifacts/<artifact_name>/' in the container filesystem.\n"
+        "When users ask questions you don't know the answer to, use web_search to find relevant information.\n"
+        "For running weave scripts, prefer start_background_run — it runs detached so the user can disconnect and reconnect."
     )
 
     if agent_id:
@@ -950,7 +1155,7 @@ async def chat_stream(request: Request):
 
                 # Try non-streaming first to detect tool calls
                 resp = await client.post(
-                    f"{AI_SERVER_URL}/v1/chat/completions",
+                    f"{_ai_server_url()}/v1/chat/completions",
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
@@ -1006,7 +1211,7 @@ async def chat_stream(request: Request):
                 # Re-do the call with streaming for smooth output
                 async with client.stream(
                     "POST",
-                    f"{AI_SERVER_URL}/v1/chat/completions",
+                    f"{_ai_server_url()}/v1/chat/completions",
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",

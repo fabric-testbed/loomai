@@ -10,7 +10,7 @@ deploy, and troubleshoot experiments on the FABRIC testbed.
 - **FABRIC config**: `$FABRIC_CONFIG_DIR` (tokens, SSH keys, fabric_rc)
 - **Artifacts**: `/home/fabric/work/my_artifacts/` (weaves, VM templates, recipes, notebooks)
 - **Drafts & Slices**: `/home/fabric/work/my_slices/` (drafts and slice registry)
-- **Builtin templates (read-only)**: `/app/slice-libraries/` (slice_templates, vm_templates, recipes)
+- **Reference templates (read-only)**: `/app/slice-libraries/` (slice_templates, vm_templates, recipes)
 - **FABRIC context**: `AGENTS.md` in the working directory (comprehensive FABRIC reference)
 
 ### Filesystem Write Access
@@ -24,7 +24,7 @@ visible in the WebUI.
 
 | Type | Marker file | Description |
 |------|-------------|-------------|
-| Weave | `slice.json` | Reusable slice topology template |
+| Weave | `slice.json` | Reusable slice topology template (may also include `run.json` and/or `deploy.json` argument manifests) |
 | VM Template | `vm-template.json` | Single-node configuration (image, resources, boot scripts) |
 | Recipe | `recipe.json` | Post-provisioning install script for existing VMs |
 | Notebook | `*.ipynb` | Jupyter notebook for interactive experiments |
@@ -86,7 +86,9 @@ When referring to artifact operations, use this vocabulary:
 Artifact types are identified by `[LoomAI ...]` markers in the description, not
 by tags. LoomAI auto-prepends the marker on publish: `[LoomAI Weave]`,
 `[LoomAI VM Template]`, `[LoomAI Recipe]`, `[LoomAI Notebook]`. Artifacts
-without a marker default to "notebook". Tags are optional user labels.
+without a marker default to "notebook". Category tags (`loomai:weave`,
+`loomai:vm`, `loomai:recipe`) are also auto-added on publish.
+Additional tags are optional user labels.
 
 ## Co-located AI Tools
 
@@ -130,28 +132,50 @@ Drafts are local-only (no resources allocated). Default lease is 24h. Always con
 2. Create a draft from a template or custom spec
 3. Submit and wait for StableOK state
 4. Run boot configs or deploy scripts
+5. Execute recipes for additional software
 
 ### Create a weave (slice template)
-1. Find `$ARTIFACTS_DIR` (see above)
-2. `mkdir -p "$ARTIFACTS_DIR/My_Weave"`
-3. Write `slice.json` with nodes, networks, components, boot_config
-4. Optionally add `metadata.json`, `deploy.sh`, `run.sh`, `tools/` scripts
-5. The weave appears instantly in the WebUI Libraries panel
+1. `mkdir -p "/home/fabric/work/my_artifacts/My_Weave"`
+2. Write `slice.json` with nodes, networks, components, boot_config
+3. Optionally add `metadata.json`, `deploy.sh`, `deploy.json`, `run.sh`, `run.json`, `tools/` scripts
+4. The weave appears instantly in the WebUI Libraries panel
 
 ### Create a VM template
-1. `mkdir -p "$ARTIFACTS_DIR/My_VM_Template"`
+1. `mkdir -p "/home/fabric/work/my_artifacts/My_VM_Template"`
 2. Write `vm-template.json` with name, image, cores, ram, disk, components, boot_config
 3. Optionally add OS-variant directories with setup scripts
 
 ### Create a recipe
-1. `mkdir -p "$ARTIFACTS_DIR/My_Recipe/scripts"`
+1. `mkdir -p "/home/fabric/work/my_artifacts/My_Recipe"`
 2. Write `recipe.json` with image_patterns mapping OS names to scripts
 3. Write the install scripts in the directory or `scripts/` subdirectory
 
 ### Create a notebook
-1. `mkdir -p "$ARTIFACTS_DIR/My_Notebook"`
+1. `mkdir -p "/home/fabric/work/my_artifacts/My_Notebook"`
 2. Write `.ipynb` file(s) — standard Jupyter notebook format
 3. Optionally add `metadata.json` for display name and description
+
+### Publish an artifact
+```bash
+curl -X POST http://localhost:8000/api/artifacts/publish \
+  -H "Content-Type: application/json" \
+  -d '{"dir_name":"My_Weave","category":"weave","title":"My Weave","description":"...","visibility":"author","tags":[]}'
+```
+
+### Get an artifact from marketplace
+```bash
+curl -X POST http://localhost:8000/api/artifacts/download \
+  -H "Content-Type: application/json" -d '{"uuid":"artifact-uuid"}'
+```
+
+### Execute a recipe on a running slice
+```bash
+curl -X POST http://localhost:8000/api/recipes/install_docker/execute/my-slice/node1
+```
+
+### Open artifact in JupyterLab
+1. Start JupyterLab: `curl -X POST http://localhost:8000/api/jupyter/start`
+2. Open: `/jupyter/lab/tree/my_artifacts/<artifact_name>`
 
 ### Troubleshoot connectivity
 1. Check slice state — must be StableOK
@@ -165,3 +189,74 @@ Drafts are local-only (no resources allocated). Default lease is 24h. Always con
 3. Use `-qq` flags on apt-get for quiet output
 4. Make scripts idempotent (safe to re-run)
 5. For multi-role templates, dispatch based on `$(hostname)`
+
+### Create run.json / deploy.json manifests
+1. Declare arguments the script needs as `args` array entries
+2. Each arg has: `name` (env var), `label`, `type` (string/number/boolean), `required`, `default`, `description`
+3. The WebUI modal renders input fields dynamically from the manifest
+4. All args are passed as environment variables to the script
+5. If no manifest exists, the modal defaults to a single "Slice Name" field
+
+## Backend REST API Quick Reference
+
+The LoomAI backend at `http://localhost:8000` — use for operations not covered by FABlib tools:
+
+```bash
+# Slices
+GET  /api/slices                          # List all slices
+POST /api/slices                          # Create empty draft
+POST /api/slices/{name}/submit            # Submit draft
+POST /api/slices/{name}/refresh           # Refresh from FABRIC
+GET  /api/slices/{name}/validate          # Validate before submit
+POST /api/slices/{name}/clone             # Clone a slice
+POST /api/slices/{name}/renew             # Extend lease
+DELETE /api/slices/{name}                 # Delete slice
+
+# Nodes, Components, Networks (draft editing)
+POST /api/slices/{name}/nodes             # Add node
+PUT  /api/slices/{name}/nodes/{node}      # Update node
+DELETE /api/slices/{name}/nodes/{node}    # Remove node
+POST /api/slices/{name}/nodes/{node}/components  # Add component
+POST /api/slices/{name}/networks          # Add network
+DELETE /api/slices/{name}/networks/{net}  # Remove network
+
+# Boot Config & Recipes
+POST /api/files/boot-config/{name}/execute-all-stream  # Run all boot configs (SSE)
+POST /api/files/boot-config/{name}/{node}/execute      # Run one node's boot config
+POST /api/recipes/{recipe}/execute/{slice}/{node}       # Execute recipe on node
+GET  /api/recipes                         # List recipes
+
+# Artifacts
+GET  /api/artifacts/local                 # List local artifacts
+GET  /api/artifacts/remote                # List marketplace
+GET  /api/artifacts/my                    # List user's published
+POST /api/artifacts/download              # Get artifact from marketplace
+POST /api/artifacts/publish               # Publish local artifact
+PUT  /api/artifacts/remote/{uuid}         # Update published artifact
+
+# Templates
+GET  /api/templates                       # List weaves
+POST /api/templates/{name}/load           # Load weave as draft
+GET  /api/vm-templates                    # List VM templates
+
+# Resources
+GET  /api/sites                           # Sites with availability
+GET  /api/sites/{name}/hosts              # Per-host resources
+GET  /api/images                          # VM images
+GET  /api/component-models                # Component models
+
+# JupyterLab
+POST /api/jupyter/start                   # Start JupyterLab
+POST /api/jupyter/stop                    # Stop JupyterLab
+# Artifact URL: /jupyter/lab/tree/my_artifacts/{name}
+
+# Tunnels (access web services on VMs)
+POST /api/tunnels                         # Create tunnel
+GET  /api/tunnels                         # List tunnels
+DELETE /api/tunnels/{id}                  # Close tunnel
+
+# File operations on VMs
+POST /api/files/vm/{slice}/{node}/execute          # Run command
+POST /api/files/vm/{slice}/{node}/upload-direct     # Upload file
+GET  /api/files/vm/{slice}/{node}/download-direct   # Download file
+```

@@ -24,7 +24,6 @@ that can be added to any slice.
   "version": "1.0.0",
   "description": "What this template configures",
   "image": "default_ubuntu_22",
-  "builtin": false,
   "boot_config": {
     "uploads": [
       {"id": "setup", "source": "tools/setup.sh", "destination": "~/tools/setup.sh"}
@@ -43,7 +42,6 @@ that can be added to any slice.
 - `version` — Semver version string
 - `description` — Shown in template browser
 - `image` — Default VM image (user can override)
-- `builtin` — Always `false` for user-created
 - `cores`, `ram`, `disk` — Recommended resources (optional, applied when template is selected)
 - `site` — Preferred FABRIC site (optional)
 - `host` — Specific physical host (optional)
@@ -64,7 +62,6 @@ that can be added to any slice.
   "name": "Docker Host",
   "version": "1.0.0",
   "description": "Installs Docker Engine",
-  "builtin": false,
   "variants": {
     "default_ubuntu_22": { "label": "Ubuntu 22.04", "dir": "ubuntu_22" },
     "default_ubuntu_24": { "label": "Ubuntu 24.04", "dir": "ubuntu_24" },

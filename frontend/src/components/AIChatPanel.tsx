@@ -1,9 +1,11 @@
 'use client';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { getAiModels, getChatAgents, streamChat, stopChatStream, getConfig } from '../api/client';
 import type { ChatAgent } from '../api/client';
 import '../styles/ai-chat-panel.css';
+
+const VISIBLE_TOOL_COUNT = 3;
 
 interface ToolCall {
   name: string;
@@ -182,6 +184,79 @@ function clearModuleChat(storeId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// ToolCallsView — collapsible tool call list
+// ---------------------------------------------------------------------------
+
+function ToolCallsView({ toolCalls, msgIdx, onToggle, isStreaming }: {
+  toolCalls: ToolCall[];
+  msgIdx: number;
+  onToggle: (msgIdx: number, toolIdx: number) => void;
+  isStreaming: boolean;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const total = toolCalls.length;
+  const hiddenCount = total - VISIBLE_TOOL_COUNT;
+
+  // During streaming or when few tools, decide what to show
+  const visibleTools = useMemo(() => {
+    if (showAll || total <= VISIBLE_TOOL_COUNT) return toolCalls;
+    // Show last VISIBLE_TOOL_COUNT tools
+    return toolCalls.slice(total - VISIBLE_TOOL_COUNT);
+  }, [toolCalls, showAll, total]);
+
+  // Offset for mapping visible indices back to original indices
+  const offset = showAll || total <= VISIBLE_TOOL_COUNT ? 0 : total - VISIBLE_TOOL_COUNT;
+
+  return (
+    <div className="ai-chat-tools">
+      {/* Show "N earlier tools" toggle when collapsed */}
+      {!showAll && hiddenCount > 0 && (
+        <button className="ai-chat-tools-toggle" onClick={() => setShowAll(true)}>
+          {'\u25B6'} {hiddenCount} earlier tool{hiddenCount > 1 ? 's' : ''}{isStreaming ? '' : ` \u2014 click to expand`}
+        </button>
+      )}
+      {/* Show collapse toggle when expanded and there are many tools */}
+      {showAll && hiddenCount > 0 && (
+        <button className="ai-chat-tools-toggle" onClick={() => setShowAll(false)}>
+          {'\u25BC'} Collapse — showing all {total} tools
+        </button>
+      )}
+      {visibleTools.map((tc, vi) => {
+        const ti = offset + vi;
+        return (
+          <div key={ti} className={`ai-chat-tool-card${!tc.result && isStreaming ? ' running' : ''}`}>
+            <button
+              className="ai-chat-tool-header"
+              onClick={() => onToggle(msgIdx, ti)}
+            >
+              <span className="ai-chat-tool-icon">{tc.result ? '\u2713' : '\u25B6'}</span>
+              <span className="ai-chat-tool-name">{tc.name.replace(/_/g, ' ')}</span>
+              <span className="ai-chat-tool-toggle">{tc.expanded ? '\u25B4' : '\u25BE'}</span>
+            </button>
+            {tc.expanded && (
+              <div className="ai-chat-tool-detail">
+                <div className="ai-chat-tool-section">
+                  <span className="ai-chat-tool-section-label">Args</span>
+                  <pre>{JSON.stringify(tc.arguments, null, 2)}</pre>
+                </div>
+                {tc.result && (
+                  <div className="ai-chat-tool-section">
+                    <span className="ai-chat-tool-section-label">Result</span>
+                    <pre>{(() => {
+                      try { return JSON.stringify(JSON.parse(tc.result), null, 2); } catch { return tc.result; }
+                    })()}</pre>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -194,9 +269,11 @@ interface AIChatPanelProps {
   fullScreen?: boolean;
   /** Persist chat state across remounts — provide a stable id */
   persistId?: string;
+  /** Show a pop-out button in the header */
+  showPopout?: boolean;
 }
 
-export default function AIChatPanel({ onCollapse, dragHandleProps, panelIcon, sliceContext, onSliceChanged, fullScreen, persistId }: AIChatPanelProps) {
+export default function AIChatPanel({ onCollapse, dragHandleProps, panelIcon, sliceContext, onSliceChanged, fullScreen, persistId, showPopout }: AIChatPanelProps) {
   // Force-update trigger for store-driven re-renders
   const [, bump] = useState(0);
   const store = persistId ? getStore(persistId) : null;
@@ -424,6 +501,7 @@ export default function AIChatPanel({ onCollapse, dragHandleProps, panelIcon, sl
           {panelIcon && !fullScreen && <span style={{ cursor: 'grab' }}>{panelIcon}</span>}
           <span className="ai-chat-header-icon">AI</span>
           <span className="ai-chat-header-title">LoomAI</span>
+          {showPopout && <button className="ai-chat-popout-btn" onClick={() => window.open('/popout?tool=loomai', '_blank')} title="Open in new tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg></button>}
           {!fullScreen && <button className="ai-chat-collapse-btn" onClick={onCollapse} title="Collapse">{'\u2715'}</button>}
         </div>
         <div className="ai-chat-no-key">
@@ -442,6 +520,7 @@ export default function AIChatPanel({ onCollapse, dragHandleProps, panelIcon, sl
         <span className="ai-chat-header-icon">AI</span>
         <span className="ai-chat-header-title">LoomAI</span>
         <button className="ai-chat-new-btn" onClick={handleClear} title="New chat" data-help-id="ai-chat.clear">{'\u21BA'}</button>
+        {showPopout && <button className="ai-chat-popout-btn" onClick={() => window.open('/popout?tool=loomai', '_blank')} title="Open in new tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg></button>}
         {!fullScreen && <button className="ai-chat-collapse-btn" onClick={onCollapse} title="Collapse">{'\u2715'}</button>}
       </div>
 
@@ -471,36 +550,12 @@ export default function AIChatPanel({ onCollapse, dragHandleProps, panelIcon, sl
             <span className="ai-chat-msg-role">{msg.role === 'user' ? 'You' : 'AI'}</span>
             <div className="ai-chat-msg-bubble">
               {msg.toolCalls && msg.toolCalls.length > 0 && (
-                <div className="ai-chat-tools">
-                  {msg.toolCalls.map((tc, ti) => (
-                    <div key={ti} className="ai-chat-tool-card">
-                      <button
-                        className="ai-chat-tool-header"
-                        onClick={() => toggleToolExpanded(i, ti)}
-                      >
-                        <span className="ai-chat-tool-icon">{tc.result ? '\u2713' : '\u25B6'}</span>
-                        <span className="ai-chat-tool-name">{tc.name.replace(/_/g, ' ')}</span>
-                        <span className="ai-chat-tool-toggle">{tc.expanded ? '\u25B4' : '\u25BE'}</span>
-                      </button>
-                      {tc.expanded && (
-                        <div className="ai-chat-tool-detail">
-                          <div className="ai-chat-tool-section">
-                            <span className="ai-chat-tool-section-label">Args</span>
-                            <pre>{JSON.stringify(tc.arguments, null, 2)}</pre>
-                          </div>
-                          {tc.result && (
-                            <div className="ai-chat-tool-section">
-                              <span className="ai-chat-tool-section-label">Result</span>
-                              <pre>{(() => {
-                                try { return JSON.stringify(JSON.parse(tc.result), null, 2); } catch { return tc.result; }
-                              })()}</pre>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                <ToolCallsView
+                  toolCalls={msg.toolCalls}
+                  msgIdx={i}
+                  onToggle={toggleToolExpanded}
+                  isStreaming={streaming && i === messages.length - 1}
+                />
               )}
               {msg.role === 'user' ? (
                 msg.content

@@ -15,11 +15,15 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.user_context import get_user_storage
+from app.tool_installer import is_tool_installed, get_tool_binary_path, get_tool_env
 
 router = APIRouter(tags=["jupyter"])
 logger = logging.getLogger(__name__)
 
-_JUPYTER_PORT = 8889
+def _jupyter_port() -> int:
+    from app.settings_manager import get_jupyter_port
+    return get_jupyter_port()
+
 _jupyter_proc: subprocess.Popen | None = None
 
 
@@ -89,16 +93,21 @@ async def start_jupyter():
     """Start JupyterLab rooted at the base work directory."""
     global _jupyter_proc
 
+    port = _jupyter_port()
     if _jupyter_proc and _jupyter_proc.poll() is None:
-        return {"port": _JUPYTER_PORT, "status": "running"}
+        return {"port": port, "status": "running"}
 
     workdir = _workdir()
 
+    if not is_tool_installed("jupyterlab"):
+        return {"install_required": True, "tool": "jupyterlab", "status": "not_installed"}
+
+    jupyter_bin = get_tool_binary_path("jupyterlab") or "jupyter"
     cmd = [
-        "jupyter", "lab",
+        jupyter_bin, "lab",
         "--no-browser",
         "--ip=0.0.0.0",
-        f"--port={_JUPYTER_PORT}",
+        f"--port={port}",
         "--ServerApp.token=",
         "--ServerApp.password=",
         "--ServerApp.disable_check_xsrf=True",
@@ -109,6 +118,7 @@ async def start_jupyter():
     ]
 
     env = {**os.environ}
+    env.update({k: v for k, v in get_tool_env().items() if k == "PATH"})
 
     try:
         _jupyter_proc = subprocess.Popen(
@@ -117,14 +127,14 @@ async def start_jupyter():
             preexec_fn=os.setsid,
         )
         logger.info("JupyterLab started pid=%d on :%d workdir=%s",
-                     _jupyter_proc.pid, _JUPYTER_PORT, workdir)
+                     _jupyter_proc.pid, port, workdir)
     except Exception:
         logger.exception("Failed to start JupyterLab")
         return {"error": "Failed to start JupyterLab — is jupyterlab installed?",
                 "status": "error"}
 
     await asyncio.sleep(2)
-    return {"port": _JUPYTER_PORT, "status": "running"}
+    return {"port": port, "status": "running"}
 
 
 @router.post("/api/jupyter/stop")
@@ -139,7 +149,7 @@ async def jupyter_status():
     """Check JupyterLab server status."""
     running = _jupyter_proc is not None and _jupyter_proc.poll() is None
     return {
-        "port": _JUPYTER_PORT if running else None,
+        "port": _jupyter_port() if running else None,
         "status": "running" if running else "stopped",
     }
 
@@ -156,7 +166,7 @@ async def set_jupyter_theme(req: ThemeRequest):
         return {"status": "not_running"}
 
     jlab_theme = "JupyterLab Dark" if req.theme == "dark" else "JupyterLab Light"
-    settings_url = f"http://127.0.0.1:{_JUPYTER_PORT}/jupyter/lab/api/settings/@jupyterlab/apputils-extension:themes"
+    settings_url = f"http://127.0.0.1:{_jupyter_port()}/jupyter/lab/api/settings/@jupyterlab/apputils-extension:themes"
 
     import httpx
     try:
@@ -179,9 +189,8 @@ async def set_jupyter_theme(req: ThemeRequest):
 
 def _notebooks_workdir() -> str:
     """Return the notebooks workspace root inside the JupyterLab work dir."""
-    d = os.path.join(_workdir(), "notebooks")
-    os.makedirs(d, exist_ok=True)
-    return d
+    from app.settings_manager import get_notebooks_dir
+    return get_notebooks_dir()
 
 
 def _originals_dir() -> str:
@@ -265,7 +274,7 @@ async def launch_notebook(name: str):
 
     return {
         "status": "running",
-        "port": _JUPYTER_PORT,
+        "port": _jupyter_port(),
         "jupyter_path": jupyter_path,
         "work_dir": f"notebooks/{safe}",
         "has_working_copy": True,
@@ -327,6 +336,7 @@ async def notebook_status(name: str):
 class PublishForkRequest(BaseModel):
     title: str
     description: str = ""
+    description_long: str = ""
     visibility: str = "author"
     project_uuid: str = ""
     tags: list[str] = []
@@ -392,7 +402,7 @@ async def publish_fork(name: str, req: PublishForkRequest):
 
     # Step 1: Create artifact record (include title and tags upfront)
     from app.routes.artifacts import _make_descriptions
-    desc_short, desc_long = _make_descriptions(req.description, req.title, "notebook")
+    desc_short, desc_long = _make_descriptions(req.description, req.title, "notebook", req.description_long)
     create_body = {
         "title": req.title,
         "description_short": desc_short,

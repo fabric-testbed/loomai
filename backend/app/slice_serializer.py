@@ -194,6 +194,33 @@ def serialize_facility_port(fp) -> dict[str, Any]:
     }
 
 
+def serialize_port_mirror(pm) -> dict[str, Any]:
+    """Serialize a FABlib PortMirror service object."""
+    mirror_iface_name = ""
+    receive_iface_name = ""
+    direction = "both"
+    try:
+        mirror_iface_name = str(pm.get_mirror_interface_name()) if hasattr(pm, 'get_mirror_interface_name') else ""
+    except Exception:
+        pass
+    try:
+        recv_iface = pm.get_receive_interface() if hasattr(pm, 'get_receive_interface') else None
+        if recv_iface:
+            receive_iface_name = recv_iface.get_name()
+    except Exception:
+        pass
+    try:
+        direction = str(pm.get_mirror_direction()) if hasattr(pm, 'get_mirror_direction') else "both"
+    except Exception:
+        pass
+    return {
+        "name": _safe(pm.get_name),
+        "mirror_interface_name": mirror_iface_name,
+        "receive_interface_name": receive_iface_name,
+        "mirror_direction": direction,
+    }
+
+
 def slice_to_dict(slice_obj) -> dict[str, Any]:
     """Convert a full FABlib Slice into a plain dict."""
     nodes = [serialize_node(n) for n in (_safe(slice_obj.get_nodes, []) or [])]
@@ -202,6 +229,19 @@ def slice_to_dict(slice_obj) -> dict[str, Any]:
     try:
         for fp in (slice_obj.get_facility_ports() or []):
             facility_ports.append(serialize_facility_port(fp))
+    except Exception:
+        pass
+
+    port_mirrors = []
+    try:
+        # FABlib may expose port mirrors via get_network_services() with type PortMirror,
+        # or via a dedicated method. Try dedicated method first.
+        pms = None
+        if hasattr(slice_obj, 'get_port_mirror_services'):
+            pms = slice_obj.get_port_mirror_services()
+        if pms:
+            for pm in pms:
+                port_mirrors.append(serialize_port_mirror(pm))
     except Exception:
         pass
 
@@ -234,6 +274,7 @@ def slice_to_dict(slice_obj) -> dict[str, Any]:
         "nodes": nodes,
         "networks": networks,
         "facility_ports": facility_ports,
+        "port_mirrors": port_mirrors,
     }
 
 

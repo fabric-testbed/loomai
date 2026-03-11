@@ -1,6 +1,6 @@
 /** API client for the FABRIC Web GUI backend. */
 
-import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult, UpdateInfo, IpHint, L3Config } from '../types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult, UpdateInfo, IpHint, L3Config, FacilityPortInfo, LoomAISettings, ToolConfigStatus } from '../types/fabric';
 
 const BASE = '/api';
 
@@ -142,6 +142,25 @@ export function addFacilityPort(
 export function removeFacilityPort(sliceName: string, fpName: string): Promise<SliceData> {
   return fetchJson(
     `/slices/${encodeURIComponent(sliceName)}/facility-ports/${encodeURIComponent(fpName)}`,
+    { method: 'DELETE' }
+  );
+}
+
+// --- Port Mirrors ---
+
+export function addPortMirror(
+  sliceName: string,
+  data: { name: string; mirror_interface_name: string; receive_interface_name: string; mirror_direction?: string }
+): Promise<SliceData> {
+  return fetchJson(`/slices/${encodeURIComponent(sliceName)}/port-mirrors`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export function removePortMirror(sliceName: string, pmName: string): Promise<SliceData> {
+  return fetchJson(
+    `/slices/${encodeURIComponent(sliceName)}/port-mirrors/${encodeURIComponent(pmName)}`,
     { method: 'DELETE' }
   );
 }
@@ -310,6 +329,21 @@ export function importSlice(model: SliceModel): Promise<SliceData> {
 
 // --- Templates ---
 
+export interface ScriptArg {
+  name: string;
+  label: string;
+  type: 'string' | 'number' | 'boolean';
+  required: boolean;
+  default: string;
+  description?: string;
+  placeholder?: string;
+}
+
+export interface ScriptManifest {
+  description?: string;
+  args: ScriptArg[];
+}
+
 export interface TemplateSummary {
   name: string;
   description: string;
@@ -318,10 +352,11 @@ export interface TemplateSummary {
   node_count: number;
   network_count: number;
   dir_name: string;
-  builtin?: boolean;
   has_template?: boolean;
   has_deploy?: boolean;
   has_run?: boolean;
+  deploy_args?: ScriptArg[];
+  run_args?: ScriptArg[];
 }
 
 export function listTemplates(): Promise<TemplateSummary[]> {
@@ -386,14 +421,14 @@ export function deleteTemplateTool(templateName: string, filename: string): Prom
 export function runWeaveScript(
   templateName: string,
   script: 'deploy.sh' | 'run.sh',
-  sliceName: string | undefined,
+  args: Record<string, string> | undefined,
   onMessage: (data: { type: string; message: string }) => void,
 ): AbortController {
   const controller = new AbortController();
   fetch(`${BASE}/templates/${encodeURIComponent(templateName)}/run-script/${script}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ slice_name: sliceName || '' }),
+    body: JSON.stringify({ args: args || {} }),
     signal: controller.signal,
   }).then(async (res) => {
     if (!res.ok) {
@@ -423,6 +458,55 @@ export function runWeaveScript(
     }
   });
   return controller;
+}
+
+// --- Background Runs ---
+
+export interface BackgroundRun {
+  run_id: string;
+  weave_dir_name: string;
+  weave_name: string;
+  script: string;
+  slice_name: string;
+  status: 'running' | 'done' | 'error' | 'interrupted' | 'unknown';
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+}
+
+export function startBackgroundRun(
+  templateName: string,
+  script: 'deploy.sh' | 'run.sh',
+  args?: Record<string, string>,
+): Promise<{ run_id: string; status: string }> {
+  return fetchJson(`/templates/${encodeURIComponent(templateName)}/start-run/${script}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ args: args || {} }),
+  });
+}
+
+export function listBackgroundRuns(): Promise<BackgroundRun[]> {
+  return fetchJson('/templates/runs');
+}
+
+export function getBackgroundRun(runId: string): Promise<BackgroundRun> {
+  return fetchJson(`/templates/runs/${encodeURIComponent(runId)}`);
+}
+
+export function getBackgroundRunOutput(
+  runId: string,
+  offset: number = 0,
+): Promise<{ output: string; offset: number; status: string }> {
+  return fetchJson(`/templates/runs/${encodeURIComponent(runId)}/output?offset=${offset}`);
+}
+
+export function stopBackgroundRun(runId: string): Promise<{ status: string }> {
+  return fetchJson(`/templates/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST' });
+}
+
+export function deleteBackgroundRun(runId: string): Promise<{ status: string }> {
+  return fetchJson(`/templates/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' });
 }
 
 // --- VM Templates ---
@@ -491,6 +575,10 @@ export function listLinks(): Promise<LinkInfo[]> {
   return fetchJson('/links');
 }
 
+export function listFacilityPorts(): Promise<FacilityPortInfo[]> {
+  return fetchJson('/facility-ports');
+}
+
 export function getSiteDetail(name: string): Promise<SiteDetail> {
   return fetchJson(`/sites/${encodeURIComponent(name)}`);
 }
@@ -536,7 +624,69 @@ export function getAiModels(): Promise<{ models: string[]; default: string; erro
   return fetchJson('/ai/models');
 }
 
-export function startOpenCodeWeb(model?: string): Promise<{ port?: number; status: string; error?: string }> {
+// --- AI Tool Install Status ---
+
+export interface ToolInstallInfo {
+  installed: boolean;
+  display_name: string;
+  size_estimate: string;
+  type: string;
+}
+
+export function getToolInstallStatus(): Promise<Record<string, ToolInstallInfo>> {
+  return fetchJson('/ai/tools/status');
+}
+
+export function installTool(toolId: string): Promise<{ status: string; tool: string; output?: string; error?: string }> {
+  return fetchJson(`/ai/tools/${encodeURIComponent(toolId)}/install`, { method: 'POST' });
+}
+
+export interface InstallStreamEvent {
+  type: 'start' | 'output' | 'done' | 'error';
+  tool?: string;
+  display_name?: string;
+  size_estimate?: string;
+  message?: string;
+  status?: string;
+}
+
+export async function installToolStream(
+  toolId: string,
+  onEvent: (event: InstallStreamEvent) => void,
+): Promise<{ status: string }> {
+  const res = await fetch(`${BASE}/ai/tools/${encodeURIComponent(toolId)}/install-stream`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    throw new Error(`Install stream error ${res.status}`);
+  }
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalStatus = 'error';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const event: InstallStreamEvent = JSON.parse(line.slice(6));
+          onEvent(event);
+          if (event.type === 'done' && event.status) {
+            finalStatus = event.status;
+          }
+        } catch {}
+      }
+    }
+  }
+  return { status: finalStatus };
+}
+
+export function startOpenCodeWeb(model?: string): Promise<{ port?: number; status: string; error?: string; install_required?: boolean; tool?: string }> {
   const params = model ? `?model=${encodeURIComponent(model)}` : '';
   return fetchJson(`/ai/opencode-web/start${params}`, { method: 'POST' });
 }
@@ -549,7 +699,7 @@ export function getOpenCodeWebStatus(): Promise<{ port?: number; status: string 
   return fetchJson('/ai/opencode-web/status');
 }
 
-export function startAiderWeb(model?: string): Promise<{ port?: number; status: string; error?: string }> {
+export function startAiderWeb(model?: string): Promise<{ port?: number; status: string; error?: string; install_required?: boolean; tool?: string }> {
   const params = model ? `?model=${encodeURIComponent(model)}` : '';
   return fetchJson(`/ai/aider-web/start${params}`, { method: 'POST' });
 }
@@ -568,7 +718,7 @@ export function setAiTools(tools: Record<string, boolean>): Promise<Record<strin
 
 // --- JupyterLab ---
 
-export function startJupyter(): Promise<{ port?: number; status: string; error?: string }> {
+export function startJupyter(): Promise<{ port?: number; status: string; error?: string; install_required?: boolean; tool?: string }> {
   return fetchJson('/jupyter/start', { method: 'POST' });
 }
 
@@ -625,6 +775,7 @@ export function getNotebookStatus(name: string): Promise<{
 export function publishNotebookFork(name: string, params: {
   title: string;
   description?: string;
+  description_long?: string;
   visibility?: string;
   project_uuid?: string;
   tags?: string[];
@@ -706,6 +857,7 @@ export function publishArtifact(params: {
   category: string;
   title: string;
   description?: string;
+  description_long?: string;
   tags?: string[];
   visibility?: string;
   project_uuid?: string;
@@ -733,7 +885,6 @@ export interface LocalArtifact {
   description: string;
   source: string;
   artifact_uuid?: string;
-  builtin: boolean;
   created: string;
   tags: string[];
   dir_name: string;
@@ -775,6 +926,7 @@ export function updateLocalArtifactMetadata(dirName: string, params: {
 export function updateRemoteArtifact(uuid: string, params: {
   title?: string;
   description?: string;
+  description_long?: string;
   visibility?: string;
   tags?: string[];
   project_uuid?: string;
@@ -1403,7 +1555,6 @@ export interface ExperimentSummary {
   description: string;
   author: string;
   tags: string[];
-  builtin: boolean;
   dir_name: string;
   script_count: number;
   has_template: boolean;
@@ -1514,4 +1665,68 @@ export function rebuildStorage(): Promise<{
   vm_templates_total: number;
 }> {
   return fetchJson('/config/rebuild-storage', { method: 'POST' });
+}
+
+// --- Unified Settings ---
+
+export function getSettings(): Promise<LoomAISettings> {
+  return fetchJson('/settings');
+}
+
+export function saveSettings(settings: LoomAISettings): Promise<LoomAISettings> {
+  return fetchJson('/settings', {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+  });
+}
+
+export function getToolConfigs(): Promise<ToolConfigStatus[]> {
+  return fetchJson('/config/tool-configs');
+}
+
+export function resetToolConfig(tool: string): Promise<{ status: string }> {
+  return fetchJson(`/config/tool-configs/${encodeURIComponent(tool)}/reset`, {
+    method: 'POST',
+  });
+}
+
+// Claude Code config management
+export interface ClaudeConfigFile {
+  name: string;
+  content: string | null;
+}
+
+export interface ClaudeConfigStatus {
+  files: ClaudeConfigFile[];
+  logged_in: boolean;
+  account_email: string | null;
+}
+
+export function getClaudeConfigFiles(): Promise<ClaudeConfigStatus> {
+  return fetchJson('/config/claude-code/files');
+}
+
+export function updateClaudeConfigFile(filename: string, content: string): Promise<{ status: string }> {
+  return fetchJson(`/config/claude-code/files/${encodeURIComponent(filename)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function triggerClaudeBackup(): Promise<{ status: string }> {
+  return fetchJson('/config/claude-code/backup', { method: 'POST' });
+}
+
+// Folder browsing for AI tools
+export interface FolderBrowseResult {
+  path: string;
+  parent: string | null;
+  folders: string[];
+  error?: string;
+}
+
+export function browseAiFolders(path?: string): Promise<FolderBrowseResult> {
+  const params = path ? `?path=${encodeURIComponent(path)}` : '';
+  return fetchJson(`/ai/browse-folders${params}`);
 }

@@ -488,7 +488,6 @@ FABRIC_STORAGE_DIR/
 │   ├── recipe.json             # → recipe
 │   ├── metadata.json           # Optional metadata
 │   └── tools/                  # Optional scripts
-└── builtin-reference/          # Read-only reference of original built-ins
 ```
 
 ### SSH Terminal Flow

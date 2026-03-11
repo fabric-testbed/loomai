@@ -187,18 +187,6 @@
   white-space: nowrap;
 }
 
-.vmt-badge-builtin {
-  font-size: 9px;
-  font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: rgba(0, 142, 122, 0.15);
-  color: var(--fabric-teal, #008e7a);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  flex-shrink: 0;
-}
-
 .vmt-card-desc {
   font-size: 11px;
   color: var(--fabric-text-muted);

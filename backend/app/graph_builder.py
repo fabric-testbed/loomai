@@ -50,6 +50,10 @@ COMPONENT_ABBREV = {
     "GPU_A40": "A40",
     "FPGA_Xilinx_U280": "FPGA",
     "NVME_P4510": "NVMe",
+    "NIC_ConnectX_7_100": "CX7-100",
+    "NIC_ConnectX_7_400": "CX7-400",
+    "NIC_BlueField_2_ConnectX_6": "BF2",
+    "FPGA_Xilinx_SN1022": "SN1022",
 }
 
 # Component model to category (for CSS class)
@@ -64,6 +68,10 @@ COMPONENT_CATEGORY = {
     "GPU_A40": "gpu",
     "FPGA_Xilinx_U280": "fpga",
     "NVME_P4510": "nvme",
+    "NIC_ConnectX_7_100": "nic",
+    "NIC_ConnectX_7_400": "nic",
+    "NIC_BlueField_2_ConnectX_6": "nic",
+    "FPGA_Xilinx_SN1022": "fpga",
 }
 
 
@@ -226,13 +234,21 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
         layer = net.get("layer", "L2")
         net_id = f"net:{slice_id}:{net_name}"
 
-        # Label FABNetv4 networks as gateways
-        is_fabnetv4 = net_type in ("FABNetv4", "FABNetv6")
-        if is_fabnetv4:
+        # Label FABNet/Ext networks as gateways
+        is_fabnet_private = net_type in ("FABNetv4", "FABNetv6")
+        is_fabnet_public = net_type in ("FABNetv4Ext", "FABNetv6Ext", "IPv4Ext", "IPv6Ext")
+        if is_fabnet_private:
             label = f"{net_name}\nFABNet Gateway"
+            fabnet_net_ids.append(net_id)
+        elif is_fabnet_public:
+            label = f"{net_name}\nPublic Internet"
             fabnet_net_ids.append(net_id)
         else:
             label = f"{net_name}\n({net_type})"
+
+        net_classes = f"network-{layer.lower()}"
+        if is_fabnet_public:
+            net_classes += " network-l3-ext"
 
         nodes.append({
             "data": {
@@ -246,7 +262,7 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
                 "subnet": net.get("subnet", ""),
                 "gateway": net.get("gateway", ""),
             },
-            "classes": f"network-{layer.lower()}",
+            "classes": net_classes,
         })
 
         # Edges from nodes/components to networks via interfaces
@@ -362,5 +378,55 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
                     },
                     "classes": "edge-l2",
                 })
+
+    # Port mirror service nodes
+    for pm in slice_data.get("port_mirrors", []):
+        pm_name = pm["name"]
+        pm_id = f"pm:{slice_id}:{pm_name}"
+        mirror_iface = pm.get("mirror_interface_name", "")
+        receive_iface = pm.get("receive_interface_name", "")
+        direction = pm.get("mirror_direction", "both")
+
+        nodes.append({
+            "data": {
+                "id": pm_id,
+                "parent": f"slice:{slice_id}",
+                "label": f"{pm_name}\n(PortMirror)\n{direction}",
+                "element_type": "port-mirror",
+                "name": pm_name,
+                "mirror_interface_name": mirror_iface,
+                "receive_interface_name": receive_iface,
+                "mirror_direction": direction,
+            },
+            "classes": "port-mirror",
+        })
+
+        # Edge from source interface component to mirror node
+        source_comp_id = iface_to_comp.get(mirror_iface, "")
+        if source_comp_id:
+            edges.append({
+                "data": {
+                    "id": f"edge-pm-src:{slice_id}:{pm_name}",
+                    "source": source_comp_id,
+                    "target": pm_id,
+                    "label": "mirror src",
+                    "element_type": "port-mirror-edge",
+                },
+                "classes": "edge-port-mirror",
+            })
+
+        # Edge from mirror node to receive interface component
+        receive_comp_id = iface_to_comp.get(receive_iface, "")
+        if receive_comp_id:
+            edges.append({
+                "data": {
+                    "id": f"edge-pm-recv:{slice_id}:{pm_name}",
+                    "source": pm_id,
+                    "target": receive_comp_id,
+                    "label": "capture",
+                    "element_type": "port-mirror-edge",
+                },
+                "classes": "edge-port-mirror",
+            })
 
     return {"nodes": nodes, "edges": edges}

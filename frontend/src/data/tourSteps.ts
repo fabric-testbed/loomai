@@ -359,7 +359,7 @@ const artifactsWeaves: TourDef = {
       id: 'aw-local',
       title: 'Local Artifacts',
       content:
-        'The Artifacts view has three tabs: My Artifacts, Published, and Community Marketplace.\n\nThe My Artifacts tab shows artifacts on your machine, organized by category. These include built-in templates that come with LoomAI plus any you\'ve created or downloaded.\n\nEach card shows the artifact name, description, and action buttons.',
+        'The Artifacts view has three tabs: My Artifacts, Published, and Community Marketplace.\n\nThe My Artifacts tab shows artifacts on your machine, organized by category. These include any you\'ve created or downloaded from the marketplace.\n\nEach card shows the artifact name, description, and action buttons.',
       targetSelector: '.libraries-view',
       requiredView: 'libraries',
       tooltipPosition: 'bottom',

@@ -73,31 +73,70 @@ You have comprehensive FABlib tools to query resources and manage slices:
 
 Automate experiment workflows via the backend at `http://localhost:8000`:
 ```bash
-# Deploy a weave artifact (load + submit + boot config)
-curl -X POST http://localhost:8000/api/artifacts/<name>/deploy
+# Load a weave as a draft slice
+curl -X POST http://localhost:8000/api/templates/My_Weave/load \
+  -H "Content-Type: application/json" -d '{"slice_name": "my-exp"}'
 
-# Stream boot config execution (SSE — long-running)
-curl -N http://localhost:8000/api/files/boot-config/<slice_id>/<node>/execute-all-stream
+# Submit the slice
+curl -X POST http://localhost:8000/api/slices/my-exp/submit
+
+# Stream boot config execution on all nodes (SSE)
+curl -N -X POST http://localhost:8000/api/files/boot-config/my-exp/execute-all-stream
+
+# Start a background run (survives browser disconnect)
+curl -X POST http://localhost:8000/api/templates/My_Weave/start-run/run.sh \
+  -H "Content-Type: application/json" \
+  -d '{"args": {"SLICE_NAME": "my-exp"}}'
+# Returns: {"run_id": "run-abc123", "status": "running"}
+
+# Poll run output (pass last offset for incremental reads)
+curl "http://localhost:8000/api/templates/runs/run-abc123/output?offset=0"
+
+# List all background runs (active + completed)
+curl http://localhost:8000/api/templates/runs
+
+# Stop a background run
+curl -X POST http://localhost:8000/api/templates/runs/run-abc123/stop
+
+# Delete a completed run
+curl -X DELETE http://localhost:8000/api/templates/runs/run-abc123
+
+# Execute a recipe on a node
+curl -X POST http://localhost:8000/api/recipes/install_docker/execute/my-exp/node1
 
 # Set up web tunnel to experiment dashboard
-curl -X POST http://localhost:8000/api/slices/<id>/nodes/<node>/tunnels \
-  -H "Content-Type: application/json" -d '{"remote_port":8501,"label":"Streamlit App"}'
-
-# Download results from a node
-curl -X POST http://localhost:8000/api/files/sftp/download \
+curl -X POST http://localhost:8000/api/tunnels \
   -H "Content-Type: application/json" \
-  -d '{"slice_id":"...","node_name":"node1","remote_path":"/tmp/results.csv"}'
+  -d '{"slice_name":"my-exp","node_name":"monitor","remote_port":8501,"label":"Streamlit App"}'
+
+# Execute command on a VM
+curl -X POST http://localhost:8000/api/files/vm/my-exp/node1/execute \
+  -H "Content-Type: application/json" -d '{"command": "python3 experiment.py"}'
 ```
 
-## Persistent Experiments with tmux
+## Long-Running Experiments
 
-For experiments that run for hours or days:
+### Background Runs (Preferred for Weave Scripts)
+Weave `run.sh` scripts are **fully autonomous experiments** — they create their
+own slices, deploy software, run tests, collect results, and optionally clean up.
+They execute as background runs fully detached from the browser. The process
+continues even if you close the tab or disconnect. Output is captured to disk
+and can be polled incrementally.
+
+A `run.sh` may create one slice, multiple slices in sequence, or parallel slices
+over time. The user provides parameters (slice name/prefix, test config) and the
+script handles the full lifecycle. Use `### PROGRESS:` markers for status updates.
+
+Scripts declare their arguments via `run.json` — a manifest in the weave directory.
+The WebUI Run modal dynamically renders input fields from `run.json`. Each arg
+(e.g. `SLICE_NAME`, `DURATION`, `NUM_ITERATIONS`) becomes an environment variable.
+
+### tmux (For Ad-Hoc Commands)
+For interactive or ad-hoc tasks not part of a weave:
 ```bash
 tmux new-session -d -s experiment "python3 run_experiment.py"
-tmux attach -t experiment   # Check progress
-# Detach: Ctrl+B then D
+tmux attach -t experiment   # Check progress (Ctrl+B D to detach)
 ```
-tmux sessions survive WebSocket disconnects.
 
 ## Artifact Workflow
 
@@ -105,9 +144,10 @@ Save experiments as reusable artifacts:
 ```bash
 ARTIFACTS_DIR="/home/fabric/work/my_artifacts"
 ```
-- **Weave** (`slice.json`): Full topology + deployment + run script
+- **Weave** (`slice.json`): Full topology + deployment + run script + arg manifests (`deploy.json`, `run.json`)
 - **Notebook** (`*.ipynb`): Interactive analysis with results
-- **Publish**: `curl -X POST http://localhost:8000/api/artifacts/<name>/publish`
+- **Publish**: `curl -X POST http://localhost:8000/api/artifacts/publish -H "Content-Type: application/json" -d '{"dir_name":"My_Weave","category":"weave","title":"...","description":"..."}'`
+- **Open in JupyterLab**: Start Jupyter, then open `/jupyter/lab/tree/my_artifacts/<name>`
 
 ## WebUI Workflow
 

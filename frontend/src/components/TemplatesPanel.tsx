@@ -270,7 +270,6 @@ export default function TemplatesPanel({
               <div className="template-card" key={t.dir_name}>
                 <div className="template-card-header">
                   <span className="template-card-name">{t.name}</span>
-                  {t.builtin && <span className="template-builtin-badge">built-in</span>}
                 </div>
                 {t.description && (
                   <div className="template-card-desc">{t.description}</div>
@@ -406,7 +405,6 @@ export default function TemplatesPanel({
               <div className="vmt-card" key={t.dir_name}>
                 <div className="vmt-card-header">
                   <span className="vmt-card-name">{t.name}</span>
-                  {t.builtin && <span className="vmt-badge-builtin">built-in</span>}
                 </div>
                 {t.description && (
                   <div className="vmt-card-desc">{t.description}</div>

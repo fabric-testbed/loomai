@@ -206,8 +206,10 @@ curl -s http://localhost:8000/api/templates
 curl -s -X POST http://localhost:8000/api/templates/Hello_FABRIC/load \
   -d '{"slice_name": "my-hello"}'
 
-# Run a template script (deploy.sh or run.sh)
-curl -s -X POST http://localhost:8000/api/templates/my-weave/run-script/deploy.sh
+# Run a template script (deploy.sh or run.sh) with args
+curl -s -X POST http://localhost:8000/api/templates/my-weave/run-script/deploy.sh \
+  -H "Content-Type: application/json" \
+  -d '{"args": {"SLICE_NAME": "my-exp"}}'
 ```
 
 ### Artifact Operations
@@ -218,9 +220,68 @@ curl -s http://localhost:8000/api/artifacts/local
 # List marketplace artifacts
 curl -s http://localhost:8000/api/artifacts/remote
 
-# Publish local artifact
+# Download/Get artifact from marketplace
+curl -s -X POST http://localhost:8000/api/artifacts/download \
+  -H "Content-Type: application/json" \
+  -d '{"uuid": "artifact-uuid", "local_name": "My_Weave"}'
+
+# Publish local artifact (category tags like loomai:weave are auto-added)
 curl -s -X POST http://localhost:8000/api/artifacts/publish \
-  -d '{"dir_name": "My_Weave", "title": "My Weave", "description": "...", "visibility": "author", "tags": ["networking"]}'
+  -H "Content-Type: application/json" \
+  -d '{"dir_name": "My_Weave", "category": "weave", "title": "My Weave", "description": "...", "visibility": "author", "tags": ["networking"]}'
+
+# List user's published artifacts
+curl -s http://localhost:8000/api/artifacts/my
+
+# Update remote artifact metadata
+curl -s -X PUT http://localhost:8000/api/artifacts/remote/<uuid> \
+  -H "Content-Type: application/json" \
+  -d '{"title": "New Title", "description": "...", "tags": ["tag1"]}'
+```
+
+### Node & Network Management (Drafts)
+```bash
+# Add a node to a draft slice
+curl -s -X POST http://localhost:8000/api/slices/my-slice/nodes \
+  -H "Content-Type: application/json" \
+  -d '{"name": "node1", "site": "auto", "cores": 4, "ram": 16, "disk": 50, "image": "default_ubuntu_22"}'
+
+# Update a node
+curl -s -X PUT http://localhost:8000/api/slices/my-slice/nodes/node1 \
+  -H "Content-Type: application/json" -d '{"cores": 8, "ram": 32}'
+
+# Delete a node
+curl -s -X DELETE http://localhost:8000/api/slices/my-slice/nodes/node1
+
+# Add a component to a node
+curl -s -X POST http://localhost:8000/api/slices/my-slice/nodes/node1/components \
+  -H "Content-Type: application/json" -d '{"name": "gpu1", "model": "GPU_RTX6000"}'
+
+# Add a network
+curl -s -X POST http://localhost:8000/api/slices/my-slice/networks \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-net", "type": "L2Bridge", "interfaces": ["node1-nic1-p1", "node2-nic1-p1"]}'
+
+# Delete a network
+curl -s -X DELETE http://localhost:8000/api/slices/my-slice/networks/my-net
+```
+
+### Recipe Execution
+```bash
+# List available recipes
+curl -s http://localhost:8000/api/recipes
+
+# Execute recipe on a node (SSE stream)
+curl -s -X POST http://localhost:8000/api/recipes/install_docker/execute/my-slice/node1
+```
+
+### VM Template Operations
+```bash
+# List VM templates
+curl -s http://localhost:8000/api/vm-templates
+
+# Get VM template details
+curl -s http://localhost:8000/api/vm-templates/Docker_Host
 ```
 
 ### Web App Tunnels
@@ -249,6 +310,10 @@ curl -s -X POST http://localhost:8000/api/jupyter/stop
 curl -s http://localhost:8000/api/jupyter/status
 ```
 
+**Opening artifacts in JupyterLab:** After starting JupyterLab, open an artifact
+folder at `/jupyter/lab/tree/my_artifacts/<artifact_name>`. The WebUI opens this
+URL automatically when you click "JupyterLab" on an artifact.
+
 ### Monitoring
 ```bash
 # Enable monitoring on a slice (installs node_exporter on all VMs)
@@ -274,6 +339,9 @@ curl -s http://localhost:8000/api/images
 
 # List component models
 curl -s http://localhost:8000/api/component-models
+
+# List backbone links between sites
+curl -s http://localhost:8000/api/links
 ```
 
 ### File Operations (Container ↔ VM)
@@ -369,8 +437,7 @@ Complete workflow from template to running experiment:
 9. **Collect results**:
    - `fabric_download_file("my-exp", "node1", "~/results.csv", "results.csv")`
 
-10. **Save as template** for reuse:
-    - `curl -X POST localhost:8000/api/slices/my-exp/save-as-template`
+10. **Save as template** for reuse (via WebUI: click "Save as Weave" in the toolbar)
 
 ## Error Recovery
 
@@ -436,7 +503,7 @@ fabric_slice_ssh("my-slice", "node1", "ping -c 3 8.8.8.8")
 - **Boot configs**: `/home/fabric/work/.boot_info/`
 - **Skills**: `/home/fabric/work/.opencode/skills/`
 - **Agents**: `/home/fabric/work/.opencode/agents/`
-- **Builtin templates**: `/app/slice-libraries/` (read-only, shipped with the image)
+- **Reference templates**: `/app/slice-libraries/` (read-only, shipped with the image)
 - **Python**: Python 3.11 with FABlib, pandas, numpy, matplotlib, requests
 - **Shell**: bash with standard Linux tools, git, ssh
 
@@ -457,7 +524,7 @@ Changes are immediately visible in the WebUI's Libraries/Artifacts views.
 **Writable locations:**
 - `$ARTIFACTS_DIR/<name>/` — Create any artifact type here
 - `/home/fabric/work/my_slices/` — Draft slice topologies and registry
-- `/home/fabric/work/users/*/work/` — Slice working directories, notebooks
+- `/home/fabric/work/notebooks/` — JupyterLab notebook workspace
 - `/home/fabric/work/` — General workspace (scripts, data files, analysis outputs)
 
 ## LoomAI WebUI Features
@@ -524,9 +591,10 @@ When fetching artifacts from the marketplace, these markers determine the catego
 filter. Artifacts without any marker default to "notebook". The markers are stripped
 from display in the UI so users see clean descriptions.
 
-**Important**: Do not use tags for category classification. Tags are optional
-user-chosen labels for discoverability. The `[LoomAI ...]` description marker is
-the authoritative category indicator.
+**Category tags:** On publish, LoomAI auto-adds a category tag: `loomai:weave`,
+`loomai:vm`, or `loomai:recipe`. These help filter artifacts in the marketplace.
+Additional tags are optional user-chosen labels for discoverability. The
+`[LoomAI ...]` description marker is the authoritative category indicator.
 
 ## FABRIC Authentication & Token
 
@@ -704,7 +772,7 @@ in `fabric_create_slice` nodes' `components` or `nic_model` fields.
 
 All user-created artifacts are stored in `$ARTIFACTS_DIR/<DirName>/`. Artifact
 type is determined by the marker file inside each directory:
-- **Weave**: contains `slice.json` (+ optional `metadata.json`, `deploy.sh`, `run.sh`)
+- **Weave**: contains `slice.json` (+ optional `metadata.json`, `deploy.sh`, `deploy.json`, `run.sh`, `run.json`)
 - **VM Template**: contains `vm-template.json`
 - **Recipe**: contains `recipe.json`
 - **Notebook**: contains one or more `.ipynb` files
@@ -723,8 +791,10 @@ Weaves define reusable FABRIC topologies. They are stored in
 <DirName>/
   slice.json             # Required: topology definition
   metadata.json          # Optional: display name, description, counts
-  deploy.sh              # Optional: deployment script (uploaded to ~/tools/ on VMs)
-  run.sh                 # Optional: autonomous execution script (runs without creating a slice)
+  deploy.sh              # Optional: deployment script (runs on container after slice boots)
+  deploy.json            # Optional: declares args for deploy.sh (shown in Deploy modal)
+  run.sh                 # Optional: autonomous experiment script (creates own slices, background)
+  run.json               # Optional: declares args for run.sh (shown in Run modal)
   tools/                 # Optional: additional deployment scripts
     setup-worker.sh      # Additional scripts as needed
 ```
@@ -735,7 +805,6 @@ Weaves define reusable FABRIC topologies. They are stored in
 {
   "name": "My Template",
   "description": "A description of what this template does.",
-  "builtin": false,
   "order": 99,
   "node_count": 3,
   "network_count": 1
@@ -745,10 +814,97 @@ Weaves define reusable FABRIC topologies. They are stored in
 Fields:
 - `name` — Display name in the UI
 - `description` — Shown in the template browser
-- `builtin` — Always `false` for user-created templates
-- `order` — Sort order (lower = first, use 99+ for user templates)
+- `order` — Sort order (lower = first)
 - `node_count` — Number of nodes (informational)
 - `network_count` — Number of networks (informational)
+
+## deploy.json (Script Argument Manifest)
+
+Optional manifest declaring arguments that `deploy.sh` needs. The WebUI Deploy
+modal dynamically renders input fields from this file. Each arg becomes an
+environment variable passed to the script.
+
+```json
+{
+  "description": "Deploy an iPerf3 bandwidth test slice",
+  "args": [
+    {
+      "name": "SLICE_NAME",
+      "label": "Slice Name",
+      "type": "string",
+      "required": true,
+      "default": "",
+      "description": "Name for the new slice",
+      "placeholder": "iperf3-test"
+    }
+  ]
+}
+```
+
+If no `deploy.json` exists, the Deploy modal shows a single "Slice Name" field
+(backward compatible with all existing weaves).
+
+## run.json (Script Argument Manifest)
+
+Optional manifest declaring arguments that `run.sh` needs. The WebUI Run modal
+dynamically renders input fields from this file. Each arg becomes an environment
+variable passed to the script.
+
+**Key principle**: `run.sh` is fully autonomous — it creates its own slices,
+deploys software, runs experiments, collects results, and optionally cleans up.
+The user provides parameters (slice name/prefix, test config) and the script
+handles the entire lifecycle. A script may create one slice, multiple slices
+in sequence, or parallel slices over time.
+
+```json
+{
+  "description": "Create a slice, run iPerf3 tests, and clean up",
+  "args": [
+    {
+      "name": "SLICE_NAME",
+      "label": "Slice Name",
+      "type": "string",
+      "required": true,
+      "default": "",
+      "description": "Name for the slice (created and managed by the script)",
+      "placeholder": "iperf3-test"
+    },
+    {
+      "name": "DURATION",
+      "label": "Test Duration (seconds)",
+      "type": "number",
+      "required": false,
+      "default": "30",
+      "description": "Duration of each test run"
+    },
+    {
+      "name": "PARALLEL",
+      "label": "Parallel Streams",
+      "type": "number",
+      "required": false,
+      "default": "1",
+      "description": "Number of parallel TCP streams"
+    }
+  ]
+}
+```
+
+If no `run.json` exists, the Run modal shows a single "Slice Name" field.
+
+### Arg Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Environment variable name (e.g. `SLICE_NAME`, `DURATION`) |
+| `label` | string | Human-readable label shown in the modal |
+| `type` | string | `"string"`, `"number"`, or `"boolean"` |
+| `required` | boolean | Whether the field must be filled before clicking Run/Deploy |
+| `default` | string | Pre-filled default value |
+| `description` | string | Help text shown below the label |
+| `placeholder` | string | Input placeholder text |
+
+Scripts receive args as environment variables. For backward compatibility,
+`SLICE_NAME` is also passed as the first positional argument (`$1`).
 
 ## slice.json
 
@@ -922,7 +1078,7 @@ Artifact type is determined by the presence of a marker file:
 - **Recipe**: directory contains `recipe.json`
 - **Notebook**: directory contains any `.ipynb` file
 
-Builtin templates ship in `/app/slice-libraries/` and are read-only reference copies.
+Reference templates ship in `/app/slice-libraries/` as read-only examples.
 User artifacts in `$ARTIFACTS_DIR/` are fully writable — create, edit, or delete freely.
 
 ---
@@ -950,7 +1106,6 @@ Create them in `$ARTIFACTS_DIR/<DirName>/`:
   "version": "1.0.0",
   "description": "Ubuntu 22.04 with NVIDIA drivers and CUDA toolkit",
   "image": "default_ubuntu_22",
-  "builtin": false,
   "cores": 16,
   "ram": 32,
   "disk": 100,
@@ -988,7 +1143,6 @@ the node in addition to the image and boot config.
   "name": "Docker Host",
   "version": "1.0.0",
   "description": "Installs Docker Engine",
-  "builtin": false,
   "variants": {
     "default_ubuntu_22": { "label": "Ubuntu 22.04", "dir": "ubuntu_22" },
     "default_ubuntu_24": { "label": "Ubuntu 24.04", "dir": "ubuntu_24" },
@@ -1024,7 +1178,6 @@ VMs. Create them in `$ARTIFACTS_DIR/<DirName>/`:
   "name": "Install Docker",
   "version": "1.0.0",
   "description": "Installs Docker Engine and adds user to docker group.",
-  "builtin": false,
   "image_patterns": {
     "ubuntu": "install_docker_ubuntu.sh",
     "rocky": "install_docker_rocky.sh",
@@ -1082,7 +1235,6 @@ Create them in `$ARTIFACTS_DIR/<DirName>/`:
 {
   "name": "My Analysis Notebook",
   "description": "Analyzes bandwidth measurements across FABRIC sites.",
-  "builtin": false,
   "order": 99
 }
 ```

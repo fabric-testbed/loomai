@@ -8,7 +8,6 @@ Storage: FABRIC_STORAGE_DIR/my_artifacts/{name}/
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -34,16 +33,6 @@ def _experiments_dir() -> str:
     return get_artifacts_dir()
 
 
-def _builtin_experiments_dir() -> str:
-    """Return the path to builtin experiments shipped with the repo."""
-    base = os.path.dirname(__file__)
-    for levels in [("..", ".."), ("..", "..", "..")]:
-        candidate = os.path.realpath(os.path.join(base, *levels, "slice-libraries", "experiments"))
-        if os.path.isdir(candidate):
-            return candidate
-    return os.path.join(base, "..", "..", "slice-libraries", "experiments")
-
-
 def _sanitize_name(name: str) -> str:
     safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", name.strip())
     if not safe:
@@ -58,38 +47,9 @@ def _validate_path(base: str, name: str) -> str:
     return path
 
 
-# ---------------------------------------------------------------------------
-# Builtin experiment helpers
-# ---------------------------------------------------------------------------
-
-def _builtin_hash(builtin_dir: str) -> str:
-    """Compute a hash of a builtin experiment directory for change detection."""
-    hashable: dict[str, Any] = {}
-    for fname in ["experiment.json", "slice.json", "README.md"]:
-        fpath = os.path.join(builtin_dir, fname)
-        if os.path.isfile(fpath):
-            with open(fpath) as f:
-                hashable[fname] = f.read()
-    scripts_dir = os.path.join(builtin_dir, "scripts")
-    if os.path.isdir(scripts_dir):
-        scripts = []
-        for fn in sorted(os.listdir(scripts_dir)):
-            fp = os.path.join(scripts_dir, fn)
-            if os.path.isfile(fp):
-                with open(fp) as f:
-                    scripts.append({"filename": fn, "content": f.read()})
-        hashable["_scripts"] = scripts
-    return hashlib.sha256(json.dumps(hashable, sort_keys=True).encode()).hexdigest()[:16]
-
-
-def _seed_if_needed() -> None:
-    """Ensure the experiments storage directory exists.
-
-    Built-in experiment seeding is disabled — users create or download
-    artifacts via the marketplace.
-    """
-    edir = _experiments_dir()
-    os.makedirs(edir, exist_ok=True)
+def _ensure_dir() -> None:
+    """Ensure the experiments storage directory exists."""
+    os.makedirs(_experiments_dir(), exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +85,7 @@ class ReadmeBody(BaseModel):
 @router.get("")
 def list_experiments() -> list[dict[str, Any]]:
     """List runnable weaves (weave artifacts that also have run.sh)."""
-    _seed_if_needed()
+    _ensure_dir()
     edir = _experiments_dir()
     if not os.path.isdir(edir):
         return []
@@ -169,7 +129,7 @@ def list_experiments() -> list[dict[str, Any]]:
 @router.post("")
 def create_experiment(req: CreateExperimentRequest) -> dict[str, Any]:
     """Create a new experiment."""
-    _seed_if_needed()
+    _ensure_dir()
     safe_name = _sanitize_name(req.name)
     edir = _experiments_dir()
     os.makedirs(edir, exist_ok=True)
@@ -186,7 +146,6 @@ def create_experiment(req: CreateExperimentRequest) -> dict[str, Any]:
         "description": req.description,
         "author": req.author,
         "tags": req.tags,
-        "builtin": False,
         "created": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -216,7 +175,7 @@ def create_experiment(req: CreateExperimentRequest) -> dict[str, Any]:
 @router.get("/{name}")
 def get_experiment(name: str) -> dict[str, Any]:
     """Get full experiment detail."""
-    _seed_if_needed()
+    _ensure_dir()
     safe = _sanitize_name(name)
     edir = _experiments_dir()
     exp_dir = _validate_path(edir, safe)
@@ -380,7 +339,7 @@ def delete_script(name: str, filename: str) -> dict[str, str]:
 @router.post("/{name}/load")
 def load_experiment(name: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     """Load an experiment's template as a new draft slice."""
-    _seed_if_needed()
+    _ensure_dir()
     safe = _sanitize_name(name)
     edir = _experiments_dir()
     exp_dir = _validate_path(edir, safe)

@@ -176,16 +176,37 @@
   white-space: nowrap;
 }
 
-.template-builtin-badge {
+
+/* Capability badges */
+.template-capability-badge {
   font-size: 9px;
-  font-weight: 700;
+  font-weight: 600;
   padding: 1px 5px;
   border-radius: 3px;
-  background: rgba(0, 142, 122, 0.15);
-  color: var(--fabric-teal, #008e7a);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
   flex-shrink: 0;
+}
+.template-badge-loadable {
+  background: rgba(87, 152, 188, 0.12);
+  color: var(--fabric-primary, #5798bc);
+}
+.template-badge-deployable {
+  background: rgba(0, 142, 122, 0.12);
+  color: var(--fabric-teal, #008e7a);
+}
+.template-badge-runnable {
+  background: rgba(255, 133, 66, 0.12);
+  color: var(--fabric-orange, #ff8542);
+}
+.template-badge-running {
+  background: rgba(0, 142, 122, 0.18);
+  color: var(--fabric-teal, #008e7a);
+  animation: template-running-pulse 2s ease-in-out infinite;
+}
+@keyframes template-running-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 .template-card-desc {
@@ -374,4 +395,162 @@
 .templates-tab.active {
   color: var(--fabric-primary);
   border-bottom-color: var(--fabric-primary);
+}
+
+/* ─── Overflow menu (side panel cards) ─── */
+.tp-overflow-wrap {
+  position: relative;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.tp-overflow-btn {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  font-size: 16px;
+  cursor: pointer;
+  color: var(--fabric-text-muted);
+  line-height: 1;
+  border-radius: 3px;
+}
+.tp-overflow-btn:hover {
+  background: var(--fabric-bg-tint);
+  color: var(--fabric-text);
+}
+.tp-overflow-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 140px;
+  z-index: 100;
+  padding: 4px 0;
+}
+.tp-overflow-menu.tp-overflow-above {
+  top: auto;
+  bottom: 100%;
+  margin-top: 0;
+  margin-bottom: 4px;
+}
+.tp-overflow-item {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: var(--fabric-text);
+  white-space: nowrap;
+}
+.tp-overflow-item:hover {
+  background: var(--fabric-bg-tint);
+}
+.tp-overflow-item.tp-overflow-danger {
+  color: var(--fabric-coral, #e25241);
+}
+.tp-overflow-item.tp-overflow-danger:hover {
+  background: rgba(226, 82, 65, 0.08);
+}
+.tp-overflow-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.tp-overflow-sep {
+  height: 1px;
+  background: var(--fabric-border);
+  margin: 4px 0;
+}
+
+/* ─── Transport controls on weave cards ─── */
+.tp-transport-group {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+}
+.tp-transport-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  box-shadow: none;
+  transition: opacity 0.15s, background 0.15s;
+}
+.tp-transport-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.tp-transport-btn:not(:disabled):hover {
+  filter: brightness(1.1);
+}
+
+/* ▶ Play — always primary blue */
+.tp-transport-play {
+  border-color: var(--fabric-primary, #5798bc);
+  color: var(--fabric-primary, #5798bc);
+}
+.tp-transport-play:not(:disabled):hover {
+  background: var(--fabric-primary, #5798bc);
+  color: white;
+}
+
+/* ■ Stop */
+.tp-transport-stop {
+  border-color: var(--fabric-coral, #e25241);
+  color: var(--fabric-coral, #e25241);
+}
+.tp-transport-stop:not(:disabled):hover {
+  background: var(--fabric-coral, #e25241);
+  color: white;
+}
+
+/* ↺ Reset */
+.tp-transport-reset {
+  border-color: var(--fabric-text-muted, #999);
+  color: var(--fabric-text-muted, #999);
+}
+.tp-transport-reset:not(:disabled):hover {
+  background: var(--fabric-text-muted, #999);
+  color: white;
+}
+
+/* Status badges in card header */
+.tp-status-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.tp-status-running {
+  background: rgba(0, 142, 122, 0.18);
+  color: var(--fabric-teal, #008e7a);
+  animation: template-running-pulse 2s ease-in-out infinite;
+}
+.tp-status-done {
+  background: rgba(87, 152, 188, 0.12);
+  color: var(--fabric-primary, #5798bc);
+}
+.tp-status-error {
+  background: rgba(226, 82, 65, 0.12);
+  color: var(--fabric-coral, #e25241);
 }
