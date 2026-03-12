@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { getAiModels, getChatAgents, streamChat, stopChatStream, getConfig } from '../api/client';
 import type { ChatAgent } from '../api/client';
@@ -273,7 +273,7 @@ interface AIChatPanelProps {
   showPopout?: boolean;
 }
 
-export default function AIChatPanel({ onCollapse, dragHandleProps, panelIcon, sliceContext, onSliceChanged, fullScreen, persistId, showPopout }: AIChatPanelProps) {
+export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, panelIcon, sliceContext, onSliceChanged, fullScreen, persistId, showPopout }: AIChatPanelProps) {
   // Force-update trigger for store-driven re-renders
   const [, bump] = useState(0);
   const store = persistId ? getStore(persistId) : null;
@@ -593,4 +593,4 @@ export default function AIChatPanel({ onCollapse, dragHandleProps, panelIcon, sl
       </div>
     </div>
   );
-}
+});

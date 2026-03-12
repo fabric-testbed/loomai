@@ -54,6 +54,19 @@ def _ensure_dir() -> None:
     os.makedirs(_recipes_dir(), exist_ok=True)
 
 
+# ---------------------------------------------------------------------------
+# TTL-based listing cache
+# ---------------------------------------------------------------------------
+
+_recipes_cache: tuple[float, list] | None = None
+_RECIPES_CACHE_TTL = 10  # seconds
+
+
+def _invalidate_recipes_cache():
+    global _recipes_cache
+    _recipes_cache = None
+
+
 def _match_image(image: str, patterns: dict[str, str]) -> str | None:
     """Match a VM image string against recipe image_patterns.
 
@@ -76,6 +89,11 @@ def _match_image(image: str, patterns: dict[str, str]) -> str | None:
 @router.get("")
 def list_recipes() -> list[dict[str, Any]]:
     """List recipe artifacts (dirs containing recipe.json)."""
+    global _recipes_cache
+    if _recipes_cache is not None:
+        ts, data = _recipes_cache
+        if time.monotonic() - ts < _RECIPES_CACHE_TTL:
+            return data
     _ensure_dir()
 
     results: list[dict[str, Any]] = []
@@ -108,7 +126,9 @@ def list_recipes() -> list[dict[str, Any]]:
         except Exception:
             pass
 
-    return sorted(results, key=lambda r: r.get("name", ""))
+    results = sorted(results, key=lambda r: r.get("name", ""))
+    _recipes_cache = (time.monotonic(), results)
+    return results
 
 
 def _find_recipe_dir(name: str) -> str:
@@ -136,6 +156,7 @@ def get_recipe(name: str) -> dict[str, Any]:
 @router.patch("/{name}")
 def update_recipe(name: str, body: dict[str, Any]) -> dict[str, Any]:
     """Update mutable recipe fields (currently only 'starred')."""
+    _invalidate_recipes_cache()
     _ensure_dir()
     safe = _sanitize_name(name)
     recipe_dir = _find_recipe_dir(name)

@@ -1,5 +1,5 @@
 'use client';
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import type { SliceSummary } from '../types/fabric';
 import Tooltip from './Tooltip';
 import '../styles/toolbar.css';
@@ -33,7 +33,7 @@ interface ToolbarProps {
   onToggleAutoRefresh?: () => void;
 }
 
-export default function Toolbar(props: ToolbarProps) {
+export default React.memo(function Toolbar(props: ToolbarProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const [creating, setCreating] = useState(false);
@@ -397,4 +397,4 @@ export default function Toolbar(props: ToolbarProps) {
 
     </div>
   );
-}
+});

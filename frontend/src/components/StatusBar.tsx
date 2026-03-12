@@ -14,7 +14,7 @@ interface StatusBarProps {
   bootRunning?: boolean;
 }
 
-export default function StatusBar({
+export default React.memo(function StatusBar({
   statusMessage,
   loading,
   sliceState,
@@ -56,4 +56,4 @@ export default function StatusBar({
       </div>
     </div>
   );
-}
+});

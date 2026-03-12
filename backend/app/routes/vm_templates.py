@@ -48,6 +48,19 @@ def _ensure_dir() -> None:
 
 
 # ---------------------------------------------------------------------------
+# TTL-based listing cache
+# ---------------------------------------------------------------------------
+
+_vm_templates_cache: tuple[float, list] | None = None
+_VM_TEMPLATES_CACHE_TTL = 10  # seconds
+
+
+def _invalidate_vm_templates_cache():
+    global _vm_templates_cache
+    _vm_templates_cache = None
+
+
+# ---------------------------------------------------------------------------
 # Request models
 # ---------------------------------------------------------------------------
 
@@ -114,6 +127,12 @@ def _validate_tool_filename(filename: str) -> str:
 @router.get("")
 def list_vm_templates() -> list[dict[str, Any]]:
     """List VM templates (dirs containing vm-template.json)."""
+    global _vm_templates_cache
+    import time
+    if _vm_templates_cache is not None:
+        ts, data = _vm_templates_cache
+        if time.monotonic() - ts < _VM_TEMPLATES_CACHE_TTL:
+            return data
     _ensure_dir()
     tdir = _vm_templates_dir()
     if not os.path.isdir(tdir):
@@ -159,6 +178,7 @@ def list_vm_templates() -> list[dict[str, Any]]:
             results.append(summary)
         except Exception:
             pass
+    _vm_templates_cache = (time.monotonic(), results)
     return results
 
 
@@ -253,6 +273,7 @@ def get_vm_template_variant(name: str, image: str) -> dict[str, Any]:
 @router.post("/resync")
 def resync_vm_templates() -> list[dict[str, Any]]:
     """Clean corrupted entries and return updated list."""
+    _invalidate_vm_templates_cache()
     tdir = _vm_templates_dir()
     os.makedirs(tdir, exist_ok=True)
 
@@ -272,6 +293,7 @@ def resync_vm_templates() -> list[dict[str, Any]]:
 @router.post("")
 def create_vm_template(req: CreateVMTemplateRequest) -> dict[str, Any]:
     """Create a new VM template."""
+    _invalidate_vm_templates_cache()
     _ensure_dir()
     safe = _sanitize_name(req.name)
     tdir = _vm_templates_dir()
@@ -315,6 +337,7 @@ def create_vm_template(req: CreateVMTemplateRequest) -> dict[str, Any]:
 @router.put("/{name}")
 def update_vm_template(name: str, req: UpdateVMTemplateRequest) -> dict[str, Any]:
     """Update a VM template."""
+    _invalidate_vm_templates_cache()
     safe = _sanitize_name(name)
     tdir = _vm_templates_dir()
     tmpl_dir = _validate_path(tdir, safe)
@@ -360,6 +383,7 @@ def update_vm_template(name: str, req: UpdateVMTemplateRequest) -> dict[str, Any
 @router.delete("/{name}")
 def delete_vm_template(name: str) -> dict[str, str]:
     """Delete a VM template."""
+    _invalidate_vm_templates_cache()
     safe = _sanitize_name(name)
     tdir = _vm_templates_dir()
     tmpl_dir = _validate_path(tdir, safe)

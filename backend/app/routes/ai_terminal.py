@@ -201,6 +201,7 @@ _OPENCODE_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "opencode")
 _AIDER_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "aider")
 _CLAUDE_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "claude-code")
 _CRUSH_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "crush")
+_DEEPAGENTS_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "deepagents")
 
 # Skills to skip (conflict with OpenCode builtins)
 _SKIP_SKILLS = {"compact", "help"}
@@ -470,6 +471,28 @@ def _setup_crush_workspace(cwd: str, api_key: str) -> None:
     logger.info("Wrote .crush.json for Crush with %d providers", len(providers))
 
 
+def _setup_deepagents_workspace(cwd: str) -> None:
+    """Seed Deep Agents configuration and FABRIC context into the workspace.
+
+    Creates:
+    - AGENTS.md (shared FABRIC context)
+    - .deepagents/AGENTS.md (Deep Agents project instructions)
+    """
+    # Shared FABRIC context
+    agents_md = os.path.join(cwd, "AGENTS.md")
+    if os.path.isfile(_FABRIC_AI_MD_PATH) and not os.path.isfile(agents_md):
+        shutil.copy2(_FABRIC_AI_MD_PATH, agents_md)
+        logger.info("Wrote AGENTS.md for Deep Agents from FABRIC_AI.md")
+
+    # Deep Agents project instructions
+    da_dir = os.path.join(cwd, ".deepagents")
+    os.makedirs(da_dir, exist_ok=True)
+    src_agents = os.path.join(_DEEPAGENTS_DEFAULTS_DIR, "AGENTS.md")
+    if os.path.isfile(src_agents):
+        shutil.copy2(src_agents, os.path.join(da_dir, "AGENTS.md"))
+        logger.info("Wrote .deepagents/AGENTS.md for Deep Agents")
+
+
 def _start_model_proxy(
     api_key: str, default_model: str, allowed_models: list[str], env: dict,
 ) -> subprocess.Popen | None:
@@ -542,6 +565,14 @@ TOOL_CONFIGS = {
         "env": lambda key: {"NODE_OPTIONS": "--dns-result-order=ipv4first"},
         "cmd": ["claude"],
         "needs_key": False,
+    },
+    "deepagents": {
+        "env": lambda key: {
+            "OPENAI_API_KEY": key,
+            "OPENAI_BASE_URL": f"{_ai_server_url()}/v1",
+        },
+        "cmd": ["deepagents"],
+        "needs_key": True,
     },
 }
 
@@ -936,6 +967,9 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = "", cwd: 
         elif tool == "crush":
             _ensure_git_ready(cwd)
             _setup_crush_workspace(cwd, api_key)
+        elif tool == "deepagents":
+            _ensure_git_ready(cwd)
+            _setup_deepagents_workspace(cwd)
 
         # Build opencode.json dynamically from available models on the AI server
         if tool == "opencode":
@@ -1292,7 +1326,13 @@ def seed_ai_tool_defaults() -> None:
         except Exception as e:
             logger.warning("Could not seed Crush config: %s", e)
 
-    # --- Git setup (needed by Aider, OpenCode, Crush) ---
+    # --- Deep Agents: .deepagents/AGENTS.md ---
+    try:
+        _setup_deepagents_workspace(cwd)
+    except Exception as e:
+        logger.warning("Could not seed Deep Agents config: %s", e)
+
+    # --- Git setup (needed by Aider, OpenCode, Crush, Deep Agents) ---
     _ensure_git_ready(cwd)
 
     logger.info("AI tool defaults seeded to home=%s, workspace=%s", home, cwd)

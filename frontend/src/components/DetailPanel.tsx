@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { SliceData, SliceNode, SliceNetwork, SliceErrorMessage, SiteDetail, SiteMetrics, LinkMetrics } from '../types/fabric';
 import { getSiteDetail } from '../api/client';
 import '../styles/editor.css';
@@ -24,7 +24,7 @@ interface DetailPanelProps {
   panelIcon?: string;
 }
 
-export default function DetailPanel({
+export default React.memo(function DetailPanel({
   sliceData, selectedElement, onCollapse,
   siteMetricsCache, linkMetricsCache,
   metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading,
@@ -101,7 +101,7 @@ export default function DetailPanel({
       </div>
     </div>
   );
-}
+});
 
 function PropTable({ rows }: { rows: [string, string | number | undefined][] }) {
   return (

@@ -149,6 +149,7 @@ def get_default_settings() -> dict:
                 "opencode": True,
                 "crush": True,
                 "claude": True,
+                "deepagents": True,
             },
         },
         "services": {

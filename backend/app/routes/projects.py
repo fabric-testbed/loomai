@@ -6,8 +6,10 @@ import json
 import logging
 import os
 
-import requests
+import httpx
 from fastapi import APIRouter, HTTPException, Query
+
+from app.http_pool import fabric_client
 
 from app.slice_registry import get_all_entries
 
@@ -36,21 +38,21 @@ def _read_id_token() -> str | None:
 
 
 @router.get("/api/people/search")
-def search_people(q: str = Query(..., min_length=3)):
+async def search_people(q: str = Query(..., min_length=3)):
     """Search FABRIC users by name, email, or UUID."""
     token = _read_id_token()
     if not token:
         raise HTTPException(status_code=400, detail="No token available")
 
     try:
-        resp = requests.get(
+        resp = await fabric_client.get(
             f"{UIS_BASE}/people?search={q}&limit=10",
             headers={"Authorization": f"Bearer {token}"},
             timeout=15,
         )
         resp.raise_for_status()
         data = resp.json()
-    except requests.RequestException as exc:
+    except httpx.HTTPError as exc:
         logger.warning("UIS people search failed: %s", exc)
         raise HTTPException(status_code=502, detail=f"UIS API error: {exc}")
 
@@ -67,20 +69,20 @@ def search_people(q: str = Query(..., min_length=3)):
 
 
 @router.get("/api/projects/{uuid}/details")
-def get_project_details(uuid: str):
+async def get_project_details(uuid: str):
     token = _read_id_token()
     if not token:
         raise HTTPException(status_code=400, detail="No token available")
 
     try:
-        resp = requests.get(
+        resp = await fabric_client.get(
             f"{UIS_BASE}/projects/{uuid}",
             headers={"Authorization": f"Bearer {token}"},
             timeout=15,
         )
         resp.raise_for_status()
         data = resp.json()
-    except requests.RequestException as exc:
+    except httpx.HTTPError as exc:
         logger.warning("UIS project query failed: %s", exc)
         raise HTTPException(status_code=502, detail=f"UIS API error: {exc}")
 

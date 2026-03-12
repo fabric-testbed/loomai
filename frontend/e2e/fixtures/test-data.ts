@@ -58,12 +58,14 @@ export const templatesList = [
   {
     name: 'Hello FABRIC', description: 'Single node', category: 'weave',
     dir_name: 'Hello_FABRIC', builtin: true, node_count: 1,
-    network_count: 0, has_run_script: false, starred: false,
+    network_count: 0, has_run_script: false, has_deploy: false, has_run: false,
+    starred: false,
   },
   {
     name: 'L2 Bridge', description: 'Two nodes with L2 network', category: 'weave',
     dir_name: 'L2_Bridge', builtin: true, node_count: 2,
-    network_count: 1, has_run_script: false, starred: false,
+    network_count: 1, has_run_script: false, has_deploy: false, has_run: false,
+    starred: false,
   },
 ];
 

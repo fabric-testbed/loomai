@@ -48,6 +48,19 @@ def _ensure_dir() -> None:
 
 
 # ---------------------------------------------------------------------------
+# TTL-based listing cache
+# ---------------------------------------------------------------------------
+
+_templates_cache: tuple[float, list] | None = None
+_TEMPLATES_CACHE_TTL = 10  # seconds
+
+
+def _invalidate_templates_cache():
+    global _templates_cache
+    _templates_cache = None
+
+
+# ---------------------------------------------------------------------------
 # Boot info helpers (for deploy.sh discovery at boot config time)
 # ---------------------------------------------------------------------------
 
@@ -110,6 +123,12 @@ def _list_tools(tmpl_dir: str) -> list[dict[str, str]]:
 @router.get("")
 def list_templates() -> list[dict[str, Any]]:
     """List weaves (dirs containing slice.json, deploy.sh, and/or run.sh)."""
+    global _templates_cache
+    import time
+    if _templates_cache is not None:
+        ts, data = _templates_cache
+        if time.monotonic() - ts < _TEMPLATES_CACHE_TTL:
+            return data
     _ensure_dir()
     tdir = _templates_dir()
     if not os.path.isdir(tdir):
@@ -176,12 +195,14 @@ def list_templates() -> list[dict[str, Any]]:
             except Exception:
                 pass
     results.sort(key=lambda m: m.get("name", "").lower())
+    _templates_cache = (time.monotonic(), results)
     return results
 
 
 @router.post("")
 def save_template(req: SaveTemplateRequest) -> dict[str, Any]:
     """Save current slice as a reusable template."""
+    _invalidate_templates_cache()
     _ensure_dir()
     safe_name = _sanitize_name(req.name)
     tdir = _templates_dir()
@@ -226,6 +247,7 @@ class CreateArtifactRequest(BaseModel):
 @router.post("/create-blank")
 def create_blank_artifact(req: CreateArtifactRequest) -> dict[str, Any]:
     """Create a new blank artifact directory with metadata."""
+    _invalidate_templates_cache()
     _ensure_dir()
     safe_name = _sanitize_name(req.name)
     tdir = _templates_dir()
@@ -259,6 +281,7 @@ def create_blank_artifact(req: CreateArtifactRequest) -> dict[str, Any]:
 @router.post("/resync")
 def resync_templates() -> list[dict[str, Any]]:
     """Clean corrupted entries and return updated list."""
+    _invalidate_templates_cache()
     tdir = _templates_dir()
     os.makedirs(tdir, exist_ok=True)
 
@@ -446,6 +469,7 @@ def load_template(name: str, req: LoadTemplateRequest) -> dict[str, Any]:
 @router.delete("/{name}")
 def delete_template(name: str) -> dict[str, str]:
     """Delete a template."""
+    _invalidate_templates_cache()
     safe_name = _sanitize_name(name)
     tdir = _templates_dir()
     tmpl_dir = _validate_path(tdir, safe_name)
@@ -460,6 +484,7 @@ def delete_template(name: str) -> dict[str, str]:
 @router.put("/{name}")
 def update_template(name: str, req: UpdateTemplateRequest) -> dict[str, Any]:
     """Update template metadata (description)."""
+    _invalidate_templates_cache()
     safe_name = _sanitize_name(name)
     tdir = _templates_dir()
     tmpl_dir = _validate_path(tdir, safe_name)

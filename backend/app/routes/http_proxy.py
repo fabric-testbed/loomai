@@ -43,6 +43,7 @@ def _cleanup_stale():
                     if c:
                         c.close()
                 except Exception:
+                    logger.debug("Error closing stale %s connection for %s", key, k, exc_info=True)
                     pass
 
 
@@ -71,6 +72,7 @@ def _get_vm_ssh(slice_name: str, node_name: str) -> tuple[paramiko.SSHClient, pa
                     try:
                         cached[c_key].close()
                     except Exception:
+                        logger.debug("Error closing cached %s connection for %s", c_key, key, exc_info=True)
                         pass
                 _conn_cache.pop(key, None)
 
@@ -82,6 +84,7 @@ def _get_vm_ssh(slice_name: str, node_name: str) -> tuple[paramiko.SSHClient, pa
         try:
             slice_obj = fablib.get_slice(slice_id=uuid)
         except Exception:
+            logger.debug("Slice lookup by UUID %s failed, falling back to name %r", uuid, slice_name, exc_info=True)
             slice_obj = fablib.get_slice(slice_name)
     else:
         slice_obj = fablib.get_slice(slice_name)
@@ -94,6 +97,7 @@ def _get_vm_ssh(slice_name: str, node_name: str) -> tuple[paramiko.SSHClient, pa
     try:
         username = str(node_obj.get_username()) or "ubuntu"
     except Exception:
+        logger.debug("Failed to get username for node %s, defaulting to 'ubuntu'", node_name, exc_info=True)
         pass
 
     ssh_config = _get_ssh_config(slice_name=slice_name)
@@ -198,6 +202,7 @@ def _proxy_request(
         try:
             channel.close()
         except Exception:
+            logger.debug("Error closing HTTP tunnel channel", exc_info=True)
             pass
 
 

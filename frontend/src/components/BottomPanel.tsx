@@ -1,10 +1,10 @@
 'use client';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import '@xterm/xterm/css/xterm.css';
 import '../styles/bottom-panel.css';
 import type { ValidationIssue, SliceErrorMessage } from '../types/fabric';
-import LogView from './LogView';
-import TerminalHost from './TerminalHost';
+
+const LogView = React.lazy(() => import('./LogView'));
+const TerminalHost = React.lazy(() => import('./TerminalHost'));
 import { destroyTerminalSession } from '../utils/terminalStore';
 import {
   type SplitDirection, type SplitNode, type LeafNode, type LayoutNode,
@@ -82,7 +82,7 @@ interface BottomPanelProps {
 // Fixed tab IDs (non-terminal)
 const FIXED_TABS = ['slice-errors', 'errors', 'validation', 'log', 'recipes', 'local-terminal'] as const;
 
-export default function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors, onClearBootConfigErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, leftOffset = 0, rightOffset = 0, expanded, onExpandedChange, panelHeight, onPanelHeightChange, recipeConsole, recipeRunning, onClearRecipeConsole, sliceBootLogs, sliceBootRunning, onClearSliceBootLog, openBootLogSlices, onOpenBootLog, onCloseBootLog, panelId = 'bottom', excludeTabIds = [], onReceiveExternalTab }: BottomPanelProps) {
+export default React.memo(function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors, onClearBootConfigErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, leftOffset = 0, rightOffset = 0, expanded, onExpandedChange, panelHeight, onPanelHeightChange, recipeConsole, recipeRunning, onClearRecipeConsole, sliceBootLogs, sliceBootRunning, onClearSliceBootLog, openBootLogSlices, onOpenBootLog, onCloseBootLog, panelId = 'bottom', excludeTabIds = [], onReceiveExternalTab }: BottomPanelProps) {
   const setExpanded = onExpandedChange;
   const setPanelHeight = onPanelHeightChange;
 
@@ -99,8 +99,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
   const [extraLocalTerminals, setExtraLocalTerminals] = useState<string[]>([]);
   const localTermCounter = useRef(1);
 
-  // --- Terminal group dropdown (SSH tabs grouped by slice) ---
-  const [openTermGroup, setOpenTermGroup] = useState<string | null>(null);
+  // (terminal group dropdown removed — each terminal gets its own tab)
 
   // --- Tab metadata ---
   const termCount = terminals.length;
@@ -663,7 +662,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       case 'log':
         return (
           <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-            <LogView />
+            <React.Suspense fallback={null}><LogView /></React.Suspense>
           </div>
         );
       case 'recipes':
@@ -680,14 +679,14 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       case 'local-terminal':
         return (
           <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-            {containerTermActive && <TerminalHost sessionId="local-terminal" type="local" />}
+            {containerTermActive && <React.Suspense fallback={null}><TerminalHost sessionId="local-terminal" type="local" /></React.Suspense>}
           </div>
         );
       default: {
         if (tabId.startsWith('local-term-')) {
           return (
             <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-              <TerminalHost sessionId={tabId} type="local" />
+              <React.Suspense fallback={null}><TerminalHost sessionId={tabId} type="local" /></React.Suspense>
             </div>
           );
         }
@@ -714,7 +713,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
         if (term) {
           return (
             <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-              <TerminalHost sessionId={tabId} type="ssh" sliceName={term.sliceName} nodeName={term.nodeName} managementIp={term.managementIp} />
+              <React.Suspense fallback={null}><TerminalHost sessionId={tabId} type="ssh" sliceName={term.sliceName} nodeName={term.nodeName} managementIp={term.managementIp} /></React.Suspense>
             </div>
           );
         }
@@ -761,18 +760,6 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
   }
 
   function renderLeafPane(leaf: LeafNode): React.ReactNode {
-    // Group SSH terminal tabs by slice name for compact rendering
-    const termGroupMap = new Map<string, string[]>();
-    for (const tabId of leaf.tabIds) {
-      const term = terminals.find(t => t.id === tabId);
-      if (term) {
-        const group = termGroupMap.get(term.sliceName) || [];
-        group.push(tabId);
-        termGroupMap.set(term.sliceName, group);
-      }
-    }
-    const renderedGroups = new Set<string>();
-
     return (
       <div
         key={leaf.id}
@@ -788,77 +775,25 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
         {/* Tab bar */}
         <div className="bottom-panel-tabs">
           {leaf.tabIds.map((tabId) => {
-            // Check if this is an SSH terminal tab that should be grouped
+            // SSH terminal tab — render as individual tab
             const term = terminals.find(t => t.id === tabId);
             if (term) {
-              const groupTabIds = termGroupMap.get(term.sliceName)!;
-              // Single terminal for this slice — render normally (no group)
-              if (groupTabIds.length === 1) {
-                return (
-                  <button
-                    key={tabId}
-                    className={`bp-tab bp-tab-container ${leaf.activeTabId === tabId ? 'active' : ''} ${dragState?.tabId === tabId ? 'dragging' : ''}`}
-                    draggable
-                    onDragStart={(e) => handleTabDragStart(e, tabId, leaf.id)}
-                    onDragEnd={handleTabDragEnd}
-                    onClick={() => activateTab(tabId)}
-                    title={getTabTitle(tabId)}
-                  >
-                    {getTabLabel(tabId)}
-                    <span
-                      className="bp-tab-close"
-                      onClick={(e) => { e.stopPropagation(); destroyTerminalSession(tabId); onCloseTerminal(tabId); }}
-                    >✕</span>
-                  </button>
-                );
-              }
-              // Multiple terminals — render group (only once per slice)
-              if (renderedGroups.has(term.sliceName)) return null;
-              renderedGroups.add(term.sliceName);
-              const activeInGroup = groupTabIds.find(id => id === leaf.activeTabId);
-              const isGroupOpen = openTermGroup === term.sliceName;
               return (
-                <div
-                  key={`group-${term.sliceName}`}
-                  className="bp-tab-group"
-                  onMouseLeave={() => { if (isGroupOpen) setOpenTermGroup(null); }}
+                <button
+                  key={tabId}
+                  className={`bp-tab bp-tab-container ${leaf.activeTabId === tabId ? 'active' : ''} ${dragState?.tabId === tabId ? 'dragging' : ''}`}
+                  draggable
+                  onDragStart={(e) => handleTabDragStart(e, tabId, leaf.id)}
+                  onDragEnd={handleTabDragEnd}
+                  onClick={() => activateTab(tabId)}
+                  title={getTabTitle(tabId)}
                 >
-                  <button
-                    className={`bp-tab ${activeInGroup ? 'active' : ''}`}
-                    onClick={() => {
-                      if (isGroupOpen) {
-                        setOpenTermGroup(null);
-                      } else {
-                        setOpenTermGroup(term.sliceName);
-                      }
-                    }}
-                    title={`${groupTabIds.length} terminals for ${term.sliceName}`}
-                  >
-                    {term.sliceName}
-                    <span className="bp-group-count">{groupTabIds.length}</span>
-                    <span className="bp-group-chevron">▾</span>
-                  </button>
-                  {isGroupOpen && (
-                    <div className="bp-tab-dropdown">
-                      {groupTabIds.map(gTabId => {
-                        const gTerm = terminals.find(t => t.id === gTabId);
-                        return (
-                          <button
-                            key={gTabId}
-                            className={`bp-tab-dropdown-item ${leaf.activeTabId === gTabId ? 'active' : ''}`}
-                            onClick={() => { activateTab(gTabId); setOpenTermGroup(null); }}
-                          >
-                            <span>{gTerm?.nodeName || getTabLabel(gTabId)}</span>
-                            <span
-                              className="bp-tab-close"
-                              onClick={(e) => { e.stopPropagation(); destroyTerminalSession(gTabId); onCloseTerminal(gTabId); }}
-                            >✕</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                  {getTabLabel(tabId)}
+                  <span
+                    className="bp-tab-close"
+                    onClick={(e) => { e.stopPropagation(); destroyTerminalSession(tabId); onCloseTerminal(tabId); }}
+                  >✕</span>
+                </button>
               );
             }
 
@@ -977,7 +912,7 @@ export default function BottomPanel({ terminals, onCloseTerminal, validationIssu
       </div>
     </div>
   );
-}
+});
 
 // --- Recipe Console View ---
 export function RecipeConsoleView({ lines, running, onClear, endRef }: { lines: RecipeConsoleLine[]; running: boolean; onClear: () => void; endRef: React.RefObject<HTMLDivElement> }) {

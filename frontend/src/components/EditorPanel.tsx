@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { SliceData, SiteInfo, ComponentModel, SliceNode, SliceNetwork, SliceFacilityPort, SlicePortMirror, BootConfig, BootUpload, BootCommand, BootExecResult, FileEntry, SliceKeySet, VMTemplateSummary, HostInfo, IpHint, L3Config, FacilityPortInfo } from '../types/fabric';
 import * as api from '../api/client';
 import Tooltip from './Tooltip';
@@ -42,7 +42,7 @@ interface EditorPanelProps {
   facilityPorts?: FacilityPortInfo[];
 }
 
-export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCollapse, sites, images, componentModels, selectedElement, dragHandleProps, panelIcon, vmTemplates = [], onSaveVmTemplate, onBootConfigErrors, onRunBootConfig, bootRunning, facilityPorts = [] }: EditorPanelProps) {
+export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCollapse, sites, images, componentModels, selectedElement, dragHandleProps, panelIcon, vmTemplates = [], onSaveVmTemplate, onBootConfigErrors, onRunBootConfig, bootRunning, facilityPorts = [] }: EditorPanelProps) {
   const [selectedSliverKey, setSelectedSliverKey] = useState('');
   const [addMode, setAddMode] = useState<AddSliverType | null>(null);
   const [loading, setLoading] = useState(false);
@@ -470,7 +470,7 @@ export default function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCo
       )}
     </div>
   );
-}
+});
 
 
 // --- Lease Renew Section ---

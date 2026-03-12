@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import TitleBar from './components/TitleBar';
 import Toolbar from './components/Toolbar';
 import CytoscapeGraph from './components/CytoscapeGraph';
@@ -14,23 +15,24 @@ import BottomPanel from './components/BottomPanel';
 import type { TerminalTab, RecipeConsoleLine, BootConsoleLine } from './components/BottomPanel';
 import SideConsolePanel from './components/SideConsolePanel';
 import StatusBar from './components/StatusBar';
-import ConfigureView from './components/ConfigureView';
-import FileTransferView from './components/FileTransferView';
-import HelpView from './components/HelpView';
+const ConfigureView = dynamic(() => import('./components/ConfigureView'), { ssr: false });
+const FileTransferView = dynamic(() => import('./components/FileTransferView'), { ssr: false });
+const HelpView = dynamic(() => import('./components/HelpView'), { ssr: false });
 import ClientView from './components/ClientView';
-import JupyterLabView from './components/JupyterLabView';
-import AICompanionView from './components/AICompanionView';
+const JupyterLabView = dynamic(() => import('./components/JupyterLabView'), { ssr: false });
+const AICompanionView = dynamic(() => import('./components/AICompanionView'), { ssr: false });
 import AIChatPanel from './components/AIChatPanel';
-import LandingView from './components/LandingView';
-import ArtifactEditorView from './components/ArtifactEditorView';
+const LandingView = dynamic(() => import('./components/LandingView'), { ssr: false });
+const ArtifactEditorView = dynamic(() => import('./components/ArtifactEditorView'), { ssr: false });
 import SlicesView from './components/SlicesView';
-import InfrastructureView from './components/InfrastructureView';
+const InfrastructureView = dynamic(() => import('./components/InfrastructureView'), { ssr: false });
 import type { ClientTarget } from './components/ClientView';
 import HelpContextMenu from './components/HelpContextMenu';
 import GuidedTour from './components/GuidedTour';
 import { tours } from './data/tourSteps';
 import * as api from './api/client';
-import type { SliceSummary, SliceData, SiteInfo, LinkInfo, ComponentModel, SiteMetrics, LinkMetrics, ValidationIssue, ProjectInfo, VMTemplateSummary, BootConfig, RecipeSummary, FacilityPortInfo } from './types/fabric';
+import type { SliceSummary, SliceData, ComponentModel, ValidationIssue, ProjectInfo, VMTemplateSummary, BootConfig, RecipeSummary } from './types/fabric';
+import { useInfrastructure } from './hooks/useInfrastructure';
 
 export default function App() {
   const [slices, setSlices] = useState<SliceSummary[]>([]);
@@ -219,6 +221,7 @@ export default function App() {
   const autoRefreshRef = useRef(autoRefresh);
   autoRefreshRef.current = autoRefresh;
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollAbortRef = useRef<AbortController | null>(null);
   const [consoleFullWidth, setConsoleFullWidth] = useState(false);
   const [consoleExpanded, setConsoleExpanded] = useState(false);
   const [consoleHeight, setConsoleHeight] = useState(260);
@@ -247,11 +250,29 @@ export default function App() {
     }));
   }, []);
 
-  // --- Global cache: infrastructure ---
-  const [infraSites, setInfraSites] = useState<SiteInfo[]>([]);
-  const [infraLinks, setInfraLinks] = useState<LinkInfo[]>([]);
-  const [infraFacilityPorts, setInfraFacilityPorts] = useState<FacilityPortInfo[]>([]);
-  const [infraLoading, setInfraLoading] = useState(false);
+  // Refs for addError context (moved up so infrastructure hook can use addError)
+  const selectedSliceRef = useRef(selectedSliceId);
+  selectedSliceRef.current = selectedSliceId;
+
+  const projectNameRef = useRef(projectName);
+  projectNameRef.current = projectName;
+
+  // Helper to add errors with project/slice context prefix
+  const addError = useCallback((msg: string, sliceName?: string) => {
+    const parts: string[] = [];
+    if (projectNameRef.current) parts.push(projectNameRef.current);
+    if (sliceName || selectedSliceRef.current) parts.push(sliceName || selectedSliceRef.current);
+    const prefix = parts.length > 0 ? `[${parts.join(' / ')}] ` : '';
+    setErrors(prev => [...prev, prefix + msg]);
+  }, []);
+
+  // --- Infrastructure hook (sites, links, facility ports, metrics) ---
+  const {
+    infraSites, infraLinks, infraFacilityPorts, infraLoading, infraLoaded,
+    siteMetricsCache, linkMetricsCache,
+    metricsRefreshRate, setMetricsRefreshRate, metricsLoading,
+    refreshInfrastructure, refreshMetrics, refreshInfrastructureAndMark,
+  } = useInfrastructure({ addError, setStatusMessage, selectedElement });
 
   // --- Global cache: static data (fetched once on mount) ---
   const [images, setImages] = useState<string[]>([]);
@@ -262,12 +283,6 @@ export default function App() {
   const [activeTourId, setActiveTourId] = useState<string | null>(null);
   const [tourStep, setTourStep] = useState(0);
 
-  // --- Global cache: metrics ---
-  const [siteMetricsCache, setSiteMetricsCache] = useState<Record<string, SiteMetrics>>({});
-  const [linkMetricsCache, setLinkMetricsCache] = useState<Record<string, LinkMetrics>>({});
-  const [metricsRefreshRate, setMetricsRefreshRate] = useState(0); // 0 = manual
-  const [metricsLoading, setMetricsLoading] = useState(false);
-
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
     localStorage.setItem('theme', dark ? 'dark' : 'light');
@@ -275,21 +290,26 @@ export default function App() {
     api.setJupyterTheme(dark ? 'dark' : 'light').catch(() => {});
   }, [dark]);
 
-  // Fetch static data once on mount (images + component models + VM templates)
+  // Fetch static data once on mount (images, component models, VM templates, AI tools, recipes).
+  // Grouped into Promise.all so all setState calls batch into a single render cycle.
   useEffect(() => {
-    api.listImages().then(setImages).catch(() => {});
-    api.listComponentModels().then(setComponentModels).catch(() => {});
-    api.listVmTemplates().then(setVmTemplates).catch(() => {});
-    api.getAiTools().then(setEnabledAiTools).catch(() => {});
+    Promise.all([
+      api.listImages(),
+      api.listComponentModels(),
+      api.listVmTemplates(),
+      api.getAiTools(),
+      api.listRecipes(),
+    ]).then(([images, models, templates, tools, recipeList]) => {
+      setImages(images);
+      setComponentModels(models);
+      setVmTemplates(templates);
+      setEnabledAiTools(tools);
+      setRecipes(recipeList);
+    }).catch(() => {});
   }, []);
 
   const refreshVmTemplates = useCallback(() => {
     api.listVmTemplates().then(setVmTemplates).catch(() => {});
-  }, []);
-
-  // Fetch recipes on mount
-  useEffect(() => {
-    api.listRecipes().then(setRecipes).catch(() => {});
   }, []);
 
   // Recipe execution handler (streams SSE to bottom panel console)
@@ -505,109 +525,6 @@ export default function App() {
     ai_tool_selected: !!selectedAiTool,
   }), [configStatus, slices, sliceData, selectedElement, infraSites, selectedAiTool]);
 
-  // --- Refresh infrastructure (sites + links) + metrics ---
-  const refreshInfrastructure = useCallback(async () => {
-    setInfraLoading(true);
-    setStatusMessage('Loading sites and links...');
-    const IGNORED = new Set(['AWS', 'AZURE', 'GCP', 'OCI', 'AL2S']);
-    try {
-      const [allSites, links, facilityPorts] = await Promise.all([api.listSites(), api.listLinks(), api.listFacilityPorts().catch(() => [] as FacilityPortInfo[])]);
-      const filteredSites = allSites.filter((s) => !IGNORED.has(s.name) && s.lat !== 0 && s.lon !== 0);
-      setInfraSites(filteredSites);
-      setInfraLinks(links);
-      setInfraFacilityPorts(facilityPorts);
-
-      setStatusMessage('Loading metrics...');
-      // Refresh all site metrics in parallel
-      await Promise.allSettled(filteredSites.map((s) => api.getSiteMetrics(s.name)))
-        .then((results) => {
-          const cache: Record<string, SiteMetrics> = {};
-          results.forEach((r, i) => {
-            if (r.status === 'fulfilled') {
-              cache[filteredSites[i].name] = r.value;
-            }
-          });
-          setSiteMetricsCache((prev) => ({ ...prev, ...cache }));
-        });
-
-      // Refresh all link metrics in parallel
-      await Promise.allSettled(links.map((l) => api.getLinkMetrics(l.site_a, l.site_b)))
-        .then((results) => {
-          const cache: Record<string, any> = {};
-          results.forEach((r, i) => {
-            if (r.status === 'fulfilled') {
-              const key = `${links[i].site_a}-${links[i].site_b}`;
-              cache[key] = r.value;
-            }
-          });
-          setLinkMetricsCache((prev) => ({ ...prev, ...cache }));
-        });
-    } catch (e: any) {
-      addError(e.message);
-    } finally {
-      setInfraLoading(false);
-      setStatusMessage('');
-    }
-  }, []);
-
-  // --- Refresh metrics for currently selected element ---
-  const refreshMetrics = useCallback(async () => {
-    if (!selectedElement) return;
-    const type = selectedElement.element_type;
-    if (type === 'site') {
-      const siteName = selectedElement.name;
-      setMetricsLoading(true);
-      setStatusMessage(`Refreshing metrics for ${siteName}...`);
-      try {
-        const m = await api.getSiteMetrics(siteName);
-        setSiteMetricsCache((prev) => ({ ...prev, [siteName]: m }));
-      } catch (e: any) {
-        addError(e.message);
-      } finally {
-        setMetricsLoading(false);
-        setStatusMessage('');
-      }
-    } else if (type === 'infra_link') {
-      const key = `${selectedElement.site_a}-${selectedElement.site_b}`;
-      setMetricsLoading(true);
-      setStatusMessage('Refreshing link metrics...');
-      try {
-        const m = await api.getLinkMetrics(selectedElement.site_a, selectedElement.site_b);
-        setLinkMetricsCache((prev) => ({ ...prev, [key]: m }));
-      } catch (e: any) {
-        addError(e.message);
-      } finally {
-        setMetricsLoading(false);
-        setStatusMessage('');
-      }
-    }
-  }, [selectedElement]);
-
-  // Infrastructure loaded flag (no auto-fetch on startup)
-  const [infraLoaded, setInfraLoaded] = useState(false);
-  const refreshInfrastructureAndMark = useCallback(async () => {
-    await refreshInfrastructure();
-    setInfraLoaded(true);
-  }, [refreshInfrastructure]);
-
-  // --- Auto-refresh interval for metrics ---
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  useEffect(() => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-    if (metricsRefreshRate > 0 && selectedElement) {
-      const type = selectedElement.element_type;
-      if (type === 'site' || type === 'infra_link') {
-        intervalRef.current = setInterval(refreshMetrics, metricsRefreshRate * 1000);
-      }
-    }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [metricsRefreshRate, selectedElement, refreshMetrics]);
-
   // Validate slice whenever sliceData changes
   const runValidation = useCallback(async (name: string) => {
     try {
@@ -674,22 +591,13 @@ export default function App() {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
+    if (pollAbortRef.current) {
+      pollAbortRef.current.abort();
+      pollAbortRef.current = null;
+    }
   }, []);
 
-  const selectedSliceRef = useRef(selectedSliceId);
-  selectedSliceRef.current = selectedSliceId;
-
-  const projectNameRef = useRef(projectName);
-  projectNameRef.current = projectName;
-
-  // Helper to add errors with project/slice context prefix
-  const addError = useCallback((msg: string, sliceName?: string) => {
-    const parts: string[] = [];
-    if (projectNameRef.current) parts.push(projectNameRef.current);
-    if (sliceName || selectedSliceRef.current) parts.push(sliceName || selectedSliceRef.current);
-    const prefix = parts.length > 0 ? `[${parts.join(' / ')}] ` : '';
-    setErrors(prev => [...prev, prefix + msg]);
-  }, []);
+  // (selectedSliceRef and projectNameRef moved up, next to infrastructure hook)
 
   // Run boot configs per-node with activity tracking
   const runBootConfigsPerNode = useCallback(async (sliceName: string, nodeNames: string[]) => {
@@ -737,6 +645,11 @@ export default function App() {
     pollingRef.current = setInterval(async () => {
       if (!autoRefreshRef.current) { stopPolling(); return; }
 
+      // Abort any previous in-flight poll request before starting a new one
+      if (pollAbortRef.current) pollAbortRef.current.abort();
+      const controller = new AbortController();
+      pollAbortRef.current = controller;
+
       try {
         // Refresh slice list
         const list = await api.listSlices();
@@ -755,10 +668,12 @@ export default function App() {
           prevSliceStatesRef.current[entry.name] = entry.state;
         }
 
-        // Also refresh the currently selected slice if it's in a transitional state
+        // For the currently selected slice: use lightweight state check during transitions,
+        // only do full refresh when it reaches a stable state (to get updated node/graph data)
         const currentName = selectedSliceRef.current;
         const currentEntry = currentName ? list.find(s => s.name === currentName) : null;
-        if (currentName && currentEntry && POLL_STATES.has(currentEntry.state)) {
+        if (currentName && currentEntry && STABLE_STATES.has(currentEntry.state)) {
+          // Slice just became stable — do a full refresh to get final node/graph data
           try {
             const data = await api.refreshSlice(currentName);
             setSliceData(data);
@@ -773,15 +688,8 @@ export default function App() {
             console.log(`[poll] Auto-running boot config for "${entry.name}"`);
             bootConfigRanRef.current.add(entry.name);
             appendBuildLog(entry.name, { type: 'build', message: `Slice is ready (${entry.state})` });
-            // Refresh slice data if it's the currently selected slice — use
-            // refreshSlice (POST) to pull fresh sliver states from FABRIC
-            if (entry.name === currentName) {
-              try {
-                const data = await api.refreshSlice(currentName);
-                setSliceData(data);
-              } catch { /* ignore */ }
-            }
             // Fire and forget — each slice configures independently in parallel
+            // (The IIFE below already refreshes the slice data)
             const sliceName = entry.name;
             (async () => {
               // Get node names for per-node progress tracking
@@ -829,6 +737,28 @@ export default function App() {
 
   // Clean up polling on unmount
   useEffect(() => { return () => stopPolling(); }, [stopPolling]);
+
+  // Pause all polling when the browser tab is hidden, resume on return
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        stopPolling();
+      } else if (document.visibilityState === 'visible') {
+        // On return, refresh slice list and restart polling if needed
+        api.listSlices().then(list => {
+          protectDeletingSlices(list);
+          setSlices(list);
+          syncStateFromList(list);
+          const hasTransitional = list.some(s => POLL_STATES.has(s.state));
+          if (hasTransitional && autoRefreshRef.current && !pollingRef.current) {
+            startPolling();
+          }
+        }).catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [stopPolling, startPolling, syncStateFromList]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refresh slice data when switching back to a slice-displaying view
   // so the user sees current data even if state changed while on another view.
@@ -1640,9 +1570,9 @@ export default function App() {
       }
     };
 
-    // Poll immediately, then every 2 seconds
+    // Poll immediately, then every 5 seconds
     poll();
-    const timer = setInterval(poll, 2000);
+    const timer = setInterval(poll, 5000);
     runPollTimers.current.set(runId, timer);
   }, [appendBuildLog]);
 
@@ -1716,9 +1646,15 @@ export default function App() {
     }).catch(() => {});
 
     // Periodically refresh active runs list (for badge updates in LibrariesPanel)
+    // Only polls when tab is visible and there are running jobs
     const runsInterval = setInterval(() => {
-      api.listBackgroundRuns().then(setActiveRuns).catch(() => {});
-    }, 10_000);
+      if (document.visibilityState === 'hidden') return;
+      api.listBackgroundRuns().then(runs => {
+        setActiveRuns(runs);
+        // No need to keep polling if nothing is running — the next
+        // user action (start run, view runs) will refresh the list
+      }).catch(() => {});
+    }, 30_000);
 
     return () => {
       clearInterval(runsInterval);
@@ -1787,6 +1723,49 @@ export default function App() {
     setCurrentView('artifacts');
   }, []);
 
+  // --- Memoized values and stable callbacks for panel props ---
+  const sliceContextJson = useMemo(
+    () => sliceData ? JSON.stringify(sliceData, null, 2) : undefined,
+    [sliceData]
+  );
+
+  const handleViewChange = useCallback((v: TopView) => {
+    if (v !== 'jupyter') setJupyterPath(undefined);
+    setCurrentView(v);
+  }, []);
+
+  const handleRecipesChanged = useCallback(() => {
+    api.listRecipes().then(setRecipes).catch(() => {});
+  }, []);
+
+  const handleClearErrors = useCallback(() => {
+    setErrors([]);
+    setValidationIssues([]);
+    setValidationValid(false);
+  }, []);
+
+  const handleClearBootConfigErrors = useCallback(() => setBootConfigErrors([]), []);
+
+  const handleClearRecipeConsole = useCallback(() => setRecipeConsole([]), []);
+
+  const handleClearSliceBootLog = useCallback((sn: string) => {
+    setSliceBootLogs(prev => { const next = { ...prev }; delete next[sn]; return next; });
+  }, []);
+
+  const handleCollapseEditor = useCallback(() => toggleCollapse('editor'), [toggleCollapse]);
+  const handleCollapseTemplate = useCallback(() => toggleCollapse('template'), [toggleCollapse]);
+  const handleCollapseChat = useCallback(() => toggleCollapse('chat'), [toggleCollapse]);
+  const handleCollapseConsole = useCallback(() => toggleCollapse('console'), [toggleCollapse]);
+
+  const handleToggleDark = useCallback(() => setDark((d) => !d), []);
+  const handleToggleSettings = useCallback(() => setSettingsOpen((prev) => !prev), []);
+  const handleGoHome = useCallback(() => setCurrentView('landing'), []);
+  const handleOpenHelpCb = useCallback(() => handleOpenHelp(), [handleOpenHelp]);
+  const handleLaunchAiTool = useCallback((toolId: string) => {
+    setSelectedAiTool(toolId);
+    setCurrentView('ai');
+  }, []);
+
   // --- Panel rendering helpers (shared between left/right panel groups) ---
   const showSidePanels = currentView === 'slices' || currentView === 'artifacts';
   // In artifacts view, only show chat and console panels (not editor/template)
@@ -1814,7 +1793,7 @@ export default function App() {
             sliceData={sliceData}
             sliceName={selectedSliceName}
             onSliceUpdated={handleSliceUpdated}
-            onCollapse={() => toggleCollapse('editor')}
+            onCollapse={handleCollapseEditor}
             sites={infraSites}
             images={images}
             componentModels={componentModels}
@@ -1841,7 +1820,7 @@ export default function App() {
             onViewRunOutput={handleViewRunOutput}
             onStopRun={handleStopRun}
             onResetArtifact={handleResetArtifact}
-            onCollapse={() => toggleCollapse('template')}
+            onCollapse={handleCollapseTemplate}
             dragHandleProps={dragProps}
             panelIcon={icon}
             onVmTemplatesChanged={refreshVmTemplates}
@@ -1850,7 +1829,7 @@ export default function App() {
             onNodeAdded={updateSliceAndValidate}
             onExecuteRecipe={handleExecuteRecipe}
             executingRecipe={executingRecipeName}
-            onRecipesChanged={() => api.listRecipes().then(setRecipes).catch(() => {})}
+            onRecipesChanged={handleRecipesChanged}
             onLaunchNotebook={handleLaunchNotebook}
             onPublishNotebook={handlePublishNotebook}
             onPublishArtifact={handlePublishArtifact}
@@ -1862,10 +1841,10 @@ export default function App() {
         return (
           <AIChatPanel
             key="chat"
-            onCollapse={() => toggleCollapse('chat')}
+            onCollapse={handleCollapseChat}
             dragHandleProps={dragProps}
             panelIcon={icon}
-            sliceContext={sliceData ? JSON.stringify(sliceData, null, 2) : undefined}
+            sliceContext={sliceContextJson}
             onSliceChanged={refreshSliceList}
             persistId="loomai-sidebar"
           />
@@ -1882,20 +1861,20 @@ export default function App() {
             sliceState={sliceData?.state ?? ''}
             dirty={sliceData?.dirty ?? false}
             errors={errors}
-            onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
+            onClearErrors={handleClearErrors}
             sliceErrors={sliceData?.error_messages ?? []}
             bootConfigErrors={bootConfigErrors}
-            onClearBootConfigErrors={() => setBootConfigErrors([])}
+            onClearBootConfigErrors={handleClearBootConfigErrors}
             recipeConsole={recipeConsole}
             recipeRunning={recipeRunning}
-            onClearRecipeConsole={() => setRecipeConsole([])}
+            onClearRecipeConsole={handleClearRecipeConsole}
             sliceBootLogs={sliceBootLogs}
             sliceBootRunning={sliceBootRunning}
-            onClearSliceBootLog={(sn) => setSliceBootLogs(prev => { const next = { ...prev }; delete next[sn]; return next; })}
+            onClearSliceBootLog={handleClearSliceBootLog}
             containerTermActive={true}
             onReceiveExternalTab={handleSideReceiveTab}
             onTabMovedOut={handleSideTabMovedOut}
-            onCollapse={() => toggleCollapse('console')}
+            onCollapse={handleCollapseConsole}
             dragHandleProps={dragProps}
             panelIcon={icon}
           />
@@ -1996,6 +1975,7 @@ export default function App() {
     { id: 'aider', name: 'Aider', icon: 'Ai' },
     { id: 'opencode', name: 'OpenCode', icon: 'OC' },
     { id: 'crush', name: 'Crush', icon: 'Cr' },
+    { id: 'deepagents', name: 'Deep Agents', icon: 'DA' },
     { id: 'claude', name: 'Claude Code', icon: 'CC' },
   ];
   // LoomAI is always visible; other tools filtered by settings
@@ -2006,17 +1986,17 @@ export default function App() {
       <TitleBar
         dark={dark}
         currentView={currentView}
-        onToggleDark={() => setDark((d) => !d)}
-        onViewChange={(v) => { if (v !== 'jupyter') setJupyterPath(undefined); setCurrentView(v); }}
-        onOpenSettings={() => setSettingsOpen((prev) => !prev)}
-        onOpenHelp={() => handleOpenHelp()}
-        onGoHome={() => setCurrentView('landing')}
+        onToggleDark={handleToggleDark}
+        onViewChange={handleViewChange}
+        onOpenSettings={handleToggleSettings}
+        onOpenHelp={handleOpenHelpCb}
+        onGoHome={handleGoHome}
         projectName={projectName}
         projects={visibleProjects}
         onProjectChange={handleProjectChange}
         aiTools={visibleAiTools}
         selectedAiTool={selectedAiTool}
-        onLaunchAiTool={(toolId) => { setSelectedAiTool(toolId); setCurrentView('ai'); }}
+        onLaunchAiTool={handleLaunchAiTool}
       />
 
       {currentView === 'slices' && <Toolbar
@@ -2372,10 +2352,10 @@ export default function App() {
             sliceState={sliceData?.state ?? ''}
             dirty={sliceData?.dirty ?? false}
             errors={errors}
-            onClearErrors={() => { setErrors([]); setValidationIssues([]); setValidationValid(false); }}
+            onClearErrors={handleClearErrors}
             sliceErrors={sliceData?.error_messages ?? []}
             bootConfigErrors={bootConfigErrors}
-            onClearBootConfigErrors={() => setBootConfigErrors([])}
+            onClearBootConfigErrors={handleClearBootConfigErrors}
             fullWidth={consoleFullWidth || !showSidePanels}
             onToggleFullWidth={() => setConsoleFullWidth(fw => !fw)}
             showWidthToggle={showSidePanels}
@@ -2385,10 +2365,10 @@ export default function App() {
             onPanelHeightChange={setConsoleHeight}
             recipeConsole={recipeConsole}
             recipeRunning={recipeRunning}
-            onClearRecipeConsole={() => setRecipeConsole([])}
+            onClearRecipeConsole={handleClearRecipeConsole}
             sliceBootLogs={sliceBootLogs}
             sliceBootRunning={sliceBootRunning}
-            onClearSliceBootLog={(sn) => setSliceBootLogs(prev => { const next = { ...prev }; delete next[sn]; return next; })}
+            onClearSliceBootLog={handleClearSliceBootLog}
             openBootLogSlices={openBootLogSlices}
             onOpenBootLog={(sn) => setOpenBootLogSlices(prev => prev.includes(sn) ? prev : [...prev, sn])}
             onCloseBootLog={(sn) => setOpenBootLogSlices(prev => prev.filter(s => s !== sn))}

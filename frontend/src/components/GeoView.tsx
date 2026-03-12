@@ -1,5 +1,5 @@
 'use client';
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { MapContainer, TileLayer, CircleMarker, Polyline, Popup, useMap } from 'react-leaflet';
 import type { LatLngBoundsExpression } from 'leaflet';
 import type { SliceData, SiteInfo, LinkInfo, SiteMetrics, LinkMetrics } from '../types/fabric';
@@ -76,7 +76,7 @@ const TILE_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png
 const ATTR_LIGHT = '&copy; Esri';
 const ATTR_DARK = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>';
 
-export default function GeoView({ sliceData, selectedElement, onNodeClick, sites, links, linksLoading, siteMetricsCache, linkMetricsCache, metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading, collapsibleDetail, hideDetail, defaultShowInfra = true, hideInfraToggles }: GeoViewProps) {
+export default React.memo(function GeoView({ sliceData, selectedElement, onNodeClick, sites, links, linksLoading, siteMetricsCache, linkMetricsCache, metricsRefreshRate, onMetricsRefreshRateChange, onRefreshMetrics, metricsLoading, collapsibleDetail, hideDetail, defaultShowInfra = true, hideInfraToggles }: GeoViewProps) {
   const [showInfraSites, setShowInfraSites] = useState(defaultShowInfra);
   const [showInfraLinks, setShowInfraLinks] = useState(defaultShowInfra);
   const [showSliceNodes, setShowSliceNodes] = useState(true);
@@ -346,4 +346,4 @@ export default function GeoView({ sliceData, selectedElement, onNodeClick, sites
       )}
     </div>
   );
-}
+});

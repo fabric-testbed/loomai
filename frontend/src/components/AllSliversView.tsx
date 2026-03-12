@@ -1,5 +1,5 @@
 'use client';
-import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { SliceSummary, SliceData, RecipeSummary } from '../types/fabric';
 import type { ContextMenuAction } from './CytoscapeGraph';
 import * as api from '../api/client';
@@ -67,7 +67,7 @@ interface MenuState {
 
 // --- Main component ---
 
-export default function AllSliversView({
+export default React.memo(function AllSliversView({
   slices,
   dark,
   onSliceSelect,
@@ -744,4 +744,4 @@ export default function AllSliversView({
       {renderContextMenu()}
     </div>
   );
-}
+});

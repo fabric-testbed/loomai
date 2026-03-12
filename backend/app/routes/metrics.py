@@ -6,6 +6,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 import httpx
 
+from app.http_pool import metrics_client
+
 router = APIRouter(tags=["metrics"])
 
 PROMETHEUS_BASE = (
@@ -17,10 +19,9 @@ QUERY_URL = f"{PROMETHEUS_BASE}/query"
 
 async def _prom_query(query: str) -> list[dict[str, Any]]:
     """Execute an instant Prometheus query and return the result vector."""
-    async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
-        resp = await client.get(QUERY_URL, params={"query": query})
-        resp.raise_for_status()
-        data = resp.json()
+    resp = await metrics_client.get(QUERY_URL, params={"query": query})
+    resp.raise_for_status()
+    data = resp.json()
     if data.get("status") != "success":
         return []
     return data.get("data", {}).get("result", [])

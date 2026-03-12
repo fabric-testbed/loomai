@@ -3,6 +3,7 @@
 from __future__ import annotations
 import ast
 import asyncio
+import logging
 import threading
 import time
 from typing import Any
@@ -10,6 +11,9 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from app.fablib_manager import get_fablib
+from app.fablib_executor import run_in_fablib_pool
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["resources"])
 
@@ -19,6 +23,9 @@ _fablib_lock = threading.Lock()
 # Simple cache for expensive topology queries
 _cache: dict[str, tuple[float, Any]] = {}
 CACHE_TTL = 300  # 5 minutes
+
+# Flag to prevent concurrent background refresh tasks from piling up
+_bg_refresh_running = False
 
 # FABRIC site GPS coordinates (from FABRIC API)
 SITE_LOCATIONS: dict[str, dict[str, float]] = {
@@ -95,6 +102,7 @@ def _fetch_host_details_v2(resources, site_name: str) -> list[dict[str, Any]]:
     try:
         hosts_map = resources.get_hosts_by_site(site_name)
     except Exception:
+        logger.debug("Could not fetch hosts for site", exc_info=True)
         return hosts_detail
     if not hosts_map:
         return hosts_detail
@@ -222,6 +230,7 @@ def _fetch_host_details_v1(site) -> list[dict[str, Any]]:
     try:
         hosts = site.get_hosts()
     except Exception:
+        logger.debug("v1 host fetch failed", exc_info=True)
         return hosts_detail
     for host in hosts:
         host_info: dict[str, Any] = {
@@ -244,6 +253,7 @@ def _fetch_host_details_v1(site) -> list[dict[str, Any]]:
                         "available": avail,
                     }
             except Exception:
+                logger.debug("Component query failed", exc_info=True)
                 continue
         host_info["components"] = host_components
         hosts_detail.append(host_info)
@@ -255,16 +265,48 @@ def get_cached_sites() -> list[dict[str, Any]]:
 
     This is used by the site resolver so it doesn't duplicate FABlib calls.
     Safe to call from a synchronous context (e.g. inside asyncio.to_thread).
+
+    Uses stale-while-revalidate: if cache exists but is expired, returns stale
+    data immediately and triggers a background refresh so callers don't block.
     """
     cached = _cache.get("sites")
-    if cached and time.time() - cached[0] < CACHE_TTL:
+    if cached:
+        if time.time() - cached[0] < CACHE_TTL:
+            return cached[1]
+        # Cache is stale — return stale data, trigger background refresh
+        _trigger_bg_site_refresh()
         return cached[1]
+    # No cache at all — must block and fetch
     with _fablib_lock:
         # Double-check after acquiring lock
         cached = _cache.get("sites")
-        if cached and time.time() - cached[0] < CACHE_TTL:
+        if cached:
             return cached[1]
         return _fetch_sites_sync()
+
+
+def _trigger_bg_site_refresh():
+    """Trigger a background refresh of site data (non-blocking).
+
+    Only one background refresh runs at a time.
+    """
+    global _bg_refresh_running
+    if _bg_refresh_running:
+        return
+    _bg_refresh_running = True
+
+    def _refresh():
+        global _bg_refresh_running
+        try:
+            with _fablib_lock:
+                _fetch_sites_sync()
+            logger.debug("Background site refresh complete")
+        except Exception as e:
+            logger.warning("Background site refresh failed: %s", e)
+        finally:
+            _bg_refresh_running = False
+
+    threading.Thread(target=_refresh, daemon=True).start()
 
 
 def get_fresh_sites() -> list[dict[str, Any]]:
@@ -280,16 +322,25 @@ def get_fresh_sites() -> list[dict[str, Any]]:
 
 @router.get("/sites")
 async def list_sites() -> list[dict[str, Any]]:
-    """List all FABRIC sites with location and availability."""
+    """List all FABRIC sites with location and availability.
+
+    Uses stale-while-revalidate: returns cached data immediately even if
+    expired, and triggers background refresh so the caller doesn't block.
+    """
     cached = _cache.get("sites")
-    if cached and time.time() - cached[0] < CACHE_TTL:
+    if cached:
+        if time.time() - cached[0] < CACHE_TTL:
+            return cached[1]
+        # Cache expired — return stale, refresh in background
+        _trigger_bg_site_refresh()
         return cached[1]
 
+    # No cache at all — must fetch synchronously
     def _do():
         with _fablib_lock:
             return _fetch_sites_sync()
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -331,7 +382,7 @@ async def list_links() -> list[dict[str, Any]]:
             _cache["links"] = (time.time(), links)
             return links
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -372,7 +423,7 @@ async def list_site_hosts(site_name: str) -> list[dict[str, Any]]:
                 return _fetch_host_details_v2(resources, site_name)
             return _fetch_host_details_v1(site)
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -458,7 +509,7 @@ async def get_site_detail(site_name: str) -> dict[str, Any]:
                     "components": components,
                 }
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -496,7 +547,7 @@ async def get_resources() -> dict[str, Any]:
                     result[site_name] = {"error": "unavailable"}
             return result
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -571,7 +622,7 @@ async def list_facility_ports() -> list[dict[str, Any]]:
             _cache["facility_ports"] = (time.time(), result)
             return result
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

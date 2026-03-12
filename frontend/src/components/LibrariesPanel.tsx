@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { SliceData, VMTemplateSummary, RecipeSummary } from '../types/fabric';
 import type { TemplateSummary, ScriptArg, BackgroundRun } from '../api/client';
 import * as api from '../api/client';
@@ -121,7 +121,7 @@ function OverflowMenu({ items, isOpen, onToggle, onClose }: {
   );
 }
 
-export default function LibrariesPanel({
+export default React.memo(function LibrariesPanel({
   onSliceImported, onDeployWeave, onRunWeaveScript, onRunExperiment, activeRuns, onViewRunOutput, onStopRun, onResetArtifact,
   onVmTemplatesChanged, sliceName, sliceData, onNodeAdded,
   onExecuteRecipe, executingRecipe, onRecipesChanged, onLaunchNotebook, onPublishNotebook,
@@ -414,8 +414,10 @@ export default function LibrariesPanel({
   };
 
   // Periodic polling — pick up templates created externally or manually
+  // Only polls when the browser tab is visible to avoid unnecessary requests
   useEffect(() => {
     const interval = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
       if (activeTab === 'weaves') refreshSliceTemplates();
       else if (activeTab === 'vm') refreshVmTemplates();
       else if (activeTab === 'recipes') refreshRecipes();
@@ -1089,4 +1091,4 @@ export default function LibrariesPanel({
       )}
     </div>
   );
-}
+});

@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, highlightActiveLine, rectangularSelection, crosshairCursor } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands';
@@ -80,7 +80,7 @@ function getLanguageExtension(filename: string) {
   }
 }
 
-export default function FileEditor({ filePath, onClose, dark, vmContext }: FileEditorProps) {
+export default React.memo(function FileEditor({ filePath, onClose, dark, vmContext }: FileEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -227,4 +227,4 @@ export default function FileEditor({ filePath, onClose, dark, vmContext }: FileE
       </div>
     </div>
   );
-}
+});

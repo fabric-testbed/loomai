@@ -162,6 +162,39 @@ export async function mockAllApis(page: Page, overrides: MockOverrides = {}) {
     route.fulfill({ json: [] })
   );
 
+  // AI tools status
+  await page.route('**/api/ai/tools/status', (route: Route) =>
+    route.fulfill({ json: {} })
+  );
+
+  // Template background runs
+  await page.route('**/api/templates/runs', (route: Route) =>
+    route.fulfill({ json: [] })
+  );
+
+  // Links (backbone links between sites)
+  await page.route('**/api/links', (route: Route) =>
+    route.fulfill({ json: [] })
+  );
+
+  // Facility ports
+  await page.route('**/api/facility-ports', (route: Route) =>
+    route.fulfill({ json: [] })
+  );
+
+  // Projects
+  await page.route('**/api/projects', (route: Route) => {
+    if (route.request().method() === 'GET') {
+      return route.fulfill({
+        json: {
+          projects: configStatus.token_info.projects,
+          active_project_id: configStatus.project_id,
+        },
+      });
+    }
+    return route.fallback();
+  });
+
   // Catch-all for unhandled API routes — return 404 instead of timing out
   await page.route('**/api/**', (route: Route) => {
     const method = route.request().method();

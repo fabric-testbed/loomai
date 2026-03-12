@@ -38,6 +38,9 @@ class NodeMonitoringState:
     site: str = ""
     last_scrape: float = 0.0
     last_error: str = ""
+    # Exponential backoff for unreachable nodes
+    consecutive_failures: int = 0
+    next_scrape_after: float = 0.0  # unix timestamp — skip scrape until this time
 
 
 @dataclass
@@ -300,22 +303,51 @@ class MonitoringManager:
 
     # -- Scraping -----------------------------------------------------------
 
+    # Max backoff interval for unreachable nodes (5 minutes)
+    _MAX_BACKOFF = 300
+
     def _scrape_node(self, slice_name: str, node_name: str) -> Optional[str]:
-        """Scrape metrics from a single node. Returns raw text or None."""
+        """Scrape metrics from a single node. Returns raw text or None.
+
+        Implements exponential backoff for unreachable nodes to avoid
+        wasting thread pool time on nodes that are consistently failing.
+        """
         try:
             node = self._get_node(slice_name, node_name)
             stdout, stderr = node.execute(
                 "curl -s --max-time 10 http://localhost:9100/metrics 2>/dev/null"
             )
             if stdout and "node_cpu_seconds_total" in stdout:
+                # Success — reset backoff
+                with self._state_lock:
+                    state = self._states.get(slice_name)
+                    if state and node_name in state.nodes:
+                        ns = state.nodes[node_name]
+                        ns.consecutive_failures = 0
+                        ns.next_scrape_after = 0.0
                 return stdout
+            # No useful data — treat as failure
+            self._record_scrape_failure(slice_name, node_name, "No metrics data")
             return None
         except Exception as e:
-            with self._state_lock:
-                state = self._states.get(slice_name)
-                if state and node_name in state.nodes:
-                    state.nodes[node_name].last_error = str(e)
+            self._record_scrape_failure(slice_name, node_name, str(e))
             return None
+
+    def _record_scrape_failure(self, slice_name: str, node_name: str, error: str):
+        """Record a scrape failure and apply exponential backoff."""
+        with self._state_lock:
+            state = self._states.get(slice_name)
+            if state and node_name in state.nodes:
+                ns = state.nodes[node_name]
+                ns.last_error = error
+                ns.consecutive_failures += 1
+                # Exponential backoff: 15s, 30s, 60s, 120s, 300s (capped)
+                backoff = min(SCRAPE_INTERVAL * (2 ** ns.consecutive_failures),
+                              self._MAX_BACKOFF)
+                ns.next_scrape_after = time.time() + backoff
+                logger.debug("Node %s/%s: failure #%d, backoff %ds",
+                             slice_name, node_name,
+                             ns.consecutive_failures, backoff)
 
     def _process_metrics(self, slice_name: str, node_name: str, raw: str) -> None:
         """Parse raw metrics text and update history."""
@@ -414,8 +446,11 @@ class MonitoringManager:
                 if not state or not state.enabled:
                     break
 
+                now = time.time()
                 enabled_nodes = [
-                    n for n, ns in state.nodes.items() if ns.enabled and ns.exporter_installed
+                    n for n, ns in state.nodes.items()
+                    if ns.enabled and ns.exporter_installed
+                    and now >= ns.next_scrape_after  # respect backoff
                 ]
                 if not enabled_nodes:
                     await asyncio.sleep(SCRAPE_INTERVAL)

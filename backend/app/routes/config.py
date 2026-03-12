@@ -13,11 +13,11 @@ from typing import Optional
 from urllib.parse import urlencode
 
 import paramiko
-import requests as http_requests
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
+from app.http_pool import fabric_client
 from app.slice_registry import resolve_slice_name
 from app.fablib_manager import (
     DEFAULT_CONFIG_DIR,
@@ -812,7 +812,7 @@ def _parse_semver(tag: str) -> tuple:
 
 
 @router.get("/api/config/check-update")
-def check_update():
+async def check_update():
     """Check Docker Hub for a newer version of the application image."""
     now = time.time()
 
@@ -823,7 +823,7 @@ def check_update():
     current_parsed = _parse_semver(CURRENT_VERSION)
 
     try:
-        resp = http_requests.get(
+        resp = await fabric_client.get(
             DOCKER_HUB_TAGS_URL,
             params={"page_size": 25, "ordering": "last_updated"},
             timeout=10,

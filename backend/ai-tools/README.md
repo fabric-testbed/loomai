@@ -22,6 +22,8 @@ ai-tools/
     .aider.conf.yml       Aider settings and conventions
   claude-code/            Claude Code CLI configuration
     CLAUDE.md             In-container project instructions for Claude Code
+  deepagents/             Deep Agents (LangChain) configuration
+    AGENTS.md             Project instructions for Deep Agents
 ```
 
 ## How These Files Reach the Container

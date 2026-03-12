@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.fablib_manager import get_fablib
+from app.fablib_executor import run_in_fablib_pool
 from app.user_context import get_user_storage
 from app.slice_serializer import slice_to_dict, slice_summary, check_has_errors
 from app.graph_builder import build_graph
@@ -337,10 +338,28 @@ def _get_slice_obj(name: str):
     return fablib.get_slice(name=name)
 
 
+# Serialization cache: keyed on (slice_name, state), stores serialized dict.
+# Invalidated on any mutation (add/remove node, submit, modify).
+_serialize_cache: dict[str, tuple[str, dict[str, Any]]] = {}  # name -> (state, data)
+
+
+def _invalidate_serialize_cache(name: str):
+    """Invalidate the serialization cache for a slice after mutations."""
+    _serialize_cache.pop(name, None)
+
+
 def _serialize(slice_obj, dirty: bool = False) -> dict[str, Any]:
     data = slice_to_dict(slice_obj)
     name = data.get("name", "")
+    state = data.get("state", "")
     is_new = _is_new_draft(name) if _is_draft(name) else False
+
+    # Check serialization cache for stable, non-dirty slices
+    if not dirty and not is_new:
+        cached = _serialize_cache.get(name)
+        if cached and cached[0] == state:
+            return cached[1]
+
     # Only mark as "Draft" if it's a genuinely new local slice with no UUID.
     # A slice that has a UUID was submitted to FABRIC and must show its real state.
     if is_new and not data.get("id"):
@@ -371,7 +390,13 @@ def _serialize(slice_obj, dirty: bool = False) -> dict[str, Any]:
     if dirty and is_new:
         _persist_draft(name, slice_obj)
     graph = build_graph(data)
-    return {**data, "graph": graph}
+    result = {**data, "graph": graph}
+
+    # Cache the result for stable, non-dirty slices
+    if not dirty and not is_new:
+        _serialize_cache[name] = (state, result)
+
+    return result
 
 
 # --- Request models ---
@@ -450,6 +475,18 @@ class ResolveSitesRequest(BaseModel):
 # Heavy FABlib calls use async + asyncio.to_thread() so they don't block
 # the event loop or exhaust the default threadpool for other requests.
 
+# Request deduplication for list_slices: avoid concurrent FABlib calls
+# from overlapping poll requests.
+_list_slices_lock = asyncio.Lock()
+_list_slices_cache: tuple[float, list[dict[str, Any]]] | None = None
+_LIST_SLICES_CACHE_TTL = 5  # seconds
+
+
+def _invalidate_list_cache():
+    """Invalidate the list_slices dedup cache after mutations."""
+    global _list_slices_cache
+    _list_slices_cache = None
+
 @router.get("/slices")
 async def list_slices() -> list[dict[str, Any]]:
     """List all slices visible to the current user.
@@ -462,7 +499,31 @@ async def list_slices() -> list[dict[str, Any]]:
        states (Dead, Closing, StableError) since the last list.
     4. Scan drafts dir on disk for new drafts (e.g. created externally).
     5. Append new (never-submitted) draft slices.
+
+    Uses a 5-second result cache + async lock to deduplicate concurrent polls.
     """
+    import time as _time
+    global _list_slices_cache
+
+    # Fast path: return cached result if still fresh (no lock needed)
+    cached = _list_slices_cache
+    if cached and _time.time() - cached[0] < _LIST_SLICES_CACHE_TTL:
+        return cached[1]
+
+    # Acquire lock to prevent concurrent FABlib calls from overlapping polls
+    async with _list_slices_lock:
+        # Double-check after acquiring lock (another request may have filled cache)
+        cached = _list_slices_cache
+        if cached and _time.time() - cached[0] < _LIST_SLICES_CACHE_TTL:
+            return cached[1]
+
+        result = await _list_slices_impl()
+        _list_slices_cache = (_time.time(), result)
+        return result
+
+
+async def _list_slices_impl() -> list[dict[str, Any]]:
+    """Core implementation of list_slices (extracted for dedup caching)."""
     # Scan drafts dir for any new drafts not yet in memory
     try:
         await asyncio.to_thread(_load_persistent_drafts)
@@ -480,165 +541,80 @@ async def list_slices() -> list[dict[str, Any]]:
                       if (getattr(s, 'get_project_id', lambda: '')() or '') == current_pid]
         return [slice_summary(s) for s in slices]
     try:
-        fabric_results = await asyncio.to_thread(_fast_query)
+        fabric_results = await run_in_fablib_pool(_fast_query)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     # Load non-archived registry entries for the current project
     registry = get_all_entries(include_archived=False, project_id=current_pid)
 
-    # Separate fast results into: unchanged (same state as registry) and
-    # changed (state differs from registry — needs UUID confirmation).
-    # New slices not yet in the registry are registered directly.
-    unchanged_entries: list[dict] = []
-    needs_confirm: list[dict] = []  # fast results with state changes
-    new_entries: list[dict] = []    # not yet in registry
-
+    # Trust get_slices() results directly for state — no per-slice UUID
+    # confirmation needed. This reduces list_slices from O(N) to O(1) FABlib
+    # calls (single biggest backend performance win).
+    all_entries: list[dict] = []
     for r in fabric_results:
         name = r["name"]
         uuid = r.get("id", "")
         fast_state = r.get("state", "")
         entry = registry.get(name)
         if entry is None:
-            # New slice — register directly
-            new_entries.append({
+            # New slice — register it
+            all_entries.append({
                 "name": name, "uuid": uuid,
                 "state": fast_state, "has_errors": False,
             })
-        elif entry.get("state") == fast_state:
-            # State unchanged — trust it
-            unchanged_entries.append(r)
+        elif entry.get("state") != fast_state:
+            # State changed — trust get_slices() result and update registry
+            update_slice_state(name, fast_state, uuid=uuid,
+                               has_errors=entry.get("has_errors", False))
+            logger.info("State change for '%s': %s → %s (trusted from get_slices)",
+                        name, entry.get("state"), fast_state)
         else:
-            # State changed — need UUID confirmation
-            needs_confirm.append(r)
+            # Unchanged — bulk register to keep registry fresh
+            all_entries.append({
+                "name": name, "uuid": uuid,
+                "state": fast_state, "has_errors": entry.get("has_errors", False),
+            })
 
-    # Bulk-register genuinely new slices
-    if new_entries:
-        bulk_register(new_entries)
+    if all_entries:
+        bulk_register(all_entries)
 
     # Build set of names returned by the fast query
     fast_names: set[str] = {r["name"] for r in fabric_results}
 
-    # Individually query registry entries NOT in fast results (by UUID)
-    stale_entries: list[tuple[str, dict]] = []
+    # For registry entries NOT in fast results (stale), use the registry's
+    # last known state. Only query by UUID lazily when the user selects
+    # the slice (via refresh endpoint), not on every poll.
+    stale_results: list[dict[str, Any]] = []
     for name, entry in registry.items():
         if name in fast_names:
             continue
         if entry.get("uuid"):
-            stale_entries.append((name, entry))
-
-    def _query_by_uuid():
-        """Confirm state changes and query stale entries by UUID."""
-        fablib = get_fablib()
-        confirmed: dict[str, dict[str, Any]] = {}
-        stale_updated: list[dict[str, Any]] = []
-
-        # Confirm state changes from the fast query
-        for r in needs_confirm:
-            name = r["name"]
-            uuid = r.get("id", "")
-            if not uuid:
-                # No UUID to query — trust the fast result
-                confirmed[name] = r
-                continue
-            try:
-                s = fablib.get_slice(slice_id=uuid)
-                state = str(s.get_state()) if s.get_state() else r.get("state", "")
-                has_errors = check_has_errors(s)
-                sid = str(s.get_slice_id()) if s.get_slice_id() else uuid
-                update_slice_state(name, state, uuid=sid, has_errors=has_errors)
-                confirmed[name] = {
-                    "name": name, "id": sid,
-                    "state": state, "has_errors": has_errors,
-                }
-                logger.info("Confirmed state change for '%s': %s → %s",
-                            name, registry.get(name, {}).get("state"), state)
-            except Exception:
-                # UUID query failed — keep registry state
-                entry = registry.get(name, {})
-                confirmed[name] = {
-                    "name": name, "id": uuid,
-                    "state": entry.get("state", r.get("state", "")),
-                    "has_errors": entry.get("has_errors", False),
-                }
-                logger.warning("UUID confirmation failed for '%s', keeping registry state", name)
-
-        # Query stale entries (not in fast results)
-        for name, entry in stale_entries:
             uuid = entry["uuid"]
-            try:
-                s = fablib.get_slice(slice_id=uuid)
-                state = str(s.get_state()) if s.get_state() else "Dead"
-                has_errors = check_has_errors(s)
-                sid = str(s.get_slice_id()) if s.get_slice_id() else uuid
-                update_slice_state(name, state, uuid=sid, has_errors=has_errors)
-                stale_updated.append({
-                    "name": name, "id": sid,
-                    "state": state, "has_errors": has_errors,
-                })
-            except Exception:
-                # Slice purged or inaccessible — mark as Dead
+            state = entry.get("state", "Dead")
+            # If the state is not terminal, it likely transitioned to Dead
+            # since get_slices() didn't return it. Mark as Dead.
+            if state not in TERMINAL_STATES:
                 update_slice_state(name, "Dead", uuid=uuid, has_errors=False)
-                stale_updated.append({
-                    "name": name, "id": uuid,
-                    "state": "Dead", "has_errors": False,
-                })
-
-        return confirmed, stale_updated
-
-    # Run UUID queries (both confirmations and stale lookups)
-    confirmed_results: dict[str, dict[str, Any]] = {}
-    stale_results: list[dict[str, Any]] = []
-    if needs_confirm or stale_entries:
-        try:
-            confirmed_results, stale_results = await asyncio.to_thread(_query_by_uuid)
-        except Exception:
-            # Fall back: trust fast results for confirmations, registry for stale
-            for r in needs_confirm:
-                confirmed_results[r["name"]] = r
-            for name, entry in stale_entries:
-                stale_results.append({
-                    "name": name, "id": entry["uuid"],
-                    "state": entry.get("state", "Dead"),
-                    "has_errors": entry.get("has_errors", False),
-                })
-    else:
-        # No confirmations or stale queries needed — register unchanged entries
-        unchanged_bulk = []
-        for r in unchanged_entries:
-            unchanged_bulk.append({
-                "name": r["name"], "uuid": r.get("id", ""),
-                "state": r.get("state", ""), "has_errors": False,
+                state = "Dead"
+            stale_results.append({
+                "name": name, "id": uuid,
+                "state": state,
+                "has_errors": entry.get("has_errors", False),
             })
-        if unchanged_bulk:
-            bulk_register(unchanged_bulk)
-
-    # If we did UUID queries, also register the unchanged entries
-    if needs_confirm or stale_entries:
-        unchanged_bulk = []
-        for r in unchanged_entries:
-            unchanged_bulk.append({
-                "name": r["name"], "uuid": r.get("id", ""),
-                "state": r.get("state", ""), "has_errors": False,
-            })
-        if unchanged_bulk:
-            bulk_register(unchanged_bulk)
 
     results: list[dict[str, Any]] = []
     seen_names: set[str] = set()
 
-    # Add all FABRIC results — use confirmed state for changed slices
+    # Add all FABRIC results directly (already authoritative)
     for r in fabric_results:
         name = r["name"]
         seen_names.add(name)
-        if name in confirmed_results:
-            results.append(confirmed_results[name])
-        else:
-            entry = registry.get(name)
-            r["has_errors"] = entry.get("has_errors", False) if entry else False
-            results.append(r)
+        entry = registry.get(name)
+        r["has_errors"] = entry.get("has_errors", False) if entry else False
+        results.append(r)
 
-    # Add individually-queried stale results
+    # Add stale results
     for r in stale_results:
         name = r["name"]
         if name not in seen_names:
@@ -681,6 +657,7 @@ async def list_slices() -> list[dict[str, Any]]:
 @router.post("/slices/archive-terminal")
 async def archive_terminal_slices() -> dict[str, Any]:
     """Archive all slices in terminal states (Dead, Closing, StableError)."""
+    _invalidate_list_cache()
     archived = registry_archive_all_terminal()
     return {"archived": archived, "count": len(archived)}
 
@@ -740,7 +717,7 @@ async def reconcile_projects() -> dict[str, Any]:
         }
 
     try:
-        result = await asyncio.to_thread(_reconcile)
+        result = await run_in_fablib_pool(_reconcile)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -805,10 +782,10 @@ async def get_slice(slice_name: str) -> dict[str, Any]:
             if sid or st:
                 update_slice_state(slice_name, st, uuid=sid, has_errors=has_errors)
         except Exception:
-            pass
+            logger.warning("Failed to update registry state for '%s'", slice_name, exc_info=True)
         return data
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Slice not found: {e}")
 
@@ -816,6 +793,7 @@ async def get_slice(slice_name: str) -> dict[str, Any]:
 @router.post("/slices")
 async def create_slice(name: str) -> dict[str, Any]:
     """Create a new empty draft slice."""
+    _invalidate_list_cache()
     def _do():
         import uuid as _uuid_mod
         fablib = get_fablib()
@@ -829,7 +807,7 @@ async def create_slice(name: str) -> dict[str, Any]:
         ensure_slice_workdir(name)
         return _serialize(slice_obj)
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -837,6 +815,7 @@ async def create_slice(name: str) -> dict[str, Any]:
 @router.post("/slices/{slice_name}/submit")
 async def submit_slice(slice_name: str) -> dict[str, Any]:
     """Submit a slice — creates new slice or modifies existing one."""
+    _invalidate_list_cache()
     slice_name = _resolve_slice_name(slice_name)
     # Capture site groups before popping draft (pop clears them)
     site_groups = _get_site_groups(slice_name)
@@ -949,6 +928,7 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
                         try:
                             submitted_state = str(d.get_state()) if d.get_state() else "Configuring"
                         except Exception:
+                            logger.debug("Could not read state after submit", exc_info=True)
                             submitted_state = "Configuring"
                         submit_succeeded = True
                         update_slice_state(name, submitted_state, uuid=submitted_uuid)
@@ -956,14 +936,14 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
                                     name, submitted_uuid, submitted_state, attempt + 1)
                         return
                 except Exception:
-                    pass
+                    logger.debug("UUID capture attempt failed", exc_info=True)
                 if attempt < 5:
                     logger.info("Submit: no UUID yet for '%s', retrying in %ds (attempt %d/6)",
                                 name, (attempt + 1), attempt + 1)
                     time.sleep(attempt + 1)  # 1, 2, 3, 4, 5 seconds
             logger.warning("Submit: could not capture UUID for '%s' after retries", name)
         try:
-            return await asyncio.to_thread(_do)
+            return await run_in_fablib_pool(_do)
         except Exception as e:
             if submit_succeeded:
                 # Submit worked but post-submit serialization failed.
@@ -1009,6 +989,7 @@ async def refresh_slice(slice_name: str) -> dict[str, Any]:
                 return _serialize(draft)
 
     # Drop any draft — reload fresh from FABRIC
+    _invalidate_serialize_cache(slice_name)
     draft_backup, is_new_backup = _pop_draft(slice_name)
     site_groups_backup = _get_site_groups(slice_name)
 
@@ -1031,13 +1012,14 @@ async def refresh_slice(slice_name: str) -> dict[str, Any]:
             has_errors = check_has_errors(slice_obj)
             update_slice_state(slice_name, state, uuid=sid, has_errors=has_errors)
         except Exception:
+            logger.warning("Failed to read state after refresh", exc_info=True)
             state = ""
         # Only store as draft if NOT terminal — terminal slices are read-only
         if state not in TERMINAL_STATES:
             _store_draft(slice_name, slice_obj, is_new=False)
         return _serialize(slice_obj)
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except Exception as e:
         # Restore draft so user doesn't lose their work
         if draft_backup is not None:
@@ -1045,6 +1027,22 @@ async def refresh_slice(slice_name: str) -> dict[str, Any]:
             if site_groups_backup:
                 _store_site_groups(slice_name, site_groups_backup)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/slices/{slice_name}/state")
+async def get_slice_state(slice_name: str) -> dict[str, Any]:
+    """Return only slice state (lightweight, for polling)."""
+    slice_name = _resolve_slice_name(slice_name)
+    uuid = get_slice_uuid(slice_name)
+    entry = get_all_entries(include_archived=True).get(slice_name)
+    if entry:
+        return {
+            "name": slice_name,
+            "id": entry.get("uuid", uuid or ""),
+            "state": entry.get("state", ""),
+            "has_errors": entry.get("has_errors", False),
+        }
+    raise HTTPException(status_code=404, detail="Slice not found")
 
 
 @router.post("/slices/{slice_name}/resolve-sites")
@@ -1114,7 +1112,7 @@ async def resolve_sites_endpoint(slice_name: str, body: ResolveSitesRequest = Re
         return _serialize(draft, dirty=True)
 
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except HTTPException:
         raise
     except Exception as e:
@@ -1124,6 +1122,7 @@ async def resolve_sites_endpoint(slice_name: str, body: ResolveSitesRequest = Re
 @router.delete("/slices/{slice_name}")
 async def delete_slice(slice_name: str) -> dict[str, str]:
     """Delete a slice."""
+    _invalidate_list_cache()
     slice_name = _resolve_slice_name(slice_name)
     draft, is_new = _pop_draft(slice_name)
     if draft is not None and is_new:
@@ -1147,7 +1146,7 @@ async def delete_slice(slice_name: str) -> dict[str, str]:
         update_slice_state(slice_name, "Dead")
         return {"status": "deleted", "name": slice_name}
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1182,7 +1181,7 @@ async def renew_slice(slice_name: str, body: RenewRequest) -> dict[str, Any]:
         return _serialize(slice_obj)
 
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except HTTPException:
         raise
     except Exception as e:
@@ -1926,7 +1925,7 @@ async def run_post_boot_config(slice_name: str) -> dict[str, Any]:
             raise
         return _serialize(slice_obj)
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except HTTPException:
         raise
     except Exception as e:
@@ -2131,14 +2130,14 @@ async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
                     ud["boot_config"] = final_bc
                     new_node.set_user_data(ud)
                 except Exception:
-                    pass
+                    logger.debug("Clone set_user_data failed", exc_info=True)
             else:
                 post_boot = node_def.get("post_boot_script", "")
                 if post_boot:
                     try:
                         new_node.set_user_data({"post_boot_script": post_boot})
                     except Exception:
-                        pass
+                        logger.debug("Clone set_user_data failed", exc_info=True)
 
         # Add networks — resolve interfaces by (node_name, comp_name, port_index)
         _fabnet_to_l3 = {
@@ -2194,6 +2193,9 @@ async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
                             iface.set_ip_addr(addr=iface_ips[iname])
 
         _store_draft(new_name, new_slice, is_new=True)
+        import uuid as _uuid_mod
+        draft_id = f"draft-{_uuid_mod.uuid4()}"
+        register_slice(new_name, uuid=draft_id, state="Draft")
         # Store resolved group membership for the clone
         if clone_groups:
             _store_site_groups(new_name, clone_groups)
@@ -2211,13 +2213,13 @@ async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
                 if bc and isinstance(bc, dict):
                     _save_boot_config(new_name, node.get_name(), bc)
             except Exception:
-                pass
+                logger.debug("Clone boot config copy failed", exc_info=True)
 
         result = _serialize(new_slice)
         logger.info("Clone: successfully created draft '%s'", new_name)
         return result
     try:
-        return await asyncio.to_thread(_do)
+        return await run_in_fablib_pool(_do)
     except HTTPException:
         raise
     except Exception as e:
@@ -2568,6 +2570,9 @@ def import_slice(model: SliceModelImport) -> dict[str, Any]:
                 logger.warning("Import: could not add facility port %s: %s", fp_def["name"], ex)
 
         _store_draft(model.name, slice_obj, is_new=True)
+        import uuid as _uuid_mod
+        draft_id = f"draft-{_uuid_mod.uuid4()}"
+        register_slice(model.name, uuid=draft_id, state="Draft")
         if node_groups:
             _store_site_groups(model.name, node_groups)
         # Restore IP hints from imported model

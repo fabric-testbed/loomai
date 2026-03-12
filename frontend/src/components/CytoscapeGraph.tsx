@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import cytoscape, { type Core, type EventObject } from 'cytoscape';
 import type { CyGraph, SliceData, RecipeSummary } from '../types/fabric';
 import '../styles/context-menu.css';
@@ -281,7 +281,7 @@ interface MenuState {
   sliceName?: string;  // set when right-clicking a slice compound node
 }
 
-export default function CytoscapeGraph({
+export default React.memo(function CytoscapeGraph({
   graph,
   layout,
   dark,
@@ -777,7 +777,7 @@ export default function CytoscapeGraph({
       )}
     </div>
   );
-}
+});
 
 /**
  * Show or hide the slice compound container node.

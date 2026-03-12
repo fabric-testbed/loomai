@@ -12,6 +12,7 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from app.http_pool import ai_client
 from app.settings_manager import get_fabric_api_key as _get_ai_api_key
 
 logger = logging.getLogger(__name__)
@@ -1018,21 +1019,16 @@ async def _execute_fetch_webpage(url: str, max_length: int = 4000) -> str:
     """Fetch a webpage and return its text content (HTML stripped)."""
     max_length = min(max(500, max_length), 8000)
     try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(15.0, connect=5.0),
-            follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; LooMAI/1.0)"},
-        ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "")
-            if "text/html" in content_type:
-                text = _extract_text_from_html(resp.text)
-            else:
-                text = resp.text
-            if len(text) > max_length:
-                text = text[:max_length] + "\n\n[... truncated]"
-            return json.dumps({"url": url, "content": text}, default=str)
+        resp = await ai_client.get(url)
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "")
+        if "text/html" in content_type:
+            text = _extract_text_from_html(resp.text)
+        else:
+            text = resp.text
+        if len(text) > max_length:
+            text = text[:max_length] + "\n\n[... truncated]"
+        return json.dumps({"url": url, "content": text}, default=str)
     except Exception as e:
         logger.warning("Fetch webpage failed: %s", e)
         return json.dumps({"error": f"Fetch failed: {e}"})
@@ -1059,8 +1055,8 @@ def _extract_text_from_html(html: str) -> str:
 # Streaming agentic chat
 # ---------------------------------------------------------------------------
 
-# Track active streaming requests for cancellation
-_active_clients: dict[str, httpx.AsyncClient] = {}
+# Track cancelled streaming requests
+_cancelled_requests: set[str] = set()
 
 
 @router.get("/api/ai/chat/agents")
@@ -1132,16 +1128,14 @@ async def chat_stream(request: Request):
     system_message = {"role": "system", "content": "\n".join(system_parts)}
 
     async def generate():
-        client = httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=10.0))
-        if request_id:
-            _active_clients[request_id] = client
-
         try:
             conversation = [system_message] + messages
             tool_round = 0
 
             while tool_round < _MAX_TOOL_ROUNDS:
                 if await request.is_disconnected():
+                    break
+                if request_id and request_id in _cancelled_requests:
                     break
 
                 # Make LLM call (non-streaming for tool rounds, streaming for final)
@@ -1154,7 +1148,7 @@ async def chat_stream(request: Request):
                 }
 
                 # Try non-streaming first to detect tool calls
-                resp = await client.post(
+                resp = await ai_client.post(
                     f"{_ai_server_url()}/v1/chat/completions",
                     headers={
                         "Authorization": f"Bearer {api_key}",
@@ -1209,7 +1203,7 @@ async def chat_stream(request: Request):
 
                 # No tool calls — stream the final text response
                 # Re-do the call with streaming for smooth output
-                async with client.stream(
+                async with ai_client.stream(
                     "POST",
                     f"{_ai_server_url()}/v1/chat/completions",
                     headers={
@@ -1227,6 +1221,8 @@ async def chat_stream(request: Request):
 
                     async for line in stream_resp.aiter_lines():
                         if await request.is_disconnected():
+                            break
+                        if request_id and request_id in _cancelled_requests:
                             break
                         if not line.startswith("data: "):
                             continue
@@ -1264,9 +1260,8 @@ async def chat_stream(request: Request):
             logger.exception("Chat stream error")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
         finally:
-            if request_id and request_id in _active_clients:
-                del _active_clients[request_id]
-            await client.aclose()
+            if request_id:
+                _cancelled_requests.discard(request_id)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -1275,12 +1270,7 @@ async def chat_stream(request: Request):
 async def chat_stop(request: Request):
     body = await request.json()
     request_id = body.get("request_id", "")
-    if request_id in _active_clients:
-        try:
-            await _active_clients[request_id].aclose()
-        except Exception:
-            pass
-        if request_id in _active_clients:
-            del _active_clients[request_id]
+    if request_id:
+        _cancelled_requests.add(request_id)
         return {"status": "stopped"}
     return {"status": "not_found"}

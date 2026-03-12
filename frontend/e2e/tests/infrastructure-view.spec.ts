@@ -13,17 +13,23 @@ test.describe('Infrastructure View', () => {
     await expect(page.locator('.infra-view')).toBeVisible();
   });
 
-  test('has Map and Browse tabs', async ({ page }) => {
+  test('has Map, Browse, and Facility Ports tabs', async ({ page }) => {
     const tabs = page.locator('.infra-subtab');
-    await expect(tabs).toHaveCount(2);
+    await expect(tabs).toHaveCount(3);
     await expect(tabs.nth(0)).toHaveText('Map');
     await expect(tabs.nth(1)).toHaveText('Browse');
+    await expect(tabs.nth(2)).toHaveText('Facility Ports');
   });
 
   test('Browse tab shows site list', async ({ page }) => {
     // Click Browse tab
     await page.locator('.infra-subtab', { hasText: 'Browse' }).click();
     // Should show site data from our mock
+    await expect(page.locator('.infra-content')).toBeVisible();
+  });
+
+  test('Facility Ports tab is clickable', async ({ page }) => {
+    await page.locator('.infra-subtab', { hasText: 'Facility Ports' }).click();
     await expect(page.locator('.infra-content')).toBeVisible();
   });
 

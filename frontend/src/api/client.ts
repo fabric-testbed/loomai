@@ -38,6 +38,10 @@ export function refreshSlice(name: string): Promise<SliceData> {
   return fetchJson(`/slices/${encodeURIComponent(name)}/refresh`, { method: 'POST' });
 }
 
+export function getSliceState(name: string): Promise<{name: string; id: string; state: string; has_errors: boolean}> {
+  return fetchJson(`/slices/${encodeURIComponent(name)}/state`);
+}
+
 export function validateSlice(name: string): Promise<ValidationResult> {
   return fetchJson(`/slices/${encodeURIComponent(name)}/validate`);
 }

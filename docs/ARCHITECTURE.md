@@ -398,6 +398,7 @@ Five AI coding assistants are integrated:
 | OpenCode | Web terminal | Free | FABRIC skills, agents, MCP tools |
 | Crush | Terminal | Free | Charm TUI, NRP model support |
 | Claude Code | Terminal | Paid | Anthropic CLI, advanced coding |
+| Deep Agents | Terminal | Free | LangChain coding agent, planning, memory, skills |
 
 LoomAI (`AIChatPanel.tsx`) supports streaming responses, expandable tool call cards, and multiple agent personas (Network Architect, Troubleshooter, Experiment Designer, etc.).
 

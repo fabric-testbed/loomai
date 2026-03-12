@@ -1,12 +1,12 @@
 'use client';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import '@xterm/xterm/css/xterm.css';
 import '../styles/side-console.css';
 import type { ValidationIssue, SliceErrorMessage } from '../types/fabric';
 import type { TerminalTab, BootConfigError, RecipeConsoleLine, BootConsoleLine } from './BottomPanel';
 import { RecipeConsoleView, SingleSliceBootLogView, SliceErrorsView, ValidationView } from './BottomPanel';
-import LogView from './LogView';
-import TerminalHost from './TerminalHost';
+
+const LogView = React.lazy(() => import('./LogView'));
+const TerminalHost = React.lazy(() => import('./TerminalHost'));
 import { destroyTerminalSession } from '../utils/terminalStore';
 import {
   type SplitDirection, type SplitNode, type LeafNode, type LayoutNode,
@@ -50,7 +50,7 @@ interface SideConsolePanelProps {
 
 const PANEL_ID = 'side';
 
-export default function SideConsolePanel({
+export default React.memo(function SideConsolePanel({
   tabIds, terminals, onCloseTerminal, validationIssues, validationValid,
   sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors,
   onClearBootConfigErrors, recipeConsole, recipeRunning, onClearRecipeConsole,
@@ -302,7 +302,7 @@ export default function SideConsolePanel({
       case 'log':
         return (
           <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-            <LogView />
+            <React.Suspense fallback={null}><LogView /></React.Suspense>
           </div>
         );
       case 'recipes':
@@ -319,14 +319,14 @@ export default function SideConsolePanel({
       case 'local-terminal':
         return (
           <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-            {containerTermActive && <TerminalHost sessionId="local-terminal" type="local" />}
+            {containerTermActive && <React.Suspense fallback={null}><TerminalHost sessionId="local-terminal" type="local" /></React.Suspense>}
           </div>
         );
       default: {
         if (tabId.startsWith('local-term-')) {
           return (
             <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-              <TerminalHost sessionId={tabId} type="local" />
+              <React.Suspense fallback={null}><TerminalHost sessionId={tabId} type="local" /></React.Suspense>
             </div>
           );
         }
@@ -353,7 +353,7 @@ export default function SideConsolePanel({
         if (term) {
           return (
             <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-              <TerminalHost sessionId={tabId} type="ssh" sliceName={term.sliceName} nodeName={term.nodeName} managementIp={term.managementIp} />
+              <React.Suspense fallback={null}><TerminalHost sessionId={tabId} type="ssh" sliceName={term.sliceName} nodeName={term.nodeName} managementIp={term.managementIp} /></React.Suspense>
             </div>
           );
         }
@@ -490,4 +490,4 @@ export default function SideConsolePanel({
       </div>
     </div>
   );
-}
+});

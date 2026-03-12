@@ -47,7 +47,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   const [litellmApiKey, setLitellmApiKey] = useState('');
   const [nrpApiKey, setNrpApiKey] = useState('');
   const [aiTools, setAiTools] = useState<Record<string, boolean>>({
-    aider: true, opencode: true, crush: true, claude: false,
+    aider: true, opencode: true, crush: true, claude: false, deepagents: true,
   });
 
   // Unified settings and tool configs
@@ -824,6 +824,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                   { id: 'aider', label: 'Aider', desc: 'AI pair programming terminal' },
                   { id: 'opencode', label: 'OpenCode', desc: 'Terminal-based AI coding assistant' },
                   { id: 'crush', label: 'Crush', desc: 'Terminal AI assistant (Charm)' },
+                  { id: 'deepagents', label: 'Deep Agents', desc: 'LangChain coding agent with planning and memory' },
                   { id: 'claude', label: 'Claude Code', desc: 'Anthropic CLI (requires your own account)' },
                 ] as const).map((tool) => (
                   <label key={tool.id} className="ai-tool-toggle-row">

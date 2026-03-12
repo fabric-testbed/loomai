@@ -11,9 +11,11 @@ import shutil
 import signal
 import subprocess
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.http_pool import fabric_client, ai_client
 from app.user_context import get_user_storage
 from app.tool_installer import is_tool_installed, get_tool_binary_path, get_tool_env
 
@@ -168,14 +170,12 @@ async def set_jupyter_theme(req: ThemeRequest):
     jlab_theme = "JupyterLab Dark" if req.theme == "dark" else "JupyterLab Light"
     settings_url = f"http://127.0.0.1:{_jupyter_port()}/jupyter/lab/api/settings/@jupyterlab/apputils-extension:themes"
 
-    import httpx
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.put(
-                settings_url,
-                json={"raw": json.dumps({"theme": jlab_theme})},
-            )
-            r.raise_for_status()
+        r = await fabric_client.put(
+            settings_url,
+            json={"raw": json.dumps({"theme": jlab_theme})},
+        )
+        r.raise_for_status()
     except Exception as e:
         logger.warning("Failed to set JupyterLab theme: %s", e)
         return {"status": "error", "detail": str(e)}
@@ -392,7 +392,6 @@ async def publish_fork(name: str, req: PublishForkRequest):
 
     # Use the artifacts publish flow
     from app.routes.artifacts import _get_auth_headers, ARTIFACT_API, _cache
-    import httpx
     import tarfile
     import tempfile
 
@@ -414,15 +413,14 @@ async def publish_fork(name: str, req: PublishForkRequest):
         create_body["project_uuid"] = req.project_uuid
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.post(
-                f"{ARTIFACT_API}/artifacts",
-                params={"format": "json"},
-                json=create_body,
-                headers=headers,
-            )
-            r.raise_for_status()
-            created = r.json()
+        r = await fabric_client.post(
+            f"{ARTIFACT_API}/artifacts",
+            params={"format": "json"},
+            json=create_body,
+            headers=headers,
+        )
+        r.raise_for_status()
+        created = r.json()
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code,
                           detail=f"Failed to create artifact: {e.response.text}")
@@ -443,14 +441,13 @@ async def publish_fork(name: str, req: PublishForkRequest):
         update_body["project_uuid"] = req.project_uuid
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.put(
-                f"{ARTIFACT_API}/artifacts/{artifact_uuid}",
-                params={"format": "json"},
-                json=update_body,
-                headers=headers,
-            )
-            r.raise_for_status()
+        r = await fabric_client.put(
+            f"{ARTIFACT_API}/artifacts/{artifact_uuid}",
+            params={"format": "json"},
+            json=update_body,
+            headers=headers,
+        )
+        r.raise_for_status()
     except Exception as e:
         logger.warning("Failed to update artifact %s title/tags: %s", artifact_uuid, e)
 
@@ -467,17 +464,16 @@ async def publish_fork(name: str, req: PublishForkRequest):
         })
 
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                with open(tar_path, "rb") as fh:
-                    r = await client.post(
-                        f"{ARTIFACT_API}/contents",
-                        params={"format": "json"},
-                        headers=headers,
-                        files={"file": (f"{safe}.tar.gz", fh, "application/gzip")},
-                        data={"data": upload_data},
-                    )
-                    r.raise_for_status()
-                    version_info = r.json()
+            with open(tar_path, "rb") as fh:
+                r = await ai_client.post(
+                    f"{ARTIFACT_API}/contents",
+                    params={"format": "json"},
+                    headers=headers,
+                    files={"file": (f"{safe}.tar.gz", fh, "application/gzip")},
+                    data={"data": upload_data},
+                )
+                r.raise_for_status()
+                version_info = r.json()
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code,
                               detail=f"Content upload failed: {e.response.text}")

@@ -1,4 +1,5 @@
 'use client';
+import React from 'react';
 import '../styles/slices-view.css';
 
 type SlicesSubView = 'topology' | 'table' | 'storage' | 'map' | 'apps';
@@ -17,7 +18,7 @@ const SUB_VIEWS: Array<{ key: SlicesSubView; label: string }> = [
   { key: 'apps', label: 'Apps' },
 ];
 
-export default function SlicesView({ subView, onSubViewChange, children }: SlicesViewProps) {
+export default React.memo(function SlicesView({ subView, onSubViewChange, children }: SlicesViewProps) {
   return (
     <div className="slices-view">
       <div className="slices-subtabs">
@@ -36,4 +37,4 @@ export default function SlicesView({ subView, onSubViewChange, children }: Slice
       </div>
     </div>
   );
-}
+});

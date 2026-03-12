@@ -59,6 +59,13 @@ TOOL_REGISTRY: dict[str, dict] = {
         "display_name": "Claude Code",
         "size_estimate": "~1 GB",
     },
+    "deepagents": {
+        "type": "pip",
+        "packages": ["deepagents-cli[anthropic]"],
+        "binary": "deepagents",
+        "display_name": "Deep Agents",
+        "size_estimate": "~500 MB",
+    },
     "jupyterlab": {
         "type": "pip",
         "packages": ["jupyterlab", "ipykernel", "pandas", "matplotlib", "numpy"],

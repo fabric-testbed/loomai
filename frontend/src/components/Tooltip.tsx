@@ -1,5 +1,5 @@
 'use client';
-import { useState, useRef, useCallback, useLayoutEffect, type ReactNode } from 'react';
+import React, { useState, useRef, useCallback, useLayoutEffect, type ReactNode } from 'react';
 import '../styles/tooltip.css';
 
 interface TooltipProps {
@@ -8,7 +8,7 @@ interface TooltipProps {
   delay?: number;
 }
 
-export default function Tooltip({ text, children, delay = 400 }: TooltipProps) {
+export default React.memo(function Tooltip({ text, children, delay = 400 }: TooltipProps) {
   const [visible, setVisible] = useState(false);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const [adjusted, setAdjusted] = useState({ x: 0, y: 0 });
@@ -78,4 +78,4 @@ export default function Tooltip({ text, children, delay = 400 }: TooltipProps) {
       )}
     </span>
   );
-}
+});

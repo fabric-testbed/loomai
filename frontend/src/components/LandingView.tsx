@@ -87,6 +87,11 @@ export default function LandingView({ onNavigate, onOpenSettings, listLoaded, on
                 <span className="landing-ai-tool-desc">Terminal AI assistant from Charm with FABRIC and NRP LLM support</span>
               </div>
               <div className="landing-ai-tool">
+                <span className="landing-ai-tool-name">Deep Agents</span>
+                <span className="landing-ai-tool-tag free">Free</span>
+                <span className="landing-ai-tool-desc">LangChain coding agent with planning, memory, and skills</span>
+              </div>
+              <div className="landing-ai-tool">
                 <span className="landing-ai-tool-name">Claude Code</span>
                 <span className="landing-ai-tool-tag paid">Paid</span>
                 <span className="landing-ai-tool-desc">Anthropic's CLI with deep FABRIC integration via MCP tools</span>

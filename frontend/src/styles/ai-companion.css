@@ -57,6 +57,7 @@
 .ai-card-icon.opencode { background: linear-gradient(135deg, #6c5ce7, #a29bfe); color: #fff; }
 .ai-card-icon.crush { background: linear-gradient(135deg, #e25241, #ff8542); color: #fff; }
 .ai-card-icon.claude { background: linear-gradient(135deg, #d4a574, #c4956a); color: #fff; }
+.ai-card-icon.deepagents { background: linear-gradient(135deg, #1a8870, #2cb67d); color: #fff; }
 
 .ai-card-name {
   font-size: 16px;

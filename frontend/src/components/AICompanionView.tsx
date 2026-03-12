@@ -79,6 +79,14 @@ const TOOLS: ToolDef[] = [
     needsKey: true,
   },
   {
+    id: 'deepagents',
+    name: 'Deep Agents',
+    desc: 'LangChain\'s open-source coding agent with planning, memory, and skills. Powered by FABRIC-hosted LLMs. Requires a free FABRIC API key.',
+    icon: 'DA',
+    iconClass: 'deepagents',
+    needsKey: true,
+  },
+  {
     id: 'claude',
     name: 'Claude Code',
     desc: 'Anthropic\'s most powerful agentic coding CLI. Requires your own paid Anthropic subscription (Max or API).',

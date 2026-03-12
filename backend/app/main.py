@@ -276,10 +276,31 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(60)
             mgr.cleanup_idle()
 
+    # Periodically warm the site resource cache in background (every 4 min)
+    # so users never hit a cold cache stall
+    async def _site_cache_warmer():
+        from app.routes.resources import _trigger_bg_site_refresh
+        # Initial delay — let the app finish starting before first refresh
+        await asyncio.sleep(30)
+        while True:
+            _trigger_bg_site_refresh()
+            await asyncio.sleep(240)  # 4 minutes
+
     task = asyncio.create_task(_cleanup_loop())
+    cache_task = asyncio.create_task(_site_cache_warmer())
     yield
     task.cancel()
+    cache_task.cancel()
     mgr.close_all()
+
+    # Close shared httpx connection pools
+    try:
+        from app.http_pool import fabric_client, ai_client, metrics_client
+        await fabric_client.aclose()
+        await ai_client.aclose()
+        await metrics_client.aclose()
+    except Exception:
+        pass
 
     # Back up Claude Code config to persistent storage on shutdown
     try:
@@ -291,9 +312,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FABRIC Web GUI API", version="0.1.0", lifespan=lifespan)
 
+from app.error_handler import install_error_handlers
+install_error_handlers(app)
+
+_DEFAULT_ORIGINS = ["http://localhost:3000", "http://localhost:5173"]
+_cors_env = os.environ.get("CORS_ORIGINS", "")
+_cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else _DEFAULT_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

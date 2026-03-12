@@ -18,6 +18,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.http_pool import fabric_client, ai_client
 from app.user_context import get_user_storage, get_token_path, register_user_changed_callback
 
 router = APIRouter(prefix="/api/artifacts", tags=["artifacts"])
@@ -59,7 +60,7 @@ def _get_auth_headers() -> dict[str, str]:
         if token:
             return {"Authorization": f"Bearer {token}"}
     except Exception:
-        pass
+        logger.debug("Could not read auth token", exc_info=True)
     return {}
 
 
@@ -221,25 +222,24 @@ async def _fetch_all_artifacts() -> list[dict[str, Any]]:
     all_artifacts: list[dict[str, Any]] = []
     page = 1
     headers = _get_auth_headers()
-    async with httpx.AsyncClient(timeout=20) as client:
-        while True:
-            r = await client.get(
-                f"{ARTIFACT_API}/artifacts",
-                params={"format": "json", "page": page},
-                headers=headers,
-            )
-            r.raise_for_status()
-            data = r.json()
-            results = data.get("results", [])
-            for art in results:
-                art["tags"] = _normalize_tags(art.get("tags", []))
-                art["category"] = _classify_artifact(art["tags"], art.get("description_short", ""), art.get("description_long", ""))
-            all_artifacts.extend(results)
-            if data.get("next") is None:
-                break
-            page += 1
-            if page > 20:  # safety limit
-                break
+    while True:
+        r = await fabric_client.get(
+            f"{ARTIFACT_API}/artifacts",
+            params={"format": "json", "page": page},
+            headers=headers,
+        )
+        r.raise_for_status()
+        data = r.json()
+        results = data.get("results", [])
+        for art in results:
+            art["tags"] = _normalize_tags(art.get("tags", []))
+            art["category"] = _classify_artifact(art["tags"], art.get("description_short", ""), art.get("description_long", ""))
+        all_artifacts.extend(results)
+        if data.get("next") is None:
+            break
+        page += 1
+        if page > 20:  # safety limit
+            break
 
     _cache["artifacts"] = all_artifacts
     _cache["fetched_at"] = now
@@ -250,10 +250,9 @@ async def _fetch_all_artifacts() -> list[dict[str, Any]]:
 async def _fetch_artifact(uuid: str) -> dict[str, Any]:
     """Fetch a single artifact by UUID."""
     headers = _get_auth_headers()
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(f"{ARTIFACT_API}/artifacts/{uuid}", params={"format": "json"}, headers=headers)
-        r.raise_for_status()
-        return r.json()
+    r = await fabric_client.get(f"{ARTIFACT_API}/artifacts/{uuid}", params={"format": "json"}, headers=headers)
+    r.raise_for_status()
+    return r.json()
 
 
 # ---------------------------------------------------------------------------
@@ -396,9 +395,8 @@ async def download_artifact(req: DownloadRequest):
 
     download_url = f"{ARTIFACT_API}/contents/download/{urn}"
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            r = await client.get(download_url, headers=_get_auth_headers())
-            r.raise_for_status()
+        r = await ai_client.get(download_url, headers=_get_auth_headers())
+        r.raise_for_status()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Download failed: {e}")
 
@@ -478,7 +476,7 @@ async def download_artifact(req: DownloadRequest):
                 metadata["node_count"] = len(model.get("nodes", []))
                 metadata["network_count"] = len(model.get("networks", []))
             except Exception:
-                pass
+                logger.debug("Metadata parsing failed", exc_info=True)
         with open(meta_path, "w") as f:
             json.dump(metadata, f, indent=2)
 
@@ -535,7 +533,7 @@ def list_local_artifacts():
                     with open(mpath) as f:
                         meta = json.load(f)
                 except Exception:
-                    pass
+                    logger.debug("Metadata parsing failed", exc_info=True)
                 break
 
         meta["dir_name"] = entry
@@ -586,7 +584,7 @@ def update_local_metadata(dir_name: str, req: LocalMetadataUpdate):
             with open(meta_path) as f:
                 meta = json.load(f)
         except Exception:
-            pass
+            logger.debug("Metadata parsing failed", exc_info=True)
 
     for field in ("name", "description", "description_short", "description_long",
                     "project_uuid", "visibility"):
@@ -640,15 +638,14 @@ async def publish_artifact(req: PublishRequest):
     if req.project_uuid:
         create_body["project_uuid"] = req.project_uuid
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.post(
-                f"{ARTIFACT_API}/artifacts",
-                params={"format": "json"},
-                json=create_body,
-                headers=headers,
-            )
-            r.raise_for_status()
-            created = r.json()
+        r = await fabric_client.post(
+            f"{ARTIFACT_API}/artifacts",
+            params={"format": "json"},
+            json=create_body,
+            headers=headers,
+        )
+        r.raise_for_status()
+        created = r.json()
     except httpx.HTTPStatusError as e:
         detail = e.response.text
         raise HTTPException(status_code=e.response.status_code, detail=f"Failed to create artifact: {detail}")
@@ -670,14 +667,13 @@ async def publish_artifact(req: PublishRequest):
         update_body["project_uuid"] = req.project_uuid
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.put(
-                f"{ARTIFACT_API}/artifacts/{artifact_uuid}",
-                params={"format": "json"},
-                json=update_body,
-                headers=headers,
-            )
-            r.raise_for_status()
+        r = await fabric_client.put(
+            f"{ARTIFACT_API}/artifacts/{artifact_uuid}",
+            params={"format": "json"},
+            json=update_body,
+            headers=headers,
+        )
+        r.raise_for_status()
     except httpx.HTTPStatusError as e:
         detail = e.response.text
         logger.warning("Failed to update artifact %s: %s", artifact_uuid, detail)
@@ -697,17 +693,16 @@ async def publish_artifact(req: PublishRequest):
         })
 
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                with open(tar_path, "rb") as fh:
-                    r = await client.post(
-                        f"{ARTIFACT_API}/contents",
-                        params={"format": "json"},
-                        headers=headers,
-                        files={"file": (f"{req.dir_name}.tar.gz", fh, "application/gzip")},
-                        data={"data": upload_data},
-                    )
-                    r.raise_for_status()
-                    version_info = r.json()
+            with open(tar_path, "rb") as fh:
+                r = await ai_client.post(
+                    f"{ARTIFACT_API}/contents",
+                    params={"format": "json"},
+                    headers=headers,
+                    files={"file": (f"{req.dir_name}.tar.gz", fh, "application/gzip")},
+                    data={"data": upload_data},
+                )
+                r.raise_for_status()
+                version_info = r.json()
         except httpx.HTTPStatusError as e:
             detail = e.response.text
             raise HTTPException(
@@ -739,14 +734,13 @@ async def list_valid_tags():
     """Return the set of tags accepted by the Artifact Manager for publishing."""
     headers = _get_auth_headers()
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.get(
-                f"{ARTIFACT_API}/meta/tags",
-                params={"format": "json"},
-                headers=headers,
-            )
-            r.raise_for_status()
-            data = r.json()
+        r = await fabric_client.get(
+            f"{ARTIFACT_API}/meta/tags",
+            params={"format": "json"},
+            headers=headers,
+        )
+        r.raise_for_status()
+        data = r.json()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch tags: {e}")
 
@@ -876,15 +870,14 @@ async def update_remote_artifact(uuid: str, req: UpdateArtifactRequest):
         raise HTTPException(status_code=400, detail="No fields to update")
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.put(
-                f"{ARTIFACT_API}/artifacts/{uuid}",
-                params={"format": "json"},
-                json=update_body,
-                headers=headers,
-            )
-            r.raise_for_status()
-            updated = r.json()
+        r = await fabric_client.put(
+            f"{ARTIFACT_API}/artifacts/{uuid}",
+            params={"format": "json"},
+            json=update_body,
+            headers=headers,
+        )
+        r.raise_for_status()
+        updated = r.json()
     except httpx.HTTPStatusError as e:
         detail = e.response.text
         raise HTTPException(status_code=e.response.status_code, detail=f"Failed to update artifact: {detail}")
@@ -926,17 +919,16 @@ async def upload_artifact_version(uuid: str, req: UploadVersionRequest):
         })
 
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                with open(tar_path, "rb") as fh:
-                    r = await client.post(
-                        f"{ARTIFACT_API}/contents",
-                        params={"format": "json"},
-                        headers=headers,
-                        files={"file": (f"{req.dir_name}.tar.gz", fh, "application/gzip")},
-                        data={"data": upload_data},
-                    )
-                    r.raise_for_status()
-                    version_info = r.json()
+            with open(tar_path, "rb") as fh:
+                r = await ai_client.post(
+                    f"{ARTIFACT_API}/contents",
+                    params={"format": "json"},
+                    headers=headers,
+                    files={"file": (f"{req.dir_name}.tar.gz", fh, "application/gzip")},
+                    data={"data": upload_data},
+                )
+                r.raise_for_status()
+                version_info = r.json()
         except httpx.HTTPStatusError as e:
             detail = e.response.text
             raise HTTPException(status_code=e.response.status_code, detail=f"Version upload failed: {detail}")
@@ -960,13 +952,12 @@ async def delete_artifact_version(uuid: str, version_uuid: str):
     if not headers:
         raise HTTPException(status_code=401, detail="No FABRIC token configured")
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.delete(
-                f"{ARTIFACT_API}/contents/{version_uuid}",
-                params={"format": "json"},
-                headers=headers,
-            )
-            r.raise_for_status()
+        r = await fabric_client.delete(
+            f"{ARTIFACT_API}/contents/{version_uuid}",
+            params={"format": "json"},
+            headers=headers,
+        )
+        r.raise_for_status()
     except httpx.HTTPStatusError as e:
         detail = e.response.text
         raise HTTPException(status_code=e.response.status_code, detail=f"Failed to delete version: {detail}")
@@ -1038,9 +1029,8 @@ async def revert_local_artifact(dir_name: str, req: RevertRequest):
     # 5. Download the tar.gz
     download_url = f"{ARTIFACT_API}/contents/download/{urn}"
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            r = await client.get(download_url, headers=_get_auth_headers())
-            r.raise_for_status()
+        r = await ai_client.get(download_url, headers=_get_auth_headers())
+        r.raise_for_status()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Download failed: {e}")
 
@@ -1119,7 +1109,7 @@ async def revert_local_artifact(dir_name: str, req: RevertRequest):
             metadata["node_count"] = len(model.get("nodes", []))
             metadata["network_count"] = len(model.get("networks", []))
         except Exception:
-            pass
+            logger.debug("Metadata parsing failed", exc_info=True)
 
     with open(os.path.join(local_dir, "metadata.json"), "w") as f:
         json.dump(metadata, f, indent=2)
@@ -1154,13 +1144,12 @@ async def delete_remote_artifact(uuid: str):
         raise HTTPException(status_code=401, detail="No FABRIC token configured")
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.delete(
-                f"{ARTIFACT_API}/artifacts/{uuid}",
-                params={"format": "json"},
-                headers=headers,
-            )
-            r.raise_for_status()
+        r = await fabric_client.delete(
+            f"{ARTIFACT_API}/artifacts/{uuid}",
+            params={"format": "json"},
+            headers=headers,
+        )
+        r.raise_for_status()
     except httpx.HTTPStatusError as e:
         detail = e.response.text
         raise HTTPException(status_code=e.response.status_code, detail=f"Failed to delete artifact: {detail}")

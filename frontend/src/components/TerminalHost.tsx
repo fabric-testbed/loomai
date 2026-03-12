@@ -34,7 +34,7 @@ function refitSession(session: TerminalSession) {
   }
 }
 
-export default function TerminalHost({
+export default React.memo(function TerminalHost({
   sessionId,
   type,
   sliceName,
@@ -83,4 +83,4 @@ export default function TerminalHost({
   }, [sessionId, type, sliceName, nodeName, managementIp]);
 
   return <div ref={hostRef} style={{ width: '100%', height: '100%' }} />;
-}
+});

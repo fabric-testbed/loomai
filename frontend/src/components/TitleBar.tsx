@@ -1,5 +1,5 @@
 'use client';
-import { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import '../styles/titlebar.css';
 import { VERSION } from '../version';
 import { checkForUpdate } from '../api/client';
@@ -41,7 +41,7 @@ const VIEWS: Array<{ key: TopView; label: string; icon: string; desc: string }> 
   { key: 'jupyter', label: 'JupyterLab', icon: '\uD83D\uDCD3', desc: 'JupyterLab — interactive notebooks' },
 ];
 
-export default function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, projectName, projects, onProjectChange, aiTools, selectedAiTool, onLaunchAiTool }: TitleBarProps) {
+export default React.memo(function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, projectName, projects, onProjectChange, aiTools, selectedAiTool, onLaunchAiTool }: TitleBarProps) {
   const currentProject = projects?.find((p) => p.name === projectName);
   const [viewOpen, setViewOpen] = useState(false);
   const [projOpen, setProjOpen] = useState(false);
@@ -268,4 +268,4 @@ export default function TitleBar({ dark, currentView, onToggleDark, onViewChange
       </div>
     </div>
   );
-}
+});

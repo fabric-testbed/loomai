@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -28,7 +28,7 @@ const TERM_THEME = {
   brightWhite: '#ffffff',
 };
 
-export default function LogView() {
+export default React.memo(function LogView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
 
@@ -81,4 +81,4 @@ export default function LogView() {
   }, []);
 
   return <div className="bp-terminal-container" ref={containerRef} />;
-}
+});

@@ -190,16 +190,18 @@ async def list_files(path: str = ""):
     target = _safe_path(base, path)
     if not os.path.isdir(target):
         raise HTTPException(status_code=404, detail="Directory not found")
-    entries = []
-    for name in sorted(os.listdir(target)):
-        if name in (".provisions", ".boot-config", ".slice-keys", ".all_slices"):
-            continue
-        full = os.path.join(target, name)
-        try:
-            entries.append(_entry(full))
-        except OSError:
-            continue
-    return entries
+    def _do():
+        entries = []
+        for name in sorted(os.listdir(target)):
+            if name in (".provisions", ".boot-config", ".slice-keys", ".all_slices"):
+                continue
+            full = os.path.join(target, name)
+            try:
+                entries.append(_entry(full))
+            except OSError:
+                continue
+        return entries
+    return await asyncio.to_thread(_do)
 
 
 @router.post("/api/files/upload")
@@ -251,12 +253,14 @@ async def read_file_content(path: str = ""):
     size = os.path.getsize(target)
     if size > MAX_TEXT_SIZE:
         raise HTTPException(status_code=400, detail="File too large to edit (>5 MB)")
-    try:
-        with open(target, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Cannot read file: {e}")
-    return {"path": path, "content": content}
+    def _do():
+        try:
+            with open(target, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Cannot read file: {e}")
+        return {"path": path, "content": content}
+    return await asyncio.to_thread(_do)
 
 
 class FileContentBody(BaseModel):
@@ -269,12 +273,14 @@ async def write_file_content(body: FileContentBody):
     """Write text file content from in-browser editor."""
     base = _storage_dir()
     target = _safe_path(base, body.path)
-    try:
-        with open(target, "w", encoding="utf-8") as f:
-            f.write(body.content)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Cannot write file: {e}")
-    return {"path": body.path, "status": "ok"}
+    def _do():
+        try:
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(body.content)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Cannot write file: {e}")
+        return {"path": body.path, "status": "ok"}
+    return await asyncio.to_thread(_do)
 
 
 @router.get("/api/files/download")
@@ -292,18 +298,19 @@ async def download_folder(path: str = ""):
     target = _safe_path(base, path)
     if not os.path.isdir(target):
         raise HTTPException(status_code=404, detail="Directory not found")
-
-    buf = io.BytesIO()
-    folder_name = os.path.basename(target) or "storage"
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for root, dirs, files in os.walk(target):
-            # Skip internal directories
-            dirs[:] = [d for d in dirs if d not in (".provisions", ".boot-config", ".slice-keys", ".all_slices")]
-            for fname in files:
-                full = os.path.join(root, fname)
-                arcname = os.path.relpath(full, target)
-                zf.write(full, arcname)
-    buf.seek(0)
+    def _do():
+        buf = io.BytesIO()
+        folder_name = os.path.basename(target) or "storage"
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(target):
+                dirs[:] = [d for d in dirs if d not in (".provisions", ".boot-config", ".slice-keys", ".all_slices")]
+                for fname in files:
+                    full = os.path.join(root, fname)
+                    arcname = os.path.relpath(full, target)
+                    zf.write(full, arcname)
+        buf.seek(0)
+        return buf, folder_name
+    buf, folder_name = await asyncio.to_thread(_do)
     return StreamingResponse(
         buf,
         media_type="application/zip",

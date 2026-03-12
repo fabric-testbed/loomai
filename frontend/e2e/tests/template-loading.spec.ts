@@ -25,9 +25,9 @@ test.describe('Template Loading', () => {
       nodes: [makeNode('node1', 'RENC')],
     });
 
-    // Mock template load endpoint
-    await page.route('**/api/templates/Hello_FABRIC*', (route) => {
-      if (route.request().method() === 'GET') {
+    // Mock template load endpoint (POST /api/templates/{name}/load)
+    await page.route('**/api/templates/Hello_FABRIC/load', (route) => {
+      if (route.request().method() === 'POST') {
         return route.fulfill({ json: loadedSlice });
       }
       return route.fallback();
@@ -43,18 +43,15 @@ test.describe('Template Loading', () => {
 
     // Find and click Load on Hello FABRIC template
     const panel = page.locator('.template-panel');
-    if (await panel.isVisible()) {
-      const card = panel.locator('.template-card', { hasText: 'Hello FABRIC' });
-      if (await card.isVisible()) {
-        await card.locator('.template-btn-load', { hasText: 'Load' }).click();
+    await expect(panel).toBeVisible();
+    const card = panel.locator('.template-card', { hasText: 'Hello FABRIC' });
+    await expect(card).toBeVisible();
+    await card.locator('.tp-transport-play', { hasText: 'Load' }).click();
 
-        // Should show load modal
-        const modal = page.locator('.template-modal');
-        if (await modal.isVisible({ timeout: 2000 }).catch(() => false)) {
-          await modal.locator('.template-input').fill('Hello FABRIC');
-          await modal.locator('button.primary', { hasText: 'Load' }).click();
-        }
-      }
-    }
+    // Should show load modal
+    const modal = page.locator('.template-modal');
+    await expect(modal).toBeVisible();
+    await modal.locator('.template-input').fill('Hello FABRIC');
+    await modal.locator('button.primary', { hasText: 'Load' }).click();
   });
 });
