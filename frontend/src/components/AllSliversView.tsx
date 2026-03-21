@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import type { SliceSummary, SliceData, RecipeSummary } from '../types/fabric';
+import type { SliceSummary, SliceData, SliceNode, SliceNetwork, RecipeSummary } from '../types/fabric';
 import type { ContextMenuAction } from './CytoscapeGraph';
 import * as api from '../api/client';
 import Tooltip from './Tooltip';
@@ -90,6 +90,9 @@ export default React.memo(function AllSliversView({
   // Sort state for slice rows
   const [sliceSort, setSliceSort] = useState<'name' | 'state' | 'lease_end' | 'nodes' | 'networks'>('name');
   const [sliceSortDir, setSliceSortDir] = useState<'asc' | 'desc'>('asc');
+  // Sort state for sliver (child) rows — applies to all expanded slices uniformly
+  const [sliverSort, setSliverSort] = useState<'name' | 'site' | 'host' | 'state' | 'resources' | 'ip'>('name');
+  const [sliverSortDir, setSliverSortDir] = useState<'asc' | 'desc'>('asc');
   // Context menu
   const [menu, setMenu] = useState<MenuState | null>(null);
   // Busy deleting
@@ -145,6 +148,18 @@ export default React.memo(function AllSliversView({
       setLoadingSlices(prev => { const n = new Set(prev); n.delete(name); return n; });
     }
   }, []);
+
+  // Auto-refresh expanded slices when their state changes (detected via slices prop)
+  const prevSliceStatesRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    for (const s of slices) {
+      const prev = prevSliceStatesRef.current[s.name];
+      if (prev && prev !== s.state && expandedSlices.has(s.name) && sliceCache.has(s.name)) {
+        refreshSliceCache(s.name);
+      }
+      prevSliceStatesRef.current[s.name] = s.state;
+    }
+  }, [slices, expandedSlices, sliceCache, refreshSliceCache]);
 
   // --- Selection helpers ---
 
@@ -298,10 +313,48 @@ export default React.memo(function AllSliversView({
     else { setSliceSort(key); setSliceSortDir('asc'); }
   };
 
+  const handleSliverHeaderClick = (key: typeof sliverSort) => {
+    if (sliverSort === key) setSliverSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSliverSort(key); setSliverSortDir('asc'); }
+  };
+
   const sortArrow = (key: string, active: string, dir: 'asc' | 'desc') =>
     <span className={`sort-arrow ${active === key ? 'active' : ''}`}>
       {active === key ? (dir === 'asc' ? '\u25B2' : '\u25BC') : '\u25B4'}
     </span>;
+
+  const sortNodes = useCallback((nodes: SliceNode[]): SliceNode[] => {
+    const sorted = [...nodes];
+    sorted.sort((a, b) => {
+      let av: string | number = '';
+      let bv: string | number = '';
+      switch (sliverSort) {
+        case 'name': av = a.name.toLowerCase(); bv = b.name.toLowerCase(); break;
+        case 'site': av = (a.site || '').toLowerCase(); bv = (b.site || '').toLowerCase(); break;
+        case 'host': av = (a.host || '').toLowerCase(); bv = (b.host || '').toLowerCase(); break;
+        case 'state': av = (a.reservation_state || '').toLowerCase(); bv = (b.reservation_state || '').toLowerCase(); break;
+        case 'resources': av = (a.cores ?? 0) * 1000 + (a.ram ?? 0) * 10 + (a.disk ?? 0); bv = (b.cores ?? 0) * 1000 + (b.ram ?? 0) * 10 + (b.disk ?? 0); break;
+        case 'ip': av = a.management_ip || ''; bv = b.management_ip || ''; break;
+      }
+      if (typeof av === 'number' && typeof bv === 'number') return sliverSortDir === 'asc' ? av - bv : bv - av;
+      if (av < bv) return sliverSortDir === 'asc' ? -1 : 1;
+      if (av > bv) return sliverSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return sorted;
+  }, [sliverSort, sliverSortDir]);
+
+  const sortNets = useCallback((nets: SliceNetwork[]): SliceNetwork[] => {
+    const sorted = [...nets];
+    sorted.sort((a, b) => {
+      const av = a.name.toLowerCase();
+      const bv = b.name.toLowerCase();
+      if (av < bv) return sliverSortDir === 'asc' ? -1 : 1;
+      if (av > bv) return sliverSortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return sorted;
+  }, [sliverSortDir]);
 
   // --- Context menu ---
 
@@ -573,20 +626,21 @@ export default React.memo(function AllSliversView({
             </tr>
           </thead>
           <tbody>
-            {sortedSlices.map(slice => {
+            {sortedSlices.map((slice, sliceIndex) => {
               const isExpanded = expandedSlices.has(slice.name);
               const isLoading = loadingSlices.has(slice.name);
               const cached = sliceCache.get(slice.name);
               const sk = sliceKey(slice.name);
               const sliceChecked = selectedItems.has(sk);
+              const groupClass = sliceIndex % 2 === 0 ? 'slice-group-even' : 'slice-group-odd';
 
               const nodeCount = cached?.nodes.length ?? '?';
               const netCount = cached?.networks.length ?? '?';
               const errorCount = cached?.error_messages?.length ?? (slice.has_errors ? '!' : 0);
 
-              // Filter child slivers
-              const filteredNodes = cached ? cached.nodes.filter(filterNode) : [];
-              const filteredNets = cached ? cached.networks.filter(filterNet) : [];
+              // Filter and sort child slivers
+              const filteredNodes = cached ? sortNodes(cached.nodes.filter(filterNode)) : [];
+              const filteredNets = cached ? sortNets(cached.networks.filter(filterNet)) : [];
 
               return [
                 // Slice row
@@ -642,18 +696,43 @@ export default React.memo(function AllSliversView({
                 ...(isExpanded ? [
                   // Failed to load
                   ...(isLoading && !cached ? [
-                    <tr key={`${slice.name}-loading`} className="sliver-section-header">
+                    <tr key={`${slice.name}-loading`} className={`sliver-section-header ${groupClass}`}>
                       <td colSpan={8} style={{ textAlign: 'center', fontStyle: 'italic' }}>Loading...</td>
                     </tr>
                   ] : []),
 
                   // VMs sub-header
                   ...(cached && filteredNodes.length > 0 ? [
-                    <tr key={`${slice.name}-vm-header`} className="sliver-section-header">
+                    <tr key={`${slice.name}-vm-header`} className={`sliver-section-header ${groupClass}`}>
                       <td colSpan={8}>
                         <span className="sliver-type-badge node">VM</span> Nodes ({filteredNodes.length})
                       </td>
                     </tr>,
+                    // Mini sort header for node columns (only when >1 node)
+                    ...(filteredNodes.length > 1 ? [
+                      <tr key={`${slice.name}-vm-sort`} className={`sliver-sort-header ${groupClass}`}>
+                        <td className="sliver-checkbox-col"></td>
+                        <td></td>
+                        <td className="sliver-indent" onClick={() => handleSliverHeaderClick('name')}>
+                          Name {sortArrow('name', sliverSort, sliverSortDir)}
+                        </td>
+                        <td onClick={() => handleSliverHeaderClick('site')}>
+                          Site {sortArrow('site', sliverSort, sliverSortDir)}
+                        </td>
+                        <td onClick={() => handleSliverHeaderClick('host')}>
+                          Host {sortArrow('host', sliverSort, sliverSortDir)}
+                        </td>
+                        <td onClick={() => handleSliverHeaderClick('state')}>
+                          State {sortArrow('state', sliverSort, sliverSortDir)}
+                        </td>
+                        <td onClick={() => handleSliverHeaderClick('resources')}>
+                          Resources {sortArrow('resources', sliverSort, sliverSortDir)}
+                        </td>
+                        <td onClick={() => handleSliverHeaderClick('ip')}>
+                          IP {sortArrow('ip', sliverSort, sliverSortDir)}
+                        </td>
+                      </tr>
+                    ] : []),
                     ...filteredNodes.map(node => {
                       const nk = nodeKey(slice.name, node.name);
                       const checked = selectedItems.has(nk);
@@ -671,7 +750,7 @@ export default React.memo(function AllSliversView({
                       return (
                         <tr
                           key={`${slice.name}-node-${node.name}`}
-                          className={`sliver-row ${checked ? 'multi-selected' : ''}`}
+                          className={`sliver-row ${groupClass} ${checked ? 'multi-selected' : ''}`}
                           onContextMenu={(e) => handleNodeContextMenu(e, slice.name, clickData)}
                         >
                           <td className="sliver-checkbox-col" onClick={e => e.stopPropagation()}>
@@ -697,7 +776,7 @@ export default React.memo(function AllSliversView({
 
                   // Networks sub-header
                   ...(cached && filteredNets.length > 0 ? [
-                    <tr key={`${slice.name}-net-header`} className="sliver-section-header">
+                    <tr key={`${slice.name}-net-header`} className={`sliver-section-header ${groupClass}`}>
                       <td colSpan={8}>
                         <span className="sliver-type-badge network">Net</span> Networks ({filteredNets.length})
                       </td>
@@ -708,7 +787,7 @@ export default React.memo(function AllSliversView({
                       return (
                         <tr
                           key={`${slice.name}-net-${net.name}`}
-                          className={`sliver-row ${checked ? 'multi-selected' : ''}`}
+                          className={`sliver-row ${groupClass} ${checked ? 'multi-selected' : ''}`}
                         >
                           <td className="sliver-checkbox-col" onClick={e => e.stopPropagation()}>
                             <input type="checkbox" checked={checked} onChange={() => toggleItem(nk)} />
@@ -727,7 +806,7 @@ export default React.memo(function AllSliversView({
 
                   // Empty expanded state
                   ...(cached && filteredNodes.length === 0 && filteredNets.length === 0 ? [
-                    <tr key={`${slice.name}-empty`} className="sliver-section-header">
+                    <tr key={`${slice.name}-empty`} className={`sliver-section-header ${groupClass}`}>
                       <td colSpan={8} style={{ textAlign: 'center', fontStyle: 'italic' }}>
                         {cached.nodes.length === 0 && cached.networks.length === 0 ? 'No slivers in this slice' : 'No matches in this slice'}
                       </td>

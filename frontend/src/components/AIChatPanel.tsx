@@ -326,7 +326,9 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
   useEffect(() => {
     getConfig().then(s => setHasKey(!!s.ai_api_key_set)).catch(() => setHasKey(false));
     getAiModels().then(data => {
-      setModels(data.models || []);
+      const primary = data.models || [];
+      const nrp = (data.nrp_models || []).map(m => `nrp:${m}`);
+      setModels([...primary, ...nrp]);
       if (!store?.selectedModel) {
         setSelectedModel(data.default || data.models?.[0] || '');
       }

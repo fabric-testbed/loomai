@@ -299,7 +299,7 @@ const aiTools: TourDef = {
       id: 'ai-loomai',
       title: 'LoomAI Chat',
       content:
-        'LoomAI is the built-in FABRIC-aware chat assistant. It can execute FABRIC operations using tool calling.\n\nTry asking it:\n\u2022 "Create a 2-node slice with an L2 bridge at RENC"\n\u2022 "What sites have GPUs available?"\n\u2022 "Show me my active slices"\n\u2022 "Help me write a boot script to install Docker"\n\nThe assistant streams responses and shows expandable tool call cards when it executes FABRIC operations.',
+        'LoomAI is the FABRIC-aware chat assistant. It can execute FABRIC operations using tool calling.\n\nTry asking it:\n\u2022 "Create a 2-node slice with an L2 bridge at RENC"\n\u2022 "What sites have GPUs available?"\n\u2022 "Show me my active slices"\n\u2022 "Help me write a boot script to install Docker"\n\nThe assistant streams responses and shows expandable tool call cards when it executes FABRIC operations.',
       targetSelector: '.ai-companion-view',
       requiredView: 'ai',
       tooltipPosition: 'bottom',
@@ -317,7 +317,7 @@ const aiTools: TourDef = {
       id: 'ai-coding-tools',
       title: 'AI Coding Assistants',
       content:
-        'Aider, OpenCode, Crush, and Claude Code run in a split-pane view with the tool on the left and a container file browser on the right.\n\nUse them to:\n\u2022 Write deployment scripts and boot configs\n\u2022 Create weave artifacts (slice.json + deploy.sh + run.sh)\n\u2022 Debug networking and configuration issues\n\u2022 Generate FABlib Python code for custom experiments\n\nAll tools have access to your workspace files and FABRIC domain knowledge.',
+        'Aider, OpenCode, Crush, and Claude Code run in a split-pane view with the tool on the left and a container file browser on the right.\n\nUse them to:\n\u2022 Write deployment scripts and boot configs\n\u2022 Create weave artifacts (weave.json defines the topology, weave.sh runs it, output goes to weave.log)\n\u2022 Debug networking and configuration issues\n\u2022 Generate FABlib Python code for custom experiments\n\nAll tools have access to your workspace files and FABRIC domain knowledge.',
       targetSelector: '.ai-companion-view',
       requiredView: 'ai',
       tooltipPosition: 'bottom',
@@ -368,7 +368,7 @@ const artifactsWeaves: TourDef = {
       id: 'aw-marketplace',
       title: 'Marketplace',
       content:
-        'The Community Marketplace tab lets you browse artifacts published by the FABRIC community.\n\n\u2022 Search by name or description\n\u2022 Filter by category (Weave, VM Template, Recipe, Notebook)\n\u2022 Filter by tags or author\n\u2022 Sort by popularity, newest, or alphabetically\n\nClick "Get" to download an artifact to your local library.',
+        'The Community Marketplace tab lets you browse artifacts published by the FABRIC community.\n\n\u2022 Search by name or description\n\u2022 Filter by category (Weave, VM Template, Recipe, Notebook)\n\u2022 Filter by tags or author\n\u2022 Sort by popularity, newest, or alphabetically\n\nClick "Get" to download an artifact to your local artifact library.',
       targetSelector: '.libraries-view',
       requiredView: 'libraries',
       tooltipPosition: 'bottom',
@@ -377,7 +377,7 @@ const artifactsWeaves: TourDef = {
       id: 'aw-weave-types',
       title: 'Understanding Weaves',
       content:
-        'A weave can contain any combination of:\n\n\u2022 slice.json \u2014 Topology definition (nodes, networks, boot configs)\n\u2022 deploy.sh \u2014 Deployment script that runs after provisioning\n\u2022 run.sh \u2014 Autonomous experiment script\n\nAction buttons appear based on what the weave contains:\n\u2022 Load/Deploy require slice.json\n\u2022 Deploy also requires deploy.sh\n\u2022 Run requires run.sh\n\u2022 JupyterLab opens the folder for editing',
+        'A weave is defined by weave.json and can contain:\n\n\u2022 weave.json \u2014 Topology definition (nodes, networks, boot configs) \u2014 required marker file\n\u2022 weave.sh \u2014 Run script for the weave (output goes to weave.log)\n\n Action buttons appear based on what the weave contains:\n\u2022 Load/Deploy require weave.json\n\u2022 Run requires weave.sh (or a run_script in weave_config)\n\u2022 JupyterLab opens the folder for editing',
       targetSelector: '.libraries-view',
       requiredView: 'libraries',
       tooltipPosition: 'bottom',
@@ -398,7 +398,7 @@ const artifactsWeaves: TourDef = {
       id: 'aw-create-weave',
       title: 'Creating a Weave',
       content:
-        'To create a weave from an existing slice:\n\n1. Build your topology in the editor\n2. Click "Save as Template" in the toolbar\n3. The weave captures all nodes, networks, site groups, and boot configs\n\nFor a deployable weave, use an AI tool to add a deploy.sh script:\n1. Open the weave folder in JupyterLab\n2. Write deploy.sh with your post-provisioning commands\n3. The weave now has a Deploy button\n\nFor autonomous experiments, add a run.sh script.',
+        'To create a weave from an existing slice:\n\n1. Build your topology in the editor\n2. Click "Save as Weave" in the toolbar\n3. The weave captures all nodes, networks, site groups, and boot configs as weave.json\n\nTo make the weave runnable, use an AI tool to add a weave.sh script:\n1. Open the weave folder in JupyterLab\n2. Write weave.sh with your experiment commands\n3. The weave now has a Run button (output goes to weave.log)',
       targetSelector: '.libraries-view',
       requiredView: 'libraries',
       tooltipPosition: 'bottom',
@@ -416,7 +416,7 @@ const artifactsWeaves: TourDef = {
       id: 'aw-side-panel',
       title: 'Artifacts Side Panel',
       content:
-        'Back in the Topology view, the Artifacts side panel gives quick access to your library.\n\nThe four tabs (Weaves, VM, Recipes, Notebooks) let you:\n\u2022 Load weaves into the editor\n\u2022 Deploy weaves with one click\n\u2022 Add VM templates to the current slice\n\u2022 Apply recipes to provisioned nodes\n\u2022 Star favorite recipes for the context menu',
+        'Back in the Topology view, the Artifacts side panel gives quick access to your artifacts.\n\nThe four tabs (Weaves, VM, Recipes, Notebooks) let you:\n\u2022 Load weaves into the editor\n\u2022 Deploy weaves with one click\n\u2022 Add VM templates to the current slice\n\u2022 Apply recipes to provisioned nodes\n\u2022 Star favorite recipes for the context menu',
       targetSelector: '.template-panel',
       requiredView: 'main',
       tooltipPosition: 'left',
@@ -620,7 +620,7 @@ const jupyterLab: TourDef = {
       id: 'jl-intro',
       title: 'Embedded JupyterLab',
       content:
-        'LoomAI includes a full JupyterLab environment running on the backend container. Use it for:\n\n\u2022 Interactive FABlib experiments\n\u2022 Data analysis and visualization\n\u2022 Editing artifact scripts (deploy.sh, run.sh)\n\u2022 Running Jupyter notebooks from the Artifacts library\n\nJupyterLab auto-starts when you first access it and syncs with your app theme.',
+        'LoomAI includes a full JupyterLab environment running on the backend container. Use it for:\n\n\u2022 Interactive FABlib experiments\n\u2022 Data analysis and visualization\n\u2022 Editing weave scripts (weave.sh)\n\u2022 Running Jupyter notebooks from the Artifacts view\n\nJupyterLab auto-starts when you first access it and syncs with your app theme.',
       targetSelector: '[data-help-id="titlebar.view"]',
       requiredView: 'main',
       tooltipPosition: 'bottom',
@@ -638,7 +638,7 @@ const jupyterLab: TourDef = {
       id: 'jl-artifacts',
       title: 'Editing Artifacts in JupyterLab',
       content:
-        'Try it now: go to the Artifacts side panel (in topology view) and click "JupyterLab" on any weave, VM template, or recipe card. This opens that artifact\'s folder directly in JupyterLab.\n\nThis is the easiest way to:\n\u2022 Edit deploy.sh or run.sh scripts\n\u2022 Modify slice.json topology files\n\u2022 Update boot configuration commands\n\u2022 Write and test Jupyter notebooks before publishing\n\nChanges are saved directly to your artifact storage.',
+        'Try it now: go to the Artifacts side panel (in topology view) and click "JupyterLab" on any weave, VM template, or recipe card. This opens that artifact\'s folder directly in JupyterLab.\n\nThis is the easiest way to:\n\u2022 Edit weave.sh run scripts\n\u2022 Modify weave.json topology files\n\u2022 Update boot configuration commands\n\u2022 Write and test Jupyter notebooks before publishing\n\nChanges are saved directly to your artifact storage.',
       targetSelector: '.template-panel',
       requiredView: 'main',
       tooltipPosition: 'left',

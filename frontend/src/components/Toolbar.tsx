@@ -265,17 +265,6 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
           </button>
         </Tooltip>
 
-        <Tooltip text="Save current slice as a reusable artifact">
-          <button
-            className="toolbar-btn toolbar-btn-save-template"
-            onClick={() => props.onSaveSliceTemplate?.()}
-            disabled={!hasSlice || !props.sliceState || props.loading}
-            data-help-id="toolbar.save-template"
-          >
-            Save as Artifact
-          </button>
-        </Tooltip>
-
         {hasSlice && isTerminal && (
           <Tooltip text="Archive this slice (hide from list)">
             <button

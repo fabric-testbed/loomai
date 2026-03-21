@@ -474,4 +474,15 @@ export interface ToolConfigStatus {
   files: string[];
 }
 
+export interface UserInfo {
+  uuid: string;
+  name: string;
+  email: string;
+  is_active: boolean;
+  added_at: string;
+}
 
+export interface UsersResponse {
+  active_user: string | null;
+  users: UserInfo[];
+}

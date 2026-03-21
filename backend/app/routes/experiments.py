@@ -1,7 +1,8 @@
 """Runnable weave management API routes.
 
-Runnable weaves are weave artifacts that also have run.sh for automatic execution.
-A runnable weave is detected by having: slice.json + deploy.sh + run.sh.
+Runnable weaves are weave artifacts that have a run script for automatic execution.
+A runnable weave is detected by having weave.json (with run_script field) and a
+topology file.
 
 Storage: FABRIC_STORAGE_DIR/my_artifacts/{name}/
 """
@@ -84,7 +85,7 @@ class ReadmeBody(BaseModel):
 
 @router.get("")
 def list_experiments() -> list[dict[str, Any]]:
-    """List runnable weaves (weave artifacts that also have run.sh)."""
+    """List runnable weaves (weave artifacts that have a run script)."""
     _ensure_dir()
     edir = _experiments_dir()
     if not os.path.isdir(edir):
@@ -94,17 +95,17 @@ def list_experiments() -> list[dict[str, Any]]:
         entry_dir = os.path.join(edir, entry)
         if not os.path.isdir(entry_dir):
             continue
-        # An experiment is a slice artifact with run.sh
-        if not os.path.isfile(os.path.join(entry_dir, "slice.json")):
-            continue
-        if not os.path.isfile(os.path.join(entry_dir, "deploy.sh")):
-            continue
-        if not os.path.isfile(os.path.join(entry_dir, "run.sh")):
-            continue  # Not a runnable experiment
+        # A runnable weave needs weave.json and a weave.sh script
+        has_weave_json = os.path.isfile(os.path.join(entry_dir, "weave.json"))
+        has_weave_sh = os.path.isfile(os.path.join(entry_dir, "weave.sh"))
+        if not has_weave_json:
+            continue  # No weave marker
+        if not has_weave_sh:
+            continue  # Not a runnable weave — no run script
 
-        # Read metadata from experiment.json or metadata.json
+        # Read metadata from weave.json
         meta: dict[str, Any] = {}
-        for meta_file in ["experiment.json", "metadata.json"]:
+        for meta_file in ["weave.json", "experiment.json"]:
             mpath = os.path.join(entry_dir, meta_file)
             if os.path.isfile(mpath):
                 try:
@@ -204,11 +205,6 @@ def get_experiment(name: str) -> dict[str, Any]:
     # Include template info
     tmpl_path = os.path.join(exp_dir, "slice.json")
     meta["has_template"] = os.path.isfile(tmpl_path)
-    if meta["has_template"]:
-        with open(tmpl_path) as f:
-            tmpl = json.load(f)
-        meta["node_count"] = len(tmpl.get("nodes", []))
-        meta["network_count"] = len(tmpl.get("networks", []))
 
     return meta
 

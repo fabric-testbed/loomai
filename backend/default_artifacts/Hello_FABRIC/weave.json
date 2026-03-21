@@ -1,0 +1,29 @@
+{
+  "name": "Hello FABRIC",
+  "description": "A simple example weave that creates a single Ubuntu VM on FABRIC. Click Run to provision, Stop to tear down. Great for learning how weaves work.",
+  "run_script": "weave.sh",
+  "log_file": "weave.log",
+  "args": [
+    {
+      "name": "SLICE_NAME",
+      "label": "Slice Name",
+      "type": "string",
+      "required": true,
+      "default": "hello-fabric",
+      "description": "Name for your FABRIC slice"
+    }
+  ],
+  "format": "fabric-slice-v1",
+  "nodes": [
+    {
+      "name": "node1",
+      "site": "auto",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": []
+    }
+  ],
+  "networks": []
+}

@@ -157,7 +157,7 @@ export default function OpenCodeWebView({ visible = true }: Props) {
             <span className="tc-sidebar-badge free">Free &bull; FABRIC API Key Required</span>
           </div>
           <div className="tc-sidebar-desc">
-            Interactive AI assistant with built-in FABRIC tools, skills, and agents.
+            Interactive AI assistant with integrated FABRIC tools, skills, and agents.
             Powered by <strong>FABRIC-hosted LLMs</strong> — free for FABRIC users with an API key.
             Get your key from the FABRIC portal, then create slices, deploy experiments, debug connectivity, and write deploy scripts.
           </div>

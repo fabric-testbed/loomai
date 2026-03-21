@@ -196,14 +196,15 @@ _MODEL_PROXY_PORT = 9199  # Fallback; prefer _model_proxy_port() accessor
 # Paths to AI tool assets (inside the container)
 _APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _AI_TOOLS_DIR = os.path.join(_APP_ROOT, "ai-tools")
-_FABRIC_AI_MD_PATH = os.path.join(_AI_TOOLS_DIR, "shared", "FABRIC_AI.md")
-_OPENCODE_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "opencode")
+_SHARED_DIR = os.path.join(_AI_TOOLS_DIR, "shared")
+_FABRIC_AI_MD_PATH = os.path.join(_SHARED_DIR, "FABRIC_AI.md")
+_OPENCODE_DEFAULTS_DIR = _SHARED_DIR  # Skills and agents live in shared/
 _AIDER_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "aider")
 _CLAUDE_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "claude-code")
 _CRUSH_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "crush")
 _DEEPAGENTS_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "deepagents")
 
-# Skills to skip (conflict with OpenCode builtins)
+# Skills to skip (conflict with OpenCode internals)
 _SKIP_SKILLS = {"compact", "help"}
 
 
@@ -390,6 +391,7 @@ def _setup_claude_workspace(cwd: str) -> None:
     Copies:
     - CLAUDE.md from ai-tools/claude-code/
     - AGENTS.md (shared FABRIC context, referenced by CLAUDE.md)
+    - .claude/commands/*.md — shared skills as Claude Code slash commands
     """
     # Shared FABRIC context
     agents_md = os.path.join(cwd, "AGENTS.md")
@@ -403,6 +405,33 @@ def _setup_claude_workspace(cwd: str) -> None:
         dst_claude = os.path.join(cwd, "CLAUDE.md")
         shutil.copy2(src_claude, dst_claude)
         logger.info("Wrote CLAUDE.md for Claude Code CLI")
+
+    # Shared skills → .claude/commands/<name>.md (Claude Code slash commands)
+    skills_src = os.path.join(_SHARED_DIR, "skills")
+    if os.path.isdir(skills_src):
+        cmds_dir = os.path.join(cwd, ".claude", "commands")
+        os.makedirs(cmds_dir, exist_ok=True)
+        skill_count = 0
+        for fname in os.listdir(skills_src):
+            if not fname.endswith(".md"):
+                continue
+            # Strip YAML frontmatter — Claude Code commands use the file directly
+            with open(os.path.join(skills_src, fname)) as f:
+                content = f.read()
+            # Remove frontmatter (name:/description:/---) for Claude Code format
+            lines = content.split("\n")
+            body_start = 0
+            if lines and lines[0].startswith("name:"):
+                for i, line in enumerate(lines):
+                    if line.strip() == "---":
+                        body_start = i + 1
+                        break
+            body = "\n".join(lines[body_start:]).strip()
+            if body:
+                with open(os.path.join(cmds_dir, fname), "w") as f:
+                    f.write(body + "\n")
+                skill_count += 1
+        logger.info("Created %d Claude Code commands from shared skills", skill_count)
 
 
 def _setup_crush_workspace(cwd: str, api_key: str) -> None:
@@ -1251,11 +1280,15 @@ def seed_ai_tool_defaults() -> None:
         if os.path.isfile(src_claude_md):
             shutil.copy2(src_claude_md, os.path.join(claude_dir, "CLAUDE.md"))
 
-        # settings.json — empty if not present
+        # settings.json — seed from Docker defaults or empty fallback
         settings_path = os.path.join(claude_dir, "settings.json")
         if not os.path.isfile(settings_path):
-            with open(settings_path, "w") as f:
-                json.dump({}, f)
+            src_settings = os.path.join(_CLAUDE_DEFAULTS_DIR, "settings.json")
+            if os.path.isfile(src_settings):
+                shutil.copy2(src_settings, settings_path)
+            else:
+                with open(settings_path, "w") as f:
+                    json.dump({}, f)
 
         # .mcp.json in workspace — only fabric-reports MCP. fabric-api MCP is
         # intentionally excluded: in-container tools should use FABlib directly.

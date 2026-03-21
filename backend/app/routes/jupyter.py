@@ -213,11 +213,11 @@ def _sanitize_name(name: str) -> str:
 
 
 def _read_artifact_uuid(artifact_dir: str) -> str:
-    """Read the artifact_uuid from metadata.json in an artifact directory."""
-    meta_path = os.path.join(artifact_dir, "metadata.json")
-    if os.path.isfile(meta_path):
+    """Read the artifact_uuid from weave.json in an artifact directory."""
+    weave_path = os.path.join(artifact_dir, "weave.json")
+    if os.path.isfile(weave_path):
         try:
-            with open(meta_path) as f:
+            with open(weave_path) as f:
                 return json.load(f).get("artifact_uuid", "")
         except Exception:
             pass
@@ -346,7 +346,7 @@ class PublishForkRequest(BaseModel):
 async def publish_fork(name: str, req: PublishForkRequest):
     """Publish the working copy as a forked artifact.
 
-    Reads the original artifact_uuid from metadata.json and includes
+    Reads the original artifact_uuid from weave.json and includes
     fork provenance in the new artifact's metadata.
     """
     safe = _sanitize_name(name)
@@ -354,14 +354,14 @@ async def publish_fork(name: str, req: PublishForkRequest):
     if not os.path.isdir(work_dir):
         raise HTTPException(status_code=404, detail=f"No workspace for '{name}' — launch it first")
 
-    # Read original metadata for fork provenance
+    # Read original metadata for fork provenance from weave.json
     artifact_dir = os.path.join(_artifacts_dir(), safe)
     original_uuid = ""
     original_title = ""
-    meta_path = os.path.join(artifact_dir, "metadata.json")
-    if os.path.isfile(meta_path):
+    weave_path = os.path.join(artifact_dir, "weave.json")
+    if os.path.isfile(weave_path):
         try:
-            with open(meta_path) as f:
+            with open(weave_path) as f:
                 meta = json.load(f)
             original_uuid = meta.get("artifact_uuid", "")
             original_title = meta.get("name", safe)
@@ -369,11 +369,11 @@ async def publish_fork(name: str, req: PublishForkRequest):
             pass
 
     # Update the workspace metadata with fork info before publishing
-    work_meta_path = os.path.join(work_dir, "metadata.json")
+    work_weave_path = os.path.join(work_dir, "weave.json")
     work_meta = {}
-    if os.path.isfile(work_meta_path):
+    if os.path.isfile(work_weave_path):
         try:
-            with open(work_meta_path) as f:
+            with open(work_weave_path) as f:
                 work_meta = json.load(f)
         except Exception:
             pass
@@ -387,7 +387,7 @@ async def publish_fork(name: str, req: PublishForkRequest):
             "url": f"https://artifacts.fabric-testbed.net/api/artifacts/{original_uuid}",
         }
 
-    with open(work_meta_path, "w") as f:
+    with open(work_weave_path, "w") as f:
         json.dump(work_meta, f, indent=2)
 
     # Use the artifacts publish flow

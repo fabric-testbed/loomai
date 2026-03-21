@@ -1,0 +1,74 @@
+{
+  "name": "Prometheus Grafana Monitor",
+  "description": "3-node monitoring stack: Prometheus + Grafana on a monitor node, node_exporter on 2 workers, connected via FABNetv4. Click Run to provision, Stop to tear down.",
+  "run_script": "weave.sh",
+  "log_file": "weave.log",
+  "args": [
+    {
+      "name": "SLICE_NAME",
+      "label": "Slice Name",
+      "type": "string",
+      "required": true,
+      "default": "prom-grafana",
+      "description": "Name for the monitoring slice"
+    },
+    {
+      "name": "MONITOR_INTERVAL",
+      "label": "Monitor Interval (seconds)",
+      "type": "number",
+      "required": false,
+      "default": 30,
+      "description": "How often to check slice health (in seconds)"
+    }
+  ],
+  "format": "fabric-slice-v1",
+  "nodes": [
+    {
+      "name": "monitor",
+      "site": "@cluster",
+      "cores": 4,
+      "ram": 16,
+      "disk": 50,
+      "image": "default_ubuntu_22",
+      "components": [{"name": "FABNET", "model": "NIC_Basic"}]
+    },
+    {
+      "name": "worker1",
+      "site": "@cluster",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [{"name": "FABNET", "model": "NIC_Basic"}]
+    },
+    {
+      "name": "worker2",
+      "site": "@cluster",
+      "cores": 2,
+      "ram": 8,
+      "disk": 10,
+      "image": "default_ubuntu_22",
+      "components": [{"name": "FABNET", "model": "NIC_Basic"}]
+    }
+  ],
+  "networks": [
+    {
+      "name": "fabnet-monitor",
+      "type": "FABNetv4",
+      "interfaces": ["monitor-FABNET-p1"],
+      "l3_config": {"mode": "auto", "route_mode": "default_fabnet", "custom_routes": [], "default_fabnet_subnet": "10.128.0.0/10"}
+    },
+    {
+      "name": "fabnet-worker1",
+      "type": "FABNetv4",
+      "interfaces": ["worker1-FABNET-p1"],
+      "l3_config": {"mode": "auto", "route_mode": "default_fabnet", "custom_routes": [], "default_fabnet_subnet": "10.128.0.0/10"}
+    },
+    {
+      "name": "fabnet-worker2",
+      "type": "FABNetv4",
+      "interfaces": ["worker2-FABNET-p1"],
+      "l3_config": {"mode": "auto", "route_mode": "default_fabnet", "custom_routes": [], "default_fabnet_subnet": "10.128.0.0/10"}
+    }
+  ]
+}

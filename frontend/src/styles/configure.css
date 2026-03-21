@@ -507,3 +507,80 @@
   font-size: 11px;
   color: var(--fabric-text-muted);
 }
+
+/* User Accounts */
+.user-account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.user-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--fabric-border);
+  background: var(--fabric-bg);
+}
+
+.user-account-row.active {
+  border-color: var(--fabric-primary, #5798bc);
+  background: color-mix(in srgb, var(--fabric-primary, #5798bc) 8%, var(--fabric-bg));
+}
+
+.user-account-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.user-account-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fabric-text);
+}
+
+.user-account-email {
+  font-size: 12px;
+  color: var(--fabric-text-muted);
+}
+
+.user-account-uuid {
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+  opacity: 0.7;
+}
+
+.user-account-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.user-account-active-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fabric-primary, #5798bc);
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--fabric-primary, #5798bc) 12%, transparent);
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.btn-danger {
+  color: var(--fabric-coral, #e25241);
+  border-color: var(--fabric-coral, #e25241);
+}
+
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--fabric-coral, #e25241) 10%, transparent);
+}

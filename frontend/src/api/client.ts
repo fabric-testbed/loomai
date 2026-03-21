@@ -1,6 +1,6 @@
 /** API client for the FABRIC Web GUI backend. */
 
-import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult, UpdateInfo, IpHint, L3Config, FacilityPortInfo, LoomAISettings, ToolConfigStatus } from '../types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult, UpdateInfo, IpHint, L3Config, FacilityPortInfo, LoomAISettings, ToolConfigStatus, UsersResponse } from '../types/fabric';
 
 const BASE = '/api';
 
@@ -353,14 +353,9 @@ export interface TemplateSummary {
   description: string;
   source_slice: string;
   created: string;
-  node_count: number;
-  network_count: number;
   dir_name: string;
   has_template?: boolean;
-  has_deploy?: boolean;
-  has_run?: boolean;
-  deploy_args?: ScriptArg[];
-  run_args?: ScriptArg[];
+  weave_config?: { run_script: string; log_file: string; args?: ScriptArg[] };
 }
 
 export function listTemplates(): Promise<TemplateSummary[]> {
@@ -403,10 +398,6 @@ export function getTemplate(name: string): Promise<TemplateSummary & { model: an
   return fetchJson(`/templates/${encodeURIComponent(name)}`);
 }
 
-export function resyncTemplates(): Promise<TemplateSummary[]> {
-  return fetchJson('/templates/resync', { method: 'POST' });
-}
-
 export function readTemplateTool(templateName: string, filename: string): Promise<{ filename: string; content: string }> {
   return fetchJson(`/templates/${encodeURIComponent(templateName)}/tools/${encodeURIComponent(filename)}`);
 }
@@ -424,7 +415,7 @@ export function deleteTemplateTool(templateName: string, filename: string): Prom
 
 export function runWeaveScript(
   templateName: string,
-  script: 'deploy.sh' | 'run.sh',
+  script: string,
   args: Record<string, string> | undefined,
   onMessage: (data: { type: string; message: string }) => void,
 ): AbortController {
@@ -480,7 +471,7 @@ export interface BackgroundRun {
 
 export function startBackgroundRun(
   templateName: string,
-  script: 'deploy.sh' | 'run.sh',
+  script: string,
   args?: Record<string, string>,
 ): Promise<{ run_id: string; status: string }> {
   return fetchJson(`/templates/${encodeURIComponent(templateName)}/start-run/${script}`, {
@@ -511,6 +502,13 @@ export function stopBackgroundRun(runId: string): Promise<{ status: string }> {
 
 export function deleteBackgroundRun(runId: string): Promise<{ status: string }> {
   return fetchJson(`/templates/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' });
+}
+
+export function getWeaveLog(
+  dirName: string,
+  offset: number = 0,
+): Promise<{ output: string; offset: number }> {
+  return fetchJson(`/templates/${encodeURIComponent(dirName)}/weave-log?offset=${offset}`);
 }
 
 // --- VM Templates ---
@@ -548,10 +546,6 @@ export function updateVmTemplate(name: string, data: { description?: string; ima
 
 export function deleteVmTemplate(name: string): Promise<{ status: string; name: string }> {
   return fetchJson(`/vm-templates/${encodeURIComponent(name)}`, { method: 'DELETE' });
-}
-
-export function resyncVmTemplates(): Promise<VMTemplateSummary[]> {
-  return fetchJson('/vm-templates/resync', { method: 'POST' });
 }
 
 export function readVmTemplateTool(templateName: string, filename: string): Promise<{ filename: string; content: string }> {
@@ -624,7 +618,7 @@ export function getAiTools(): Promise<Record<string, boolean>> {
   return fetchJson('/config/ai-tools');
 }
 
-export function getAiModels(): Promise<{ models: string[]; default: string; error?: string }> {
+export function getAiModels(): Promise<{ models: string[]; default: string; nrp_models?: string[]; error?: string }> {
   return fetchJson('/ai/models');
 }
 
@@ -865,17 +859,31 @@ export function publishArtifact(params: {
   tags?: string[];
   visibility?: string;
   project_uuid?: string;
+  action?: 'update' | 'fork';
 }): Promise<{
   status: string;
   uuid: string;
   title: string;
   visibility: string;
   version: string;
+  forked_from?: string;
 }> {
   return fetchJson('/artifacts/publish', {
     method: 'POST',
     body: JSON.stringify(params),
   });
+}
+
+export interface PublishInfo {
+  can_update: boolean;
+  can_fork: boolean;
+  is_author: boolean;
+  artifact_uuid: string | null;
+  remote_title: string | null;
+}
+
+export function getPublishInfo(dirName: string): Promise<PublishInfo> {
+  return fetchJson(`/artifacts/local/${encodeURIComponent(dirName)}/publish-info`);
 }
 
 export function listValidTags(): Promise<{ tags: ValidTag[] }> {
@@ -887,6 +895,8 @@ export function listValidTags(): Promise<{ tags: ValidTag[] }> {
 export interface LocalArtifact {
   name: string;
   description: string;
+  description_short?: string;
+  description_long?: string;
   source: string;
   artifact_uuid?: string;
   created: string;
@@ -894,8 +904,6 @@ export interface LocalArtifact {
   dir_name: string;
   category: string;
   is_from_marketplace: boolean;
-  node_count?: number;
-  network_count?: number;
   remote_status?: 'linked' | 'not_linked' | 'remote_deleted';
   is_author?: boolean;
   remote_artifact?: RemoteArtifact | null;
@@ -1569,8 +1577,6 @@ export interface ExperimentSummary {
 export interface ExperimentDetail extends ExperimentSummary {
   readme: string;
   scripts: Array<{ filename: string }>;
-  node_count?: number;
-  network_count?: number;
 }
 
 export function listExperiments(): Promise<ExperimentSummary[]> {
@@ -1663,10 +1669,6 @@ export function rebuildStorage(): Promise<{
   status: string;
   directories: number;
   directories_created: number;
-  slice_templates_reseeded: number;
-  vm_templates_reseeded: number;
-  slice_templates_total: number;
-  vm_templates_total: number;
 }> {
   return fetchJson('/config/rebuild-storage', { method: 'POST' });
 }
@@ -1733,4 +1735,26 @@ export interface FolderBrowseResult {
 export function browseAiFolders(path?: string): Promise<FolderBrowseResult> {
   const params = path ? `?path=${encodeURIComponent(path)}` : '';
   return fetchJson(`/ai/browse-folders${params}`);
+}
+
+// --- Multi-User Management ---
+
+export function listUsers(): Promise<UsersResponse> {
+  return fetchJson('/users');
+}
+
+export function switchUser(uuid: string): Promise<{ status: string; active_user: string }> {
+  return fetchJson('/users/switch', {
+    method: 'POST',
+    body: JSON.stringify({ uuid }),
+  });
+}
+
+export function removeUser(uuid: string, deleteData: boolean = false): Promise<{ status: string; removed: string }> {
+  const params = deleteData ? '?delete_data=true' : '';
+  return fetchJson(`/users/${encodeURIComponent(uuid)}${params}`, { method: 'DELETE' });
+}
+
+export function migrateCurrentUser(): Promise<{ status: string; message: string; uuid?: string }> {
+  return fetchJson('/users/migrate-current', { method: 'POST' });
 }

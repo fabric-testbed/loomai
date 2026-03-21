@@ -57,14 +57,12 @@ export const imageList = [
 export const templatesList = [
   {
     name: 'Hello FABRIC', description: 'Single node', category: 'weave',
-    dir_name: 'Hello_FABRIC', builtin: true, node_count: 1,
-    network_count: 0, has_run_script: false, has_deploy: false, has_run: false,
+    dir_name: 'Hello_FABRIC', has_template: true,
     starred: false,
   },
   {
     name: 'L2 Bridge', description: 'Two nodes with L2 network', category: 'weave',
-    dir_name: 'L2_Bridge', builtin: true, node_count: 2,
-    network_count: 1, has_run_script: false, has_deploy: false, has_run: false,
+    dir_name: 'L2_Bridge', has_template: true,
     starred: false,
   },
 ];
@@ -72,7 +70,7 @@ export const templatesList = [
 export const vmTemplatesList = [
   {
     name: 'Basic Ubuntu', description: 'Ubuntu 22 VM', image: 'default_ubuntu_22',
-    dir_name: 'Basic_Ubuntu', builtin: true, created: '2024-01-01',
+    dir_name: 'Basic_Ubuntu', created: '2024-01-01',
     images: ['default_ubuntu_22'], variant_count: 0, version: '1.0',
   },
 ];

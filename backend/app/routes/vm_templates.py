@@ -272,7 +272,7 @@ def get_vm_template_variant(name: str, image: str) -> dict[str, Any]:
 
 @router.post("/resync")
 def resync_vm_templates() -> list[dict[str, Any]]:
-    """Clean corrupted entries and return updated list."""
+    """Clean corrupted entries from disk and return updated VM template list."""
     _invalidate_vm_templates_cache()
     tdir = _vm_templates_dir()
     os.makedirs(tdir, exist_ok=True)

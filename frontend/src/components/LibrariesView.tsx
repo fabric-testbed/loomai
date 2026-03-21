@@ -43,6 +43,8 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   const [myLoading, setMyLoading] = useState(false);
   const [myError, setMyError] = useState('');
   const [myCategoryFilter, setMyCategoryFilter] = useState<CategoryFilter>('all');
+  const [mySort, setMySort] = useState<'newest' | 'az'>('newest');
+  const [myActiveTags, setMyActiveTags] = useState<Set<string>>(new Set());
 
   // Overflow menu state
   const [overflowOpen, setOverflowOpen] = useState<string | null>(null);
@@ -148,11 +150,19 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   const [pubCategory, setPubCategory] = useState('');
   const [pubTitle, setPubTitle] = useState('');
   const [pubDesc, setPubDesc] = useState('');
+  const [pubDescLong, setPubDescLong] = useState('');
   const [pubVisibility, setPubVisibility] = useState('author');
   const [pubTags, setPubTags] = useState<Set<string>>(new Set());
   const [pubValidTags, setPubValidTags] = useState<ValidTag[]>([]);
   const [pubBusy, setPubBusy] = useState(false);
   const [pubError, setPubError] = useState('');
+  const [pubIsVersionUpdate, setPubIsVersionUpdate] = useState(false);
+  const [pubAction, setPubAction] = useState<'update' | 'fork' | ''>('');
+  const [pubCanUpdate, setPubCanUpdate] = useState(false);
+  const [pubCanFork, setPubCanFork] = useState(false);
+  const [pubForkConfirmed, setPubForkConfirmed] = useState(false);
+  const [pubLoadingInfo, setPubLoadingInfo] = useState(false);
+  const [pubRemoteTitle, setPubRemoteTitle] = useState('');
 
   // Notebook actions
   const [launchingNotebook, setLaunchingNotebook] = useState<string | null>(null);
@@ -229,7 +239,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     if (art) {
       setTab('my-artifacts');
       setMyCategoryFilter('notebook');
-      openPublishNotebook(art.dir_name, art.name, art.description || '');
+      openPublish(art);
       onClearPublishNotebook?.();
     }
   }, [initialPublishNotebook, myArtifacts, myLoading]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -241,7 +251,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     if (art) {
       setTab('my-artifacts');
       setMyCategoryFilter(initialPublishArtifact.category as CategoryFilter);
-      openPublish(art.dir_name, art.category, art.name, art.description || '');
+      openPublish(art);
       onClearPublishArtifact?.();
     }
   }, [initialPublishArtifact, myArtifacts, myLoading]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -286,11 +296,46 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       const s = search.toLowerCase();
       list = list.filter(a =>
         a.name.toLowerCase().includes(s) ||
-        (a.description || '').toLowerCase().includes(s)
+        (a.description || '').toLowerCase().includes(s) ||
+        a.tags?.some(t => t.toLowerCase().includes(s))
       );
+    }
+    if (myActiveTags.size > 0) {
+      list = list.filter(a => {
+        const artTags = new Set(a.tags?.map(t => t.toLowerCase()) || []);
+        for (const t of myActiveTags) {
+          if (!artTags.has(t.toLowerCase())) return false;
+        }
+        return true;
+      });
+    }
+    if (mySort === 'newest') {
+      list = [...list].sort((a, b) => (b.created || '').localeCompare(a.created || ''));
+    } else {
+      list = [...list].sort((a, b) => a.name.localeCompare(b.name));
     }
     return list;
   })();
+
+  const myUniqueTags = (() => {
+    const counts = new Map<string, number>();
+    for (const a of myArtifacts) {
+      for (const t of a.tags || []) {
+        counts.set(t, (counts.get(t) || 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+  })();
+
+  const toggleMyTag = (tag: string) => {
+    setMyActiveTags(prev => {
+      const next = new Set(prev);
+      if (next.has(tag)) next.delete(tag); else next.add(tag);
+      return next;
+    });
+  };
 
   // ---------------------------------------------------------------------------
   // Marketplace — filtering & sorting
@@ -375,7 +420,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     setVersionPickerArt(null);
     try {
       const result = await api.downloadArtifact(art.uuid, versionUuid);
-      alert(`Got "${result.title}" — added to local ${result.category} library as "${result.local_name}"`);
+      alert(`Got "${result.title}" — added to local ${result.category} artifacts as "${result.local_name}"`);
       fetchMyArtifacts();
     } catch (e: any) {
       if (e.message.includes('409')) {
@@ -398,7 +443,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           } else {
             // Overwrite existing
             const result = await api.downloadArtifact(art.uuid, versionUuid, undefined, true);
-            alert(`Updated "${result.title}" in local library`);
+            alert(`Updated "${result.title}" in local artifacts`);
           }
           fetchMyArtifacts();
         } catch (e2: any) {
@@ -451,16 +496,57 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     }
   };
 
-  // Publish dialog
-  const openPublish = async (dirName: string, category: string, name: string, description: string) => {
-    setPubDirName(dirName);
-    setPubCategory(category);
-    setPubTitle(name);
-    setPubDesc(description || '');
-    setPubVisibility('author');
-    setPubTags(new Set());
+  // Publish dialog — fetches publish info to determine update/fork/create
+  const openPublish = async (art: LocalArtifact) => {
+    setPubDirName(art.dir_name);
+    setPubCategory(art.category);
     setPubError('');
+    setPubAction('');
+    setPubCanUpdate(false);
+    setPubCanFork(false);
+    setPubForkConfirmed(false);
+    setPubRemoteTitle('');
+    setPubLoadingInfo(true);
     setPubOpen(true);
+
+    // Pre-fill from existing metadata
+    setPubTitle(art.name);
+    setPubDesc(art.description || '');
+    setPubDescLong(art.description_long || '');
+    setPubVisibility('author');
+    setPubTags(new Set(art.tags || []));
+
+    // Fetch publish info from backend
+    try {
+      const info = await api.getPublishInfo(art.dir_name);
+      setPubCanUpdate(info.can_update);
+      setPubCanFork(info.can_fork);
+      setPubRemoteTitle(info.remote_title || '');
+      setPubIsVersionUpdate(info.can_update); // backwards compat
+
+      if (info.can_update && art.remote_artifact) {
+        // Default to "update" when user is author
+        setPubAction('update');
+        const r = art.remote_artifact;
+        setPubTitle(r.title || art.name);
+        setPubDesc(stripCategoryMarker(r.description_short || art.description || ''));
+        setPubDescLong(art.description_long || stripCategoryMarker(r.description_long || ''));
+        setPubVisibility(r.visibility || 'author');
+        setPubTags(new Set(r.tags || []));
+      } else if (info.can_fork) {
+        // Not author but has remote link — fork only
+        setPubAction('fork');
+      }
+      // else: local-only, action stays '' (create new)
+    } catch {
+      // If publish-info fails, fall back to basic behavior
+      setPubCanUpdate(false);
+      setPubCanFork(false);
+      setPubIsVersionUpdate(false);
+    } finally {
+      setPubLoadingInfo(false);
+    }
+
     try {
       const { tags } = await api.listValidTags();
       setPubValidTags(tags);
@@ -471,9 +557,9 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
 
   const handlePublish = async () => {
     if (!pubTitle.trim()) { setPubError('Title is required'); return; }
-    const descLen = (pubDesc.trim() || pubTitle.trim()).length;
-    if (descLen < 5) { setPubError('Description must be at least 5 characters'); return; }
-    if (descLen > 255) { setPubError('Description must be at most 255 characters (it will be used as the short description)'); return; }
+    const shortDesc = pubDesc.trim() || pubTitle.trim();
+    if (shortDesc.length < 5) { setPubError('Short description must be at least 5 characters'); return; }
+    if (shortDesc.length > 255) { setPubError('Short description must be at most 255 characters'); return; }
     setPubBusy(true);
     setPubError('');
     try {
@@ -481,15 +567,23 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         dir_name: pubDirName,
         category: pubCategory,
         title: pubTitle.trim(),
-        description: pubDesc.trim() || pubTitle.trim(),
+        description: shortDesc,
+        description_long: pubDescLong.trim() || undefined,
         tags: [...pubTags],
         visibility: pubVisibility,
+        action: pubAction || undefined,
       });
       setPubOpen(false);
       setMpLoaded(false);
       fetchMyArtifacts();
       fetchMarketplace(true);
-      alert(`Published "${result.title}" to FABRIC Artifact Manager (${result.visibility})`);
+      if (result.status === 'updated') {
+        alert(`Updated "${result.title}" — new version ${result.version} published`);
+      } else if (result.forked_from) {
+        alert(`Forked "${result.title}" as new artifact (${result.visibility})`);
+      } else {
+        alert(`Published "${result.title}" to FABRIC Artifact Manager (${result.visibility})`);
+      }
     } catch (e: any) {
       setPubError(e.message);
     } finally {
@@ -532,14 +626,26 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     }
   };
 
-  // Notebook-specific publish (uses publishNotebookFork for workspace + fork provenance)
-  const openPublishNotebook = async (dirName: string, name: string, description: string) => {
-    setPubDirName(dirName);
+  // Notebook-specific publish — backend handles update vs. create decision
+  const openPublishNotebook = async (art: LocalArtifact) => {
+    const isVU = isVersionUpdate(art);
+    setPubDirName(art.dir_name);
     setPubCategory('notebook');
-    setPubTitle(name + ' (fork)');
-    setPubDesc(description || '');
-    setPubVisibility('author');
-    setPubTags(new Set());
+    setPubIsVersionUpdate(isVU);
+    if (isVU && art.remote_artifact) {
+      const r = art.remote_artifact;
+      setPubTitle(r.title || art.name);
+      setPubDesc(stripCategoryMarker(r.description_short || art.description || ''));
+      setPubDescLong(stripCategoryMarker(r.description_long || ''));
+      setPubVisibility(r.visibility || 'author');
+      setPubTags(new Set(r.tags || []));
+    } else {
+      setPubTitle(art.name);
+      setPubDesc(art.description || '');
+      setPubDescLong('');
+      setPubVisibility('author');
+      setPubTags(new Set());
+    }
     setPubError('');
     setPubOpen(true);
     try {
@@ -547,32 +653,6 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       setPubValidTags(tags);
     } catch {
       setPubValidTags([]);
-    }
-  };
-
-  const handlePublishNotebookFork = async () => {
-    if (!pubTitle.trim()) { setPubError('Title is required'); return; }
-    const descLen = (pubDesc.trim() || pubTitle.trim()).length;
-    if (descLen < 5) { setPubError('Description must be at least 5 characters'); return; }
-    if (descLen > 255) { setPubError('Description must be at most 255 characters (it will be used as the short description)'); return; }
-    setPubBusy(true);
-    setPubError('');
-    try {
-      const result = await api.publishNotebookFork(pubDirName, {
-        title: pubTitle.trim(),
-        description: pubDesc.trim() || pubTitle.trim(),
-        visibility: pubVisibility,
-        tags: [...pubTags],
-      });
-      setPubOpen(false);
-      setMpLoaded(false);
-      fetchMyArtifacts();
-      fetchMarketplace(true);
-      alert(`Published "${result.title}" to FABRIC Artifact Manager.${result.forked_from ? ` Forked from ${result.forked_from}.` : ''}`);
-    } catch (e: any) {
-      setPubError(e.message);
-    } finally {
-      setPubBusy(false);
     }
   };
 
@@ -1051,19 +1131,6 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   const stripCategoryMarker = (text: string) =>
     text.replace(/\n?\[LoomAI (?:Weave|VM Template|Recipe|Notebook)\]\s*/gi, '').trim();
 
-  /** Append the [LoomAI ...] marker to a description before saving. */
-  const CATEGORY_MARKERS: Record<string, string> = {
-    'weave': '[LoomAI Weave]',
-    'vm-template': '[LoomAI VM Template]',
-    'recipe': '[LoomAI Recipe]',
-    'notebook': '[LoomAI Notebook]',
-  };
-  const ensureCategoryMarker = (desc: string, category: string) => {
-    const marker = CATEGORY_MARKERS[category];
-    if (!marker || desc.toLowerCase().includes(marker.toLowerCase())) return desc;
-    return `${desc}\n${marker}`;
-  };
-
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -1099,10 +1166,10 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     else onEditArtifact?.(art.dir_name);
   };
   const handlePublishArtifact = (art: LocalArtifact) => {
-    if (art.category === 'notebook') openPublishNotebook(art.dir_name, art.name, art.description || '');
-    else openPublish(art.dir_name, art.category, art.name, art.description || '');
+    openPublish(art);
   };
-  const canPublish = (art: LocalArtifact) => art.remote_status === 'not_linked';
+  const canPublish = (_art: LocalArtifact) => true;
+  const isVersionUpdate = (art: LocalArtifact) => art.remote_status === 'linked' && !!art.is_author && !!art.artifact_uuid;
 
   // Simple inline overflow menu for artifact cards
   const ArtifactOverflow = ({ art, menuKey }: { art: LocalArtifact; menuKey: string }) => {
@@ -1120,12 +1187,10 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     }, [isOpen]);
     const items: { label: string; onClick: () => void; disabled?: boolean; danger?: boolean; separator?: boolean }[] = [
       { label: 'Open', onClick: () => handleOpenArtifact(art) },
-      { label: 'Publish', onClick: () => handlePublishArtifact(art), disabled: !canPublish(art) },
-      { label: 'Edit', onClick: () => onEditArtifact?.(art.dir_name), disabled: !onEditArtifact },
-      { label: 'Delete', onClick: () => handleDeleteLocal(art), danger: true },
-      { label: '', onClick: () => {}, separator: true },
-      { label: 'JupyterLab', onClick: () => handleEditInJupyter(art.dir_name), disabled: launchingNotebook === art.dir_name },
+      { label: 'Publish', onClick: () => handlePublishArtifact(art) },
       { label: 'Details', onClick: () => { setViewMode('preview'); setPreviewSelected(`${art.category}-${art.dir_name}`); } },
+      { label: '', onClick: () => {}, separator: true },
+      { label: 'Delete', onClick: () => handleDeleteLocal(art), danger: true },
     ];
     return (
       <div className="tv-overflow-wrap" ref={wrapRef}>
@@ -1164,8 +1229,6 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         </div>
         {art.description && <div className="tv-card-desc">{art.description}</div>}
         <div className="tv-card-meta">
-          {art.node_count != null && <span>{art.node_count} node{art.node_count !== 1 ? 's' : ''}</span>}
-          {art.network_count != null && <span>{art.network_count} network{art.network_count !== 1 ? 's' : ''}</span>}
           {art.remote_status === 'linked' && art.remote_artifact && (
             <>
               <span>{art.remote_artifact.artifact_downloads_active} downloads</span>
@@ -1199,7 +1262,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         ) : (
           <div className="tv-card-actions">
             <button className="tv-btn tv-btn-primary" onClick={() => handleOpenArtifact(art)}>Open</button>
-            <button className="tv-btn tv-btn-publish" onClick={() => handlePublishArtifact(art)} disabled={!canPublish(art)}>
+            <button className="tv-btn tv-btn-publish" onClick={() => handlePublishArtifact(art)}>
               <BtnText full="Publish" short="Pub" />
             </button>
             <button className="tv-btn" onClick={() => onEditArtifact?.(art.dir_name)}>Edit</button>
@@ -1281,7 +1344,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     <div className="tv-table-wrap">
       <table className="tv-table">
         <thead><tr>
-          <th>Name</th><th>Category</th><th>Source</th><th>Nodes</th><th>Networks</th><th>Downloads</th><th>Status</th><th>Actions</th>
+          <th>Name</th><th>Category</th><th>Source</th><th>Downloads</th><th>Status</th><th>Actions</th>
         </tr></thead>
         <tbody>
           {filteredMyArtifacts.map(art => {
@@ -1292,13 +1355,11 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                 </td>
                 <td><span className={`tv-badge tv-badge-cat tv-badge-cat-${art.category}`}>{categoryLabel(art.category)}</span></td>
                 <td>{sourceLabel(art)}</td>
-                <td>{art.node_count ?? '—'}</td>
-                <td>{art.network_count ?? '—'}</td>
                 <td>{art.remote_artifact?.artifact_downloads_active ?? '—'}</td>
                 <td>{art.remote_status === 'linked' ? 'Linked' : art.remote_status === 'remote_deleted' ? 'Remote Deleted' : 'Local Only'}</td>
                 <td className="tv-table-actions">
                   <button className="tv-btn tv-btn-primary" onClick={() => handleOpenArtifact(art)}>Open</button>
-                  <button className="tv-btn tv-btn-publish" onClick={() => handlePublishArtifact(art)} disabled={!canPublish(art)}>
+                  <button className="tv-btn tv-btn-publish" onClick={() => handlePublishArtifact(art)}>
                     <BtnText full="Publish" short="Pub" />
                   </button>
                   <button className="tv-btn" onClick={() => onEditArtifact?.(art.dir_name)}>Edit</button>
@@ -1388,8 +1449,6 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           {!art.is_from_marketplace && !art.is_author && <span className="tv-badge tv-badge-source-local">Local</span>}
         </div>
         <div className="tv-pv-detail-grid">
-          {art.node_count != null && <><span className="tv-pv-label">Nodes</span><span>{art.node_count}</span></>}
-          {art.network_count != null && <><span className="tv-pv-label">Networks</span><span>{art.network_count}</span></>}
           <span className="tv-pv-label">Category</span><span>{categoryLabel(art.category)}</span>
           <span className="tv-pv-label">Source</span><span>{sourceLabel(art)}</span>
           {art.created && <><span className="tv-pv-label">Created</span><span>{new Date(art.created).toLocaleDateString()}</span></>}
@@ -1405,7 +1464,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         </div>
         <div className="tv-pv-detail-actions">
           <button className="tv-btn tv-btn-primary" onClick={() => handleOpenArtifact(art)}>Open</button>
-          <button className="tv-btn tv-btn-publish" onClick={() => handlePublishArtifact(art)} disabled={!canPublish(art)}>Publish</button>
+          <button className="tv-btn tv-btn-publish" onClick={() => handlePublishArtifact(art)}>Publish</button>
           {!isDetailEdit && (
             <button className="tv-btn" onClick={() => openDetailEdit(art)}>Edit Info</button>
           )}
@@ -1536,7 +1595,14 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
               </button>
             );
           })}
-          {!filteredMyArtifacts.length && <div className="tv-empty" style={{ padding: '16px' }}>No artifacts match your filters.</div>}
+          {!filteredMyArtifacts.length && (
+            <div className="tv-empty" style={{ padding: '16px' }}>
+              No artifacts match your filters.{' '}
+              <button className="tv-mp-reset-link" onClick={() => {
+                setSearch(''); setMyActiveTags(new Set()); setMyCategoryFilter('all');
+              }}>Clear filters</button>
+            </div>
+          )}
         </div>
         <div className="tv-pv-main">
           {selected ? renderLocalDetail(selected) : <div className="tv-empty" style={{ paddingTop: '40px' }}>Select an artifact to preview its details.</div>}
@@ -1582,20 +1648,16 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     if (!editing || editCwd !== '') return [];
     const warns: string[] = [];
     const hasFile = (name: string) => rootFileNames.includes(name);
-    const hasSlice = hasFile('slice.json');
-    const hasDeploy = hasFile('deploy.sh');
-    const hasRun = hasFile('run.sh');
+    const hasWeaveJson = hasFile('weave.json');
+    const hasWeaveSh = hasFile('weave.sh');
     const hasVm = hasFile('vm-template.json');
     const hasRecipe = hasFile('recipe.json');
 
-    if (!hasSlice && !hasVm && !hasRecipe) {
-      warns.push('No recognized artifact type. Add slice.json (weave), vm-template.json (VM), or recipe.json (recipe).');
+    if (!hasWeaveJson && !hasVm && !hasRecipe) {
+      warns.push('No recognized artifact type. Add weave.json (weave), vm-template.json (VM), or recipe.json (recipe).');
     }
-    if (hasSlice && !hasDeploy) {
-      warns.push('Missing deploy.sh — a weave needs both slice.json and deploy.sh to be loadable.');
-    }
-    if (hasSlice && hasDeploy && !hasRun) {
-      warns.push('No run.sh — add run.sh to make this weave runnable.');
+    if (hasWeaveJson && !hasWeaveSh) {
+      warns.push('No weave.sh — add weave.sh to make this weave runnable. Output will go to weave.log.');
     }
     return warns;
   })();
@@ -1801,10 +1863,10 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
             {renderVersionsEditor(r.uuid, editing.dir_name, editing.category)}
           </>
         )}
-        {!r && editing.remote_status === 'not_linked' && (
+        {!r && (
           <div className="tv-editor-section">
             <div className="tv-editor-section-title">Publishing</div>
-            <button className="tv-btn tv-btn-publish" onClick={() => openPublish(editing.dir_name, editing.category, editing.name, editing.description || '')}>
+            <button className="tv-btn tv-btn-publish" onClick={() => openPublish(editing)}>
               Publish to FABRIC Artifact Manager
             </button>
           </div>
@@ -1977,22 +2039,47 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       {/* ================================================================= */}
       {tab === 'my-artifacts' && (
         <>
-          <div className="tv-my-filter-bar">
-            <div className="tv-my-filter-group">
-              <span className="tv-my-filter-label">Category:</span>
-              {(['all', 'weave', 'vm-template', 'recipe', 'notebook'] as CategoryFilter[]).map(c => (
-                <button key={c} className={`tv-my-filter-chip ${myCategoryFilter === c ? 'active' : ''}`}
-                  onClick={() => setMyCategoryFilter(c)}>
-                  {c === 'all' ? 'All' : categoryLabel(c)}
-                </button>
-              ))}
+          <div className="tv-mp-toolbar">
+            <div className="tv-mp-search-wrap">
+              <input className="tv-mp-search" placeholder="Search local artifacts..." value={search}
+                onChange={e => setSearch(e.target.value)} />
+              {search && <button className="tv-mp-search-clear" onClick={() => setSearch('')} title="Clear search">x</button>}
             </div>
+            <select className="tv-mp-sort" value={myCategoryFilter} onChange={e => setMyCategoryFilter(e.target.value as CategoryFilter)}>
+              <option value="all">All Categories</option>
+              <option value="weave">{categoryLabel('weave')}</option>
+              <option value="vm-template">{categoryLabel('vm-template')}</option>
+              <option value="recipe">{categoryLabel('recipe')}</option>
+              <option value="notebook">{categoryLabel('notebook')}</option>
+            </select>
+            <select className="tv-mp-sort" value={mySort} onChange={e => setMySort(e.target.value as any)}>
+              <option value="newest">Newest First</option>
+              <option value="az">A - Z</option>
+            </select>
             {renderViewToggle()}
           </div>
 
-          <div className="tv-search">
-            <input className="tv-search-input" placeholder="Search local artifacts..." value={search}
-              onChange={e => setSearch(e.target.value)} />
+          {myUniqueTags.length > 0 && (
+            <div className="tv-mp-tag-bar">
+              <span className="tv-mp-tag-label">Tags:</span>
+              {(myActiveTags.size > 0 || myCategoryFilter !== 'all' || search) && (
+                <button className="tv-mp-tag-chip tv-mp-tag-clear" onClick={() => {
+                  setMyActiveTags(new Set()); setMyCategoryFilter('all'); setSearch('');
+                }}>Clear all filters</button>
+              )}
+              {myUniqueTags.map(t => (
+                <button key={t.name} className={`tv-mp-tag-chip ${myActiveTags.has(t.name) ? 'active' : ''}`}
+                  onClick={() => toggleMyTag(t.name)}>
+                  {t.name} <span className="tv-mp-tag-count">{t.count}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="tv-mp-results-info">
+            {filteredMyArtifacts.length === myArtifacts.length
+              ? `${myArtifacts.length} artifact${myArtifacts.length !== 1 ? 's' : ''}`
+              : `${filteredMyArtifacts.length} of ${myArtifacts.length} artifacts`}
           </div>
 
           {myLoading && !myArtifacts.length && <div className="tv-loading">Loading artifacts...</div>}
@@ -2001,11 +2088,25 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           {viewMode === 'grid' && (
             <>
               <div className="tv-grid">{filteredMyArtifacts.map(renderMyArtifactCard)}</div>
-              {!myLoading && !filteredMyArtifacts.length && <div className="tv-empty">No artifacts match your filters.</div>}
+              {!myLoading && !filteredMyArtifacts.length && (
+                <div className="tv-empty">
+                  No artifacts match your filters.{' '}
+                  <button className="tv-mp-reset-link" onClick={() => {
+                    setSearch(''); setMyActiveTags(new Set()); setMyCategoryFilter('all');
+                  }}>Clear filters</button>
+                </div>
+              )}
             </>
           )}
           {viewMode === 'table' && (
-            filteredMyArtifacts.length ? renderMyTable() : <div className="tv-empty">No artifacts match your filters.</div>
+            filteredMyArtifacts.length ? renderMyTable() : (
+              <div className="tv-empty">
+                No artifacts match your filters.{' '}
+                <button className="tv-mp-reset-link" onClick={() => {
+                  setSearch(''); setMyActiveTags(new Set()); setMyCategoryFilter('all');
+                }}>Clear filters</button>
+              </div>
+            )
           )}
           {viewMode === 'preview' && renderMyPreview()}
         </>
@@ -2178,19 +2279,103 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         <div className="tv-pub-overlay" onClick={() => setPubOpen(false)}>
           <div className="tv-pub-dialog" onClick={e => e.stopPropagation()}>
             <div className="tv-pub-header">
-              Publish to FABRIC Artifact Manager
+              {pubAction === 'update' ? 'Publish New Version' : pubAction === 'fork' ? 'Fork as New Artifact' : 'Publish to FABRIC Artifact Manager'}
               <button className="tv-btn" onClick={() => setPubOpen(false)} style={{ marginLeft: 'auto' }}>Close</button>
             </div>
+            {pubLoadingInfo && (
+              <div style={{ fontSize: 12, color: 'var(--fabric-text-muted, #888)', padding: '6px 0' }}>
+                Checking publish options...
+              </div>
+            )}
+            {!pubLoadingInfo && (pubCanUpdate || pubCanFork) && (
+              <div style={{ padding: '8px 0', borderBottom: '1px solid var(--fabric-border, #e0e0e0)' }}>
+                {pubCanUpdate && pubCanFork ? (
+                  <div className="tv-pub-vis-options" style={{ gap: '6px' }}>
+                    <label className={`tv-pub-vis-option ${pubAction === 'update' ? 'active' : ''}`} style={{ flex: 1 }}>
+                      <input type="radio" name="pub-action" value="update" checked={pubAction === 'update'}
+                        onChange={() => setPubAction('update')} />
+                      <span className="tv-pub-vis-label">Publish New Version</span>
+                      <span className="tv-pub-vis-desc">Update the existing artifact with a new version</span>
+                    </label>
+                    <label className={`tv-pub-vis-option ${pubAction === 'fork' ? 'active' : ''}`} style={{ flex: 1 }}>
+                      <input type="radio" name="pub-action" value="fork" checked={pubAction === 'fork'}
+                        onChange={() => setPubAction('fork')} />
+                      <span className="tv-pub-vis-label">Fork as New Artifact</span>
+                      <span className="tv-pub-vis-desc">Create a new artifact with provenance linking to the original</span>
+                    </label>
+                  </div>
+                ) : pubCanFork && !pubCanUpdate && pubForkConfirmed ? (
+                  <div className="tv-pub-fork-banner">
+                    <div className="tv-pub-fork-icon">⑂</div>
+                    <div className="tv-pub-fork-text">
+                      <strong>Publishing as a fork</strong>
+                      {pubRemoteTitle && <span className="tv-pub-fork-original">Original: {pubRemoteTitle}</span>}
+                      <span className="tv-pub-fork-detail">A new artifact will be created under your account with provenance linking back to the original.</span>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            )}
+            {pubAction === 'fork' && pubCanUpdate && (
+              <div className="tv-pub-fork-banner" style={{ marginTop: 8 }}>
+                <div className="tv-pub-fork-icon">⑂</div>
+                <div className="tv-pub-fork-text">
+                  <strong>Creating a fork</strong>
+                  {pubRemoteTitle && <span className="tv-pub-fork-original">Original: {pubRemoteTitle}</span>}
+                  <span className="tv-pub-fork-detail">A new, separate artifact will be created with provenance linking to the original.</span>
+                </div>
+              </div>
+            )}
+            {pubAction === 'update' && (
+              <div style={{ fontSize: 12, color: 'var(--fabric-teal, #008e7a)', padding: '6px 0', borderBottom: '1px solid var(--fabric-border, #e0e0e0)' }}>
+                This will upload a new version and update metadata for the existing artifact.
+              </div>
+            )}
+            {/* Fork confirmation gate — shown before form when non-author tries to publish */}
+            {!pubLoadingInfo && pubCanFork && !pubCanUpdate && !pubForkConfirmed && (
+              <div className="tv-pub-fork-confirm">
+                <div className="tv-pub-fork-confirm-icon">⑂</div>
+                <h3 className="tv-pub-fork-confirm-heading">This will be a fork</h3>
+                {pubRemoteTitle && (
+                  <div className="tv-pub-fork-confirm-original">Original: <em>{pubRemoteTitle}</em></div>
+                )}
+                <ul className="tv-pub-fork-confirm-list">
+                  <li>This creates a <strong>new artifact</strong> on the Artifact Manager, separate from the original</li>
+                  <li>You will be the <strong>owner and author</strong></li>
+                  <li>It will include provenance linking back to the original</li>
+                  <li>You should give it a <strong>new name</strong>, short description, and detailed description</li>
+                </ul>
+                <div className="tv-pub-fork-confirm-actions">
+                  <button className="tv-btn tv-btn-primary" onClick={() => setPubForkConfirmed(true)}>Continue</button>
+                  <button className="tv-btn" onClick={() => setPubOpen(false)}>Cancel</button>
+                </div>
+              </div>
+            )}
+            {(pubAction !== 'fork' || pubCanUpdate || pubForkConfirmed) && (<>
             <div className="tv-pub-field">
               <label className="tv-pub-label">Title</label>
               <input className="tv-pub-input" value={pubTitle} onChange={e => setPubTitle(e.target.value)} />
+              {pubAction === 'fork' && (
+                <span className="tv-pub-field-hint">Consider giving your fork a unique name</span>
+              )}
             </div>
             <div className="tv-pub-field">
-              <label className="tv-pub-label">Description <span style={{ fontSize: 11, opacity: 0.6 }}>(5-255 chars)</span></label>
-              <textarea className="tv-pub-textarea" value={pubDesc} onChange={e => setPubDesc(e.target.value)} rows={3} maxLength={255} />
+              <label className="tv-pub-label">Short Description <span style={{ fontSize: 11, opacity: 0.6 }}>(5-255 chars, shown in listings)</span></label>
+              <textarea className="tv-pub-textarea" value={pubDesc} onChange={e => setPubDesc(e.target.value)} rows={2} maxLength={255} />
               <span className={`ae-char-count ${pubDesc.length > 0 && (pubDesc.length < 5 || pubDesc.length > 255) ? 'over' : ''}`} style={{ fontSize: 11, opacity: 0.7, textAlign: 'right', display: 'block', marginTop: 2 }}>
                 {pubDesc.length}/255{pubDesc.length > 0 && pubDesc.length < 5 ? ' (min 5)' : ''}
               </span>
+              {pubAction === 'fork' && (
+                <span className="tv-pub-field-hint">Describe what makes your version different</span>
+              )}
+            </div>
+            <div className="tv-pub-field">
+              <label className="tv-pub-label">Detailed Description <span style={{ fontSize: 11, opacity: 0.6 }}>(optional, shown on artifact detail page)</span></label>
+              <textarea className="tv-pub-textarea" value={pubDescLong} onChange={e => setPubDescLong(e.target.value)} rows={4}
+                placeholder="Longer description with usage instructions, requirements, etc." />
+              {pubAction === 'fork' && (
+                <span className="tv-pub-field-hint">Describe what makes your version different</span>
+              )}
             </div>
             <div className="tv-pub-field">
               <label className="tv-pub-label">Visibility</label>
@@ -2219,20 +2404,23 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
               <label className="tv-pub-label">Category</label>
               <span className="tv-pub-category">{categoryLabel(pubCategory)}</span>
             </div>
-            {pubCategory === 'notebook' && (
+            {pubCategory === 'notebook' && !pubIsVersionUpdate && (
               <div className="tv-pub-field" style={{ fontSize: 12, color: 'var(--fabric-teal, #008e7a)' }}>
                 This will publish your modified notebook workspace as a new artifact with fork provenance linking to the original.
               </div>
             )}
+            </>)}
+            {(pubAction !== 'fork' || pubCanUpdate || pubForkConfirmed) && (<>
             {pubError && <div className="tv-error" style={{ padding: '8px 0' }}>{pubError}</div>}
             <div className="tv-pub-actions">
-              <button className="tv-btn tv-btn-primary"
-                onClick={pubCategory === 'notebook' ? handlePublishNotebookFork : handlePublish}
+              <button className={`tv-btn ${pubAction === 'fork' ? 'tv-btn-fork' : 'tv-btn-primary'}`}
+                onClick={handlePublish}
                 disabled={pubBusy || !pubTitle.trim()}>
-                {pubBusy ? 'Publishing...' : 'Publish'}
+                {pubBusy ? 'Publishing...' : pubAction === 'update' ? 'Publish Update' : pubAction === 'fork' ? '⑂ Publish Fork' : 'Publish'}
               </button>
               <button className="tv-btn" onClick={() => setPubOpen(false)}>Cancel</button>
             </div>
+            </>)}
           </div>
         </div>
       )}

@@ -16,7 +16,7 @@ class TestListLocalArtifacts:
         assert isinstance(data["artifacts"], list)
 
     def test_local_returns_weave(self, client, storage_dir):
-        # Create a weave artifact (slice.json + deploy.sh)
+        # Create a weave artifact with weave.json marker
         art_dir = storage_dir / "my_artifacts" / "test_weave"
         art_dir.mkdir(parents=True, exist_ok=True)
         (art_dir / "slice.json").write_text(json.dumps({
@@ -25,8 +25,13 @@ class TestListLocalArtifacts:
             "nodes": [{"name": "n1"}],
             "networks": [],
         }))
-        (art_dir / "deploy.sh").write_text("#!/bin/bash\necho deploy")
-        (art_dir / "metadata.json").write_text(json.dumps({
+        (art_dir / "weave.json").write_text(json.dumps({
+            "run_script": "weave.sh",
+            "log_file": "weave.log",
+        }))
+        (art_dir / "weave.json").write_text(json.dumps({
+            "run_script": "weave.sh",
+            "log_file": "weave.log",
             "name": "Test Weave",
             "description": "A test weave",
         }))
@@ -88,8 +93,8 @@ class TestUpdateLocalMetadata:
         (art_dir / "slice.json").write_text(json.dumps({
             "format": "fabric-slice-v1", "nodes": [], "networks": [],
         }))
-        (art_dir / "deploy.sh").write_text("#!/bin/bash")
-        (art_dir / "metadata.json").write_text(json.dumps({
+        (art_dir / "weave.json").write_text(json.dumps({
+            "run_script": "weave.sh",
             "name": "Original",
             "description": "Old desc",
         }))
@@ -103,7 +108,7 @@ class TestUpdateLocalMetadata:
         assert data["metadata"]["description"] == "New desc"
 
         # Verify persisted on disk
-        with open(art_dir / "metadata.json") as f:
+        with open(art_dir / "weave.json") as f:
             saved = json.load(f)
         assert saved["name"] == "Updated"
 
@@ -259,14 +264,14 @@ class TestDeleteArtifactVersion:
 
 class TestMyArtifacts:
     def test_my_artifacts_returns_structure(self, client, storage_dir):
-        # Create a local weave artifact
+        # Create a local weave artifact with weave.json marker
         art_dir = storage_dir / "my_artifacts" / "my_weave"
         art_dir.mkdir(parents=True, exist_ok=True)
         (art_dir / "slice.json").write_text(json.dumps({
             "format": "fabric-slice-v1", "nodes": [], "networks": [],
         }))
-        (art_dir / "deploy.sh").write_text("#!/bin/bash")
-        (art_dir / "metadata.json").write_text(json.dumps({
+        (art_dir / "weave.json").write_text(json.dumps({
+            "run_script": "weave.sh",
             "name": "My Weave",
             "source": "artifact-manager",
             "artifact_uuid": "remote-uuid-1",
@@ -284,3 +289,228 @@ class TestMyArtifacts:
         assert "user_email" in data
         assert data["user_email"] == "user@example.com"
         assert len(data["local_artifacts"]) >= 1
+
+
+class TestPublishInfo:
+    """Tests for GET /artifacts/local/{dir_name}/publish-info."""
+
+    def test_publish_info_local_only(self, client, storage_dir):
+        """Local-only artifact (no artifact_uuid) → can_update=False, can_fork=False."""
+        art_dir = storage_dir / "my_artifacts" / "local_only"
+        art_dir.mkdir(parents=True, exist_ok=True)
+        (art_dir / "weave.json").write_text(json.dumps({
+            "name": "Local Weave",
+            "run_script": "weave.sh",
+        }))
+
+        resp = client.get("/api/artifacts/local/local_only/publish-info")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["can_update"] is False
+        assert data["can_fork"] is False
+        assert data["is_author"] is False
+        assert data["artifact_uuid"] is None
+
+    def test_publish_info_author(self, client, storage_dir):
+        """Author of linked artifact → can_update=True, can_fork=True."""
+        art_dir = storage_dir / "my_artifacts" / "authored_weave"
+        art_dir.mkdir(parents=True, exist_ok=True)
+        (art_dir / "weave.json").write_text(json.dumps({
+            "name": "Authored Weave",
+            "artifact_uuid": "author-uuid-1",
+            "source": "artifact-manager",
+        }))
+
+        mock_remote = {
+            "uuid": "author-uuid-1",
+            "title": "Remote Authored",
+            "visibility": "public",
+            "created_by": {"email": "user@example.com"},
+            "authors": [],
+            "tags": [],
+        }
+
+        with patch("app.routes.artifacts._fetch_artifact",
+                    new_callable=AsyncMock, return_value=mock_remote), \
+             patch("app.routes.artifacts._get_current_user_identity",
+                    return_value=("user@example.com", "Test User")):
+            resp = client.get("/api/artifacts/local/authored_weave/publish-info")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["can_update"] is True
+        assert data["can_fork"] is True
+        assert data["is_author"] is True
+        assert data["artifact_uuid"] == "author-uuid-1"
+        assert data["remote_title"] == "Remote Authored"
+
+    def test_publish_info_not_author(self, client, storage_dir):
+        """Non-author of linked artifact → can_update=False, can_fork=True."""
+        art_dir = storage_dir / "my_artifacts" / "foreign_weave"
+        art_dir.mkdir(parents=True, exist_ok=True)
+        (art_dir / "weave.json").write_text(json.dumps({
+            "name": "Foreign Weave",
+            "artifact_uuid": "foreign-uuid-1",
+            "source": "artifact-manager",
+        }))
+
+        mock_remote = {
+            "uuid": "foreign-uuid-1",
+            "title": "Someone Else's Weave",
+            "visibility": "public",
+            "created_by": {"email": "other@example.com"},
+            "authors": [{"email": "other@example.com"}],
+            "tags": [],
+        }
+
+        with patch("app.routes.artifacts._fetch_artifact",
+                    new_callable=AsyncMock, return_value=mock_remote), \
+             patch("app.routes.artifacts._get_current_user_identity",
+                    return_value=("user@example.com", "Test User")):
+            resp = client.get("/api/artifacts/local/foreign_weave/publish-info")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["can_update"] is False
+        assert data["can_fork"] is True
+        assert data["is_author"] is False
+
+    def test_publish_info_not_found(self, client):
+        resp = client.get("/api/artifacts/local/nonexistent/publish-info")
+        assert resp.status_code == 404
+
+
+class TestPublishAction:
+    """Tests for the action parameter on POST /artifacts/publish."""
+
+    def test_publish_action_update_requires_uuid(self, client, storage_dir):
+        """action=update with no artifact_uuid → 400."""
+        art_dir = storage_dir / "my_artifacts" / "no_uuid"
+        art_dir.mkdir(parents=True, exist_ok=True)
+        (art_dir / "weave.json").write_text(json.dumps({
+            "name": "No UUID",
+            "run_script": "weave.sh",
+        }))
+
+        with patch("app.routes.artifacts._get_auth_headers",
+                    return_value={"Authorization": "Bearer fake"}):
+            resp = client.post("/api/artifacts/publish", json={
+                "dir_name": "no_uuid",
+                "category": "weave",
+                "title": "No UUID",
+                "description": "Test desc",
+                "action": "update",
+            })
+        assert resp.status_code == 400
+        assert "Cannot update" in resp.json()["detail"]
+
+    def test_publish_action_fork_requires_uuid(self, client, storage_dir):
+        """action=fork with no artifact_uuid → 400."""
+        art_dir = storage_dir / "my_artifacts" / "no_uuid_fork"
+        art_dir.mkdir(parents=True, exist_ok=True)
+        (art_dir / "weave.json").write_text(json.dumps({
+            "name": "No UUID Fork",
+            "run_script": "weave.sh",
+        }))
+
+        with patch("app.routes.artifacts._get_auth_headers",
+                    return_value={"Authorization": "Bearer fake"}):
+            resp = client.post("/api/artifacts/publish", json={
+                "dir_name": "no_uuid_fork",
+                "category": "weave",
+                "title": "No UUID Fork",
+                "description": "Test desc",
+                "action": "fork",
+            })
+        assert resp.status_code == 400
+        assert "Cannot fork" in resp.json()["detail"]
+
+    def test_publish_action_fork_writes_provenance(self, client, storage_dir):
+        """action=fork writes forked_from to weave.json."""
+        art_dir = storage_dir / "my_artifacts" / "fork_test"
+        art_dir.mkdir(parents=True, exist_ok=True)
+        (art_dir / "weave.json").write_text(json.dumps({
+            "name": "Fork Test",
+            "artifact_uuid": "original-uuid-1",
+            "source": "artifact-manager",
+        }))
+
+        mock_remote = {
+            "uuid": "original-uuid-1",
+            "title": "Original Artifact",
+            "versions": [{"version": "1.0.0", "active": True, "uuid": "v1"}],
+            "tags": [],
+        }
+        mock_create_resp = MagicMock()
+        mock_create_resp.status_code = 200
+        mock_create_resp.raise_for_status = MagicMock()
+        mock_create_resp.json.return_value = {"uuid": "new-fork-uuid"}
+
+        mock_update_resp = MagicMock()
+        mock_update_resp.status_code = 200
+        mock_update_resp.raise_for_status = MagicMock()
+        mock_update_resp.json.return_value = {}
+
+        mock_upload_resp = MagicMock()
+        mock_upload_resp.status_code = 200
+        mock_upload_resp.raise_for_status = MagicMock()
+        mock_upload_resp.json.return_value = {"version": "1.0.0"}
+
+        import app.http_pool as pool
+
+        with patch("app.routes.artifacts._get_auth_headers",
+                    return_value={"Authorization": "Bearer fake"}), \
+             patch("app.routes.artifacts._fetch_artifact",
+                    new_callable=AsyncMock, return_value=mock_remote), \
+             patch.object(pool.fabric_client, "post",
+                          new=AsyncMock(return_value=mock_create_resp)), \
+             patch.object(pool.fabric_client, "put",
+                          new=AsyncMock(return_value=mock_update_resp)), \
+             patch.object(pool.ai_client, "post",
+                          new=AsyncMock(return_value=mock_upload_resp)):
+            resp = client.post("/api/artifacts/publish", json={
+                "dir_name": "fork_test",
+                "category": "weave",
+                "title": "My Fork",
+                "description": "Forked version",
+                "action": "fork",
+            })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "published"
+        assert data["uuid"] == "new-fork-uuid"
+        assert data["forked_from"] == "original-uuid-1"
+
+        # Verify forked_from was written to weave.json
+        with open(art_dir / "weave.json") as f:
+            meta = json.load(f)
+        assert "forked_from" in meta
+        assert meta["forked_from"]["artifact_uuid"] == "original-uuid-1"
+        assert meta["forked_from"]["version"] == "1.0.0"
+        assert meta["forked_from"]["title"] == "Original Artifact"
+        assert meta["artifact_uuid"] == "new-fork-uuid"
+
+
+class TestDownloadDedup:
+    """Tests for download deduplication by artifact_uuid."""
+
+    def test_find_local_by_uuid(self, storage_dir):
+        """_find_local_by_uuid finds an existing artifact by UUID."""
+        from app.routes.artifacts import _find_local_by_uuid
+
+        art_dir = storage_dir / "my_artifacts" / "existing_art"
+        art_dir.mkdir(parents=True, exist_ok=True)
+        (art_dir / "weave.json").write_text(json.dumps({
+            "name": "Existing",
+            "artifact_uuid": "dedup-uuid-1",
+        }))
+
+        result = _find_local_by_uuid("dedup-uuid-1")
+        assert result == "existing_art"
+
+    def test_find_local_by_uuid_not_found(self, storage_dir):
+        """_find_local_by_uuid returns None when UUID not present locally."""
+        from app.routes.artifacts import _find_local_by_uuid
+
+        # Ensure my_artifacts exists but doesn't have the UUID
+        (storage_dir / "my_artifacts").mkdir(parents=True, exist_ok=True)
+        result = _find_local_by_uuid("nonexistent-uuid")
+        assert result is None

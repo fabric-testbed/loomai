@@ -2,7 +2,7 @@
 
 ## Overview
 
-**fabric-webgui** is a standalone web application that replicates the Jupyter-based **fabvis** GUI (from `fabrictestbed-extensions` fabvis branch) as a browser application. It provides a three-panel topology editor with Cytoscape.js graph visualization, a geographic Leaflet map view, tabular sliver views, file management, AI coding assistants, guided tours, an artifact marketplace, a landing page, and template/recipe libraries for building FABRIC network experiments.
+**fabric-webgui** is a standalone web application that replicates the Jupyter-based **fabvis** GUI (from `fabrictestbed-extensions` fabvis branch) as a browser application. It provides a three-panel topology editor with Cytoscape.js graph visualization, a geographic Leaflet map view, tabular sliver views, file management, AI coding assistants, guided tours, an artifact marketplace, and a landing page for building FABRIC network experiments.
 
 **Target users**: FABRIC testbed researchers who need a visual interface for creating, managing, and monitoring network experiment slices.
 
@@ -41,7 +41,7 @@
 │  │Site Resolver │ │Slice Registry│ │Monitoring Manager│    │
 │  │(group→site)  │ │(JSON persist)│ │(node_exporter)   │    │
 │  └──────────────┘ └──────────────┘ └──────────────────┘    │
-│  14 route modules (slices, resources, templates, ...)       │
+│  18 route modules (slices, resources, templates, ...)       │
 └────────────────────────┬────────────────────────────────────┘
                          │ FABlib Python API + SSH
 ┌────────────────────────┴────────────────────────────────────┐
@@ -136,9 +136,8 @@
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/` | List all weaves (slice.json + deploy.sh artifacts) |
+| GET | `/` | List all weaves (includes `weave_config` from `weave.json`) |
 | POST | `/` | Save current slice as template |
-| POST | `/resync` | Force re-seed builtins |
 | GET | `/{name}` | Get full template with model JSON and tool files |
 | POST | `/{name}/load` | Load template as new draft |
 | PUT | `/{name}` | Update template metadata |
@@ -146,6 +145,22 @@
 | GET | `/{name}/tools/{file}` | Read tool file content |
 | PUT | `/{name}/tools/{file}` | Create/update tool file |
 | DELETE | `/{name}/tools/{file}` | Delete tool file |
+| GET | `/{name}/weave-log` | Read weave log file (offset-based for incremental reads) |
+| POST | `/{name}/run-script/{script}` | Stream script execution (SSE) |
+| POST | `/{name}/start-run/{script}` | Start background run (returns run_id) |
+
+**Background runs** (`run_manager.py`):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/runs` | List all background runs (active + completed) |
+| GET | `/runs/{run_id}/output` | Poll run output (byte-offset incremental) |
+| POST | `/runs/{run_id}/stop` | Stop a running process |
+| DELETE | `/runs/{run_id}` | Delete run data |
+
+Each weave has a `weave.json` config: `{"run_script": "weave.sh", "log_file": "weave.log"}`.
+The Run button executes `run_script` as a background process. Output goes to `log_file`,
+viewable in the console via "View Log".
 
 #### VM Templates (`routes/vm_templates.py` → `/api/vm-templates`)
 
@@ -153,7 +168,6 @@
 |--------|------|-------------|
 | GET | `/` | List all VM templates |
 | POST | `/` | Create VM template |
-| POST | `/resync` | Force re-seed builtins |
 | GET | `/{name}` | Get full VM template with boot_config |
 | PUT | `/{name}` | Update VM template |
 | DELETE | `/{name}` | Delete VM template |
@@ -188,7 +202,7 @@
 | GET | `/config/slice-key/{slice}` | Get key set for a slice |
 | PUT | `/config/slice-key/{slice}` | Assign key set to a slice |
 | POST | `/config/save` | Write fabric_rc + ssh_config |
-| POST | `/config/rebuild-storage` | Re-initialize storage, re-seed templates |
+| POST | `/config/rebuild-storage` | Re-initialize storage layout |
 | GET | `/projects` | List user projects from Core API |
 | POST | `/projects/switch` | Switch active project |
 | GET | `/projects/{uuid}/details` | Project details from UIS + local counts |
@@ -312,7 +326,7 @@ App.tsx (root state orchestration)
 ├── [table view]:    AllSliversView    — Expandable table with bulk ops
 ├── [map view]:      GeoView           — Leaflet map + DetailPanel
 ├── [files view]:    FileTransferView  — Dual FileBrowser + FileEditor
-├── [libraries view]: LibrariesView    — Full artifact manager (Local, Authored, Marketplace)
+├── [artifacts view]: LibrariesView    — Full artifact manager (Local, Authored, Marketplace)
 ├── [ai view]:       AICompanionView   — AI tool launcher cards
 │   ├── TerminalCompanionView — Split-pane terminal AI tools
 │   ├── AiderWebView          — Aider web interface
@@ -340,7 +354,7 @@ All state lives in `App.tsx` as `useState` hooks. No external state library. Key
 
 - **Slice state**: `selectedSliceId`, `sliceData`, `slices[]`, `loading`
 - **Infrastructure**: `infraSites`, `infraLinks`, `images`, `componentModels`, `vmTemplates`
-- **UI layout**: `currentView` (landing/topology/sliver/map/files/libraries/client/ai/jupyter), `panelLayout`, `dark`, `consoleExpanded`, `consoleHeight`
+- **UI layout**: `currentView` (landing/topology/sliver/map/files/artifacts/client/ai/jupyter), `panelLayout`, `dark`, `consoleExpanded`, `consoleHeight`
 - **Terminals**: `terminalTabs[]`, `terminalIdCounter`
 - **Validation**: `validationIssues[]`, `validationValid`
 - **Errors**: `errors[]`, `bootConfigErrors[]`
@@ -406,7 +420,7 @@ Terminal-based tools run in split-pane views (`TerminalCompanionView.tsx`) with 
 
 ### Artifact Marketplace
 
-The Libraries view (`LibrariesView.tsx`) provides a full artifact management system:
+The Artifacts view (`LibrariesView.tsx`) provides a full artifact management system:
 - **Local tab**: Browse installed artifacts by category (weaves, VM templates, recipes, notebooks)
 - **Authored tab**: Manage artifacts you've published
 - **Marketplace tab**: Browse community-published artifacts with search, category filter, and tag filter
@@ -464,32 +478,19 @@ Cytoscape.js JSON {nodes: [...], edges: [...]}
 Rendered graph with layout algorithm (dagre/cola/breadthfirst/grid/concentric/cose)
 ```
 
-### Template Seeding
+### Artifact Storage
 
 ```
-slice-libraries/                  (git-tracked source of truth)
-├── slice_templates/
-├── vm_templates/
-└── vm_recipes/
-        │
-        │  Docker build: COPY into /app/slice-libraries/
-        │  Dev: rsync to backend/slice-libraries/
-        │
-        ▼
-Backend startup / resync endpoint
-        │
-        │  Hash-based change detection (metadata.json hash)
-        │  Only copies if builtin and hash differs
-        │
-        ▼
 FABRIC_STORAGE_DIR/
-├── .artifacts/{name}/          # Unified artifact storage
-│   ├── slice.json + deploy.sh  # → weave (+ run.sh → runnable weave)
+├── .artifacts/{name}/          # Unified artifact storage (user-created)
+│   ├── weave.json              # → weave (+ weave.sh → runnable weave)
 │   ├── vm-template.json        # → VM template
 │   ├── recipe.json             # → recipe
-│   ├── metadata.json           # Optional metadata
+│   ├── weave.sh               # Optional run script
 │   └── tools/                  # Optional scripts
 ```
+
+All artifacts are user-created. Study the Hello FABRIC weave in my_artifacts/ for patterns.
 
 ### SSH Terminal Flow
 
@@ -509,38 +510,9 @@ VM (management IP)
 Shell (bash)
 ```
 
-## Slice Libraries
+## Artifact Format Reference
 
-### Structure
-
-```
-slice-libraries/
-├── slice_templates/           Topologies with site groups and networks
-│   ├── Hello_FABRIC/
-│   ├── L2_Bridge___Auto_IP/
-│   ├── Wide-Area_L2_Network/
-│   ├── iPerf3_Bandwidth_Test/
-│   ├── Prometheus___Grafana_Stack/  (with tools/ directory)
-│   ├── FRR_OSPF_Triangle/
-│   ├── P4_BMv2_Lab/
-│   ├── Kubernetes_Cluster/
-│   ├── GPU_Compute_Pair/
-│   └── Ollama_LLM_Service/
-├── vm_templates/              Single-node VM blueprints
-│   ├── Docker_Host/
-│   ├── FRR_Router/
-│   ├── OVS_Switch/
-│   ├── GPU___CUDA_Host/
-│   ├── NVMe_Storage_Node/
-│   ├── Ollama_LLM_Server/
-│   └── ... (11 total)
-└── vm_recipes/                Reusable install actions
-    └── install_docker/
-        ├── recipe.json
-        └── scripts/           OS-specific install scripts
-```
-
-### Template Format (`slice.json`)
+### Template Format (Topology)
 
 ```json
 {
@@ -570,7 +542,6 @@ slice-libraries/
 ```json
 {
   "name": "Install Docker",
-  "builtin": true,
   "image_patterns": {
     "ubuntu": "install_docker_ubuntu.sh",
     "rocky": "install_docker_rocky.sh"
@@ -652,6 +623,75 @@ sudo ./build/build-lxc.sh --tag v0.1.4
 # Builds a Proxmox-ready .tar.gz with systemd services
 ```
 
+## AI Provider Abstraction Layer
+
+The backend integrates with OpenAI-compatible LLM APIs for the 6 AI tools. No `openai` Python library is used — all calls go through `httpx.AsyncClient`.
+
+### Providers
+
+| Provider | URL | Purpose |
+|----------|-----|---------|
+| FABRIC AI Server | `ai.fabric-testbed.net` | Primary — LiteLLM proxy with free models |
+| NRP/Nautilus | `ellm.nrp-nautilus.io` | Fallback — alternative model access |
+
+### HTTP Clients (`http_pool.py`)
+
+Three shared `httpx.AsyncClient` instances with connection pooling:
+
+| Client | Timeout | Pool | Purpose |
+|--------|---------|------|---------|
+| `fabric_client` | 30s | 10 keepalive, 20 max | FABRIC API calls (artifacts, metrics, projects) |
+| `ai_client` | 180s total, 10s connect | 5 keepalive, 10 max | AI/LLM API calls, web fetches |
+| `metrics_client` | 15s | 5 keepalive, 10 max | Prometheus queries (verify=False for self-signed) |
+
+### Model Proxy (`scripts/model_proxy.py`)
+
+A lightweight reverse proxy that intercepts OpenAI-compatible API requests and rewrites unknown model names to a configured default. Required because some AI tools (e.g., OpenCode agents) use hardcoded model names not available on the FABRIC AI server.
+
+- Listens on `localhost:{model_proxy_port}` (default 9199)
+- Supports both regular and streaming (SSE) responses
+- 300-second upstream timeout
+- Configured via command-line args: `<port> <target_url> <default_model> <allowed_models>`
+
+### Settings (`settings_manager.py`)
+
+AI-related settings under the `ai` key:
+- `ai.ai_server_url` — FABRIC AI server URL
+- `ai.nrp_server_url` — NRP fallback URL
+- `ai.fabric_api_key` / `ai.nrp_api_key` — API keys
+- `ai.tools` — per-tool enable/disable toggles
+- `services.model_proxy_port` — local model proxy port
+
+### Tool Calling
+
+LoomAI (`ai_chat.py`) uses OpenAI function-calling format: tools are defined as JSON schemas, the model returns `tool_calls` in its response, and the backend executes them and feeds results back in a loop.
+
+## FABRIC API Integration
+
+### FABlib Import Strategy
+
+FABlib (`fabrictestbed_extensions`) is imported directly into the FastAPI process — not accessed via REST. This gives full access to FABlib's object model but requires careful thread management.
+
+### Thread Pool (`fablib_executor.py`)
+
+A dedicated `ThreadPoolExecutor` with 4 workers (thread prefix: `"fablib"`) runs all blocking FABlib calls. The `run_in_fablib_pool()` async wrapper submits callables to this pool, preventing FABlib's 2–15 second blocking calls from starving WebSocket terminals, SSE streams, and file operations.
+
+### Authentication
+
+- **FABRIC services**: Bearer token from `id_token.json` (auto-refreshed by FABlib)
+- **SSH to VMs**: Two-hop bastion: Backend → `bastion.fabric-testbed.net` → VM management IP (via paramiko `ProxyJump`)
+
+### Caching Strategy
+
+| Data | TTL | Mechanism |
+|------|-----|-----------|
+| Artifacts list | 300s | In-memory dict with timestamp |
+| Update check | 3600s | In-memory timestamp |
+| Site availability | 5 min | Stale-while-revalidate with background refresh |
+| Slice list dedup | 5s | `asyncio.Lock` + timestamp |
+| Template/recipe lists | 10s | In-memory TTL cache |
+| SSH tunnel idle | 600s | Idle timeout, then close |
+
 ## Configuration
 
 ### Environment Variables
@@ -716,3 +756,12 @@ Toggle in TitleBar. Persisted to `localStorage`. Sets `data-theme` attribute on 
 |-----------|-------------|
 | `SliceModel` | Import/export format for `.fabric.json` files |
 | `TemplateSummary` | Template list entry with metadata |
+
+## Related Documentation
+
+- [`CONVENTIONS.md`](CONVENTIONS.md) — Code conventions, naming, state management, CSS patterns
+- [`DECISIONS.md`](DECISIONS.md) — Architectural decision records (ADRs)
+- [`ROADMAP.md`](ROADMAP.md) — Project status, completed features, known gaps
+- [`AGENTS.md`](AGENTS.md) — Claude Code slash commands and in-container AI tool agents/skills
+- [`TESTING.md`](TESTING.md) — Test infrastructure, running tests, coverage gaps
+- [`../CLAUDE.md`](../CLAUDE.md) — Project overview, key files, UUID policy, build commands

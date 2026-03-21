@@ -73,18 +73,17 @@ def _artifacts_dir() -> str:
 def _detect_category(entry_dir: str) -> str:
     """Detect artifact category from files present in the directory.
 
-    - slice.json + deploy.sh → weave (runnable if also has run.sh)
+    - weave.json → weave
     - vm-template.json → vm-template
     - recipe.json → recipe
     - *.ipynb files → notebook
     - otherwise → other
     """
-    has_slice = os.path.isfile(os.path.join(entry_dir, "slice.json"))
-    has_deploy = os.path.isfile(os.path.join(entry_dir, "deploy.sh"))
+    has_weave_json = os.path.isfile(os.path.join(entry_dir, "weave.json"))
     has_vm = os.path.isfile(os.path.join(entry_dir, "vm-template.json"))
     has_recipe = os.path.isfile(os.path.join(entry_dir, "recipe.json"))
 
-    if has_slice and has_deploy:
+    if has_weave_json:
         return "weave"
     if has_vm:
         return "vm-template"
@@ -115,7 +114,19 @@ _CATEGORY_TAGS: dict[str, str] = {
     "weave": "loomai:weave",
     "vm-template": "loomai:vm",
     "recipe": "loomai:recipe",
+    "notebook": "loomai:notebook",
 }
+
+
+_TAG_TO_CATEGORY: dict[str, str] = {v: k for k, v in _CATEGORY_TAGS.items()}
+
+
+def _category_from_tags(tags: list[str]) -> str | None:
+    """Return category based on loomai: tags, or None if no match."""
+    for tag in tags:
+        if tag in _TAG_TO_CATEGORY:
+            return _TAG_TO_CATEGORY[tag]
+    return None
 
 
 def _ensure_category_tag(tags: list[str], category: str) -> list[str]:
@@ -130,11 +141,12 @@ def _make_descriptions(description: str, title: str, category: str,
                        description_long: str = "") -> tuple[str, str]:
     """Build (description_short, description_long) for the FABRIC Artifact API.
 
-    - description_short: 5–255 chars, plain user text (no marker)
-    - description_long: full user description + category marker
+    - description_short: 5–255 chars, plain user text
+    - description_long: full user description (clean, no category markers)
+
+    Category is now identified by loomai: tags, not description markers.
     """
     full = description.strip() if description else ""
-    marker = _CATEGORY_MARKERS.get(category, "")
 
     # description_short: plain user text, truncated to 255 chars
     short_text = full or title
@@ -147,29 +159,25 @@ def _make_descriptions(description: str, title: str, category: str,
         desc_short = desc_short.ljust(5)
 
     # description_long: use explicit long description if provided, else fall back to short
-    long_base = description_long.strip() if description_long else ""
-    long_text = long_base or full or title
-    if marker and marker.lower() not in long_text.lower():
-        desc_long = f"{long_text}\n{marker}"
-    else:
-        desc_long = long_text
+    desc_long = (description_long.strip() if description_long else "") or full or title
 
     return desc_short, desc_long
 
 
 def _classify_artifact(tags: list[str], description_short: str = "",
                        description_long: str = "") -> str:
-    """Classify an artifact by [LoomAI ...] markers in the description.
+    """Classify artifact by loomai: tags (primary) or description markers (fallback).
 
-    Categories are determined solely by markers appended to the artifact
-    description during publish.  Tags are user-facing metadata from the
-    artifact manager and are NOT used for classification.  Anything without
-    a recognized marker defaults to "notebook".
-
-    Checks description_long first (where markers are now stored), then
-    falls back to description_short for backwards compatibility with
-    artifacts published before the marker was moved.
+    Tags are the authoritative category identifier.  Description markers
+    are checked as a fallback for older artifacts published before tags
+    were added.  Defaults to "notebook" if neither match.
     """
+    # Primary: check tags
+    tag_set = set(tags)
+    for cat, cat_tag in _CATEGORY_TAGS.items():
+        if cat_tag in tag_set:
+            return cat
+    # Fallback: description markers (backward compat)
     for desc in (description_long, description_short):
         if desc:
             desc_lower = desc.lower()
@@ -183,6 +191,29 @@ def _sanitize_name(name: str) -> str:
     """Sanitize a name for use as a directory name."""
     safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", name.strip())
     return safe or "artifact"
+
+
+def _find_local_by_uuid(artifact_uuid: str) -> str | None:
+    """Scan my_artifacts/ for an existing directory with a matching artifact_uuid."""
+    adir = _artifacts_dir()
+    if not os.path.isdir(adir):
+        return None
+    for entry in os.listdir(adir):
+        entry_dir = os.path.join(adir, entry)
+        if not os.path.isdir(entry_dir):
+            continue
+        # Check weave.json, vm-template.json, recipe.json, metadata.json
+        for meta_file in ("weave.json", "vm-template.json", "recipe.json", "metadata.json"):
+            meta_path = os.path.join(entry_dir, meta_file)
+            if os.path.isfile(meta_path):
+                try:
+                    with open(meta_path) as f:
+                        data = json.load(f)
+                    if data.get("artifact_uuid") == artifact_uuid:
+                        return entry
+                except Exception:
+                    continue
+    return None
 
 
 def _get_current_user_identity() -> tuple[str, str]:
@@ -275,6 +306,7 @@ class PublishRequest(BaseModel):
     tags: list[str] = []
     visibility: str = "author"
     project_uuid: str = ""
+    action: str = ""  # "update", "fork", or "" for auto/new
 
 
 class UpdateArtifactRequest(BaseModel):
@@ -401,15 +433,25 @@ async def download_artifact(req: DownloadRequest):
         raise HTTPException(status_code=502, detail=f"Download failed: {e}")
 
     local_name = _sanitize_name(req.local_name or art.get("title", "artifact"))
+
+    # Deduplicate: check if we already have this artifact locally by UUID
+    existing_local = _find_local_by_uuid(req.uuid)
+    if existing_local:
+        local_name = existing_local  # update existing copy instead of creating new
+
     dest_dir = os.path.join(_artifacts_dir(), local_name)
 
     if os.path.exists(dest_dir):
-        if not req.overwrite:
+        if existing_local:
+            # Always update the existing copy (dedup by UUID)
+            shutil.rmtree(dest_dir)
+        elif not req.overwrite:
             raise HTTPException(
                 status_code=409,
                 detail=f"Local artifact '{local_name}' already exists. Set overwrite=true to replace it."
             )
-        shutil.rmtree(dest_dir)
+        else:
+            shutil.rmtree(dest_dir)
 
     os.makedirs(dest_dir, exist_ok=True)
 
@@ -457,28 +499,24 @@ async def download_artifact(req: DownloadRequest):
                 filename += ".bin"
             shutil.copy2(raw_path, os.path.join(dest_dir, filename))
 
-    meta_path = os.path.join(dest_dir, "metadata.json")
-    if not os.path.isfile(meta_path):
-        metadata = {
-            "name": art.get("title", local_name),
-            "description": art.get("description_long", "") or art.get("description_short", ""),
-            "source": "artifact-manager",
-            "artifact_uuid": req.uuid,
-
-            "created": datetime.now(timezone.utc).isoformat(),
-            "tags": tag_strs,
-        }
-        tmpl_path = os.path.join(dest_dir, "slice.json")
-        if os.path.isfile(tmpl_path):
-            try:
-                with open(tmpl_path) as f:
-                    model = json.load(f)
-                metadata["node_count"] = len(model.get("nodes", []))
-                metadata["network_count"] = len(model.get("networks", []))
-            except Exception:
-                logger.debug("Metadata parsing failed", exc_info=True)
-        with open(meta_path, "w") as f:
-            json.dump(metadata, f, indent=2)
+    # Write metadata into weave.json (single source of truth)
+    weave_path = os.path.join(dest_dir, "weave.json")
+    weave_data: dict[str, Any] = {}
+    if os.path.isfile(weave_path):
+        try:
+            with open(weave_path) as f:
+                weave_data = json.load(f)
+        except Exception:
+            pass
+    if not weave_data.get("name"):
+        weave_data["name"] = art.get("title", local_name)
+        weave_data.setdefault("description", art.get("description_long", "") or art.get("description_short", ""))
+        weave_data["source"] = "artifact-manager"
+        weave_data["artifact_uuid"] = req.uuid
+        weave_data.setdefault("created", datetime.now(timezone.utc).isoformat())
+        weave_data["tags"] = tag_strs
+        with open(weave_path, "w") as f:
+            json.dump(weave_data, f, indent=2)
 
     # Save a clean reference copy for reset functionality, keyed by UUID
     originals_dir = os.path.join(_storage_dir(), ".artifact-originals")
@@ -515,31 +553,50 @@ def list_local_artifacts():
         if category == "other":
             continue  # Skip unrecognized directories
 
-        # Read metadata from the appropriate file for each category.
-        # The canonical metadata lives in the type-specific file:
-        #   weave → metadata.json, vm-template → vm-template.json,
-        #   recipe → recipe.json, notebook → metadata.json
+        # Read metadata — check category-specific files first, then
+        # metadata.json (legacy).  Merge artifact_uuid from legacy file
+        # if the primary file doesn't have it.
         meta: dict[str, Any] = {}
-        _META_FILES = {
-            "weave": ["metadata.json", "experiment.json"],
-            "vm-template": ["vm-template.json", "metadata.json"],
-            "recipe": ["recipe.json", "metadata.json"],
-            "notebook": ["metadata.json"],
-        }
-        for meta_file in _META_FILES.get(category, ["metadata.json"]):
+        meta_candidates = list(_META_FILES_MAP.get(category, ["weave.json"])) + ["metadata.json"]
+        uuid_from_legacy = ""
+        for meta_file in meta_candidates:
             mpath = os.path.join(entry_dir, meta_file)
             if os.path.isfile(mpath):
                 try:
                     with open(mpath) as f:
-                        meta = json.load(f)
+                        data = json.load(f)
                 except Exception:
-                    logger.debug("Metadata parsing failed", exc_info=True)
-                break
+                    logger.debug("Metadata parsing failed for %s", mpath, exc_info=True)
+                    continue
+                if not meta:
+                    meta = data
+                elif data.get("artifact_uuid") and not meta.get("artifact_uuid"):
+                    # Primary file lacked artifact_uuid but legacy file has it
+                    uuid_from_legacy = data["artifact_uuid"]
+                    if data.get("source"):
+                        meta.setdefault("source", data["source"])
+        if uuid_from_legacy:
+            meta["artifact_uuid"] = uuid_from_legacy
 
         meta["dir_name"] = entry
         meta["category"] = category
         meta["is_from_marketplace"] = meta.get("source") == "artifact-manager"
         meta.setdefault("name", entry)
+        # Ensure description falls back to description_short
+        if not meta.get("description") and meta.get("description_short"):
+            meta["description"] = meta["description_short"]
+
+        # Override file-based category using loomai: tags.
+        # Marketplace downloads all get weave.json, so tags are the
+        # authoritative category signal for those artifacts.
+        tags = _normalize_tags(meta.get("tags", []))
+        tag_cat = _category_from_tags(tags)
+        if tag_cat:
+            meta["category"] = tag_cat
+        elif meta["is_from_marketplace"] and category == "weave":
+            # Marketplace artifact with no loomai: tag → notebook
+            meta["category"] = "notebook"
+
         results.append(meta)
 
     return {"artifacts": results}
@@ -565,14 +622,8 @@ def update_local_metadata(dir_name: str, req: LocalMetadataUpdate):
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     category = _detect_category(entry_dir)
-    _META_FILES = {
-        "weave": ["metadata.json", "experiment.json"],
-        "vm-template": ["vm-template.json", "metadata.json"],
-        "recipe": ["recipe.json", "metadata.json"],
-        "notebook": ["metadata.json"],
-    }
-    meta_file = "metadata.json"
-    for mf in _META_FILES.get(category, ["metadata.json"]):
+    meta_file = "weave.json"
+    for mf in _META_FILES_MAP.get(category, ["weave.json"]):
         if os.path.isfile(os.path.join(entry_dir, mf)):
             meta_file = mf
             break
@@ -602,31 +653,104 @@ def update_local_metadata(dir_name: str, req: LocalMetadataUpdate):
     return {"status": "ok", "metadata": meta}
 
 
-@router.post("/publish")
-async def publish_artifact(req: PublishRequest):
-    """Publish a local artifact to the FABRIC Artifact Manager.
+def _read_local_metadata(src_dir: str, category: str) -> tuple[dict[str, Any], str]:
+    """Read the local metadata JSON for an artifact directory.
 
-    Steps:
-    1. Create the artifact record (POST /artifacts)
-    2. Update it with title and tags (PUT /artifacts/{uuid})
-    3. Tar the local directory and upload as content (POST /contents)
+    Checks category-specific files first, then metadata.json as legacy
+    fallback.  If multiple files exist, prefers one that contains
+    ``artifact_uuid`` so the smart-publish update path works correctly.
+
+    Returns (metadata_dict, metadata_file_path).
     """
-    headers = _get_auth_headers()
-    if not headers:
-        raise HTTPException(status_code=401, detail="No FABRIC token configured — cannot publish")
+    meta_files = _META_FILES_MAP.get(category, ["weave.json"])
+    # Also check metadata.json (legacy format from older downloads)
+    all_candidates = list(meta_files) + (["metadata.json"] if "metadata.json" not in meta_files else [])
 
-    # Validate the local artifact exists
-    src_dir = os.path.join(_artifacts_dir(), req.dir_name)
-    if not os.path.isdir(src_dir):
-        raise HTTPException(status_code=404, detail=f"Local artifact '{req.dir_name}' not found in {req.category}")
+    first_found: tuple[dict[str, Any], str] | None = None
+    for mf in all_candidates:
+        mpath = os.path.join(src_dir, mf)
+        if os.path.isfile(mpath):
+            try:
+                with open(mpath) as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+            # Prefer the file that already has artifact_uuid
+            if data.get("artifact_uuid"):
+                return data, mpath
+            if first_found is None:
+                first_found = (data, mpath)
 
-    # Build short + long descriptions for the FABRIC Artifact API
-    desc_short, desc_long = _make_descriptions(req.description, req.title, req.category, req.description_long)
+    if first_found is not None:
+        return first_found
+    # Fall back to primary metadata file (may not exist yet)
+    return {}, os.path.join(src_dir, meta_files[0])
 
-    # Ensure the category-specific loomai: tag is present
-    publish_tags = _ensure_category_tag(list(req.tags), req.category)
 
-    # Step 1: Create artifact record (include title and tags upfront)
+def _write_local_metadata(meta_path: str, meta: dict[str, Any],
+                          artifact_uuid: str,
+                          tags: list[str] | None = None) -> None:
+    """Write artifact_uuid, source, and tags back to the local metadata file."""
+    meta["artifact_uuid"] = artifact_uuid
+    meta["source"] = "artifact-manager"
+    if tags is not None:
+        meta["tags"] = tags
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
+
+# Module-level constant for metadata file lookup (used by list_local_artifacts,
+# update_local_metadata, and _read_local_metadata)
+_META_FILES_MAP: dict[str, list[str]] = {
+    "weave": ["weave.json"],
+    "vm-template": ["vm-template.json", "weave.json"],
+    "recipe": ["recipe.json", "weave.json"],
+    "notebook": ["weave.json"],
+}
+
+
+async def _upload_content(headers: dict[str, str], artifact_uuid: str,
+                          src_dir: str, dir_name: str) -> dict[str, Any]:
+    """Tar a local directory and upload it as artifact content."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tar_path = os.path.join(tmpdir, f"{dir_name}.tar.gz")
+        with tarfile.open(tar_path, "w:gz") as tf:
+            tf.add(src_dir, arcname=dir_name)
+
+        upload_data = json.dumps({
+            "artifact": artifact_uuid,
+            "storage_type": "fabric",
+            "storage_repo": "renci",
+        })
+
+        try:
+            with open(tar_path, "rb") as fh:
+                r = await ai_client.post(
+                    f"{ARTIFACT_API}/contents",
+                    params={"format": "json"},
+                    headers=headers,
+                    files={"file": (f"{dir_name}.tar.gz", fh, "application/gzip")},
+                    data={"data": upload_data},
+                )
+                r.raise_for_status()
+                return r.json()
+        except httpx.HTTPStatusError as e:
+            detail = e.response.text
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=f"Content upload failed for artifact {artifact_uuid}: {detail}",
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Content upload failed for artifact {artifact_uuid}: {e}",
+            )
+
+
+async def _create_new_artifact(headers: dict[str, str], req: PublishRequest,
+                               src_dir: str, desc_short: str, desc_long: str,
+                               publish_tags: list[str]) -> dict[str, Any]:
+    """Create a new remote artifact, upload content, return response dict."""
     create_body: dict[str, Any] = {
         "title": req.title,
         "description_short": desc_short,
@@ -648,13 +772,15 @@ async def publish_artifact(req: PublishRequest):
         created = r.json()
     except httpx.HTTPStatusError as e:
         detail = e.response.text
-        raise HTTPException(status_code=e.response.status_code, detail=f"Failed to create artifact: {detail}")
+        raise HTTPException(status_code=e.response.status_code,
+                            detail=f"Failed to create artifact: {detail}")
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to create artifact: {e}")
+        raise HTTPException(status_code=502,
+                            detail=f"Failed to create artifact: {e}")
 
     artifact_uuid = created["uuid"]
 
-    # Step 2: Update with title and tags
+    # Update with full metadata (title, tags, project)
     update_body: dict[str, Any] = {
         "title": req.title,
         "description_short": desc_short,
@@ -665,7 +791,6 @@ async def publish_artifact(req: PublishRequest):
         update_body["tags"] = publish_tags
     if req.project_uuid:
         update_body["project_uuid"] = req.project_uuid
-
     try:
         r = await fabric_client.put(
             f"{ARTIFACT_API}/artifacts/{artifact_uuid}",
@@ -674,51 +799,12 @@ async def publish_artifact(req: PublishRequest):
             headers=headers,
         )
         r.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        detail = e.response.text
-        logger.warning("Failed to update artifact %s: %s", artifact_uuid, detail)
     except Exception as e:
-        logger.warning("Failed to update artifact %s: %s", artifact_uuid, e)
+        logger.warning("Failed to update new artifact %s: %s", artifact_uuid, e)
 
-    # Step 3: Package and upload content
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tar_path = os.path.join(tmpdir, f"{req.dir_name}.tar.gz")
-        with tarfile.open(tar_path, "w:gz") as tf:
-            tf.add(src_dir, arcname=req.dir_name)
-
-        upload_data = json.dumps({
-            "artifact": artifact_uuid,
-            "storage_type": "fabric",
-            "storage_repo": "renci",
-        })
-
-        try:
-            with open(tar_path, "rb") as fh:
-                r = await ai_client.post(
-                    f"{ARTIFACT_API}/contents",
-                    params={"format": "json"},
-                    headers=headers,
-                    files={"file": (f"{req.dir_name}.tar.gz", fh, "application/gzip")},
-                    data={"data": upload_data},
-                )
-                r.raise_for_status()
-                version_info = r.json()
-        except httpx.HTTPStatusError as e:
-            detail = e.response.text
-            raise HTTPException(
-                status_code=e.response.status_code,
-                detail=f"Artifact created ({artifact_uuid}) but content upload failed: {detail}",
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Artifact created ({artifact_uuid}) but content upload failed: {e}",
-            )
-
-    # Invalidate cache so the new artifact shows up
-    _cache["fetched_at"] = 0
-
-    logger.info("Published artifact %s as %s (visibility=%s)", req.title, artifact_uuid, req.visibility)
+    # Upload content
+    version_info = await _upload_content(headers, artifact_uuid, src_dir,
+                                         req.dir_name)
 
     return {
         "status": "published",
@@ -727,6 +813,276 @@ async def publish_artifact(req: PublishRequest):
         "visibility": req.visibility,
         "version": version_info.get("version", ""),
     }
+
+
+@router.get("/local/{dir_name}/publish-info")
+async def get_publish_info(dir_name: str):
+    """Return publish options for a local artifact.
+
+    Frontend uses this to determine what options to show in the publish dialog.
+    """
+    adir = _artifacts_dir()
+    entry_dir = os.path.join(adir, dir_name)
+    if not os.path.isdir(entry_dir):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    category = _detect_category(entry_dir)
+    local_meta, _ = _read_local_metadata(entry_dir, category)
+    existing_uuid = local_meta.get("artifact_uuid", "")
+
+    if not existing_uuid:
+        return {
+            "can_update": False,
+            "can_fork": False,
+            "is_author": False,
+            "artifact_uuid": None,
+            "remote_title": None,
+        }
+
+    # Check remote artifact
+    remote = None
+    is_author = False
+    remote_title = None
+    try:
+        remote = await _fetch_artifact(existing_uuid)
+        user_email, user_name = _get_current_user_identity()
+        is_author = _is_user_author(remote, user_email, user_name)
+        remote_title = remote.get("title", "")
+    except Exception:
+        # Remote artifact doesn't exist anymore or unreachable
+        pass
+
+    return {
+        "can_update": is_author and remote is not None,
+        "can_fork": existing_uuid != "" and remote is not None,
+        "is_author": is_author,
+        "artifact_uuid": existing_uuid,
+        "remote_title": remote_title,
+    }
+
+
+@router.post("/publish")
+async def publish_artifact(req: PublishRequest):
+    """Publish a local artifact to the FABRIC Artifact Manager.
+
+    The `action` field controls behavior:
+    - "update": Push a new version to the existing artifact (requires authorship)
+    - "fork": Create a new artifact with forked_from provenance
+    - "" (empty/default): Create a brand new artifact (no existing uuid, or legacy auto behavior)
+    """
+    headers = _get_auth_headers()
+    if not headers:
+        raise HTTPException(status_code=401, detail="No FABRIC token configured — cannot publish")
+
+    src_dir = os.path.join(_artifacts_dir(), req.dir_name)
+    if not os.path.isdir(src_dir):
+        raise HTTPException(status_code=404, detail=f"Local artifact '{req.dir_name}' not found in {req.category}")
+
+    desc_short, desc_long = _make_descriptions(req.description, req.title, req.category, req.description_long)
+    publish_tags = _ensure_category_tag(list(req.tags), req.category)
+    local_meta, meta_path = _read_local_metadata(src_dir, req.category)
+    existing_uuid = local_meta.get("artifact_uuid", "")
+
+    if req.action == "update":
+        # --- UPDATE existing artifact (user is the author) ---
+        if not existing_uuid:
+            raise HTTPException(status_code=400, detail="Cannot update: no artifact_uuid in local metadata")
+
+        # Verify authorship
+        try:
+            remote = await _fetch_artifact(existing_uuid)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch remote artifact: {e}")
+
+        user_email, user_name = _get_current_user_identity()
+        if not _is_user_author(remote, user_email, user_name):
+            raise HTTPException(status_code=403, detail="You are not the author of this artifact")
+
+        update_body: dict[str, Any] = {
+            "title": req.title,
+            "description_short": desc_short,
+            "description_long": desc_long,
+            "visibility": req.visibility,
+        }
+        if publish_tags:
+            update_body["tags"] = publish_tags
+        if req.project_uuid:
+            update_body["project_uuid"] = req.project_uuid
+
+        try:
+            r = await fabric_client.put(
+                f"{ARTIFACT_API}/artifacts/{existing_uuid}",
+                params={"format": "json"},
+                json=update_body,
+                headers=headers,
+            )
+            r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            detail = e.response.text
+            raise HTTPException(status_code=e.response.status_code,
+                                detail=f"Failed to update artifact: {detail}")
+        except Exception as e:
+            raise HTTPException(status_code=502,
+                                detail=f"Failed to update artifact: {e}")
+
+        version_info = await _upload_content(headers, existing_uuid, src_dir, req.dir_name)
+
+        # Update .artifact-originals
+        originals_dir = os.path.join(_storage_dir(), ".artifact-originals")
+        os.makedirs(originals_dir, exist_ok=True)
+        orig_dest = os.path.join(originals_dir, existing_uuid)
+        if os.path.exists(orig_dest):
+            shutil.rmtree(orig_dest)
+        shutil.copytree(src_dir, orig_dest)
+
+        _write_local_metadata(meta_path, local_meta, existing_uuid, publish_tags)
+        _cache["fetched_at"] = 0
+        logger.info("Updated artifact %s (%s) with new version (visibility=%s)",
+                    req.title, existing_uuid, req.visibility)
+
+        return {
+            "status": "updated",
+            "uuid": existing_uuid,
+            "title": req.title,
+            "visibility": req.visibility,
+            "version": version_info.get("version", ""),
+        }
+
+    elif req.action == "fork":
+        # --- FORK: create new artifact with provenance ---
+        if not existing_uuid:
+            raise HTTPException(status_code=400, detail="Cannot fork: no artifact_uuid in local metadata")
+
+        # Fetch remote info for provenance
+        remote_title = ""
+        remote_version = ""
+        try:
+            remote = await _fetch_artifact(existing_uuid)
+            remote_title = remote.get("title", "")
+            versions = remote.get("versions", [])
+            if versions:
+                active = [v for v in versions if v.get("active", True)]
+                remote_version = (active[0] if active else versions[0]).get("version", "")
+        except Exception:
+            logger.warning("Could not fetch remote artifact %s for fork provenance", existing_uuid)
+
+        # Write forked_from to local metadata before creating the new artifact
+        local_meta["forked_from"] = {
+            "artifact_uuid": existing_uuid,
+            "version": remote_version,
+            "title": remote_title,
+        }
+        # Clear the old artifact_uuid so _create_new_artifact starts fresh
+        local_meta.pop("artifact_uuid", None)
+        local_meta["source"] = "artifact-manager"
+        with open(meta_path, "w") as f:
+            json.dump(local_meta, f, indent=2)
+
+        # Create new artifact
+        result = await _create_new_artifact(headers, req, src_dir, desc_short,
+                                            desc_long, publish_tags)
+        new_uuid = result["uuid"]
+
+        # Write the new uuid back
+        _write_local_metadata(meta_path, local_meta, new_uuid, publish_tags)
+
+        # Save .artifact-originals
+        originals_dir = os.path.join(_storage_dir(), ".artifact-originals")
+        os.makedirs(originals_dir, exist_ok=True)
+        orig_dest = os.path.join(originals_dir, new_uuid)
+        if os.path.exists(orig_dest):
+            shutil.rmtree(orig_dest)
+        shutil.copytree(src_dir, orig_dest)
+
+        _cache["fetched_at"] = 0
+        logger.info("Forked artifact %s from %s as %s", req.title, existing_uuid, new_uuid)
+
+        result["forked_from"] = existing_uuid
+        return result
+
+    else:
+        # --- CREATE NEW (no existing uuid, or legacy auto behavior) ---
+        # If there's an existing_uuid but action is empty, this is the legacy
+        # "auto" path. We still support it for backwards compat but the frontend
+        # should now explicitly choose "update" or "fork".
+        if existing_uuid:
+            # Legacy auto path: check authorship to decide
+            remote = None
+            is_author = False
+            try:
+                remote = await _fetch_artifact(existing_uuid)
+                user_email, user_name = _get_current_user_identity()
+                is_author = _is_user_author(remote, user_email, user_name)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    logger.info("Remote artifact %s no longer exists — will create new", existing_uuid)
+                else:
+                    logger.warning("Failed to fetch remote artifact %s: %s", existing_uuid, e)
+            except Exception as e:
+                logger.warning("Failed to fetch remote artifact %s: %s", existing_uuid, e)
+
+            if remote and is_author:
+                # Auto-update
+                update_body = {
+                    "title": req.title,
+                    "description_short": desc_short,
+                    "description_long": desc_long,
+                    "visibility": req.visibility,
+                }
+                if publish_tags:
+                    update_body["tags"] = publish_tags
+                if req.project_uuid:
+                    update_body["project_uuid"] = req.project_uuid
+                try:
+                    r = await fabric_client.put(
+                        f"{ARTIFACT_API}/artifacts/{existing_uuid}",
+                        params={"format": "json"},
+                        json=update_body,
+                        headers=headers,
+                    )
+                    r.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    detail = e.response.text
+                    raise HTTPException(status_code=e.response.status_code,
+                                        detail=f"Failed to update artifact: {detail}")
+                except Exception as e:
+                    raise HTTPException(status_code=502,
+                                        detail=f"Failed to update artifact: {e}")
+                version_info = await _upload_content(headers, existing_uuid, src_dir, req.dir_name)
+                originals_dir = os.path.join(_storage_dir(), ".artifact-originals")
+                os.makedirs(originals_dir, exist_ok=True)
+                orig_dest = os.path.join(originals_dir, existing_uuid)
+                if os.path.exists(orig_dest):
+                    shutil.rmtree(orig_dest)
+                shutil.copytree(src_dir, orig_dest)
+                _cache["fetched_at"] = 0
+                return {
+                    "status": "updated",
+                    "uuid": existing_uuid,
+                    "title": req.title,
+                    "visibility": req.visibility,
+                    "version": version_info.get("version", ""),
+                }
+
+            # Fall through to create new (fork without explicit provenance)
+            logger.info("Creating new artifact (auto fork/re-create) — local had uuid %s", existing_uuid)
+
+        result = await _create_new_artifact(headers, req, src_dir, desc_short,
+                                            desc_long, publish_tags)
+        new_uuid = result["uuid"]
+        _write_local_metadata(meta_path, local_meta, new_uuid, publish_tags)
+
+        originals_dir = os.path.join(_storage_dir(), ".artifact-originals")
+        os.makedirs(originals_dir, exist_ok=True)
+        orig_dest = os.path.join(originals_dir, new_uuid)
+        if os.path.exists(orig_dest):
+            shutil.rmtree(orig_dest)
+        shutil.copytree(src_dir, orig_dest)
+
+        _cache["fetched_at"] = 0
+        logger.info("Published artifact %s as %s (visibility=%s)", req.title, new_uuid, req.visibility)
+
+        return result
 
 
 @router.get("/valid-tags")
@@ -985,22 +1341,22 @@ async def revert_local_artifact(dir_name: str, req: RevertRequest):
     if not os.path.isdir(local_dir):
         raise HTTPException(status_code=404, detail=f"Local artifact '{dir_name}' not found")
 
-    # 2. Read metadata to get artifact_uuid
-    meta_path = os.path.join(local_dir, "metadata.json")
-    if not os.path.isfile(meta_path):
-        raise HTTPException(status_code=400, detail="Local artifact has no metadata.json — cannot determine remote link")
+    # 2. Read metadata to get artifact_uuid from weave.json
+    weave_path = os.path.join(local_dir, "weave.json")
+    if not os.path.isfile(weave_path):
+        raise HTTPException(status_code=400, detail="Local artifact has no weave.json — cannot determine remote link")
 
     try:
-        with open(meta_path) as f:
+        with open(weave_path) as f:
             local_meta = json.load(f)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read metadata.json: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to read weave.json: {e}")
 
     artifact_uuid = local_meta.get("artifact_uuid", "")
     if not artifact_uuid:
         raise HTTPException(
             status_code=400,
-            detail="Local artifact is not linked to a remote artifact (no artifact_uuid in metadata)",
+            detail="Local artifact is not linked to a remote artifact (no artifact_uuid in weave.json)",
         )
 
     # 3. Fetch remote artifact info
@@ -1089,30 +1445,27 @@ async def revert_local_artifact(dir_name: str, req: RevertRequest):
                 filename += ".bin"
             shutil.copy2(raw_path, os.path.join(local_dir, filename))
 
-    # 9. Re-write metadata.json preserving the artifact_uuid link
+    # 9. Re-write weave.json preserving the artifact_uuid link
     tag_strs = _normalize_tags(art.get("tags", []))
     category = _detect_category(local_dir)
-    metadata = {
+    weave_data: dict[str, Any] = {}
+    revert_weave_path = os.path.join(local_dir, "weave.json")
+    if os.path.isfile(revert_weave_path):
+        try:
+            with open(revert_weave_path) as f:
+                weave_data = json.load(f)
+        except Exception:
+            pass
+    weave_data.update({
         "name": art.get("title", dir_name),
         "description": art.get("description_long", "") or art.get("description_short", ""),
         "source": "artifact-manager",
         "artifact_uuid": artifact_uuid,
         "created": datetime.now(timezone.utc).isoformat(),
         "tags": tag_strs,
-    }
-    # Enrich with slice info if applicable
-    tmpl_path = os.path.join(local_dir, "slice.json")
-    if os.path.isfile(tmpl_path):
-        try:
-            with open(tmpl_path) as f:
-                model = json.load(f)
-            metadata["node_count"] = len(model.get("nodes", []))
-            metadata["network_count"] = len(model.get("networks", []))
-        except Exception:
-            logger.debug("Metadata parsing failed", exc_info=True)
-
-    with open(os.path.join(local_dir, "metadata.json"), "w") as f:
-        json.dump(metadata, f, indent=2)
+    })
+    with open(revert_weave_path, "w") as f:
+        json.dump(weave_data, f, indent=2)
 
     # 10. Update .artifact-originals with fresh copy (keyed by UUID)
     originals_dir = os.path.join(_storage_dir(), ".artifact-originals")

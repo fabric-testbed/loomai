@@ -81,7 +81,21 @@ def _atomic_write_text(path: str, text: str) -> None:
 
 
 def get_storage_dir() -> str:
-    """Return the root storage directory (from env or default)."""
+    """Return the effective storage directory.
+
+    When a user registry exists and an active user is set, returns the
+    per-user directory ``users/{uuid}/``. Otherwise returns the flat
+    ``FABRIC_STORAGE_DIR`` root (legacy single-user mode).
+    """
+    from app.user_registry import get_user_storage_dir
+    user_dir = get_user_storage_dir()
+    if user_dir is not None:
+        return user_dir
+    return os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+
+
+def get_root_storage_dir() -> str:
+    """Return the raw FABRIC_STORAGE_DIR (never user-scoped)."""
     return os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
 
 
@@ -217,6 +231,12 @@ def _get_settings() -> dict:
     if _cached_settings is None:
         return load_settings()
     return _cached_settings
+
+
+def invalidate_settings_cache() -> None:
+    """Clear the cached settings so the next access reloads from disk."""
+    global _cached_settings
+    _cached_settings = None
 
 
 # ---------------------------------------------------------------------------

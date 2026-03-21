@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import cytoscape, { type Core, type EventObject } from 'cytoscape';
 import type { CyGraph, SliceData, RecipeSummary } from '../types/fabric';
+import * as api from '../api/client';
 import '../styles/context-menu.css';
 
 // Register layout extensions
@@ -297,7 +298,7 @@ export default React.memo(function CytoscapeGraph({
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
-  const [showComponents, setShowComponents] = useState(false);
+  const [showComponents, setShowComponents] = useState(true);
   const showComponentsRef = useRef(showComponents);
   showComponentsRef.current = showComponents;
   const [showSliceBox, setShowSliceBox] = useState(true);
@@ -306,6 +307,13 @@ export default React.memo(function CytoscapeGraph({
   const [showFabnetInternet, setShowFabnetInternet] = useState(true);
   const showFabnetInternetRef = useRef(showFabnetInternet);
   showFabnetInternetRef.current = showFabnetInternet;
+
+  // PNG save dialog state
+  const [pngDialog, setPngDialog] = useState<{ dataUrl: string } | null>(null);
+  const [pngFilename, setPngFilename] = useState('fabric-slice.png');
+  const [pngSavePath, setPngSavePath] = useState('/home/fabric/work');
+  const [pngSaving, setPngSaving] = useState(false);
+  const [pngSaveResult, setPngSaveResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   // Close context menu on clicks or escape
   const menuOpenTime = useRef(0);
@@ -576,12 +584,32 @@ export default React.memo(function CytoscapeGraph({
     const cy = cyRef.current;
     if (!cy) return;
     const exportBg = dark ? '#1a1a2e' : '#ffffff';
-    const png = cy.png({ full: true, scale: 2, bg: exportBg });
-    const link = document.createElement('a');
-    link.download = 'fabric-slice.png';
-    link.href = png;
-    link.click();
-  }, [dark]);
+    const dataUrl = cy.png({ full: true, scale: 2, bg: exportBg });
+    // Derive a default filename from the slice name if available
+    const sliceName = sliceData?.name || 'fabric-slice';
+    const safeName = sliceName.replace(/[^a-zA-Z0-9_-]/g, '_');
+    setPngFilename(`${safeName}.png`);
+    setPngSaveResult(null);
+    setPngDialog({ dataUrl });
+  }, [dark, sliceData]);
+
+  const handlePngSave = useCallback(async () => {
+    if (!pngDialog) return;
+    setPngSaving(true);
+    setPngSaveResult(null);
+    try {
+      // Convert data URL to File
+      const res = await fetch(pngDialog.dataUrl);
+      const blob = await res.blob();
+      const file = new File([blob], pngFilename, { type: 'image/png' });
+      await api.uploadFiles(pngSavePath, [file]);
+      setPngSaveResult({ ok: true, message: `Saved to ${pngSavePath}/${pngFilename}` });
+    } catch (err: any) {
+      setPngSaveResult({ ok: false, message: err.message || 'Save failed' });
+    } finally {
+      setPngSaving(false);
+    }
+  }, [pngDialog, pngFilename, pngSavePath]);
 
   // Context menu helpers
   const vmsWithIp = menu?.selected.filter(
@@ -773,6 +801,90 @@ export default React.memo(function CytoscapeGraph({
               ✕ Delete{deletable.length > 1 ? ` (${deletable.length})` : ''}
             </button>
           )}
+        </div>
+      )}
+
+      {/* PNG save-to-container dialog */}
+      {pngDialog && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.5)',
+        }} onClick={() => { if (!pngSaving) setPngDialog(null); }}>
+          <div style={{
+            background: dark ? '#1e1e2e' : '#fff',
+            color: dark ? '#e0e0e0' : '#222',
+            border: `1px solid ${dark ? '#444' : '#ccc'}`,
+            borderRadius: 8, padding: '20px 24px', minWidth: 380, maxWidth: 480,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 16 }}>Save PNG to Container</div>
+
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ display: 'block', fontSize: 12, marginBottom: 4, opacity: 0.7 }}>Filename</label>
+              <input
+                style={{
+                  width: '100%', padding: '6px 8px', borderRadius: 4, border: `1px solid ${dark ? '#555' : '#ccc'}`,
+                  background: dark ? '#2a2a3e' : '#f8f8f8', color: 'inherit', fontSize: 13, boxSizing: 'border-box',
+                }}
+                value={pngFilename}
+                onChange={e => setPngFilename(e.target.value)}
+                disabled={pngSaving}
+              />
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', fontSize: 12, marginBottom: 4, opacity: 0.7 }}>Save to directory</label>
+              <input
+                style={{
+                  width: '100%', padding: '6px 8px', borderRadius: 4, border: `1px solid ${dark ? '#555' : '#ccc'}`,
+                  background: dark ? '#2a2a3e' : '#f8f8f8', color: 'inherit', fontSize: 13, boxSizing: 'border-box',
+                }}
+                value={pngSavePath}
+                onChange={e => setPngSavePath(e.target.value)}
+                disabled={pngSaving}
+              />
+            </div>
+
+            {/* Thumbnail preview */}
+            <div style={{ marginBottom: 16, textAlign: 'center' }}>
+              <img
+                src={pngDialog.dataUrl}
+                alt="PNG preview"
+                style={{ maxWidth: '100%', maxHeight: 150, borderRadius: 4, border: `1px solid ${dark ? '#444' : '#ddd'}` }}
+              />
+            </div>
+
+            {pngSaveResult && (
+              <div style={{
+                fontSize: 12, marginBottom: 12, padding: '6px 10px', borderRadius: 4,
+                background: pngSaveResult.ok ? (dark ? '#1a3a2a' : '#e8f5e9') : (dark ? '#3a1a1a' : '#fce4ec'),
+                color: pngSaveResult.ok ? (dark ? '#66bb6a' : '#2e7d32') : (dark ? '#ef5350' : '#c62828'),
+              }}>
+                {pngSaveResult.message}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setPngDialog(null)}
+                disabled={pngSaving}
+                style={{
+                  padding: '6px 14px', borderRadius: 4, border: `1px solid ${dark ? '#555' : '#ccc'}`,
+                  background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: 13,
+                }}
+              >Cancel</button>
+              <button
+                onClick={handlePngSave}
+                disabled={pngSaving || !pngFilename.trim()}
+                style={{
+                  padding: '6px 14px', borderRadius: 4, border: 'none',
+                  background: '#5798bc', color: '#fff', cursor: 'pointer', fontSize: 13,
+                  opacity: pngSaving || !pngFilename.trim() ? 0.6 : 1,
+                }}
+              >{pngSaving ? 'Saving...' : 'Save'}</button>
+            </div>
+          </div>
         </div>
       )}
     </div>

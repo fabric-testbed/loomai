@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../api/client';
-import type { ConfigStatus, ProjectInfo, SliceKeySet, LoomAISettings, ToolConfigStatus } from '../types/fabric';
+import type { ConfigStatus, ProjectInfo, SliceKeySet, LoomAISettings, ToolConfigStatus, UserInfo } from '../types/fabric';
 import '../styles/configure.css';
 
 interface ConfigureViewProps {
@@ -49,6 +49,11 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   const [aiTools, setAiTools] = useState<Record<string, boolean>>({
     aider: true, opencode: true, crush: true, claude: false, deepagents: true,
   });
+
+  // Multi-user state
+  const [registeredUsers, setRegisteredUsers] = useState<UserInfo[]>([]);
+  const [activeUserUuid, setActiveUserUuid] = useState<string | null>(null);
+  const [switchingUser, setSwitchingUser] = useState(false);
 
   // Unified settings and tool configs
   const [settings, setSettings] = useState<LoomAISettings | null>(null);
@@ -145,12 +150,23 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     }
   }, []);
 
+  const loadUsers = useCallback(async () => {
+    try {
+      const data = await api.listUsers();
+      setRegisteredUsers(data.users);
+      setActiveUserUuid(data.active_user);
+    } catch {
+      // ignore — may not have users endpoint yet
+    }
+  }, []);
+
   useEffect(() => {
     loadStatus();
     loadKeySets();
     loadSettings();
     loadToolConfigs();
-  }, [loadStatus, loadKeySets, loadSettings, loadToolConfigs]);
+    loadUsers();
+  }, [loadStatus, loadKeySets, loadSettings, loadToolConfigs, loadUsers]);
 
   // Load projects when token is available
   const loadProjects = useCallback(async () => {
@@ -195,7 +211,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     try {
       await api.uploadToken(file);
       setMessage({ text: 'Token uploaded successfully', type: 'success' });
-      await loadStatus();
+      await Promise.all([loadStatus(), loadUsers(), loadSettings(), loadKeySets()]);
       await loadProjects();
     } catch (err: any) {
       setMessage({ text: `Token upload failed: ${err.message}`, type: 'error' });
@@ -223,7 +239,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
       setMessage({ text: 'Token saved successfully', type: 'success' });
       setPastedToken('');
       setShowTokenPaste(false);
-      await loadStatus();
+      await Promise.all([loadStatus(), loadUsers(), loadSettings(), loadKeySets()]);
       await loadProjects();
     } catch (err: any) {
       setMessage({ text: `Token paste failed: ${err.message}`, type: 'error' });
@@ -456,6 +472,70 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
         {message && (
           <div className={`configure-section message ${message.type}`}>
             {message.text}
+          </div>
+        )}
+
+        {/* User Accounts Section — only show when 2+ users registered */}
+        {registeredUsers.length >= 2 && (
+          <div className="configure-section">
+            <h3>User Accounts</h3>
+            <p>Switch between registered FABRIC identities. To add a new user, upload or paste their token below.</p>
+            <div className="user-account-list">
+              {registeredUsers.map((u) => (
+                <div
+                  key={u.uuid}
+                  className={`user-account-row${u.is_active ? ' active' : ''}`}
+                >
+                  <div className="user-account-info">
+                    <span className="user-account-name">{u.name || 'Unknown'}</span>
+                    <span className="user-account-email">{u.email}</span>
+                    <span className="user-account-uuid">{u.uuid.slice(0, 8)}...</span>
+                  </div>
+                  <div className="user-account-actions">
+                    {u.is_active ? (
+                      <span className="user-account-active-badge">Active</span>
+                    ) : (
+                      <>
+                        <button
+                          className="btn primary btn-sm"
+                          disabled={switchingUser}
+                          onClick={async () => {
+                            setSwitchingUser(true);
+                            try {
+                              await api.switchUser(u.uuid);
+                              setMessage({ text: `Switched to ${u.name || u.email}`, type: 'success' });
+                              await Promise.all([loadStatus(), loadUsers(), loadSettings(), loadKeySets()]);
+                              await loadProjects();
+                            } catch (err: any) {
+                              setMessage({ text: `Switch failed: ${err.message}`, type: 'error' });
+                            } finally {
+                              setSwitchingUser(false);
+                            }
+                          }}
+                        >
+                          {switchingUser ? 'Switching...' : 'Switch'}
+                        </button>
+                        <button
+                          className="btn btn-sm btn-danger"
+                          onClick={async () => {
+                            if (!confirm(`Remove ${u.name || u.email}? This will unregister the user. Their data will remain on disk.`)) return;
+                            try {
+                              await api.removeUser(u.uuid);
+                              setMessage({ text: `Removed ${u.name || u.email}`, type: 'success' });
+                              await loadUsers();
+                            } catch (err: any) {
+                              setMessage({ text: `Remove failed: ${err.message}`, type: 'error' });
+                            }
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -921,7 +1001,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                 try {
                   const result = await api.rebuildStorage();
                   setMessage({
-                    text: `Storage rebuilt: ${result.slice_templates_total} slice templates, ${result.vm_templates_total} VM templates re-seeded.`,
+                    text: `Storage rebuilt: ${result.directories_created} directories initialized.`,
                     type: 'success',
                   });
                 } catch (err: any) {

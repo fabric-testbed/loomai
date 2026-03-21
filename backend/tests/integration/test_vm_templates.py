@@ -68,7 +68,7 @@ class TestDeleteVMTemplate:
             "image": "default_ubuntu_22",
             "boot_config": {"uploads": [], "commands": [], "network": []},
         }))
-        (tmpl_dir / "metadata.json").write_text(json.dumps({
+        (tmpl_dir / "weave.json").write_text(json.dumps({
             "name": "Del_VM",
             "category": "vm-template",
         }))

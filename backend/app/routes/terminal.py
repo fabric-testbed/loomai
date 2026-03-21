@@ -23,6 +23,10 @@ from app.fablib_manager import (
     get_default_slice_key_path,
     get_slice_key_path,
 )
+from app.settings_manager import (
+    get_bastion_username as _settings_bastion_username,
+    get_host as _settings_host,
+)
 from app.user_context import get_user_storage
 
 router = APIRouter()
@@ -84,13 +88,13 @@ def _get_ssh_config(slice_name: Optional[str] = None):
                 os.path.join(config_dir, "slice_key"),
             )
 
-    # Get bastion username from fablib
+    # Get bastion credentials from settings_manager (authoritative source)
     try:
-        bastion_username = fablib.get_bastion_username()
+        bastion_username = _settings_bastion_username()
     except Exception:
         bastion_username = os.environ.get("FABRIC_BASTION_USERNAME", "")
 
-    bastion_host = os.environ.get(
+    bastion_host = _settings_host("bastion") or os.environ.get(
         "FABRIC_BASTION_HOST", "bastion.fabric-testbed.net"
     )
 

@@ -189,7 +189,7 @@ def _startup_storage():
             if not os.path.isdir(src):
                 continue
             # Read metadata from the working copy to find artifact_uuid
-            working_meta = os.path.join(artifacts_dir, entry, "metadata.json")
+            working_meta = os.path.join(artifacts_dir, entry, "weave.json")
             if not os.path.isfile(working_meta):
                 continue
             try:
@@ -203,6 +203,28 @@ def _startup_storage():
                         logger.info("Re-keyed original %s -> %s", entry, art_uuid)
             except Exception:
                 pass
+
+
+def _seed_default_artifacts():
+    """Copy default artifacts (e.g. Hello_FABRIC) into my_artifacts/ if missing."""
+    import shutil
+    import logging
+    logger = logging.getLogger("startup")
+
+    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    artifacts_dir = os.path.join(storage, "my_artifacts")
+    os.makedirs(artifacts_dir, exist_ok=True)
+
+    # default_artifacts/ lives next to the app/ package
+    defaults_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "default_artifacts")
+    if not os.path.isdir(defaults_dir):
+        return
+    for entry in os.listdir(defaults_dir):
+        src = os.path.join(defaults_dir, entry)
+        dst = os.path.join(artifacts_dir, entry)
+        if os.path.isdir(src) and not os.path.exists(dst):
+            shutil.copytree(src, dst)
+            logger.info("Seeded default artifact: %s", entry)
 
 
 def _startup_ai_tools():
@@ -227,6 +249,19 @@ def _startup_settings():
     import logging
     logger = logging.getLogger("startup")
     from app import settings_manager
+    from app.user_context import register_user_changed_callback
+
+    # Register settings cache invalidation on user switch
+    register_user_changed_callback(settings_manager.invalidate_settings_cache)
+
+    # Verify active user directory exists if registry is present
+    from app import user_registry
+    active_uuid = user_registry.get_active_user_uuid()
+    if active_uuid:
+        user_dir = user_registry.get_user_storage_dir(active_uuid)
+        if user_dir and not os.path.isdir(user_dir):
+            logger.warning("Active user dir %s missing — creating it", user_dir)
+            user_registry.ensure_user_dir(active_uuid)
 
     if not os.path.isfile(settings_manager.get_settings_path()):
         logger.info("No settings.json found — migrating from legacy config")
@@ -259,6 +294,7 @@ def _startup_settings():
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle: periodic tunnel cleanup + shutdown."""
     _startup_storage()
+    _seed_default_artifacts()
     _startup_settings()
     _startup_ai_tools()
 
@@ -286,11 +322,26 @@ async def lifespan(app: FastAPI):
             _trigger_bg_site_refresh()
             await asyncio.sleep(240)  # 4 minutes
 
+    # Periodically back up Claude Code config so credentials survive
+    # container force-kills (docker compose down may not wait for shutdown)
+    async def _claude_config_backup_loop():
+        from app.routes.ai_terminal import _backup_claude_config
+        await asyncio.sleep(120)  # Wait 2 min before first backup
+        while True:
+            try:
+                _backup_claude_config()
+                logger.debug("Periodic Claude Code config backup complete")
+            except Exception as e:
+                logger.warning("Periodic Claude config backup failed: %s", e)
+            await asyncio.sleep(300)  # Every 5 minutes
+
     task = asyncio.create_task(_cleanup_loop())
     cache_task = asyncio.create_task(_site_cache_warmer())
+    backup_task = asyncio.create_task(_claude_config_backup_loop())
     yield
     task.cancel()
     cache_task.cancel()
+    backup_task.cancel()
     mgr.close_all()
 
     # Close shared httpx connection pools
@@ -306,8 +357,9 @@ async def lifespan(app: FastAPI):
     try:
         from app.routes.ai_terminal import _backup_claude_config
         _backup_claude_config()
-    except Exception:
-        pass
+        logger.info("Claude Code config backed up on shutdown")
+    except Exception as e:
+        logger.warning("Claude Code config backup failed on shutdown: %s", e)
 
 
 app = FastAPI(title="FABRIC Web GUI API", version="0.1.0", lifespan=lifespan)

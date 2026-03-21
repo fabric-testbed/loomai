@@ -13,7 +13,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from app.http_pool import ai_client
-from app.settings_manager import get_fabric_api_key as _get_ai_api_key
+from app.settings_manager import get_fabric_api_key as _get_ai_api_key, get_nrp_api_key as _get_nrp_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +24,16 @@ AI_SERVER_URL = "https://ai.fabric-testbed.net"  # Fallback; prefer _ai_server_u
 def _ai_server_url() -> str:
     from app.settings_manager import get_ai_server_url
     return get_ai_server_url()
+
+def _nrp_server_url() -> str:
+    from app.settings_manager import get_nrp_server_url
+    return get_nrp_server_url()
 _MAX_TOOL_ROUNDS = 50  # generous limit; stops only truly runaway loops
 
 _APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _AI_TOOLS_DIR = os.path.join(_APP_ROOT, "ai-tools")
 _FABRIC_AI_MD_PATH = os.path.join(_AI_TOOLS_DIR, "shared", "FABRIC_AI.md")
-_AGENTS_DIR = os.path.join(_AI_TOOLS_DIR, "opencode", "agents")
+_AGENTS_DIR = os.path.join(_AI_TOOLS_DIR, "shared", "agents")
 
 # ---------------------------------------------------------------------------
 # Caches
@@ -252,7 +256,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "list_templates",
-            "description": "List available slice templates that can be loaded as new slices.",
+            "description": "List available weaves that can be loaded as new slices.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -260,7 +264,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "load_template",
-            "description": "Load a slice template as a new draft slice.",
+            "description": "Load a weave as a new draft slice.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -326,7 +330,7 @@ TOOL_SCHEMAS: list[dict] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Relative path within user storage (e.g. 'my_artifacts/my_weave/deploy.sh')"},
+                    "path": {"type": "string", "description": "Relative path within user storage (e.g. 'my_artifacts/my_weave/weave.sh')"},
                     "content": {"type": "string", "description": "File content to write"},
                 },
                 "required": ["path", "content"],
@@ -569,12 +573,12 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "start_background_run",
-            "description": "Start a weave script (run.sh or deploy.sh) as a background run that survives browser disconnects. Returns a run_id for polling status and output.",
+            "description": "Start a weave script as a background run that survives browser disconnects. Returns a run_id for polling status and output.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "weave_dir_name": {"type": "string", "description": "Directory name of the weave (e.g. 'My_Weave')"},
-                    "script": {"type": "string", "enum": ["run.sh", "deploy.sh"], "description": "Which script to run"},
+                    "script": {"type": "string", "description": "Script to run (default 'auto' resolves from weave.json)", "default": "auto"},
                     "slice_name": {"type": "string", "description": "Slice name to pass to the script (optional)", "default": ""},
                 },
                 "required": ["weave_dir_name", "script"],
@@ -728,7 +732,6 @@ async def execute_tool(name: str, arguments: dict) -> str:
             return json.dumps([{
                 "name": t.get("name"), "dir_name": t.get("dir_name"),
                 "description": t.get("description", ""),
-                "nodes": t.get("node_count", 0),
             } for t in result], default=str)
 
         elif name == "load_template":
@@ -1073,8 +1076,7 @@ async def chat_stream(request: Request):
     we execute the tools, send results back, and let the LLM continue.
     All streamed as SSE events to the frontend.
     """
-    api_key = _get_ai_api_key()
-    if not api_key:
+    if not _get_ai_api_key():
         return StreamingResponse(
             iter([b'data: {"error": "AI API key not configured"}\n\n']),
             media_type="text/event-stream",
@@ -1086,6 +1088,21 @@ async def chat_stream(request: Request):
     agent_id = body.get("agent")
     slice_context = body.get("slice_context")
     request_id = body.get("request_id", "")
+
+    # Route to NRP server if model has "nrp:" prefix
+    use_nrp = model.startswith("nrp:")
+    if use_nrp:
+        model = model[4:]  # strip prefix
+        server_url = _nrp_server_url()
+        api_key = _get_nrp_api_key()
+        if not api_key:
+            return StreamingResponse(
+                iter([b'data: {"error": "NRP API key not configured"}\n\n']),
+                media_type="text/event-stream",
+            )
+    else:
+        server_url = _ai_server_url()
+        api_key = _get_ai_api_key()
 
     # Build system prompt
     system_parts = [_load_system_prompt()]
@@ -1104,7 +1121,7 @@ async def chat_stream(request: Request):
         "- Control JupyterLab (start, stop, status)\n"
         "- Search the web for documentation, tutorials, and troubleshooting info\n"
         "- Fetch and read webpage content from URLs\n"
-        "- Start, monitor, and stop background weave runs (run.sh/deploy.sh that survive browser disconnects)\n\n"
+        "- Start, monitor, and stop background weave runs (weave scripts that survive browser disconnects)\n\n"
         "Use tools when the user asks to perform operations. After using tools, summarize what you did clearly.\n"
         "For creating artifacts, write files under 'my_artifacts/<artifact_name>/' in the container filesystem.\n"
         "When users ask questions you don't know the answer to, use web_search to find relevant information.\n"
@@ -1149,7 +1166,7 @@ async def chat_stream(request: Request):
 
                 # Try non-streaming first to detect tool calls
                 resp = await ai_client.post(
-                    f"{_ai_server_url()}/v1/chat/completions",
+                    f"{server_url}/v1/chat/completions",
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
@@ -1157,6 +1174,22 @@ async def chat_stream(request: Request):
                     json={**llm_body, "stream": False},
                     timeout=120.0,
                 )
+
+                # On 5xx from primary server, auto-fallback to NRP
+                if resp.status_code >= 500 and not use_nrp:
+                    nrp_key = _get_nrp_api_key()
+                    if nrp_key:
+                        logger.info("Primary AI server returned %s, falling back to NRP", resp.status_code)
+                        yield f"data: {json.dumps({'content': '[Falling back to NRP server...] '})}\n\n"
+                        resp = await ai_client.post(
+                            f"{_nrp_server_url()}/v1/chat/completions",
+                            headers={
+                                "Authorization": f"Bearer {nrp_key}",
+                                "Content-Type": "application/json",
+                            },
+                            json={**llm_body, "stream": False},
+                            timeout=120.0,
+                        )
 
                 if resp.status_code != 200:
                     yield f"data: {json.dumps({'error': f'LLM error {resp.status_code}: {resp.text[:200]}'})}\n\n"
@@ -1205,7 +1238,7 @@ async def chat_stream(request: Request):
                 # Re-do the call with streaming for smooth output
                 async with ai_client.stream(
                     "POST",
-                    f"{_ai_server_url()}/v1/chat/completions",
+                    f"{server_url}/v1/chat/completions",
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",

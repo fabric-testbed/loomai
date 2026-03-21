@@ -670,12 +670,12 @@ export default function App() {
 
         // For the currently selected slice: use lightweight state check during transitions,
         // only do full refresh when it reaches a stable state (to get updated node/graph data)
-        const currentName = selectedSliceRef.current;
-        const currentEntry = currentName ? list.find(s => s.name === currentName) : null;
-        if (currentName && currentEntry && STABLE_STATES.has(currentEntry.state)) {
+        const currentId = selectedSliceRef.current;
+        const currentEntry = currentId ? list.find(s => s.id === currentId) : null;
+        if (currentId && currentEntry && STABLE_STATES.has(currentEntry.state)) {
           // Slice just became stable — do a full refresh to get final node/graph data
           try {
-            const data = await api.refreshSlice(currentName);
+            const data = await api.refreshSlice(currentId);
             setSliceData(data);
           } catch { /* next poll will retry */ }
         }
@@ -697,7 +697,7 @@ export default function App() {
               try {
                 const sd = await api.refreshSlice(sliceName);
                 sliceNodeNames = sd.nodes.map((n: any) => n.name);
-                if (sliceName === currentName) setSliceData(sd);
+                if (entry.id === currentId) setSliceData(sd);
               } catch { /* fallback */ }
 
               // Run FABlib's native post_boot_config (assigns IPs/hostnames)
@@ -710,7 +710,7 @@ export default function App() {
                 addError(`FABlib post_boot_config failed for ${sliceName}: ${e.message}`);
               }
 
-              // Run boot configs via streaming endpoint (includes deploy.sh + SSH readiness)
+              // Run boot configs via streaming endpoint (includes weave.sh + SSH readiness)
               await handleRunBootConfigStream(sliceName, true);
 
               // Mark build complete
@@ -812,15 +812,15 @@ export default function App() {
       }
 
       // If the currently selected slice changed state, reload it
-      const currentName = selectedSliceRef.current;
-      if (currentName) {
-        const entry = list.find(s => s.name === currentName);
+      const currentId = selectedSliceRef.current;
+      if (currentId) {
+        const entry = list.find(s => s.id === currentId);
         if (entry) {
           syncStateFromList(list);
           // Reload slice data if it's not yet stable/terminal (state may have changed)
           if (POLL_STATES.has(entry.state)) {
             try {
-              const data = await api.refreshSlice(currentName);
+              const data = await api.refreshSlice(currentId);
               setSliceData(data);
             } catch { /* ignore */ }
           }
@@ -1257,7 +1257,7 @@ export default function App() {
     }
   }, [selectedSliceId, updateSliceAndValidate]);
 
-  // --- Save-template modal state ---
+  // --- Save-weave / save-VM-template modal state ---
   const [saveTemplateModal, setSaveTemplateModal] = useState<{ type: 'slice' | 'vm'; nodeName?: string } | null>(null);
   const [saveTemplateName, setSaveTemplateName] = useState('');
   const [saveTemplateDesc, setSaveTemplateDesc] = useState('');
@@ -1278,7 +1278,7 @@ export default function App() {
   const handleSaveTemplateConfirm = useCallback(async () => {
     if (!saveTemplateName.trim() || !saveTemplateModal) return;
     setSaveTemplateBusy(true);
-    setStatusMessage('Saving template...');
+    setStatusMessage('Saving...');
     try {
       if (saveTemplateModal.type === 'slice') {
         await api.saveTemplate({
@@ -1442,6 +1442,8 @@ export default function App() {
   // Deploy weave: load template → submit → poll → boot config (all automatic)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleDeployWeave = useCallback(async (templateDirName: string, sliceNameForDeploy: string, _args: Record<string, string> = {}) => {
+    // Clear errors from previous operations
+    setErrors([]);
     setLoading(true);
     setStatusMessage('Loading weave template...');
 
@@ -1527,7 +1529,7 @@ export default function App() {
     }
   }, [appendBuildLog, startPolling, handleRunBootConfigStream]);
 
-  // Run weave script: execute run.sh as a background run (survives browser disconnect)
+  // Run weave script: execute weave.sh as a background run (survives browser disconnect)
   const runPollTimers = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
 
   const pollBackgroundRun = useCallback((runId: string, logKey: string) => {
@@ -1557,9 +1559,9 @@ export default function App() {
             runPollTimers.current.delete(runId);
           }
           if (resp.status === 'done') {
-            appendBuildLog(logKey, { type: 'build', message: '\u2713 run.sh complete' });
+            appendBuildLog(logKey, { type: 'build', message: '\u2713 weave script complete' });
           } else {
-            appendBuildLog(logKey, { type: 'error', message: `run.sh exited (status: ${resp.status})` });
+            appendBuildLog(logKey, { type: 'error', message: `weave script exited (status: ${resp.status})` });
           }
           setSliceBootRunning(prev => ({ ...prev, [logKey]: false }));
           // Refresh active runs list so LibrariesPanel updates the badge
@@ -1579,15 +1581,18 @@ export default function App() {
   const handleRunWeaveScript = useCallback((templateDirName: string, weaveName: string, args: Record<string, string>) => {
     const logKey = `run:${weaveName}`;
 
+    // Clear errors from previous runs
+    setErrors([]);
+
     // Open build log tab for this run
     setOpenBootLogSlices(prev => prev.includes(logKey) ? prev : [...prev, logKey]);
     setConsoleExpanded(true);
     setSliceBootRunning(prev => ({ ...prev, [logKey]: true }));
     setSliceBootLogs(prev => ({ ...prev, [logKey]: [] }));
-    appendBuildLog(logKey, { type: 'build', message: `Executing run.sh from "${weaveName}" (background)...` });
+    appendBuildLog(logKey, { type: 'build', message: `Executing weave script from "${weaveName}" (background)...` });
 
-    // Start as background run
-    api.startBackgroundRun(templateDirName, 'run.sh', args).then((resp) => {
+    // Start as background run — "auto" resolves script from weave.json
+    api.startBackgroundRun(templateDirName, 'auto', args).then((resp) => {
       appendBuildLog(logKey, { type: 'build', message: `Run started: ${resp.run_id}` });
       pollBackgroundRun(resp.run_id, logKey);
       // Refresh active runs list so LibrariesPanel shows the running badge
@@ -1598,19 +1603,21 @@ export default function App() {
     });
   }, [appendBuildLog, pollBackgroundRun]);
 
-  // Orchestrated run: deploy first (if deploy.sh exists), wait, then run run.sh
+  // Orchestrated run: deploy first (if weave has a topology), wait, then run weave.sh
   // Stores pending run-after-deploy info keyed by slice name
   const pendingRunAfterDeploy = useRef<Map<string, { templateDirName: string; weaveName: string; args: Record<string, string> }>>(new Map());
 
   const handleRunExperiment = useCallback((templateDirName: string, weaveName: string, args: Record<string, string>) => {
     const sliceName = args.SLICE_NAME || weaveName || templateDirName;
+    // Clear errors from previous runs
+    setErrors([]);
     // Stash the run info — will trigger after deploy completes
     pendingRunAfterDeploy.current.set(sliceName, { templateDirName, weaveName, args });
     // Start deploy
     handleDeployWeave(templateDirName, sliceName, args);
   }, [handleDeployWeave]);
 
-  // Watch for deploy completion and auto-trigger pending run.sh
+  // Watch for deploy completion and auto-trigger pending weave.sh
   useEffect(() => {
     for (const [sliceName, runInfo] of pendingRunAfterDeploy.current.entries()) {
       const stillRunning = sliceBootRunning[sliceName];
@@ -1621,10 +1628,10 @@ export default function App() {
         const deploySucceeded = lastLog?.message?.includes('Deploy complete') || lastLog?.message?.includes('Build complete');
         pendingRunAfterDeploy.current.delete(sliceName);
         if (deploySucceeded) {
-          appendBuildLog(sliceName, { type: 'build', message: 'Deploy succeeded — starting run.sh...' });
+          appendBuildLog(sliceName, { type: 'build', message: 'Deploy succeeded — starting weave script...' });
           handleRunWeaveScript(runInfo.templateDirName, runInfo.weaveName, runInfo.args);
         } else {
-          appendBuildLog(sliceName, { type: 'error', message: 'Deploy did not complete successfully — skipping run.sh' });
+          appendBuildLog(sliceName, { type: 'error', message: 'Deploy did not complete successfully — skipping weave script' });
         }
       }
     }
@@ -1664,11 +1671,24 @@ export default function App() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // View output of a running or completed weave run — opens the build log tab
-  const handleViewRunOutput = useCallback((weaveName: string) => {
+  // View output of a running or completed weave run — fetches full log from weave dir
+  const handleViewRunOutput = useCallback((dirName: string, weaveName: string) => {
     const logKey = `run:${weaveName}`;
     setOpenBootLogSlices(prev => prev.includes(logKey) ? prev : [...prev, logKey]);
     setConsoleExpanded(true);
+    // Fetch full log from offset 0 via weave-log endpoint
+    setSliceBootLogs(prev => ({ ...prev, [logKey]: [] }));
+    api.getWeaveLog(dirName, 0).then((resp) => {
+      if (resp.output) {
+        const lines = resp.output.split('\n');
+        const logLines = lines
+          .filter(line => line)
+          .map(line => line.startsWith('### PROGRESS:')
+            ? { type: 'build' as const, message: `\u25B6 ${line.slice(13).trim()}` }
+            : { type: 'output' as const, message: line });
+        setSliceBootLogs(prev => ({ ...prev, [logKey]: logLines }));
+      }
+    }).catch(() => {});
   }, []);
 
   // Stop a background run
@@ -2391,7 +2411,7 @@ export default function App() {
         bootRunning={Object.values(sliceBootRunning).some(Boolean)}
       />
 
-      {/* Save Template Modal (slice or VM) */}
+      {/* Save Weave / VM Template Modal */}
       {saveTemplateModal && (
         <div className="toolbar-modal-overlay" onClick={() => setSaveTemplateModal(null)}>
           <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
@@ -2405,7 +2425,7 @@ export default function App() {
             <input
               type="text"
               className="toolbar-modal-input"
-              placeholder="Template name..."
+              placeholder={saveTemplateModal?.type === 'slice' ? 'Weave name...' : 'Template name...'}
               value={saveTemplateName}
               onChange={(e) => setSaveTemplateName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSaveTemplateConfirm()}

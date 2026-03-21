@@ -61,7 +61,7 @@ def _invalidate_templates_cache():
 
 
 # ---------------------------------------------------------------------------
-# Boot info helpers (for deploy.sh discovery at boot config time)
+# Boot info helpers (for weave script discovery at boot config time)
 # ---------------------------------------------------------------------------
 
 def _boot_info_dir() -> str:
@@ -72,7 +72,7 @@ def _boot_info_dir() -> str:
 
 
 def _store_boot_info(slice_name: str, tmpl_dir: str) -> None:
-    """Store template directory info so boot config executor can find deploy.sh."""
+    """Store template directory info so boot config executor can find weave scripts."""
     try:
         path = os.path.join(_boot_info_dir(), f"{slice_name}.json")
         with open(path, "w") as f:
@@ -104,6 +104,37 @@ class LoadTemplateRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Helper: read weave.json config (with fallback auto-detection)
+# ---------------------------------------------------------------------------
+
+_WEAVE_CONFIG_DEFAULTS = {"run_script": "weave.sh", "log_file": "weave.log"}
+
+
+def _read_weave_config(tmpl_dir: str) -> dict[str, str] | None:
+    """Read weave.json from a template directory.
+
+    If weave.json exists, return its contents merged with defaults.
+    If not, auto-detect legacy weave scripts for backwards compatibility.
+    Returns None if no weave indicator is found.
+    """
+    weave_json_path = os.path.join(tmpl_dir, "weave.json")
+    if os.path.isfile(weave_json_path):
+        try:
+            with open(weave_json_path) as f:
+                config = json.load(f)
+            # Merge with defaults
+            return {**_WEAVE_CONFIG_DEFAULTS, **config}
+        except Exception:
+            return dict(_WEAVE_CONFIG_DEFAULTS)
+
+    # Auto-detect weave.sh even without weave.json
+    if os.path.isfile(os.path.join(tmpl_dir, "weave.sh")):
+        return {"run_script": "weave.sh", "log_file": "weave.log"}
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Helper: list tool files for a template directory
 # ---------------------------------------------------------------------------
 
@@ -122,7 +153,7 @@ def _list_tools(tmpl_dir: str) -> list[dict[str, str]]:
 
 @router.get("")
 def list_templates() -> list[dict[str, Any]]:
-    """List weaves (dirs containing slice.json, deploy.sh, and/or run.sh)."""
+    """List weave artifacts (dirs containing weave.json or a topology file)."""
     global _templates_cache
     import time
     if _templates_cache is not None:
@@ -139,61 +170,57 @@ def list_templates() -> list[dict[str, Any]]:
         if not os.path.isdir(entry_dir):
             continue
         tmpl_path = os.path.join(entry_dir, "slice.json")
-        deploy_path = os.path.join(entry_dir, "deploy.sh")
-        run_path = os.path.join(entry_dir, "run.sh")
+        weave_json_path = os.path.join(entry_dir, "weave.json")
+        weave_sh_path = os.path.join(entry_dir, "weave.sh")
         has_template = os.path.isfile(tmpl_path)
-        has_deploy = os.path.isfile(deploy_path)
-        has_run = os.path.isfile(run_path)
-        if not has_template and not has_deploy and not has_run:
+        has_weave_json = os.path.isfile(weave_json_path)
+        has_weave_sh = os.path.isfile(weave_sh_path)
+        if not has_template and not has_weave_json and not has_weave_sh:
             continue  # Not a weave artifact
-        meta_path = os.path.join(entry_dir, "metadata.json")
-
-        # Auto-generate metadata if missing
-        if not os.path.isfile(meta_path):
+        # Read metadata from weave.json; auto-generate fields if missing
+        weave_config = _read_weave_config(entry_dir)
+        meta: dict[str, Any] = {}
+        if has_weave_json:
             try:
-                node_count = 0
-                network_count = 0
-                name = entry
+                with open(weave_json_path) as f:
+                    meta = json.load(f)
+            except Exception:
+                pass
+
+        # Auto-populate missing metadata fields into weave.json
+        if not meta.get("name"):
+            try:
                 if has_template:
                     with open(tmpl_path) as f:
                         model = json.load(f)
-                    name = model.get("name", entry)
-                    node_count = len(model.get("nodes", []))
-                    network_count = len(model.get("networks", []))
-                auto_meta = {
-                    "name": name,
-                    "description": "",
-                    "source_slice": "",
-                    "created": datetime.now(timezone.utc).isoformat(),
-                    "node_count": node_count,
-                    "network_count": network_count,
-                }
-                with open(meta_path, "w") as f:
-                    json.dump(auto_meta, f, indent=2)
+                    meta.setdefault("name", model.get("name", entry))
+                else:
+                    meta.setdefault("name", entry)
+                meta.setdefault("description", "")
+                meta.setdefault("created", datetime.now(timezone.utc).isoformat())
+                with open(weave_json_path, "w") as f:
+                    json.dump(meta, f, indent=2)
             except Exception:
                 pass
 
-        if os.path.isfile(meta_path):
-            try:
-                with open(meta_path) as f:
-                    meta = json.load(f)
-                meta["dir_name"] = entry
-                meta["has_template"] = has_template
-                meta["has_deploy"] = has_deploy
-                meta["has_run"] = has_run
-                # Read script argument manifests
-                for manifest_name, key in [("deploy.json", "deploy_args"), ("run.json", "run_args")]:
-                    manifest_path = os.path.join(entry_dir, manifest_name)
-                    if os.path.isfile(manifest_path):
-                        try:
-                            with open(manifest_path) as f:
-                                manifest = json.load(f)
-                            meta[key] = manifest.get("args", [])
-                        except Exception:
-                            pass
-                results.append(meta)
-            except Exception:
-                pass
+        try:
+            meta["dir_name"] = entry
+            meta["has_template"] = has_template
+            meta["has_weave_json"] = has_weave_json
+            meta["has_weave_sh"] = has_weave_sh
+            meta.setdefault("name", entry)
+            # Ensure description falls back to description_short
+            if not meta.get("description") and meta.get("description_short"):
+                meta["description"] = meta["description_short"]
+            # Include weave config
+            if weave_config:
+                meta["weave_config"] = weave_config
+                # Read argument manifest from weave.json args field
+                if weave_config.get("args"):
+                    meta["run_args"] = weave_config["args"]
+            results.append(meta)
+        except Exception:
+            pass
     results.sort(key=lambda m: m.get("name", "").lower())
     _templates_cache = (time.monotonic(), results)
     return results
@@ -224,18 +251,18 @@ def save_template(req: SaveTemplateRequest) -> dict[str, Any]:
     with open(os.path.join(tmpl_dir, "slice.json"), "w") as f:
         json.dump(model, f, indent=2)
 
-    metadata = {
+    # Write all metadata into weave.json (single source of truth)
+    weave_data = {
+        **_WEAVE_CONFIG_DEFAULTS,
         "name": req.name,
         "description": req.description,
         "source_slice": req.slice_name,
         "created": datetime.now(timezone.utc).isoformat(),
-        "node_count": len(model.get("nodes", [])),
-        "network_count": len(model.get("networks", [])),
     }
-    with open(os.path.join(tmpl_dir, "metadata.json"), "w") as f:
-        json.dump(metadata, f, indent=2)
+    with open(os.path.join(tmpl_dir, "weave.json"), "w") as f:
+        json.dump(weave_data, f, indent=2)
 
-    return metadata
+    return weave_data
 
 
 class CreateArtifactRequest(BaseModel):
@@ -259,41 +286,41 @@ def create_blank_artifact(req: CreateArtifactRequest) -> dict[str, Any]:
 
     os.makedirs(tmpl_dir, exist_ok=True)
 
-    metadata = {
+    # Write all metadata into weave.json (single source of truth)
+    weave_data = {
+        **_WEAVE_CONFIG_DEFAULTS,
         "name": req.name,
         "description": req.description,
         "category": req.category,
         "created": datetime.now(timezone.utc).isoformat(),
-        "node_count": 0,
-        "network_count": 0,
     }
-    with open(os.path.join(tmpl_dir, "metadata.json"), "w") as f:
-        json.dump(metadata, f, indent=2)
+    with open(os.path.join(tmpl_dir, "weave.json"), "w") as f:
+        json.dump(weave_data, f, indent=2)
 
-    # Create an empty slice.json for weaves
+    # Create an empty topology file for weaves
     if req.category == "weave":
         with open(os.path.join(tmpl_dir, "slice.json"), "w") as f:
             json.dump({"name": req.name, "nodes": [], "networks": []}, f, indent=2)
 
-    return {"dir_name": safe_name, **metadata}
+    return {"dir_name": safe_name, **weave_data}
 
 
 @router.post("/resync")
 def resync_templates() -> list[dict[str, Any]]:
-    """Clean corrupted entries and return updated list."""
+    """Clean corrupted entries from disk and return updated artifact list."""
     _invalidate_templates_cache()
     tdir = _templates_dir()
     os.makedirs(tdir, exist_ok=True)
 
-    # Remove corrupted entries (dirs without valid metadata)
+    # Remove corrupted entries (dirs without valid weave.json or topology)
     if os.path.isdir(tdir):
         for entry in os.listdir(tdir):
             entry_dir = os.path.join(tdir, entry)
             if not os.path.isdir(entry_dir):
                 continue
-            meta_path = os.path.join(entry_dir, "metadata.json")
+            weave_path = os.path.join(entry_dir, "weave.json")
             tmpl_path = os.path.join(entry_dir, "slice.json")
-            if not os.path.isfile(meta_path) or not os.path.isfile(tmpl_path):
+            if not os.path.isfile(weave_path) or not os.path.isfile(tmpl_path):
                 shutil.rmtree(entry_dir)
 
     return list_templates()
@@ -338,11 +365,20 @@ def get_background_run_output(run_id: str, offset: int = 0):
 
 @router.post("/runs/{run_id}/stop")
 def stop_background_run(run_id: str):
-    """Stop a running background run."""
-    from app.run_manager import stop_run
-    if stop_run(run_id):
-        return {"status": "stopped"}
-    raise HTTPException(status_code=404, detail="Run not found or already finished")
+    """Stop a running background run.
+
+    Launches graceful shutdown in a background thread since it may take
+    up to ~35s (FABRIC slice deletion). Returns immediately with "stopping".
+    """
+    import threading as _threading
+    from app.run_manager import get_run, stop_run
+
+    meta = get_run(run_id)
+    if not meta or meta.get("status") != "running":
+        raise HTTPException(status_code=404, detail="Run not found or already finished")
+
+    _threading.Thread(target=stop_run, args=(run_id,), daemon=True).start()
+    return {"status": "stopping"}
 
 
 @router.delete("/runs/{run_id}")
@@ -354,6 +390,35 @@ def delete_background_run(run_id: str):
     raise HTTPException(status_code=404, detail="Run not found")
 
 
+@router.get("/{name}/weave-log")
+def get_weave_log(name: str, offset: int = 0) -> dict[str, Any]:
+    """Read the weave log file from the given byte offset.
+
+    Returns {"output": "...", "offset": N} where offset is the new position
+    for the next poll.
+    """
+    safe_name = _sanitize_name(name)
+    tdir = _templates_dir()
+    tmpl_dir = _validate_path(tdir, safe_name)
+
+    # Determine log file name from weave.json
+    weave_config = _read_weave_config(tmpl_dir)
+    log_file = weave_config.get("log_file", "weave.log") if weave_config else "weave.log"
+    log_path = os.path.join(tmpl_dir, log_file)
+
+    if not os.path.isfile(log_path):
+        return {"output": "", "offset": 0}
+
+    size = os.path.getsize(log_path)
+    if offset >= size:
+        return {"output": "", "offset": offset}
+
+    with open(log_path, "r", errors="replace") as f:
+        f.seek(offset)
+        data = f.read()
+    return {"output": data, "offset": size}
+
+
 @router.get("/{name}")
 def get_template(name: str) -> dict[str, Any]:
     """Get full template detail including model JSON and tools listing."""
@@ -362,12 +427,12 @@ def get_template(name: str) -> dict[str, Any]:
     tdir = _templates_dir()
     tmpl_dir = _validate_path(tdir, safe_name)
 
-    meta_path = os.path.join(tmpl_dir, "metadata.json")
+    weave_path = os.path.join(tmpl_dir, "weave.json")
     tmpl_path = os.path.join(tmpl_dir, "slice.json")
-    if not os.path.isfile(meta_path) or not os.path.isfile(tmpl_path):
+    if not os.path.isfile(weave_path) or not os.path.isfile(tmpl_path):
         raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
 
-    with open(meta_path) as f:
+    with open(weave_path) as f:
         metadata = json.load(f)
     with open(tmpl_path) as f:
         model = json.load(f)
@@ -418,7 +483,7 @@ def load_template(name: str, req: LoadTemplateRequest) -> dict[str, Any]:
     from app.routes.jupyter import seed_slice_workdir_from_template
     seed_slice_workdir_from_template(slice_name, tmpl_dir)
 
-    # Store template directory info so boot config can find deploy.sh
+    # Store template directory info so boot config can find weave scripts
     _store_boot_info(slice_name, tmpl_dir)
 
     # Auto-resolve site groups so the user sees candidate sites immediately
@@ -489,16 +554,16 @@ def update_template(name: str, req: UpdateTemplateRequest) -> dict[str, Any]:
     tdir = _templates_dir()
     tmpl_dir = _validate_path(tdir, safe_name)
 
-    meta_path = os.path.join(tmpl_dir, "metadata.json")
-    if not os.path.isfile(meta_path):
+    weave_path = os.path.join(tmpl_dir, "weave.json")
+    if not os.path.isfile(weave_path):
         raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
 
-    with open(meta_path) as f:
+    with open(weave_path) as f:
         metadata = json.load(f)
 
     metadata["description"] = req.description
 
-    with open(meta_path, "w") as f:
+    with open(weave_path, "w") as f:
         json.dump(metadata, f, indent=2)
 
     return metadata
@@ -570,7 +635,7 @@ def delete_tool(name: str, filename: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Run deploy.sh / run.sh from a weave against a slice
+# Run weave scripts against a slice
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
@@ -583,16 +648,23 @@ class RunScriptRequest(BaseModel):
 
 @router.post("/{name}/run-script/{script}")
 def run_weave_script(name: str, script: str, req: RunScriptRequest):
-    """Run deploy.sh or run.sh from a weave artifact, streaming output as SSE.
+    """Run a weave script, streaming output as SSE.
 
     The script is executed on the backend container with args set as env vars.
+    When script is "auto", resolves the run script from weave.json.
     """
-    if script not in ("deploy.sh", "run.sh"):
-        raise HTTPException(status_code=400, detail="Only deploy.sh and run.sh are supported")
-
     safe_name = _sanitize_name(name)
     tdir = _templates_dir()
     tmpl_dir = _validate_path(tdir, safe_name)
+
+    # Resolve "auto" script from weave.json
+    if script == "auto":
+        weave_config = _read_weave_config(tmpl_dir)
+        if weave_config:
+            script = weave_config["run_script"]
+        else:
+            script = "weave.sh"
+
     script_path = os.path.join(tmpl_dir, script)
     if not os.path.isfile(script_path):
         raise HTTPException(status_code=404, detail=f"Script '{script}' not found in weave '{name}'")
@@ -655,23 +727,36 @@ def start_background_run(name: str, script: str, req: StartRunRequest):
     """Start a weave script as a background run, detached from the HTTP connection.
 
     Returns a run_id that can be used to poll status and output.
+    When script is "auto", resolves the run script from weave.json.
     """
-    if script not in ("deploy.sh", "run.sh"):
-        raise HTTPException(status_code=400, detail="Only deploy.sh and run.sh are supported")
-
     safe_name = _sanitize_name(name)
     tdir = _templates_dir()
     tmpl_dir = _validate_path(tdir, safe_name)
-    script_path = os.path.join(tmpl_dir, script)
-    if not os.path.isfile(script_path):
-        raise HTTPException(status_code=404, detail=f"Script '{script}' not found in weave '{name}'")
 
-    # Read weave display name from metadata
-    meta_path = os.path.join(tmpl_dir, "metadata.json")
+    # Resolve script name — "auto" reads from weave.json
+    if script == "auto":
+        weave_config = _read_weave_config(tmpl_dir)
+        if weave_config:
+            script = weave_config["run_script"]
+        else:
+            script = "weave.sh"  # ultimate fallback
+
+    if script not in ("weave.sh",):
+        # Allow any script name that exists in the weave directory
+        script_path = os.path.join(tmpl_dir, script)
+        if not os.path.isfile(script_path):
+            raise HTTPException(status_code=400, detail=f"Script '{script}' not found")
+    else:
+        script_path = os.path.join(tmpl_dir, script)
+        if not os.path.isfile(script_path):
+            raise HTTPException(status_code=404, detail=f"Script '{script}' not found in weave '{name}'")
+
+    # Read weave display name from weave.json
+    weave_json_path = os.path.join(tmpl_dir, "weave.json")
     weave_name = name
-    if os.path.isfile(meta_path):
+    if os.path.isfile(weave_json_path):
         try:
-            with open(meta_path) as f:
+            with open(weave_json_path) as f:
                 weave_name = json.load(f).get("name", name)
         except Exception:
             pass
@@ -681,7 +766,12 @@ def start_background_run(name: str, script: str, req: StartRunRequest):
     if req.slice_name and "SLICE_NAME" not in script_args:
         script_args["SLICE_NAME"] = req.slice_name
 
-    from app.run_manager import start_run
+    # Resolve log path from weave.json
+    weave_config = _read_weave_config(tmpl_dir)
+    log_file = weave_config.get("log_file", "weave.log") if weave_config else "weave.log"
+    weave_log_path = os.path.join(tmpl_dir, log_file)
+
+    from app.run_manager import start_run, get_run
     run_id = start_run(
         weave_dir_name=safe_name,
         weave_name=weave_name,
@@ -689,7 +779,29 @@ def start_background_run(name: str, script: str, req: StartRunRequest):
         script_path=script_path,
         cwd=tmpl_dir,
         script_args=script_args,
+        log_path=weave_log_path,
     )
+
+    # Store active run info in weave.json so the weave knows its running process
+    run_meta = get_run(run_id) or {}
+    try:
+        weave_data = {}
+        if os.path.isfile(weave_json_path):
+            with open(weave_json_path) as f:
+                weave_data = json.load(f)
+        weave_data["active_run"] = {
+            "run_id": run_id,
+            "pid": run_meta.get("pid"),
+            "pgid": run_meta.get("pgid"),
+            "started_at": run_meta.get("started_at"),
+            "script": script,
+            "args": script_args,
+        }
+        with open(weave_json_path, "w") as f:
+            json.dump(weave_data, f, indent=2)
+    except Exception as e:
+        logger.warning("Failed to write run info to weave.json: %s", e)
+
     return {"run_id": run_id, "status": "running"}
 
 

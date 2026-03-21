@@ -3,7 +3,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install system deps + Node.js + Python deps in one layer
-# Build deps (gcc, python3-dev, libffi-dev) are purged after pip install
+# gcc, python3-dev, libffi-dev kept for runtime pip installs (e.g. recordclass via fabrictestbed-extensions)
 COPY requirements.txt .
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc python3-dev libffi-dev libssl-dev \
@@ -12,8 +12,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && pip install --no-cache-dir -r requirements.txt \
-    && apt-get purge -y gcc python3-dev libffi-dev \
-    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* /tmp/* /root/.cache
 
 # Create fabric user with passwordless sudo

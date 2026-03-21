@@ -20,7 +20,7 @@ export default function TemplatesView({ onLoadSlice }: TemplatesViewProps) {
   const [search, setSearch] = useState('');
   const [reloading, setReloading] = useState(false);
 
-  // Slice templates
+  // Weaves (formerly "slice templates")
   const [sliceTemplates, setSliceTemplates] = useState<TemplateSummary[]>([]);
   const [sliceLoading, setSliceLoading] = useState(false);
   const [sliceError, setSliceError] = useState('');
@@ -55,7 +55,7 @@ export default function TemplatesView({ onLoadSlice }: TemplatesViewProps) {
   // New file input
   const [newFileName, setNewFileName] = useState('');
 
-  // Fetch slice templates
+  // Fetch weaves
   const fetchSliceTemplates = useCallback(async () => {
     setSliceLoading(true);
     setSliceError('');
@@ -102,25 +102,17 @@ export default function TemplatesView({ onLoadSlice }: TemplatesViewProps) {
     fetchRecipes();
   }, [fetchSliceTemplates, fetchVmTemplates, fetchRecipes]);
 
-  // Reload (resync)
+  // Reload artifacts from disk
   const handleReload = async () => {
     setReloading(true);
     try {
-      const [st, vm] = await Promise.all([
-        api.resyncTemplates(),
-        api.resyncVmTemplates(),
-      ]);
-      setSliceTemplates(st);
-      setVmTemplates(vm);
-    } catch (e: any) {
-      // fallback: just refresh
       await Promise.all([fetchSliceTemplates(), fetchVmTemplates()]);
     } finally {
       setReloading(false);
     }
   };
 
-  // Load slice template
+  // Load weave
   const handleLoad = async (dirName: string) => {
     setLoadingName(dirName);
     try {
@@ -135,7 +127,7 @@ export default function TemplatesView({ onLoadSlice }: TemplatesViewProps) {
     }
   };
 
-  // Delete slice template
+  // Delete weave
   const handleDeleteSlice = async (dirName: string) => {
     try {
       await api.deleteTemplate(dirName);
@@ -298,8 +290,6 @@ export default function TemplatesView({ onLoadSlice }: TemplatesViewProps) {
         </div>
         {t.description && <div className="tv-card-desc">{t.description}</div>}
         <div className="tv-card-meta">
-          <span>{t.node_count} node{t.node_count !== 1 ? 's' : ''}</span>
-          <span>{t.network_count} network{t.network_count !== 1 ? 's' : ''}</span>
         </div>
         {showLoadInput === t.dir_name ? (
           <div className="tv-load-row">
@@ -460,7 +450,7 @@ export default function TemplatesView({ onLoadSlice }: TemplatesViewProps) {
 
       <div className="tv-tabs">
         <button className={`tv-tab ${tab === 'slice' ? 'active' : ''}`} onClick={() => setTab('slice')}>
-          Slice Templates ({sliceTemplates.length})
+          Weaves ({sliceTemplates.length})
         </button>
         <button className={`tv-tab ${tab === 'vm' ? 'active' : ''}`} onClick={() => setTab('vm')}>
           VM Templates ({vmTemplates.length})
@@ -473,7 +463,7 @@ export default function TemplatesView({ onLoadSlice }: TemplatesViewProps) {
       <div className="tv-search">
         <input
           className="tv-search-input"
-          placeholder={tab === 'recipes' ? 'Search recipes...' : 'Search templates...'}
+          placeholder={tab === 'recipes' ? 'Search recipes...' : tab === 'slice' ? 'Search weaves...' : 'Search templates...'}
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
@@ -481,12 +471,12 @@ export default function TemplatesView({ onLoadSlice }: TemplatesViewProps) {
 
       {tab === 'slice' ? (
         <>
-          {sliceLoading && !sliceTemplates.length && <div className="tv-loading">Loading slice templates...</div>}
+          {sliceLoading && !sliceTemplates.length && <div className="tv-loading">Loading weaves...</div>}
           {sliceError && <div className="tv-error">{sliceError}</div>}
           <div className="tv-grid">
             {filteredSlice.map(renderSliceCard)}
           </div>
-          {!sliceLoading && !filteredSlice.length && <div className="tv-empty">No slice templates found.</div>}
+          {!sliceLoading && !filteredSlice.length && <div className="tv-empty">No weaves found.</div>}
           {editingType === 'slice' && renderEditDrawer()}
         </>
       ) : tab === 'vm' ? (

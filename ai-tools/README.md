@@ -1,53 +1,48 @@
 # ai-tools/ — In-Container AI Tool Configuration
 
 This directory stores configuration, skills, agents, and prompts for the AI
-tools that run **inside the fabviz Docker containers** (Aider, OpenCode, Claude
-Code CLI).  It is the single source of truth for all in-container AI assets.
+tools that run **inside the LoomAI Docker containers** (OpenCode, Aider, Claude
+Code CLI, Crush, Deep Agents). It is the single source of truth for all
+in-container AI assets.
 
 > **Not for development-time tooling.**  The `.claude/commands/` directory at
 > the project root is for the Claude Code instance used by developers to build
-> fabviz itself.  This directory is for the AI tools that *end users* interact
-> with through the fabviz web UI.
+> LoomAI itself.  This directory is for the AI tools that *end users* interact
+> with through the LoomAI web UI.
 
 ## Directory Structure
 
 ```
 ai-tools/
-  shared/                 Shared context available to all AI tools
+  shared/                 Shared context, skills, and agents for ALL AI tools
     FABRIC_AI.md          Master FABRIC instructions (becomes AGENTS.md in workspace)
-  opencode/               OpenCode-specific configuration
-    agents/               Agent persona prompts (*.md)
-    skills/               Skill definitions (*.md)
+    skills/               Skill definitions (*.md) — available to all tools
+    agents/               Agent persona prompts (*.md) — available to all tools
   aider/                  Aider-specific configuration
-    .aider.conf.yml       Aider settings and conventions
   claude-code/            Claude Code CLI configuration
     CLAUDE.md             In-container project instructions for Claude Code
+  crush/                  Crush-specific configuration
   deepagents/             Deep Agents (LangChain) configuration
     AGENTS.md             Project instructions for Deep Agents
 ```
 
 ## How These Files Reach the Container
 
-At build time, the `ai-tools/` directory is copied into the Docker image.  At
+At build time, the `ai-tools/` directory is copied into the Docker image. At
 runtime, `ai_terminal.py` seeds the user workspace from these files:
 
 - `shared/FABRIC_AI.md` is copied to the workspace as `AGENTS.md`
-- `opencode/skills/` are written to `.opencode/skills/<name>/SKILL.md`
-- `opencode/agents/` are written to `.opencode/agent-prompts/<name>.md`
-- `aider/.aider.conf.yml` is copied to the workspace root
+- `shared/skills/` are seeded into the tool's skill directory
+- `shared/agents/` are seeded into the tool's agent directory
 - `claude-code/CLAUDE.md` is placed where Claude Code CLI discovers it
 
 ## Adding New Skills or Agents
 
-**OpenCode skill:** Create `opencode/skills/<skill-name>.md` with YAML
-frontmatter.  The file name (minus `.md`) becomes the slash command
-(`/skill-name`).
+**Skill:** Create `shared/skills/<skill-name>.md` with YAML frontmatter.
+The file name (minus `.md`) becomes the slash command (`/skill-name`).
 
-**OpenCode agent:** Create `opencode/agents/<agent-name>.md` with a system
-prompt.  The file name (minus `.md`) becomes the agent identity.
-
-**Aider conventions:** Edit `aider/.aider.conf.yml` to add model settings,
-conventions, or lint commands.
+**Agent:** Create `shared/agents/<agent-name>.md` with a system prompt.
+The file name (minus `.md`) becomes the agent identity.
 
 **Claude Code:** Edit `claude-code/CLAUDE.md` to add project instructions that
 Claude Code CLI will auto-discover.

@@ -206,8 +206,8 @@ curl -s http://localhost:8000/api/templates
 curl -s -X POST http://localhost:8000/api/templates/Hello_FABRIC/load \
   -d '{"slice_name": "my-hello"}'
 
-# Run a template script (deploy.sh or run.sh) with args
-curl -s -X POST http://localhost:8000/api/templates/my-weave/run-script/deploy.sh \
+# Run a weave script with args
+curl -s -X POST http://localhost:8000/api/templates/my-weave/run-script/weave.sh \
   -H "Content-Type: application/json" \
   -d '{"args": {"SLICE_NAME": "my-exp"}}'
 ```
@@ -503,7 +503,7 @@ fabric_slice_ssh("my-slice", "node1", "ping -c 3 8.8.8.8")
 - **Boot configs**: `/home/fabric/work/.boot_info/`
 - **Skills**: `/home/fabric/work/.opencode/skills/`
 - **Agents**: `/home/fabric/work/.opencode/agents/`
-- **Reference templates**: `/app/slice-libraries/` (read-only, shipped with the image)
+- **Reference templates**: `/home/fabric/work/my_artifacts/` (study the Hello FABRIC weave for patterns)
 - **Python**: Python 3.11 with FABlib, pandas, numpy, matplotlib, requests
 - **Shell**: bash with standard Linux tools, git, ssh
 
@@ -519,7 +519,7 @@ mkdir -p "$ARTIFACTS_DIR"
 ```
 
 You can create, edit, and delete artifact directories directly on the filesystem.
-Changes are immediately visible in the WebUI's Libraries/Artifacts views.
+Changes are immediately visible in the WebUI's Artifacts view.
 
 **Writable locations:**
 - `$ARTIFACTS_DIR/<name>/` — Create any artifact type here
@@ -544,7 +544,7 @@ Access tours from the Landing page button or the Help page.
 - **Table** — Expandable slice table with bulk operations (filter, sort, multi-delete)
 - **Map** — Leaflet world map with FABRIC sites, backbone links, and live metrics
 - **Storage** — Dual-panel file manager (container ↔ VM SFTP)
-- **Artifacts** — Library manager (Local, Authored, Marketplace) for weaves, VM templates, recipes, notebooks
+- **Artifacts** — Artifact manager (Local, Authored, Marketplace) for weaves, VM templates, recipes, notebooks
 - **AI Tools** — Launcher for AI coding assistants (LoomAI chat, Aider, OpenCode, Crush, Claude Code)
 - **Web Apps** — Tunnel to web services on slice VMs (Grafana, Jupyter, etc.)
 - **JupyterLab** — Embedded JupyterLab for notebooks and artifact editing
@@ -552,10 +552,10 @@ Access tours from the Landing page button or the Help page.
 ### Artifact Actions
 - **Load** — Create a draft slice from a weave
 - **Deploy** — Load + submit + execute boot configs (one-click provisioning)
-- **Run** — Execute autonomous experiment scripts (run.sh)
+- **Run** — Execute autonomous experiment scripts (`weave.sh`)
 - **JupyterLab** — Open artifact folder for editing
 - **Publish** — Share to FABRIC Artifact Manager marketplace
-- **Get** — Download from marketplace to local library
+- **Get** — Download from marketplace to local artifacts
 
 ### Help System
 - Hover tooltips on all labeled elements
@@ -575,26 +575,23 @@ When referring to artifact operations in LoomAI, use this vocabulary:
 - **VM Template** — A single-node configuration with image and boot scripts
 - **Recipe** — A post-provisioning script for installing software on nodes
 
-## Artifact Category Markers
+## Artifact Tags & Descriptions
 
-Artifact types are identified by a `[LoomAI ...]` marker in the description field,
-**not** by tags. When publishing artifacts, LoomAI automatically prepends the marker.
+**Category tags:** On publish, LoomAI auto-adds a category tag (`loomai:weave`,
+`loomai:vm`, `loomai:recipe`) that identifies the artifact type. These tags are
+the authoritative category indicator. Additional tags are optional user-chosen
+labels for discoverability.
 
-| Category | Marker in description |
-|----------|-----------------------|
-| Weave | `[LoomAI Weave]` |
-| VM Template | `[LoomAI VM Template]` |
-| Recipe | `[LoomAI Recipe]` |
-| Notebook | `[LoomAI Notebook]` |
+**Descriptions:** Artifacts have two description fields:
+- **`description_short`** (5–255 chars): Brief summary shown on artifact cards in the UI.
+  Keep it concise — one sentence describing what the artifact does.
+- **`description_long`**: Full detailed description. Use this for comprehensive documentation:
+  what the artifact deploys, how it works, prerequisites, expected behavior, and any
+  configuration notes. Markdown is supported.
 
-When fetching artifacts from the marketplace, these markers determine the category
-filter. Artifacts without any marker default to "notebook". The markers are stripped
-from display in the UI so users see clean descriptions.
-
-**Category tags:** On publish, LoomAI auto-adds a category tag: `loomai:weave`,
-`loomai:vm`, or `loomai:recipe`. These help filter artifacts in the marketplace.
-Additional tags are optional user-chosen labels for discoverability. The
-`[LoomAI ...]` description marker is the authoritative category indicator.
+When creating weaves, the `description` field in `weave.json` is used as the short
+description. Provide a separate `description_long` when publishing to give users
+the full picture.
 
 ## FABRIC Authentication & Token
 
@@ -772,7 +769,7 @@ in `fabric_create_slice` nodes' `components` or `nic_model` fields.
 
 All user-created artifacts are stored in `$ARTIFACTS_DIR/<DirName>/`. Artifact
 type is determined by the marker file inside each directory:
-- **Weave**: contains `slice.json` (+ optional `metadata.json`, `deploy.sh`, `deploy.json`, `run.sh`, `run.json`)
+- **Weave**: contains `weave.json` + `<name>.py` (lifecycle script) + `weave.sh` (orchestrator)
 - **VM Template**: contains `vm-template.json`
 - **Recipe**: contains `recipe.json`
 - **Notebook**: contains one or more `.ipynb` files
@@ -789,107 +786,201 @@ Weaves define reusable FABRIC topologies. They are stored in
 
 ```
 <DirName>/
-  slice.json             # Required: topology definition
-  metadata.json          # Optional: display name, description, counts
-  deploy.sh              # Optional: deployment script (runs on container after slice boots)
-  deploy.json            # Optional: declares args for deploy.sh (shown in Deploy modal)
-  run.sh                 # Optional: autonomous experiment script (creates own slices, background)
-  run.json               # Optional: declares args for run.sh (shown in Run modal)
-  tools/                 # Optional: additional deployment scripts
+  weave.json             # Required: ALL metadata, run config, args, and topology
+  <name>.py              # Python lifecycle script (start/stop/monitor via FABlib)
+  weave.sh               # Thin orchestrator: calls Python script, handles SIGTERM
+  tools/                 # Optional: per-VM setup scripts
     setup-worker.sh      # Additional scripts as needed
 ```
 
-## metadata.json
+## weave.json
+
+`weave.json` is the ONLY required file for a weave. It contains all metadata,
+run configuration, argument definitions, and topology. **Every arg must have a
+meaningful `default` value** — the WebUI prepopulates the Run popup with these
+defaults so users can click Run immediately. For `SLICE_NAME`, use a short
+lowercase-kebab-case name derived from the weave name (e.g., `"k8s-cluster"`).
 
 ```json
 {
+  "run_script": "weave.sh",
+  "log_file": "weave.log",
   "name": "My Template",
-  "description": "A description of what this template does.",
-  "order": 99,
-  "node_count": 3,
-  "network_count": 1
-}
-```
-
-Fields:
-- `name` — Display name in the UI
-- `description` — Shown in the template browser
-- `order` — Sort order (lower = first)
-- `node_count` — Number of nodes (informational)
-- `network_count` — Number of networks (informational)
-
-## deploy.json (Script Argument Manifest)
-
-Optional manifest declaring arguments that `deploy.sh` needs. The WebUI Deploy
-modal dynamically renders input fields from this file. Each arg becomes an
-environment variable passed to the script.
-
-```json
-{
-  "description": "Deploy an iPerf3 bandwidth test slice",
+  "description": "Brief one-sentence summary (5-255 chars, shown on UI cards)",
+  "description_long": "Full detailed description of what this weave deploys, how components interact, prerequisites, and configuration notes.",
   "args": [
     {
       "name": "SLICE_NAME",
       "label": "Slice Name",
       "type": "string",
       "required": true,
-      "default": "",
-      "description": "Name for the new slice",
-      "placeholder": "iperf3-test"
-    }
-  ]
-}
-```
-
-If no `deploy.json` exists, the Deploy modal shows a single "Slice Name" field
-(backward compatible with all existing weaves).
-
-## run.json (Script Argument Manifest)
-
-Optional manifest declaring arguments that `run.sh` needs. The WebUI Run modal
-dynamically renders input fields from this file. Each arg becomes an environment
-variable passed to the script.
-
-**Key principle**: `run.sh` is fully autonomous — it creates its own slices,
-deploys software, runs experiments, collects results, and optionally cleans up.
-The user provides parameters (slice name/prefix, test config) and the script
-handles the entire lifecycle. A script may create one slice, multiple slices
-in sequence, or parallel slices over time.
-
-```json
-{
-  "description": "Create a slice, run iPerf3 tests, and clean up",
-  "args": [
-    {
-      "name": "SLICE_NAME",
-      "label": "Slice Name",
-      "type": "string",
-      "required": true,
-      "default": "",
-      "description": "Name for the slice (created and managed by the script)",
-      "placeholder": "iperf3-test"
+      "default": "my-template",
+      "description": "Name for the slice (created and managed by the script)"
     },
     {
       "name": "DURATION",
       "label": "Test Duration (seconds)",
       "type": "number",
       "required": false,
-      "default": "30",
+      "default": 30,
       "description": "Duration of each test run"
-    },
-    {
-      "name": "PARALLEL",
-      "label": "Parallel Streams",
-      "type": "number",
-      "required": false,
-      "default": "1",
-      "description": "Number of parallel TCP streams"
     }
   ]
 }
 ```
 
-If no `run.json` exists, the Run modal shows a single "Slice Name" field.
+**Key principle**: Each weave has a **Python lifecycle script** (e.g. `hello_fabric.py`)
+that uses FABlib directly, and a **thin `weave.sh`** orchestrator that calls it with
+`start`, `stop`, or `monitor` arguments.
+
+**Python lifecycle script** (`hello_fabric.py`):
+```python
+#!/usr/bin/env python3
+"""Hello FABRIC — single-node slice lifecycle."""
+import sys
+
+def start(slice_name):
+    from fabrictestbed_extensions.fablib.fablib import FablibManager
+    fablib = FablibManager()
+    print(f"### PROGRESS: Creating slice '{slice_name}'...")
+    slice_obj = fablib.new_slice(name=slice_name)
+    slice_obj.add_node(name="node1", site="random", cores=2, ram=8, disk=10,
+                       image="default_ubuntu_22")
+    print("### PROGRESS: Submitting slice...")
+    slice_obj.submit()
+    print("### PROGRESS: Waiting for SSH access...")
+    slice_obj.wait_ssh(progress=True)
+    print(f"### PROGRESS: Slice '{slice_name}' is ready!")
+    for n in slice_obj.get_nodes():
+        print(f"  {n.get_name()}: {n.get_management_ip()}")
+
+def stop(slice_name):
+    from fabrictestbed_extensions.fablib.fablib import FablibManager
+    fablib = FablibManager()
+    try:
+        slice_obj = fablib.get_slice(name=slice_name)
+        print(f"### PROGRESS: Deleting slice '{slice_name}'...")
+        slice_obj.delete()
+        print(f"### PROGRESS: Slice '{slice_name}' deleted.")
+    except Exception as e:
+        print(f"### PROGRESS: Slice not found or already deleted: {e}")
+
+def monitor(slice_name):
+    from fabrictestbed_extensions.fablib.fablib import FablibManager
+    fablib = FablibManager()
+    slice_obj = fablib.get_slice(name=slice_name)
+    state = str(slice_obj.get_state())
+    if "StableOK" not in state:
+        print(f"ERROR: Slice state is {state}")
+        sys.exit(1)
+    for node in slice_obj.get_nodes():
+        try:
+            stdout, stderr = node.execute("echo ok", quiet=True)
+            if "ok" not in stdout:
+                raise Exception("unexpected output")
+        except Exception as e:
+            print(f"ERROR: Node {node.get_name()} health check failed: {e}")
+            sys.exit(1)
+    print(f"### PROGRESS: All nodes healthy — state: {state}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: hello_fabric.py {start|stop|monitor} SLICE_NAME")
+        sys.exit(1)
+    action, name = sys.argv[1], sys.argv[2]
+    {"start": start, "stop": stop, "monitor": monitor}[action](name)
+```
+
+**weave.sh** (thin orchestrator):
+```bash
+#!/bin/bash
+SLICE_NAME="${SLICE_NAME:-${1:-hello-fabric}}"
+SLICE_NAME=$(echo "$SLICE_NAME" | sed 's/[^a-zA-Z0-9-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+if [ -z "$SLICE_NAME" ]; then echo "ERROR: SLICE_NAME not set" >&2; exit 1; fi
+SCRIPT="hello_fabric.py"
+
+cleanup() {
+  echo ""
+  echo "### PROGRESS: Stop requested — cleaning up..."
+  python3 "$SCRIPT" stop "$SLICE_NAME" 2>&1 || true
+  echo "### PROGRESS: Done."
+  exit 0
+}
+trap cleanup SIGTERM SIGINT
+
+if ! python3 "$SCRIPT" start "$SLICE_NAME"; then
+  echo "ERROR: Failed to start slice"
+  exit 1
+fi
+
+echo "### PROGRESS: Monitoring (click Stop to tear down)..."
+while true; do
+  if ! python3 "$SCRIPT" monitor "$SLICE_NAME"; then
+    echo "ERROR: Monitor detected failure — cleaning up..."
+    python3 "$SCRIPT" stop "$SLICE_NAME" 2>&1 || true
+    exit 1
+  fi
+  sleep 30 &
+  wait $! 2>/dev/null || true
+done
+```
+
+**Key rules:**
+- `weave.sh` is a **thin orchestrator** — all slice logic lives in the Python script
+- Python script uses **FABlib directly** (not curl/REST API)
+- `trap cleanup SIGTERM SIGINT` — Stop button calls `stop()` then clean exit
+- Monitor loop uses `sleep N & wait $!` so SIGTERM is handled immediately
+- **Do NOT use `set -e`** in weave.sh — it interferes with signal handling
+- `start()` — create, submit, `wait_ssh()`, print node IPs
+- `stop()` — delete slice; handle "not found" gracefully
+- `monitor()` — check state + `node.execute("echo ok")` on each node; exit 1 on failure
+- Use `### PROGRESS:` markers for WebUI status updates
+- Exit 0 on success/stop, 1 on error
+- **Log clearly for the user** — the Build Log is the user's only window into what the
+  weave is doing. Print: step numbers (`Step 2/5`), what is happening, time estimates,
+  completion of each step, and a clear **READY** message when the weave is fully provisioned
+
+If no `args` are defined in `weave.json`, the Run modal shows a single "Slice Name" field.
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `run_script` | string | Script the Run button executes (default: `weave.sh`) |
+| `log_file` | string | Where stdout/stderr go (default: `weave.log`) |
+| `name` | string | Display name in the UI |
+| `description` | string | Shown in the template browser |
+| `args` | array | Argument definitions for the Run modal |
+| `active_run` | object | **Runtime-only.** Present while a weave is running; cleared on completion |
+
+### active_run Fields (runtime-only)
+
+When a weave is running, `weave.json` contains an `active_run` object:
+```json
+{
+  "active_run": {
+    "run_id": "run-abc123def456",
+    "pid": 12345,
+    "pgid": 12345,
+    "started_at": "2026-03-14T12:00:00Z",
+    "script": "weave.sh",
+    "args": { "SLICE_NAME": "my-slice", "DURATION": "30" }
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `run_id` | string | Unique run identifier (used for polling output and stopping) |
+| `pid` | int | OS process ID — can check if process is alive or kill it |
+| `pgid` | int | Process group ID — used for graceful shutdown (SIGTERM to group) |
+| `started_at` | string | ISO 8601 timestamp when the run started |
+| `script` | string | Which script is running (e.g. `weave.sh`) |
+| `args` | object | Argument values used for this run (env vars including `SLICE_NAME`) |
+
+This field is **absent** when no run is active. Check for its presence to determine
+if a weave is currently running. It is cleared automatically when the run completes,
+is stopped, or is interrupted.
 
 ### Arg Fields
 
@@ -906,7 +997,44 @@ If no `run.json` exists, the Run modal shows a single "Slice Name" field.
 Scripts receive args as environment variables. For backward compatibility,
 `SLICE_NAME` is also passed as the first positional argument (`$1`).
 
-## slice.json
+### Weave Lifecycle & Graceful Shutdown
+
+The weave lifecycle is handled by the Python script's three commands:
+
+**`start(name)`** — provisions the slice:
+- Creates slice with FABlib, submits, calls `wait_ssh()` to block until all nodes are accessible
+- FABlib handles StableError/timeout internally and raises exceptions on failure
+- Prints node management IPs on success
+
+**`stop(name)`** — tears down the slice:
+- Gets slice by name, calls `slice.delete()`
+- Handles "not found" gracefully (slice may already be deleted)
+- Called by `weave.sh cleanup()` on SIGTERM (Stop button)
+
+**`monitor(name)`** — health checks:
+- Verifies slice state is StableOK
+- Runs `node.execute("echo ok")` on each node to verify SSH is working
+- Exits 0 = healthy, exits 1 = failure detected (triggers auto-cleanup in weave.sh)
+
+**Graceful shutdown flow:**
+1. User clicks **Stop** in WebUI → run_manager sends SIGTERM to process group
+2. `trap cleanup SIGTERM SIGINT` fires → calls `python3 script.py stop SLICE_NAME`
+3. Python `stop()` deletes the slice via FABlib (can take 30+ seconds) → exits 0
+4. run_manager waits up to 30 seconds for the process to die, then SIGKILL as last resort
+5. `active_run` is cleared from `weave.json` when the process exits
+
+**Monitor loop flow:**
+1. After `start()` succeeds, `weave.sh` enters `while true` loop
+2. Each iteration calls `python3 script.py monitor SLICE_NAME`
+3. If `monitor()` exits 1, weave.sh calls `stop()` and exits 1
+4. If user clicks Stop, SIGTERM interrupts the loop → `cleanup()` → `stop()`
+
+**Common failure modes detected by `monitor()`:**
+- **State change** — slice state is no longer StableOK (e.g. resource reclaimed)
+- **SSH failure** — `node.execute()` raises exception (node crashed, network issue)
+- **Unexpected output** — test command returns wrong result (VM in bad state)
+
+## Topology Definition
 
 ```json
 {
@@ -931,7 +1059,7 @@ Scripts receive args as environment variables. For backward compatibility,
         "commands": [
           {
             "id": "setup",
-            "command": "chmod +x ~/tools/deploy.sh && ~/tools/deploy.sh",
+            "command": "chmod +x ~/tools/setup.sh && ~/tools/setup.sh",
             "order": 0
           }
         ],
@@ -1018,7 +1146,7 @@ Examples:
 }
 ```
 
-## tools/ Scripts (deploy.sh Pattern)
+## tools/ Scripts (Per-VM Setup)
 
 Templates can include shell scripts that run on VMs at boot time. Scripts are
 uploaded to `~/tools/` on each VM. Use `### PROGRESS:` markers for status in the UI.
@@ -1041,8 +1169,8 @@ echo "Docker installed successfully"
 The `### PROGRESS: message` lines are parsed by the WebUI boot console and shown
 as teal status indicators. Use them to give users visibility into long installations.
 
-### Multi-Role deploy.sh
-For templates with different node roles, the deploy.sh can dispatch based on hostname:
+### Multi-Role Setup Scripts
+For weaves with different node roles, the setup script can dispatch based on hostname:
 
 ```bash
 #!/bin/bash
@@ -1073,13 +1201,13 @@ mkdir -p "$ARTIFACTS_DIR"
 ```
 
 Artifact type is determined by the presence of a marker file:
-- **Weave**: directory contains `slice.json`
+- **Weave**: directory contains `weave.json`
 - **VM Template**: directory contains `vm-template.json`
 - **Recipe**: directory contains `recipe.json`
 - **Notebook**: directory contains any `.ipynb` file
 
-Reference templates ship in `/app/slice-libraries/` as read-only examples.
-User artifacts in `$ARTIFACTS_DIR/` are fully writable — create, edit, or delete freely.
+All artifacts are user-created and live in `$ARTIFACTS_DIR/` — create, edit, or delete freely.
+Study the Hello FABRIC weave in my_artifacts/ for patterns.
 
 ---
 
@@ -1210,7 +1338,7 @@ Fields:
 ### Running Recipes
 
 Recipes execute on provisioned VMs via the WebUI or API:
-1. WebUI: Libraries panel → Recipes tab → select node → click Execute
+1. WebUI: Artifacts panel → Recipes tab → select node → click Execute
 2. API: `POST /api/recipes/{name}/execute/{slice_name}/{node_name}` (SSE stream)
 3. AI tools: Use `fabric_slice_ssh` to run the same scripts manually
 
@@ -1224,22 +1352,9 @@ Create them in `$ARTIFACTS_DIR/<DirName>/`:
 ```
 <DirName>/
   my_experiment.ipynb          # One or more Jupyter notebooks
-  metadata.json                # Optional: name, description
   data/                        # Optional: supporting data files
   utils.py                     # Optional: helper modules
 ```
-
-## metadata.json (optional)
-
-```json
-{
-  "name": "My Analysis Notebook",
-  "description": "Analyzes bandwidth measurements across FABRIC sites.",
-  "order": 99
-}
-```
-
-If no `metadata.json` exists, the directory name is used as the display name.
 
 ## Creating a notebook from scratch
 
@@ -1272,7 +1387,7 @@ cat > "$ARTIFACTS_DIR/My_Analysis/analysis.ipynb" << 'EOF'
 EOF
 ```
 
-Notebooks appear in the Libraries view and can be opened in JupyterLab for editing.
+Notebooks appear in the Artifacts view and can be opened in JupyterLab for editing.
 
 ---
 
@@ -1648,7 +1763,7 @@ for net in slice.get_networks():
 3. Include descriptive metadata — users see this in the template browser
 4. Use FABNetv4 for cross-site IP connectivity (auto-configures routing)
 5. Keep boot config commands idempotent (safe to re-run)
-6. Include `### PROGRESS:` markers in deploy.sh for user-visible status
+6. Include `### PROGRESS:` markers in setup scripts for user-visible status
 
 ## Script Writing
 1. Always start with `#!/bin/bash` and `set -e`

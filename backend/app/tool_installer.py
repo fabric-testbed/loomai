@@ -68,7 +68,9 @@ TOOL_REGISTRY: dict[str, dict] = {
     },
     "jupyterlab": {
         "type": "pip",
-        "packages": ["jupyterlab", "ipykernel", "pandas", "matplotlib", "numpy"],
+        "packages": ["jupyterlab", "ipykernel", "pandas", "matplotlib", "numpy",
+                     "fabrictestbed-extensions", "plotly", "scipy", "seaborn",
+                     "ipywidgets", "requests"],
         "binary": "jupyter",
         "display_name": "JupyterLab",
         "size_estimate": "~250 MB",
@@ -122,7 +124,10 @@ def get_tool_binary_path(tool_id: str) -> str | None:
         path = os.path.join(_venv_bin(), binary)
     else:
         path = os.path.join(_npm_bin(), binary)
-    return path if os.path.isfile(path) else None
+    if os.path.isfile(path):
+        return path
+    # Fall back to system-wide install (e.g. pre-installed in Docker image)
+    return shutil.which(binary)
 
 
 def is_tool_installed(tool_id: str) -> bool:
@@ -374,7 +379,8 @@ def fixup_jupyter_kernel() -> None:
         # Install missing packages
         pip = os.path.join(_venv_bin(), "pip")
         subprocess.run(
-            [pip, "install", "--no-cache-dir", "ipykernel", "pandas", "matplotlib", "numpy"],
+            [pip, "install", "--no-cache-dir", "ipykernel", "pandas", "matplotlib", "numpy",
+             "fabrictestbed-extensions", "plotly", "scipy", "seaborn", "ipywidgets", "requests"],
             capture_output=True,
         )
         _setup_jupyter_config()

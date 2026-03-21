@@ -65,7 +65,7 @@ const TOOLS: ToolDef[] = [
   {
     id: 'opencode',
     name: 'OpenCode',
-    desc: 'Interactive AI coding assistant with built-in FABRIC tools, skills, and agents. Powered by FABRIC-hosted LLMs. Requires a free FABRIC API key.',
+    desc: 'Interactive AI coding assistant with integrated FABRIC tools, skills, and agents. Powered by FABRIC-hosted LLMs. Requires a free FABRIC API key.',
     icon: 'OC',
     iconClass: 'opencode',
     needsKey: true,

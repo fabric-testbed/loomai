@@ -26,7 +26,7 @@ class TestSaveTemplate:
         assert resp.status_code == 200
 
     def test_saved_template_appears_in_list(self, client, storage_dir):
-        # Create template directory manually
+        # Create template directory manually with weave.json marker
         tmpl_dir = storage_dir / "my_artifacts" / "Test_Tmpl"
         tmpl_dir.mkdir(parents=True, exist_ok=True)
         (tmpl_dir / "slice.json").write_text(json.dumps({
@@ -35,7 +35,9 @@ class TestSaveTemplate:
             "nodes": [],
             "networks": [],
         }))
-        (tmpl_dir / "metadata.json").write_text(json.dumps({
+        (tmpl_dir / "weave.json").write_text(json.dumps({
+            "run_script": "weave.sh",
+            "log_file": "weave.log",
             "name": "Test Tmpl",
             "description": "",
             "category": "weave",
@@ -48,7 +50,7 @@ class TestSaveTemplate:
 
 class TestDeleteTemplate:
     def test_delete_custom_template(self, client, storage_dir):
-        # Create a template directory
+        # Create a template directory with weave.json marker
         tmpl_dir = storage_dir / "my_artifacts" / "deleteme"
         tmpl_dir.mkdir(parents=True, exist_ok=True)
         (tmpl_dir / "slice.json").write_text(json.dumps({
@@ -57,7 +59,9 @@ class TestDeleteTemplate:
             "nodes": [],
             "networks": [],
         }))
-        (tmpl_dir / "metadata.json").write_text(json.dumps({
+        (tmpl_dir / "weave.json").write_text(json.dumps({
+            "run_script": "weave.sh",
+            "log_file": "weave.log",
             "name": "deleteme",
             "category": "weave",
         }))

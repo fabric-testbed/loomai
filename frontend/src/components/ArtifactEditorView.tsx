@@ -84,7 +84,7 @@ export default function ArtifactEditorView({
 
   const loadMetadata = useCallback(async () => {
     try {
-      const result = await api.readFileContent(`${artifactPath}/metadata.json`);
+      const result = await api.readFileContent(`${artifactPath}/weave.json`);
       const meta = JSON.parse(result.content);
       setMetaName(meta.name || '');
       setMetaDescShort(meta.description_short || meta.description || '');
@@ -105,7 +105,7 @@ export default function ArtifactEditorView({
     try {
       const files = await api.listFiles(artifactPath);
       const names = new Set(files.map((f: FileEntry) => f.name));
-      setHasSliceJson(names.has('slice.json'));
+      setHasSliceJson(names.has('weave.json'));
     } catch {
       // Empty or missing dir
     }
@@ -232,7 +232,7 @@ export default function ArtifactEditorView({
     setTopoLoading(true);
     setTopoError('');
     try {
-      const result = await api.readFileContent(`${artifactPath}/slice.json`);
+      const result = await api.readFileContent(`${artifactPath}/weave.json`);
       const model = JSON.parse(result.content);
       const tempName = `__ae_${dirName}_${Date.now()}`;
       tempDraftNameRef.current = tempName;
@@ -254,7 +254,7 @@ export default function ArtifactEditorView({
     try {
       const exported = await api.exportSliceJson(tempDraftNameRef.current);
       await api.writeFileContent(
-        `${artifactPath}/slice.json`,
+        `${artifactPath}/weave.json`,
         JSON.stringify(exported, null, 2)
       );
       setTopoSaved(true);
@@ -275,7 +275,7 @@ export default function ArtifactEditorView({
     };
     try {
       await api.writeFileContent(
-        `${artifactPath}/slice.json`,
+        `${artifactPath}/weave.json`,
         JSON.stringify(minimal, null, 2)
       );
       setHasSliceJson(true);
@@ -288,14 +288,14 @@ export default function ArtifactEditorView({
     setTopoSliceData(data);
   }, []);
 
-  // Auto-load topology as soon as we know slice.json exists
+  // Auto-load topology as soon as we know weave.json exists
   useEffect(() => {
     if (hasSliceJson && !topoSliceData && !topoLoading) {
       loadTopology();
     }
   }, [hasSliceJson, topoSliceData, topoLoading, loadTopology]);
 
-  // Auto-switch to topology tab when slice.json is detected on initial load
+  // Auto-switch to topology tab when weave.json is detected on initial load
   useEffect(() => {
     if (filesChecked && hasSliceJson && activeTab === 'metadata') {
       setActiveTab('topology');
@@ -490,9 +490,9 @@ export default function ArtifactEditorView({
         <div className="ae-topology-wrap">
           {!hasSliceJson && filesChecked ? (
             <div className="ae-topology-empty">
-              <div>No slice.json found in this artifact.</div>
+              <div>No weave.json found in this artifact.</div>
               <button className="tv-btn tv-btn-primary" onClick={handleCreateSliceJson}>
-                Add Topology (slice.json)
+                Add Topology (weave.json)
               </button>
             </div>
           ) : topoLoading ? (
@@ -537,7 +537,7 @@ export default function ArtifactEditorView({
                   disabled={topoSaving}>
                   {topoSaving ? 'Saving...' : 'Save Topology'}
                 </button>
-                {topoSaved && <span className="ae-saved-msg">Saved to slice.json</span>}
+                {topoSaved && <span className="ae-saved-msg">Saved to weave.json</span>}
                 {topoError && <span className="ae-error">{topoError}</span>}
               </div>
             </>

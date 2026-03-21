@@ -9,3 +9,12 @@ requests>=2.31
 httpx>=0.27
 openai>=1.0
 duckduckgo-search>=7.0
+jupyterlab
+ipykernel
+pandas
+matplotlib
+numpy
+plotly
+scipy
+seaborn
+ipywidgets

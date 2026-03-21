@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import type { SliceData, VMTemplateSummary, RecipeSummary } from '../types/fabric';
-import type { TemplateSummary, ScriptArg, BackgroundRun } from '../api/client';
+import type { TemplateSummary, ScriptArg, BackgroundRun, LocalArtifact } from '../api/client';
 import * as api from '../api/client';
 import Tooltip from './Tooltip';
 import '../styles/template-panel.css';
@@ -14,18 +14,18 @@ interface DragHandleProps {
 }
 
 interface LibrariesPanelProps {
-  // Slice template props
+  // Weave props
   onSliceImported: (data: SliceData) => void;
   // Deploy weave callback — loads template + submits + polls + boot config
   onDeployWeave?: (templateDirName: string, sliceName: string, args: Record<string, string>) => void;
-  // Run weave script callback — executes run.sh with args from run.json
+  // Run weave script callback — executes weave.sh with args from weave.json
   onRunWeaveScript?: (templateDirName: string, weaveName: string, args: Record<string, string>) => void;
-  // Orchestrated run: deploy first (if has deploy.sh), then run run.sh
+  // Orchestrated run: deploy first (if has topology), then run weave.sh
   onRunExperiment?: (templateDirName: string, weaveName: string, args: Record<string, string>) => void;
   // Active background runs (for showing "running" state on weave cards)
   activeRuns?: BackgroundRun[];
   // View output of a running/completed weave run
-  onViewRunOutput?: (weaveName: string) => void;
+  onViewRunOutput?: (dirName: string, weaveName: string) => void;
   // Stop a running background run
   onStopRun?: (runId: string) => void;
   // Reset/revert a published artifact to its original version
@@ -130,7 +130,44 @@ export default React.memo(function LibrariesPanel({
   const [activeTab, setActiveTab] = useState<TabId>('weaves');
   const [overflowOpen, setOverflowOpen] = useState<string | null>(null);
 
-  // ─── Slice Templates state ───
+  // ─── Unified artifacts (authoritative category source) ───
+  const [allArtifacts, setAllArtifacts] = useState<LocalArtifact[]>([]);
+
+  const refreshAllArtifacts = useCallback(async () => {
+    try {
+      const data = await api.getMyArtifacts();
+      setAllArtifacts(data.local_artifacts);
+    } catch {
+      // ignore — individual tabs still work, just without category gating
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshAllArtifacts();
+  }, [refreshAllArtifacts]);
+
+  // Build authoritative dir_name sets per category
+  const categoryDirNames = React.useMemo(() => {
+    const weaves = new Set<string>();
+    const vms = new Set<string>();
+    const recipes = new Set<string>();
+    const notebooks = new Set<string>();
+    for (const a of allArtifacts) {
+      if (a.category === 'weave') weaves.add(a.dir_name);
+      else if (a.category === 'vm-template') vms.add(a.dir_name);
+      else if (a.category === 'recipe') recipes.add(a.dir_name);
+      else if (a.category === 'notebook') notebooks.add(a.dir_name);
+    }
+    return { weaves, vms, recipes, notebooks };
+  }, [allArtifacts]);
+
+  // Helper: gate a list through the authoritative category set.
+  // When allArtifacts hasn't loaded yet (set is empty), pass everything through
+  // so the UI is never blank while the unified fetch is in flight.
+  const gateByCategory = <T extends { dir_name: string }>(items: T[], allowed: Set<string>): T[] =>
+    allowed.size === 0 ? items : items.filter(i => allowed.has(i.dir_name));
+
+  // ─── Weaves state ───
   const [sliceTemplates, setSliceTemplates] = useState<TemplateSummary[]>([]);
   const [sliceLoading, setSliceLoading] = useState(false);
   const [sliceError, setSliceError] = useState('');
@@ -156,14 +193,14 @@ export default React.memo(function LibrariesPanel({
     setSliceLoading(true);
     setSliceError('');
     try {
-      const list = await api.listTemplates();
+      const [list] = await Promise.all([api.listTemplates(), refreshAllArtifacts()]);
       setSliceTemplates(list);
     } catch (e: any) {
       setSliceError(e.message);
     } finally {
       setSliceLoading(false);
     }
-  }, []);
+  }, [refreshAllArtifacts]);
 
   useEffect(() => {
     refreshSliceTemplates();
@@ -212,14 +249,14 @@ export default React.memo(function LibrariesPanel({
     setVmLoading(true);
     setVmError('');
     try {
-      const list = await api.listVmTemplates();
+      const [list] = await Promise.all([api.listVmTemplates(), refreshAllArtifacts()]);
       setVmTemplates(list);
     } catch (e: any) {
       setVmError(e.message);
     } finally {
       setVmLoading(false);
     }
-  }, []);
+  }, [refreshAllArtifacts]);
 
   useEffect(() => {
     refreshVmTemplates();
@@ -268,27 +305,31 @@ export default React.memo(function LibrariesPanel({
   };
 
   const openDeployModal = (t: TemplateSummary) => {
-    const argDefs = t.deploy_args?.length ? t.deploy_args : DEFAULT_DEPLOY_ARGS;
+    const argDefs = t.weave_config?.args?.length ? t.weave_config.args : DEFAULT_DEPLOY_ARGS;
     const defaults: Record<string, string> = {};
     for (const arg of argDefs) {
-      defaults[arg.name] = arg.name === 'SLICE_NAME' ? uniqueSliceName(t.name || 'slice') : (arg.default || '');
+      defaults[arg.name] = arg.name === 'SLICE_NAME'
+        ? uniqueSliceName(String(arg.default || '') || t.name || 'slice')
+        : String(arg.default ?? '');
     }
     setScriptArgValues(defaults);
     setScriptModal({ mode: 'deploy', weaveName: t.name, dirName: t.dir_name, argDefs });
   };
 
   const openRunModal = (t: TemplateSummary) => {
-    const argDefs = t.run_args?.length ? t.run_args : DEFAULT_RUN_ARGS;
+    const argDefs = t.weave_config?.args?.length ? t.weave_config.args : DEFAULT_RUN_ARGS;
     const defaults: Record<string, string> = {};
     for (const arg of argDefs) {
-      defaults[arg.name] = arg.name === 'SLICE_NAME' ? uniqueSliceName(t.name || 'slice') : (arg.default || '');
+      defaults[arg.name] = arg.name === 'SLICE_NAME'
+        ? uniqueSliceName(String(arg.default || '') || t.name || 'slice')
+        : String(arg.default ?? '');
     }
     setScriptArgValues(defaults);
     setScriptModal({ mode: 'run', weaveName: t.name, dirName: t.dir_name, argDefs });
   };
 
   const scriptModalValid = scriptModal?.argDefs.every(
-    (a) => !a.required || scriptArgValues[a.name]?.trim()
+    (a) => !a.required || String(scriptArgValues[a.name] ?? '').trim()
   ) ?? false;
 
   const confirmScriptModal = () => {
@@ -305,9 +346,9 @@ export default React.memo(function LibrariesPanel({
       const deploySliceName = args.SLICE_NAME || weaveName || dirName;
       onDeployWeave?.(dirName, deploySliceName, args);
     } else {
-      // Orchestrated run: if weave also has deploy.sh, use onRunExperiment which deploys first
+      // Orchestrated run: if weave also has a topology, use onRunExperiment which deploys first
       const tmpl = sliceTemplates.find(t => t.dir_name === dirName);
-      if (tmpl?.has_deploy && onRunExperiment) {
+      if (tmpl?.has_template && onRunExperiment) {
         onRunExperiment(dirName, weaveName, args);
       } else {
         onRunWeaveScript?.(dirName, weaveName, args);
@@ -318,14 +359,14 @@ export default React.memo(function LibrariesPanel({
   const refreshRecipes = useCallback(async () => {
     setRecipesLoading(true);
     try {
-      const list = await api.listRecipes();
+      const [list] = await Promise.all([api.listRecipes(), refreshAllArtifacts()]);
       setRecipes(list);
     } catch {
       // ignore
     } finally {
       setRecipesLoading(false);
     }
-  }, []);
+  }, [refreshAllArtifacts]);
 
   useEffect(() => {
     refreshRecipes();
@@ -341,6 +382,7 @@ export default React.memo(function LibrariesPanel({
     setNotebooksLoading(true);
     try {
       const data = await api.getMyArtifacts();
+      setAllArtifacts(data.local_artifacts);  // reuse response to update category index
       setNotebooks(data.local_artifacts.filter((a: any) => a.category === 'notebook'));
     } catch {
       // ignore
@@ -418,6 +460,7 @@ export default React.memo(function LibrariesPanel({
   useEffect(() => {
     const interval = setInterval(() => {
       if (document.visibilityState === 'hidden') return;
+      // Each tab's refresh already co-fetches the unified artifacts list
       if (activeTab === 'weaves') refreshSliceTemplates();
       else if (activeTab === 'vm') refreshVmTemplates();
       else if (activeTab === 'recipes') refreshRecipes();
@@ -594,7 +637,7 @@ export default React.memo(function LibrariesPanel({
                 <a href="#" onClick={(e) => { e.preventDefault(); onNavigateToMarketplace?.('weave'); }}>get one from the marketplace</a>.
               </div>
             )}
-            {sliceTemplates
+            {gateByCategory(sliceTemplates, categoryDirNames.weaves)
               .filter((t) => {
                 if (!sliceSearchFilter) return true;
                 const q = sliceSearchFilter.toLowerCase();
@@ -604,18 +647,25 @@ export default React.memo(function LibrariesPanel({
               const weaveRuns = (activeRuns || []).filter(r => r.weave_dir_name === t.dir_name);
               const isRunning = weaveRuns.some(r => r.status === 'running');
               const hasCompleted = weaveRuns.some(r => r.status === 'done' || r.status === 'error' || r.status === 'interrupted');
-              const lastRun = weaveRuns.length > 0 ? weaveRuns[weaveRuns.length - 1] : null;
+              // Pick the most recently started run (API order is not chronological)
+              const lastRun = weaveRuns.length > 0
+                ? weaveRuns.reduce((a, b) => (a.started_at || '') >= (b.started_at || '') ? a : b)
+                : null;
               const activeRunId = weaveRuns.find(r => r.status === 'running')?.run_id;
 
-              // Determine ▶ button: Run > Deploy > Load priority
-              const playMode = t.has_run ? 'run' : t.has_deploy ? 'deploy' : 'load';
-              const playLabel = playMode === 'run' ? 'Run' : playMode === 'deploy' ? 'Deploy' : 'Load';
-              const playDisabled = isRunning;
+              // Determine runnability from weave_config
+              const isRunnable = !!t.weave_config?.run_script;
+              const playMode = isRunnable ? 'run' : t.has_template ? 'deploy' : 'load';
 
               const handlePlay = () => {
-                if (playMode === 'run' && onRunWeaveScript) openRunModal(t);
-                else if (playMode === 'deploy' && onDeployWeave) openDeployModal(t);
-                else if (t.has_template !== false) {
+                if (isRunning) {
+                  // Stop the running script
+                  activeRunId && onStopRun?.(activeRunId);
+                } else if (playMode === 'run' && onRunWeaveScript) {
+                  openRunModal(t);
+                } else if (playMode === 'deploy' && onDeployWeave) {
+                  openDeployModal(t);
+                } else if (t.has_template !== false) {
                   setLoadSliceName(t.name);
                   setLoadingTemplate(t.name);
                   setLoadingTemplateDirName(t.dir_name);
@@ -634,12 +684,8 @@ export default React.memo(function LibrariesPanel({
                     onToggle={() => setOverflowOpen(overflowOpen === `weave-${t.dir_name}` ? null : `weave-${t.dir_name}`)}
                     onClose={() => setOverflowOpen(null)}
                     items={[
-                      { label: 'Load...', onClick: () => { setLoadSliceName(t.name); setLoadingTemplate(t.name); setLoadingTemplateDirName(t.dir_name); }, disabled: t.has_template === false },
-                      { label: 'Deploy...', onClick: () => openDeployModal(t), disabled: !t.has_deploy || !onDeployWeave || isRunning },
-                      { label: 'Run...', onClick: () => openRunModal(t), disabled: !t.has_run || !onRunWeaveScript || isRunning },
-                      { label: 'Stop', onClick: () => activeRunId && onStopRun?.(activeRunId), disabled: !isRunning || !activeRunId || !onStopRun },
-                      { label: 'Reset', onClick: async () => { if (confirm(`Reset "${t.name}" to its original version? Local changes will be lost.`)) { await onResetArtifact?.(t.dir_name); refreshSliceTemplates(); } }, disabled: !hasCompleted || !onResetArtifact },
-                      { label: 'Open Log', onClick: () => onViewRunOutput?.(t.name), disabled: weaveRuns.length === 0 || !onViewRunOutput },
+                      { label: 'Publish', onClick: () => onPublishArtifact?.(t.dir_name, 'weave'), disabled: !onPublishArtifact },
+                      { label: 'View Log', onClick: () => onViewRunOutput?.(t.dir_name, t.name), disabled: !onViewRunOutput },
                       { label: '', onClick: () => {}, separator: true },
                       { label: 'Edit', onClick: () => onEditArtifact?.(t.dir_name), disabled: !onEditArtifact },
                       { label: 'JupyterLab', onClick: () => handleEditInJupyter(t.dir_name), disabled: launchingNotebook === t.dir_name },
@@ -651,47 +697,38 @@ export default React.memo(function LibrariesPanel({
                 {t.description && (
                   <div className="template-card-desc">{t.description}</div>
                 )}
-                <div className="template-card-meta">
-                  <span>{t.node_count} node{t.node_count !== 1 ? 's' : ''}</span>
-                  <span>{t.network_count} net{t.network_count !== 1 ? 's' : ''}</span>
-                  <span>{formatDate(t.created)}</span>
-                </div>
                 <div className="template-card-actions">
                   <div className="tp-transport-group">
-                    <Tooltip text={playMode === 'run' ? 'Execute run.sh' : playMode === 'deploy' ? 'Deploy this weave' : 'Load as new draft slice'}>
-                      <button
-                        className="tp-transport-btn tp-transport-play"
-                        disabled={playDisabled}
-                        onClick={handlePlay}
-                        data-help-id="templates.load"
-                      >
-                        {'\u25B6'} {playLabel}
-                      </button>
-                    </Tooltip>
-                    <Tooltip text="Stop the running script">
-                      <button
-                        className="tp-transport-btn tp-transport-stop"
-                        disabled={!isRunning || !activeRunId || !onStopRun}
-                        onClick={() => activeRunId && onStopRun?.(activeRunId)}
-                      >
-                        {'\u25A0'} Stop
-                      </button>
-                    </Tooltip>
-                    <Tooltip text="Reset to original version">
-                      <button
-                        className="tp-transport-btn tp-transport-reset"
-                        disabled={!hasCompleted || !onResetArtifact}
-                        onClick={async () => {
-                          if (confirm(`Reset "${t.name}" to its original version? Local changes will be lost.`)) {
-                            await onResetArtifact?.(t.dir_name);
-                            refreshSliceTemplates();
-                          }
-                        }}
-                      >
-                        {'\u21BA'} Reset
-                      </button>
-                    </Tooltip>
+                    {isRunning ? (
+                      <Tooltip text="Stop the running script">
+                        <button
+                          className="tp-transport-btn tp-transport-stop"
+                          onClick={() => activeRunId && onStopRun?.(activeRunId)}
+                        >
+                          {'\u25A0'} Stop
+                        </button>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip text={playMode === 'run' ? 'Execute weave script' : playMode === 'deploy' ? 'Deploy this weave' : 'Load as new draft slice'}>
+                        <button
+                          className="tp-transport-btn tp-transport-play"
+                          onClick={handlePlay}
+                          data-help-id="templates.load"
+                        >
+                          {'\u25B6'} {playMode === 'run' ? 'Run' : playMode === 'deploy' ? 'Deploy' : 'Load'}
+                        </button>
+                      </Tooltip>
+                    )}
                   </div>
+                  <Tooltip text="Publish to FABRIC Artifact Manager">
+                    <button
+                      className="tp-btn-publish"
+                      onClick={() => onPublishArtifact?.(t.dir_name, 'weave')}
+                      disabled={!onPublishArtifact}
+                    >
+                      Publish
+                    </button>
+                  </Tooltip>
                 </div>
               </div>
             );
@@ -702,8 +739,8 @@ export default React.memo(function LibrariesPanel({
           {loadingTemplate && (
             <div className="template-modal-overlay" onClick={() => setLoadingTemplate(null)}>
               <div className="template-modal" onClick={(e) => e.stopPropagation()}>
-                <h4>Load Template</h4>
-                <p>Create a new draft slice from template <strong>{loadingTemplate}</strong>.</p>
+                <h4>Load Weave</h4>
+                <p>Create a new draft slice from weave <strong>{loadingTemplate}</strong>.</p>
                 <input
                   type="text"
                   className="template-input"
@@ -731,9 +768,10 @@ export default React.memo(function LibrariesPanel({
                     ? <>Load, submit, and configure <strong>{scriptModal.weaveName}</strong> as a new slice.</>
                     : (() => {
                         const tmpl = sliceTemplates.find(t => t.dir_name === scriptModal.dirName);
-                        return tmpl?.has_deploy
-                          ? <>Deploy <strong>{scriptModal.weaveName}</strong> then run <strong>run.sh</strong>.</>
-                          : <>Execute <strong>run.sh</strong> from <strong>{scriptModal.weaveName}</strong>.</>;
+                        const scriptName = tmpl?.weave_config?.run_script || 'weave script';
+                        return tmpl?.has_template
+                          ? <>Deploy <strong>{scriptModal.weaveName}</strong> then run <strong>{scriptName}</strong>.</>
+                          : <>Execute <strong>{scriptName}</strong> from <strong>{scriptModal.weaveName}</strong>.</>;
                       })()}
                 </p>
                 {scriptModal.argDefs.map((arg, i) => (
@@ -785,7 +823,7 @@ export default React.memo(function LibrariesPanel({
             <div className="template-modal-overlay">
               <div className="template-modal template-loading-modal">
                 <div className="template-loading-spinner" />
-                <h4>Loading Template</h4>
+                <h4>Loading Weave</h4>
                 <div className="template-loading-steps">
                   {LOAD_STEPS.map((msg, i) => (
                     <div
@@ -833,7 +871,7 @@ export default React.memo(function LibrariesPanel({
                 <a href="#" onClick={(e) => { e.preventDefault(); onNavigateToMarketplace?.('vm-template'); }}>get one from the marketplace</a>.
               </div>
             )}
-            {vmTemplates
+            {gateByCategory(vmTemplates, categoryDirNames.vms)
               .filter((t) => {
                 if (!vmSearchFilter) return true;
                 const q = vmSearchFilter.toLowerCase();
@@ -864,7 +902,7 @@ export default React.memo(function LibrariesPanel({
                   ) : (
                     <span>Image: {t.image}</span>
                   )}
-                  <span>{formatDate(t.created)}</span>
+                  {t.created && <span>{formatDate(t.created)}</span>}
                 </div>
                 {/* Inline variant picker */}
                 {variantPicker?.dirName === t.dir_name && (
@@ -933,7 +971,7 @@ export default React.memo(function LibrariesPanel({
                 <a href="#" onClick={(e) => { e.preventDefault(); onNavigateToMarketplace?.('recipe'); }}>Get one from the marketplace</a>.
               </div>
             )}
-            {recipes
+            {gateByCategory(recipes, categoryDirNames.recipes)
               .filter((r) => {
                 if (!recipeSearchFilter) return true;
                 const q = recipeSearchFilter.toLowerCase();

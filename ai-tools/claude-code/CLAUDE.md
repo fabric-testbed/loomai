@@ -10,7 +10,6 @@ deploy, and troubleshoot experiments on the FABRIC testbed.
 - **FABRIC config**: `$FABRIC_CONFIG_DIR` (tokens, SSH keys, fabric_rc)
 - **Artifacts**: `/home/fabric/work/my_artifacts/` (weaves, VM templates, recipes, notebooks)
 - **Drafts & Slices**: `/home/fabric/work/my_slices/` (drafts and slice registry)
-- **Reference templates (read-only)**: `/app/slice-libraries/` (slice_templates, vm_templates, recipes)
 - **FABRIC context**: `AGENTS.md` in the working directory (comprehensive FABRIC reference)
 
 ### Filesystem Write Access
@@ -24,7 +23,7 @@ visible in the WebUI.
 
 | Type | Marker file | Description |
 |------|-------------|-------------|
-| Weave | `slice.json` | Reusable slice topology template (may also include `run.json` and/or `deploy.json` argument manifests) |
+| Weave | `weave.json` | Reusable slice topology template (ALL metadata, args, topology; may also include `weave.sh`) |
 | VM Template | `vm-template.json` | Single-node configuration (image, resources, boot scripts) |
 | Recipe | `recipe.json` | Post-provisioning install script for existing VMs |
 | Notebook | `*.ipynb` | Jupyter notebook for interactive experiments |
@@ -83,20 +82,29 @@ When referring to artifact operations, use this vocabulary:
 - **VM Template** — A single-node configuration
 - **Recipe** — A post-provisioning script
 
-Artifact types are identified by `[LoomAI ...]` markers in the description, not
-by tags. LoomAI auto-prepends the marker on publish: `[LoomAI Weave]`,
-`[LoomAI VM Template]`, `[LoomAI Recipe]`, `[LoomAI Notebook]`. Artifacts
-without a marker default to "notebook". Category tags (`loomai:weave`,
-`loomai:vm`, `loomai:recipe`) are also auto-added on publish.
-Additional tags are optional user labels.
+Artifact types are identified by category tags auto-added on publish:
+`loomai:weave`, `loomai:vm`, `loomai:recipe`. Additional tags are optional user labels.
+
+Artifacts have two description fields:
+- **`description_short`** (5–255 chars): Brief summary for UI cards.
+- **`description_long`**: Full detailed documentation of the artifact.
+
+## Available Skills (Slash Commands)
+
+FABRIC skills are available as slash commands (e.g., `/create-weave`, `/create-slice`).
+Key skills for slice and weave management:
+
+**Weave management:** `/create-weave`, `/create-tutorial`, `/publish-artifact`
+**Slice management:** `/create-slice`, `/deploy-slice`, `/modify-slice`, `/delete-slice`, `/renew-slice`, `/interact-slice`
+**Infrastructure:** `/sites`, `/network`, `/ssh-config`, `/config`, `/web-tunnel`
+**Software:** `/install-software`, `/create-recipe`, `/create-vm-template`
+**Troubleshooting:** `/debug`, `/monitor`, `/benchmark`
+**Data & Reports:** `/query-fabric`, `/reports`, `/jupyter`
 
 ## Co-located AI Tools
 
-OpenCode, Aider, and Crush are also available in this container with specialized
-skills and agents in `/home/fabric/work/.opencode/`. Skills cover: create-slice,
-deploy-slice, debug, ssh-config, network design, site queries, templates, and more.
-Agents cover: data-analyst, devops-engineer, network-architect, and troubleshooter.
-You share the same workspace and FABRIC credentials.
+OpenCode, Aider, and Crush are also available in this container. All tools
+share the same FABRIC skills, agents, workspace, and credentials.
 
 ## LLM Providers
 
@@ -121,7 +129,7 @@ Drafts are local-only (no resources allocated). Default lease is 24h. Always con
 2. Use `wait=False` for large slices (>4 nodes) to avoid timeouts
 3. FABNetv4 subnet is `10.128.0.0/10` — add routes if `post_boot_config()` was skipped
 4. Use `### PROGRESS: message` markers in deploy scripts for streaming status in the WebUI
-5. Prefer templates from `/app/slice-libraries/` over building from scratch
+5. Study existing weaves in `/home/fabric/work/my_artifacts/` for patterns before building from scratch
 6. Never modify files in `fabric_config/` directly — use the Configure view
 7. Token expires every ~1 hour; if operations fail with auth errors, tell the user to refresh in the Configure view
 
@@ -134,11 +142,11 @@ Drafts are local-only (no resources allocated). Default lease is 24h. Always con
 4. Run boot configs or deploy scripts
 5. Execute recipes for additional software
 
-### Create a weave (slice template)
+### Create a weave
 1. `mkdir -p "/home/fabric/work/my_artifacts/My_Weave"`
-2. Write `slice.json` with nodes, networks, components, boot_config
-3. Optionally add `metadata.json`, `deploy.sh`, `deploy.json`, `run.sh`, `run.json`, `tools/` scripts
-4. The weave appears instantly in the WebUI Libraries panel
+2. Write `weave.json` with topology (nodes, networks, components, boot_config) and run config
+3. Optionally add `weave.sh`, `tools/` scripts
+4. The weave appears instantly in the WebUI Artifacts panel
 
 ### Create a VM template
 1. `mkdir -p "/home/fabric/work/my_artifacts/My_VM_Template"`
@@ -153,7 +161,7 @@ Drafts are local-only (no resources allocated). Default lease is 24h. Always con
 ### Create a notebook
 1. `mkdir -p "/home/fabric/work/my_artifacts/My_Notebook"`
 2. Write `.ipynb` file(s) — standard Jupyter notebook format
-3. Optionally add `metadata.json` for display name and description
+3. The directory name is used as the display name
 
 ### Publish an artifact
 ```bash
@@ -190,12 +198,23 @@ curl -X POST http://localhost:8000/api/recipes/install_docker/execute/my-slice/n
 4. Make scripts idempotent (safe to re-run)
 5. For multi-role templates, dispatch based on `$(hostname)`
 
-### Create run.json / deploy.json manifests
-1. Declare arguments the script needs as `args` array entries
+### Define arguments in weave.json
+1. Add an `args` array to `weave.json` with entries for each argument the script needs
 2. Each arg has: `name` (env var), `label`, `type` (string/number/boolean), `required`, `default`, `description`
-3. The WebUI modal renders input fields dynamically from the manifest
+3. The WebUI modal renders input fields dynamically from the `args` in `weave.json`
 4. All args are passed as environment variables to the script
-5. If no manifest exists, the modal defaults to a single "Slice Name" field
+5. If no `args` are defined, the modal defaults to a single "Slice Name" field
+
+### Active run tracking in weave.json
+While a weave is running, `weave.json` contains an `active_run` object:
+- `run_id` — unique run identifier for polling output or stopping
+- `pid` / `pgid` — OS process and group IDs (check alive with `kill -0 <pid>`)
+- `started_at` — ISO 8601 timestamp
+- `script` — which script is running (e.g. `weave.sh`)
+- `args` — actual argument values used (env vars including `SLICE_NAME`)
+
+This field is absent when no run is active and cleared automatically on completion.
+To check if a weave is running: read its `weave.json` and look for `active_run`.
 
 ## Backend REST API Quick Reference
 

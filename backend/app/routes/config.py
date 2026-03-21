@@ -12,6 +12,7 @@ import time
 from typing import Optional
 from urllib.parse import urlencode
 
+import httpx
 import paramiko
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import RedirectResponse
@@ -123,6 +124,78 @@ def _read_project_id_from_rc() -> str:
     """
     from app.settings_manager import get_project_id
     return get_project_id()
+
+
+def _handle_token_write(token_data: dict) -> None:
+    """Handle multi-user registration when a token is written.
+
+    If a registry exists and the new token is for a different user,
+    registers the new user and switches to them.
+    If no registry exists but there's already a token for a different user,
+    triggers migration to multi-user layout.
+    """
+    from app import user_registry
+
+    id_token = token_data.get("id_token", "")
+    if not id_token:
+        return
+    try:
+        new_payload = _decode_jwt_payload(id_token)
+        new_uuid = new_payload.get("uuid", "")
+        new_name = new_payload.get("name", "")
+        new_email = new_payload.get("email", "")
+        if not new_uuid:
+            return
+    except Exception:
+        return
+
+    reg = user_registry.load_registry()
+
+    if reg is not None:
+        # Registry exists — register/update and switch if different
+        user_registry.add_user(new_uuid, new_name, new_email)
+        current_active = reg.get("active_user")
+        if current_active != new_uuid:
+            user_registry.set_active_user(new_uuid)
+            user_registry.ensure_user_dir(new_uuid)
+            # Write token to new user's config dir
+            new_user_dir = user_registry.get_user_storage_dir(new_uuid)
+            if new_user_dir:
+                cfg_dir = os.path.join(new_user_dir, "fabric_config")
+                os.makedirs(cfg_dir, exist_ok=True)
+                tp = os.path.join(cfg_dir, "id_token.json")
+                with open(tp, "w") as f:
+                    json.dump(token_data, f, indent=2)
+                os.chmod(tp, stat.S_IRUSR | stat.S_IWUSR)
+            _do_user_switch(new_uuid)
+    else:
+        # No registry — check if there's already a token for a different user
+        existing_token = _read_token()
+        if existing_token and "id_token" in existing_token:
+            try:
+                existing_payload = _decode_jwt_payload(existing_token["id_token"])
+                existing_uuid = existing_payload.get("uuid", "")
+                if existing_uuid and existing_uuid != new_uuid:
+                    # Different user! Trigger migration
+                    existing_name = existing_payload.get("name", "")
+                    existing_email = existing_payload.get("email", "")
+                    _migrate_to_multi_user(existing_uuid, existing_name, existing_email)
+                    # Register and switch to the new user
+                    user_registry.add_user(new_uuid, new_name, new_email)
+                    user_registry.set_active_user(new_uuid)
+                    user_registry.ensure_user_dir(new_uuid)
+                    # Write token to new user's config dir
+                    new_user_dir = user_registry.get_user_storage_dir(new_uuid)
+                    if new_user_dir:
+                        cfg_dir = os.path.join(new_user_dir, "fabric_config")
+                        os.makedirs(cfg_dir, exist_ok=True)
+                        tp = os.path.join(cfg_dir, "id_token.json")
+                        with open(tp, "w") as f:
+                            json.dump(token_data, f, indent=2)
+                        os.chmod(tp, stat.S_IRUSR | stat.S_IWUSR)
+                    _do_user_switch(new_uuid)
+            except Exception:
+                pass  # Can't decode existing token — just proceed normally
 
 
 def _storage_dir() -> str:
@@ -248,6 +321,9 @@ async def upload_token(file: UploadFile = File(...)):
     if "id_token" not in token_data:
         raise HTTPException(status_code=400, detail="Token file must contain 'id_token' field")
 
+    # Auto-register user and handle multi-user migration
+    _handle_token_write(token_data)
+
     d = _ensure_config_dir()
     # Dual-write: ~/.tokens.json (JupyterHub convention) + config_dir/id_token.json (FABlib)
     for tp in [os.path.join(os.path.expanduser("~"), ".tokens.json"),
@@ -300,6 +376,9 @@ def paste_token(req: TokenPasteRequest):
     if "id_token" not in token_data:
         raise HTTPException(status_code=400, detail="Token JSON must contain an 'id_token' field")
 
+    # Auto-register user and handle multi-user migration
+    _handle_token_write(token_data)
+
     d = _ensure_config_dir()
     # Dual-write: ~/.tokens.json (JupyterHub convention) + config_dir/id_token.json (FABlib)
     for tp in [os.path.join(os.path.expanduser("~"), ".tokens.json"),
@@ -321,11 +400,15 @@ def paste_token(req: TokenPasteRequest):
 
 @router.get("/api/config/callback")
 def oauth_callback(id_token: str, refresh_token: str = ""):
-    d = _ensure_config_dir()
     token_data = {
         "id_token": id_token,
         "refresh_token": refresh_token,
     }
+
+    # Auto-register user and handle multi-user migration
+    _handle_token_write(token_data)
+
+    d = _ensure_config_dir()
     # Dual-write: ~/.tokens.json (JupyterHub convention) + config_dir/id_token.json (FABlib)
     for tp in [os.path.join(os.path.expanduser("~"), ".tokens.json"),
                os.path.join(d, "id_token.json")]:
@@ -363,18 +446,35 @@ def get_projects():
 
     projects = payload.get("projects", [])
 
-    # Derive bastion_login from JWT claims
+    # Get bastion_login from UIS API (authoritative source)
     bastion_login = ""
-    try:
-        email = payload.get("email", "")
-        sub = payload.get("sub", "")
-        if email and sub:
-            username = email.split("@")[0]
-            cilogon_id = sub.rstrip("/").rsplit("/", 1)[-1]
-            if cilogon_id.isdigit():
-                bastion_login = f"{username}_{cilogon_id.zfill(10)}"
-    except Exception:
-        pass
+    user_uuid = payload.get("uuid", "")
+    if user_uuid and id_token:
+        try:
+            resp = httpx.get(
+                f"https://uis.fabric-testbed.net/people/{user_uuid}",
+                headers={"Authorization": f"Bearer {id_token}"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            if results:
+                bastion_login = results[0].get("bastion_login", "")
+        except Exception as e:
+            logger.warning("UIS bastion_login lookup failed: %s", e)
+
+    if not bastion_login:
+        # Fallback: derive from JWT (replace dots with underscores to match FABRIC convention)
+        try:
+            email = payload.get("email", "")
+            sub = payload.get("sub", "")
+            if email and sub:
+                username = email.split("@")[0].replace(".", "_")
+                cilogon_id = sub.rstrip("/").rsplit("/", 1)[-1]
+                if cilogon_id.isdigit():
+                    bastion_login = f"{username}_{cilogon_id.zfill(10)}"
+        except Exception:
+            pass
 
     return {
         "projects": projects,
@@ -393,9 +493,11 @@ async def upload_bastion_key(file: UploadFile = File(...)):
     content = await file.read()
     d = _ensure_config_dir()
     path = os.path.join(d, "fabric_bastion_key")
+    logger.info("Bastion key upload → %s (config_dir=%s)", path, d)
     with open(path, "wb") as f:
         f.write(content)
     os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    reset_fablib()
     return {"status": "ok", "message": "Bastion key uploaded"}
 
 
@@ -759,6 +861,9 @@ def save_config(req: ConfigSaveRequest):
 
     settings_manager.save_settings(settings)
     settings_manager.apply_env_vars(settings)
+    logger.info("save_config: config_dir=%s, bastion_key=%s",
+                settings.get("paths", {}).get("config_dir", ""),
+                settings.get("paths", {}).get("bastion_key_file", ""))
 
     # Reset FABlib so it picks up the new config
     reset_fablib()
@@ -767,7 +872,7 @@ def save_config(req: ConfigSaveRequest):
 
 
 # ---------------------------------------------------------------------------
-# POST /api/config/rebuild-storage — re-initialize storage and re-seed templates
+# POST /api/config/rebuild-storage — re-initialize storage layout
 # ---------------------------------------------------------------------------
 
 @router.post("/api/config/rebuild-storage")
@@ -1017,3 +1122,221 @@ def trigger_claude_backup():
     from app.routes.ai_terminal import _backup_claude_config
     _backup_claude_config()
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Multi-user management
+# ---------------------------------------------------------------------------
+
+def _auto_register_token_user(token_data: dict) -> None:
+    """Decode JWT from token_data and register/update user in registry."""
+    from app import user_registry
+
+    id_token = token_data.get("id_token", "")
+    if not id_token:
+        return
+    try:
+        payload = _decode_jwt_payload(id_token)
+        uuid = payload.get("uuid", "")
+        name = payload.get("name", "")
+        email = payload.get("email", "")
+        if not uuid:
+            return
+
+        # Check if this is a different user than the current active
+        current_active = user_registry.get_active_user_uuid()
+        reg = user_registry.load_registry()
+
+        if reg is not None:
+            # Registry exists — register/update user and set as active
+            user_registry.add_user(uuid, name, email)
+            if current_active and current_active != uuid:
+                user_registry.set_active_user(uuid)
+                _do_user_switch(uuid)
+        else:
+            # No registry yet — if this is the first token, just register
+            # The registry will be created but system stays in multi-user mode
+            # only when there's a second user
+            pass
+    except Exception as e:
+        logger.debug("Auto-register token user failed (non-fatal): %s", e)
+
+
+def _do_user_switch(uuid: str) -> None:
+    """Perform all side effects of switching to a different user."""
+    from app import user_registry, settings_manager
+    from app.user_context import notify_user_changed
+
+    logger.info("User switch → %s", uuid)
+
+    # Ensure user directory exists
+    user_registry.ensure_user_dir(uuid)
+
+    # Invalidate settings cache so it reloads from the new user's dir
+    settings_manager.invalidate_settings_cache()
+
+    # Symlink ~/.tokens.json to the new user's token file
+    user_dir = user_registry.get_user_storage_dir(uuid)
+    if user_dir:
+        token_src = os.path.join(user_dir, "fabric_config", "id_token.json")
+        home_tokens = os.path.join(os.path.expanduser("~"), ".tokens.json")
+        if os.path.isfile(token_src):
+            try:
+                if os.path.islink(home_tokens) or os.path.isfile(home_tokens):
+                    os.unlink(home_tokens)
+                os.symlink(token_src, home_tokens)
+            except OSError as e:
+                logger.warning("Failed to symlink ~/.tokens.json: %s", e)
+
+    # Reload settings from the new user's scope and apply env vars
+    settings = settings_manager.load_settings()
+
+    # Persist settings for new users — generates fabric_rc + ssh_config
+    # so the config dir is fully initialized before the user uploads keys
+    config_dir = settings.get("paths", {}).get("config_dir", "")
+    rc_path = os.path.join(config_dir, "fabric_rc") if config_dir else ""
+    if config_dir and not os.path.isfile(rc_path):
+        logger.info("User switch: generating initial config files in %s", config_dir)
+        settings_manager.save_settings(settings)
+
+    settings_manager.apply_env_vars(settings)
+    logger.debug("User switch: FABRIC_CONFIG_DIR=%s, bastion_key=%s",
+                 os.environ.get("FABRIC_CONFIG_DIR", ""),
+                 settings.get("paths", {}).get("bastion_key_file", ""))
+
+    # Notify all caches (resets FABlib, etc.)
+    notify_user_changed()
+    reset_fablib()
+
+
+def _migrate_to_multi_user(first_uuid: str, first_name: str, first_email: str) -> None:
+    """Migrate from flat single-user layout into users/{uuid}/ for the first user."""
+    from app import user_registry
+    import shutil as _shutil
+
+    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    user_dir = os.path.join(storage, "users", first_uuid)
+
+    if os.path.isdir(user_dir):
+        logger.info("User dir %s already exists — skipping migration", user_dir)
+        user_registry.add_user(first_uuid, first_name, first_email)
+        return
+
+    os.makedirs(user_dir, exist_ok=True)
+
+    # Move user-specific directories from flat root to per-user dir
+    dirs_to_move = [
+        "fabric_config",
+        "my_artifacts",
+        "my_slices",
+    ]
+    for d in dirs_to_move:
+        src = os.path.join(storage, d)
+        dst = os.path.join(user_dir, d)
+        if os.path.isdir(src) and not os.path.exists(dst):
+            _shutil.copytree(src, dst)
+            logger.info("Copied %s -> users/%s/%s", d, first_uuid, d)
+
+    # Copy .loomai/settings.json if it exists
+    src_settings = os.path.join(storage, ".loomai", "settings.json")
+    dst_settings_dir = os.path.join(user_dir, ".loomai")
+    if os.path.isfile(src_settings):
+        os.makedirs(dst_settings_dir, exist_ok=True)
+        _shutil.copy2(src_settings, os.path.join(dst_settings_dir, "settings.json"))
+
+    # Register the first user
+    user_registry.add_user(first_uuid, first_name, first_email)
+    logger.info("Migrated flat layout to multi-user for %s (%s)", first_name, first_uuid)
+
+
+@router.get("/api/users")
+def list_users():
+    """List registered users with active flag."""
+    from app import user_registry
+
+    users = user_registry.list_users()
+    active = user_registry.get_active_user_uuid()
+
+    return {
+        "active_user": active,
+        "users": [
+            {**u, "is_active": u["uuid"] == active}
+            for u in users
+        ],
+    }
+
+
+class UserSwitchRequest(BaseModel):
+    uuid: str
+
+
+@router.post("/api/users/switch")
+def switch_user(req: UserSwitchRequest):
+    """Switch the active user."""
+    from app import user_registry
+
+    try:
+        user_registry.set_active_user(req.uuid)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    _do_user_switch(req.uuid)
+
+    return {"status": "ok", "active_user": req.uuid}
+
+
+@router.delete("/api/users/{uuid}")
+def delete_user(uuid: str, delete_data: bool = Query(False)):
+    """Remove a user from the registry. Optionally delete their data."""
+    from app import user_registry
+
+    try:
+        user_registry.remove_user(uuid)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    if delete_data:
+        user_dir = user_registry.get_user_storage_dir(uuid)
+        if user_dir and os.path.isdir(user_dir):
+            shutil.rmtree(user_dir)
+
+    return {"status": "ok", "removed": uuid}
+
+
+@router.post("/api/users/migrate-current")
+def migrate_current_user():
+    """Migrate flat single-user layout into multi-user layout.
+
+    Reads the current token to identify the user, creates users/{uuid}/,
+    and moves data there. This is called automatically when a second user
+    token is detected, but can also be triggered manually.
+    """
+    from app import user_registry
+
+    # Check if already in multi-user mode
+    reg = user_registry.load_registry()
+    if reg is not None and len(reg.get("users", [])) > 0:
+        return {"status": "ok", "message": "Already in multi-user mode", "users": len(reg["users"])}
+
+    # Read current token to get user identity
+    token_data = _read_token()
+    if not token_data or "id_token" not in token_data:
+        raise HTTPException(status_code=400, detail="No token available. Upload a token first.")
+
+    try:
+        payload = _decode_jwt_payload(token_data["id_token"])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not decode current token")
+
+    uuid = payload.get("uuid", "")
+    name = payload.get("name", "")
+    email = payload.get("email", "")
+    if not uuid:
+        raise HTTPException(status_code=400, detail="Token does not contain a user UUID")
+
+    _migrate_to_multi_user(uuid, name, email)
+    _do_user_switch(uuid)
+
+    return {"status": "ok", "message": f"Migrated to multi-user mode for {name}", "uuid": uuid}

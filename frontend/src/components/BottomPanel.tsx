@@ -948,22 +948,90 @@ export function RecipeConsoleView({ lines, running, onClear, endRef }: { lines: 
   );
 }
 
-// --- Per-slice Boot Config Log Lines ---
+// --- Per-slice Boot Config Log Lines (with collapsible output groups) ---
+
+type LogGroup =
+  | { kind: 'status'; line: BootConsoleLine; index: number }
+  | { kind: 'output'; lines: BootConsoleLine[]; startIndex: number };
+
+function groupLogLines(lines: BootConsoleLine[]): LogGroup[] {
+  const groups: LogGroup[] = [];
+  let outputBuf: BootConsoleLine[] = [];
+  let outputStart = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].type === 'output') {
+      if (outputBuf.length === 0) outputStart = i;
+      outputBuf.push(lines[i]);
+    } else {
+      if (outputBuf.length > 0) {
+        groups.push({ kind: 'output', lines: outputBuf, startIndex: outputStart });
+        outputBuf = [];
+      }
+      groups.push({ kind: 'status', line: lines[i], index: i });
+    }
+  }
+  if (outputBuf.length > 0) {
+    groups.push({ kind: 'output', lines: outputBuf, startIndex: outputStart });
+  }
+  return groups;
+}
+
 function BootLogLines({ lines }: { lines: BootConsoleLine[] }) {
+  const groups = useMemo(() => groupLogLines(lines), [lines]);
+  const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
+
+  const toggle = useCallback((startIndex: number) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(startIndex)) next.delete(startIndex);
+      else next.add(startIndex);
+      return next;
+    });
+  }, []);
+
   return (
     <>
-      {lines.map((line, i) => (
-        <div key={i} className={`bp-recipe-line bp-recipe-${line.type}`}>
-          {line.type === 'build'    && <span className="bp-recipe-icon">{'\u2692'}</span>}
-          {line.type === 'node'     && <span className="bp-recipe-icon">{'\u25A0'}</span>}
-          {line.type === 'step'     && <span className="bp-recipe-icon">{'\u25B6'}</span>}
-          {line.type === 'progress' && <span className="bp-recipe-icon">{'\u2713'}</span>}
-          {line.type === 'output'   && <span className="bp-recipe-icon">{' '}</span>}
-          {line.type === 'error'    && <span className="bp-recipe-icon">{'\u2716'}</span>}
-          {line.type === 'deploy'   && <span className="bp-recipe-icon">{'\u25B6'}</span>}
-          <span>{line.message}</span>
-        </div>
-      ))}
+      {groups.map(g => {
+        if (g.kind === 'status') {
+          const line = g.line;
+          return (
+            <div key={g.index} className={`bp-recipe-line bp-recipe-${line.type}`}>
+              {line.type === 'build'    && <span className="bp-recipe-icon">{'\u2692'}</span>}
+              {line.type === 'node'     && <span className="bp-recipe-icon">{'\u25A0'}</span>}
+              {line.type === 'step'     && <span className="bp-recipe-icon">{'\u25B6'}</span>}
+              {line.type === 'progress' && <span className="bp-recipe-icon">{'\u2713'}</span>}
+              {line.type === 'error'    && <span className="bp-recipe-icon">{'\u2716'}</span>}
+              {line.type === 'deploy'   && <span className="bp-recipe-icon">{'\u25B6'}</span>}
+              <span>{line.message}</span>
+            </div>
+          );
+        }
+        const isOpen = expanded.has(g.startIndex);
+        return (
+          <div key={`og-${g.startIndex}`}>
+            <div
+              className="bp-output-group-toggle"
+              role="button"
+              tabIndex={0}
+              onClick={() => toggle(g.startIndex)}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(g.startIndex); } }}
+            >
+              <span className="bp-recipe-icon">{isOpen ? '\u25BE' : '\u25B8'}</span>
+              <span>{g.lines.length} line{g.lines.length !== 1 ? 's' : ''} of output</span>
+            </div>
+            {isOpen && (
+              <div className="bp-output-group-lines">
+                {g.lines.map((line, j) => (
+                  <div key={g.startIndex + j} className="bp-recipe-line bp-recipe-output">
+                    <span className="bp-recipe-icon">{' '}</span>
+                    <span>{line.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </>
   );
 }

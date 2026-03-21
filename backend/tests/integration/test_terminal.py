@@ -24,13 +24,12 @@ class TestSSHConfigHelper:
         bastion_key = config_dir / "fabric_bastion_key"
         bastion_key.write_text("fake-bastion-key")
 
-        mock_fablib.get_bastion_username = MagicMock(return_value="testuser")
-
-        # Must also patch get_fablib where terminal.py imports it
+        # Patch settings_manager functions (authoritative source) and get_fablib
         with patch("app.routes.terminal.get_fablib", return_value=mock_fablib), \
+             patch("app.routes.terminal._settings_bastion_username", return_value="testuser"), \
+             patch("app.routes.terminal._settings_host", return_value="bastion.test.net"), \
              patch.dict(os.environ, {
                  "FABRIC_CONFIG_DIR": str(config_dir),
-                 "FABRIC_BASTION_HOST": "bastion.test.net",
              }):
             config = _get_ssh_config()
 
@@ -48,10 +47,9 @@ class TestSSHConfigHelper:
         bastion_key = config_dir / "fabric_bastion_key"
         bastion_key.write_text("fake-bastion-key")
 
-        # The default slice key is already created by the storage_dir fixture
-        mock_fablib.get_bastion_username = MagicMock(return_value="user")
-
         with patch("app.routes.terminal.get_fablib", return_value=mock_fablib), \
+             patch("app.routes.terminal._settings_bastion_username", return_value="user"), \
+             patch("app.routes.terminal._settings_host", return_value=""), \
              patch.dict(os.environ, {
                  "FABRIC_CONFIG_DIR": str(config_dir),
              }):
@@ -76,9 +74,9 @@ class TestSSHConfigHelper:
             "slice_key_id": "default",
         }))
 
-        mock_fablib.get_bastion_username = MagicMock(return_value="user")
-
         with patch("app.routes.terminal.get_fablib", return_value=mock_fablib), \
+             patch("app.routes.terminal._settings_bastion_username", return_value="user"), \
+             patch("app.routes.terminal._settings_host", return_value=""), \
              patch.dict(os.environ, {
                  "FABRIC_CONFIG_DIR": str(config_dir),
              }):

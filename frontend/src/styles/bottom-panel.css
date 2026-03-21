@@ -478,6 +478,27 @@
 .bp-recipe-output   { color: var(--fabric-text-muted); }
 .bp-recipe-error    { color: var(--fabric-coral, #e25241); }
 
+/* Collapsible output groups */
+.bp-output-group-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 12px;
+  font-size: inherit;
+  color: var(--fabric-text-muted);
+  opacity: 0.65;
+  cursor: pointer;
+  user-select: none;
+}
+.bp-output-group-toggle:hover {
+  opacity: 1;
+  background: rgba(87, 152, 188, 0.07);
+}
+.bp-output-group-lines {
+  border-left: 2px solid rgba(87, 152, 188, 0.25);
+  margin-left: 18px;
+}
+
 /* --- Split-Pane Layout --- */
 
 /* Global controls row (status, width toggle, collapse) */

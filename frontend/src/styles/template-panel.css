@@ -288,6 +288,8 @@
   width: 340px;
   max-width: 90vw;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  max-height: 85vh;
+  overflow-y: auto;
 }
 .template-modal h4 {
   margin: 0 0 8px;
@@ -526,6 +528,50 @@
 .tp-transport-reset:not(:disabled):hover {
   background: var(--fabric-text-muted, #999);
   color: white;
+}
+
+/* JupyterLab button on weave cards */
+.tp-jupyter-btn {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border: 1px solid var(--fabric-primary, #5798bc);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fabric-primary, #5798bc);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tp-jupyter-btn:not(:disabled):hover {
+  background: var(--fabric-primary, #5798bc);
+  color: white;
+}
+.tp-jupyter-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Publish button on weave cards */
+.tp-btn-publish {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border: 1px solid var(--fabric-teal, #008e7a);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fabric-teal, #008e7a);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tp-btn-publish:not(:disabled):hover {
+  background: var(--fabric-teal, #008e7a);
+  color: white;
+}
+.tp-btn-publish:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* Status badges in card header */

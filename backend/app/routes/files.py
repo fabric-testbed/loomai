@@ -74,8 +74,8 @@ def _safe_path(base: str, user_path: str) -> str:
         base_resolved = os.path.realpath(base)
         if resolved.startswith(base_resolved + os.sep) or resolved == base_resolved:
             return resolved
-        # Also allow paths under the templates/recipes source directories
-        # (e.g. slice-libraries paths baked into the Docker image)
+        # Also allow paths under other known directories
+        # (e.g. artifact paths outside the user storage base)
         if os.path.exists(resolved):
             return resolved
         raise HTTPException(status_code=400, detail="Path traversal not allowed")
@@ -1181,18 +1181,22 @@ async def execute_all_boot_configs_stream(slice_name: str):
         nodes = slice_obj.get_nodes()
         base = _storage_dir()
 
-        # Auto-run deploy.sh from template root if it exists (once per slice, on container)
+        # Auto-run weave script from template root if it exists (once per slice, on container)
         template_dir = _load_template_dir(slice_name)
         if template_dir:
-            deploy_sh = os.path.join(template_dir, "deploy.sh")
-            if os.path.isfile(deploy_sh):
-                _emit("step", {"node": "__slice__", "type": "deploy", "id": "deploy.sh",
-                               "message": f"Running deploy.sh for slice \"{slice_name}\"..."})
+            # Resolve run script from weave.json config, with backward compat
+            from app.routes.templates import _read_weave_config
+            weave_config = _read_weave_config(template_dir)
+            boot_script_name = weave_config.get("run_script", "weave.sh") if weave_config else "weave.sh"
+            boot_script = os.path.join(template_dir, boot_script_name)
+            if os.path.isfile(boot_script):
+                _emit("step", {"node": "__slice__", "type": "deploy", "id": boot_script_name,
+                               "message": f"Running {boot_script_name} for slice \"{slice_name}\"..."})
                 try:
                     import subprocess
                     env = {**os.environ, "SLICE_NAME": slice_name}
                     proc = subprocess.Popen(
-                        ["bash", deploy_sh, slice_name],
+                        ["bash", boot_script, slice_name],
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         text=True, env=env,
                     )
@@ -1202,20 +1206,20 @@ async def execute_all_boot_configs_stream(slice_name: str):
                             continue
                         if line_str.startswith("### PROGRESS:"):
                             msg = line_str[len("### PROGRESS:"):].strip()
-                            _emit("step", {"node": "__slice__", "type": "progress", "id": "deploy.sh",
+                            _emit("step", {"node": "__slice__", "type": "progress", "id": boot_script_name,
                                           "message": f"  ↳ {msg}"})
                         else:
-                            _emit("output", {"node": "__slice__", "type": "deploy", "id": "deploy.sh",
+                            _emit("output", {"node": "__slice__", "type": "deploy", "id": boot_script_name,
                                             "message": line_str})
                     proc.wait()
                     if proc.returncode != 0:
-                        _emit("error", {"node": "__slice__", "type": "deploy", "id": "deploy.sh",
-                                       "message": f"deploy.sh exited with code {proc.returncode}"})
+                        _emit("error", {"node": "__slice__", "type": "deploy", "id": boot_script_name,
+                                       "message": f"{boot_script_name} exited with code {proc.returncode}"})
                     else:
-                        _emit("output", {"node": "__slice__", "type": "deploy", "id": "deploy.sh",
-                                        "message": "✓ deploy.sh complete", "status": "ok"})
+                        _emit("output", {"node": "__slice__", "type": "deploy", "id": boot_script_name,
+                                        "message": f"✓ {boot_script_name} complete", "status": "ok"})
                 except Exception as e:
-                    _emit("error", {"node": "__slice__", "type": "deploy", "id": "deploy.sh",
+                    _emit("error", {"node": "__slice__", "type": "deploy", "id": boot_script_name,
                                    "message": str(e)})
 
         for node_obj in nodes:
@@ -1337,7 +1341,7 @@ async def execute_all_boot_configs_stream(slice_name: str):
                 cid = cmd_entry.get("id", "?")
                 cmd = cmd_entry.get("command", "")
                 if cmd_entry.get("local", False):
-                    continue  # local commands are now handled by deploy.sh at template root
+                    continue  # local commands are now handled by weave script at template root
 
                 # Remote command: run on the VM
                 _emit("step", {"node": node_name, "type": "command", "id": cid,
