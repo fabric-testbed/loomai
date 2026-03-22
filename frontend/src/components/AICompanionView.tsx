@@ -209,7 +209,7 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
       {selectedTool ? (
         renderDirectTool()
       ) : showCards ? (
-        <div className="ai-cards">
+        <div className="ai-cards" data-help-id="ai-companion.launcher">
           {visibleTools.map((tool) => {
             const ready = tool.needsKey ? hasKey : true;
             const toolStatus = installStatus[tool.id];

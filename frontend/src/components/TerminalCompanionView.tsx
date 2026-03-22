@@ -131,11 +131,13 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
   const wsRef = useRef<WebSocket | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
 
-  // Model picker state (OpenCode only)
+  // Model picker state (OpenCode, Crush, Deep Agents)
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [nrpModels, setNrpModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [modelsLoading, setModelsLoading] = useState(false);
   const selectedModelRef = useRef('');
+  const hasModelPicker = toolId === 'opencode' || toolId === 'crush' || toolId === 'deepagents';
 
   // Claude Code config state
   const [configFiles, setConfigFiles] = useState<ClaudeConfigFile[]>([]);
@@ -170,10 +172,11 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
   }, []);
 
   useEffect(() => {
-    if (toolId === 'opencode') {
+    if (hasModelPicker) {
       setModelsLoading(true);
       getAiModels().then((data) => {
         setAvailableModels(data.models || []);
+        setNrpModels(data.nrp_models || []);
         const def = data.default || (data.models?.[0] ?? '');
         setSelectedModel(def);
         selectedModelRef.current = def;
@@ -214,7 +217,7 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
     term.writeln(`\x1b[36m[${info.name}] Connecting...\x1b[0m`);
 
     const params = new URLSearchParams();
-    if (toolId === 'opencode' && selectedModelRef.current) {
+    if (hasModelPicker && selectedModelRef.current) {
       params.set('model', selectedModelRef.current);
     }
     if (toolId === 'claude' && selectedFolderRef.current) {
@@ -410,7 +413,7 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
             <span className={`tc-status-dot ${connected ? 'connected' : 'disconnected'}`} />
             {connected ? 'Connected' : 'Disconnected'}
           </div>
-          {toolId === 'opencode' && (
+          {hasModelPicker && (
             <div className="tc-model-picker">
               <label className="tc-model-label">Model</label>
               {modelsLoading ? (
@@ -425,9 +428,18 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
                       selectedModelRef.current = e.target.value;
                     }}
                   >
-                    {availableModels.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
+                    <optgroup label="FABRIC AI">
+                      {availableModels.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </optgroup>
+                    {nrpModels.length > 0 && (
+                      <optgroup label="NRP">
+                        {nrpModels.map((m) => (
+                          <option key={`nrp:${m}`} value={m}>{m}</option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                   <div className="tc-model-hint">Change model and click &ldquo;New Session&rdquo; to apply</div>
                 </>

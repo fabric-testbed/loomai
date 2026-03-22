@@ -42,6 +42,13 @@
   font-weight: 400;
 }
 
+.landing-tour-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
 .landing-tour-btn {
   display: inline-flex;
   align-items: center;
@@ -49,22 +56,38 @@
   padding: 10px 24px;
   font-size: 14px;
   font-weight: 600;
-  color: white;
-  background: linear-gradient(135deg, var(--fabric-primary), #008e7a);
-  border: none;
   border-radius: 8px;
   cursor: pointer;
   transition: opacity 0.15s, transform 0.1s, box-shadow 0.15s;
-  box-shadow: 0 2px 8px rgba(87, 152, 188, 0.25);
 }
 .landing-tour-btn:hover {
   opacity: 0.92;
   transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(87, 152, 188, 0.35);
 }
 .landing-tour-btn:active {
   transform: translateY(0);
-  box-shadow: 0 1px 4px rgba(87, 152, 188, 0.2);
+}
+
+.landing-tour-btn-primary {
+  color: white;
+  background: linear-gradient(135deg, var(--fabric-primary), #008e7a);
+  border: none;
+  padding: 12px 32px;
+  font-size: 15px;
+  box-shadow: 0 2px 12px rgba(87, 152, 188, 0.3);
+}
+.landing-tour-btn-primary:hover {
+  box-shadow: 0 4px 18px rgba(87, 152, 188, 0.4);
+}
+
+.landing-tour-btn-secondary {
+  color: white;
+  background: linear-gradient(135deg, var(--fabric-primary), #008e7a);
+  border: none;
+  box-shadow: 0 2px 12px rgba(87, 152, 188, 0.3);
+}
+.landing-tour-btn-secondary:hover {
+  box-shadow: 0 4px 18px rgba(87, 152, 188, 0.4);
 }
 
 /* ── About cards ── */

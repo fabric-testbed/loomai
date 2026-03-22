@@ -598,8 +598,14 @@ export default React.memo(function BottomPanel({ terminals, onCloseTerminal, val
       case 'errors': return 'bottom.errors';
       case 'validation': return 'bottom.validation';
       case 'log': return 'bottom.log';
+      case 'recipes': return 'bottom.recipes';
       case 'local-terminal': return 'bottom.local-terminal';
-      default: return undefined;
+      default: {
+        if (tabId.startsWith('boot:')) return 'bottom.boot-config';
+        if (tabId.startsWith('local-term-')) return 'bottom.local-terminal';
+        if (terminals.find(t => t.id === tabId)) return 'bottom.node-terminals';
+        return undefined;
+      }
     }
   }
 
@@ -786,6 +792,7 @@ export default React.memo(function BottomPanel({ terminals, onCloseTerminal, val
                   onDragStart={(e) => handleTabDragStart(e, tabId, leaf.id)}
                   onDragEnd={handleTabDragEnd}
                   onClick={() => activateTab(tabId)}
+                  data-help-id={getTabHelpId(tabId)}
                   title={getTabTitle(tabId)}
                 >
                   {getTabLabel(tabId)}

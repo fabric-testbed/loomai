@@ -13,6 +13,10 @@ export interface TourStep {
   completionLabel?: string;
   /** Label shown when the step is pending */
   pendingLabel?: string;
+  /** Optional image URL displayed above the content text */
+  imageUrl?: string;
+  /** Alt text for the image */
+  imageAlt?: string;
 }
 
 export interface TourDef {
@@ -32,16 +36,16 @@ export interface TourDef {
 const gettingStarted: TourDef = {
   id: 'getting-started',
   title: 'Getting Started',
-  description: 'Set up your FABRIC credentials, learn the workspace layout, and get ready to create slices.',
+  description: 'Set up your FABRIC credentials, AI tools, and workspace \u2014 by the end, LoomAI will be fully configured and ready to use.',
   icon: '\u{1F680}',
   autoStart: false,
-  helpSections: [],
+  helpSections: ['settings'],
   steps: [
     {
       id: 'welcome',
       title: 'Welcome to LoomAI',
       content:
-        'This tour will walk you through setting up your FABRIC account step by step. You\'ll configure your token, SSH keys, and project \u2014 then you\'ll be ready to create slices.\n\nEach setup step lets you do the work right here. Complete it and the tour will detect it automatically.',
+        'This tour will walk you through configuring LoomAI step by step. You\'ll set up your FABRIC credentials, SSH keys, project, and AI tools.\n\nEach step lets you do the work right here. Complete it and the tour detects it automatically. When you\'re done, LoomAI will be fully configured and ready to use.',
       targetSelector: '.title-bar',
       requiredView: 'main',
       tooltipPosition: 'bottom',
@@ -50,7 +54,7 @@ const gettingStarted: TourDef = {
       id: 'configure-token',
       title: 'Step 1: Upload Your Token',
       content:
-        'Upload your FABRIC identity token now. Click "Login via FABRIC Portal" to sign in and get a fresh token, or drag-and-drop your token JSON file onto the upload area.\n\nThe token identifies you and determines which projects you can access. It expires periodically and can be refreshed from the portal.',
+        'Upload your FABRIC identity token. Click "Login via FABRIC Portal" to sign in and get a fresh token, or drag-and-drop your token JSON file onto the upload area.\n\nThe token identifies you and determines which projects you can access. It expires periodically \u2014 refresh it from the portal when needed.',
       targetSelector: '[data-tour-id="token"]',
       requiredView: 'settings',
       tooltipPosition: 'right',
@@ -62,7 +66,7 @@ const gettingStarted: TourDef = {
       id: 'configure-bastion',
       title: 'Step 2: Upload Bastion Key',
       content:
-        'Upload your FABRIC bastion private key. This key authenticates you through the bastion host (jump server) to reach your slice VMs via SSH.\n\nYou can download your bastion key from the FABRIC Portal under "Manage SSH Keys". Click the upload button or drag-and-drop the key file.',
+        'Upload your FABRIC bastion private key. This key authenticates you through the bastion host (jump server) to reach your slice VMs via SSH.\n\nDownload your bastion key from the FABRIC Portal under "Manage SSH Keys". Click the "Upload Bastion Key" button or drag-and-drop the key file.',
       targetSelector: '[data-tour-id="bastion-key"]',
       requiredView: 'settings',
       tooltipPosition: 'right',
@@ -74,7 +78,7 @@ const gettingStarted: TourDef = {
       id: 'configure-slice-keys',
       title: 'Step 3: Set Up Slice Keys',
       content:
-        'Generate or upload SSH key pairs for slice access. Click "Add Key Set" then "Generate" to create a new pair automatically \u2014 this is the easiest option.\n\nSlice keys let you SSH into provisioned VMs. You can have multiple named key sets for different slices.',
+        'Generate or upload SSH key pairs for slice access. Click "Add Key Set" then "Generate" to create a new pair automatically \u2014 this is the easiest option.\n\nSlice keys let you SSH into provisioned VMs. You can manage multiple named key sets for different slices.',
       targetSelector: '[data-tour-id="slice-keys"]',
       requiredView: 'settings',
       tooltipPosition: 'right',
@@ -83,11 +87,44 @@ const gettingStarted: TourDef = {
       pendingLabel: 'Generate or upload a slice key, or skip for now',
     },
     {
-      id: 'close-settings',
-      title: 'Step 4: Save & Close',
+      id: 'configure-project',
+      title: 'Step 4: Verify Your Project',
       content:
-        'Check that the status indicators above are green, then click "Save & Close" to apply your configuration.\n\nIf any steps are incomplete, you can always return to Settings later from the gear icon in the title bar.',
-      targetSelector: '.status-banner',
+        'Your active FABRIC project was auto-selected from your token. Verify this is the project you want to work with, or select a different one from the dropdown.\n\nEach project has its own resource quotas, slice namespaces, and member permissions. You can switch projects anytime from the title bar.',
+      targetSelector: '[data-help-id="settings.project"]',
+      requiredView: 'settings',
+      tooltipPosition: 'right',
+      completionCheck: 'configured',
+      completionLabel: 'Project selected',
+      pendingLabel: 'Verify or change your project, or skip for now',
+    },
+    {
+      id: 'open-advanced',
+      title: 'Step 5: Open Advanced Settings',
+      content:
+        'Click "Show Advanced Settings" below to reveal AI tool configuration and other advanced options.',
+      targetSelector: '.advanced-toggle',
+      requiredView: 'settings',
+      tooltipPosition: 'right',
+    },
+    {
+      id: 'configure-ai-key',
+      title: 'Step 6: Set Up AI Tools',
+      content:
+        'Enter your FABRIC AI API key to unlock the built-in AI coding assistants (Aider, OpenCode, Crush, and the LoomAI chat). These are free to use with your FABRIC account.\n\nGet your API key from the FABRIC portal at https://portal.fabric-testbed.net \u2014 look for "AI Services" or "API Keys" in your account settings.\n\nOptionally, add an NRP API key from https://nrp.ai for access to additional models.',
+      targetSelector: '[data-tour-id="ai-api-key"]',
+      requiredView: 'settings',
+      tooltipPosition: 'right',
+      completionCheck: 'has_ai_api_key',
+      completionLabel: 'AI API key configured',
+      pendingLabel: 'Enter your AI API key, or skip for now',
+    },
+    {
+      id: 'close-settings',
+      title: 'Step 7: Save & Close',
+      content:
+        'Check that the status indicators show green dots for Token, Bastion Key, Slice Keys, and Project. Then click "Save & Close" to apply your configuration.\n\nYou can always return to Settings later from the gear icon in the title bar.',
+      targetSelector: '[data-tour-id="save-close"]',
       requiredView: 'settings',
       tooltipPosition: 'bottom',
       completionCheck: 'configured',
@@ -95,55 +132,10 @@ const gettingStarted: TourDef = {
       pendingLabel: 'Complete the steps above, or skip for now',
     },
     {
-      id: 'toolbar-intro',
-      title: 'The Toolbar',
-      content:
-        'This is your main workspace. The toolbar has everything for managing slices.\n\nTry it now: click "Load Slices" to fetch your existing slices from FABRIC.',
-      targetSelector: '.toolbar',
-      requiredView: 'main',
-      tooltipPosition: 'bottom',
-      completionCheck: 'has_slices',
-      completionLabel: 'Slices loaded',
-      pendingLabel: 'Click "Load Slices" to fetch your slices, or skip',
-    },
-    {
-      id: 'load-template',
-      title: 'Artifacts Panel',
-      content:
-        'The Artifacts panel has weaves (pre-built topologies), VM templates, recipes, and notebooks.\n\nTry it now: click "Load" on any weave to create a draft slice from it. This gives you a topology to explore in the editor.',
-      targetSelector: '.template-panel',
-      requiredView: 'main',
-      tooltipPosition: 'left',
-      completionCheck: 'slice_loaded',
-      completionLabel: 'Slice loaded in editor',
-      pendingLabel: 'Load a weave or click "+ New" in the toolbar, or skip',
-    },
-    {
-      id: 'edit-node',
-      title: 'Editor Panel',
-      content:
-        'The Editor panel lets you modify the selected node, network, or component. Change the site, adjust cores/RAM/disk, pick an OS image, or add hardware components.\n\nTry it now: click any node in the graph to select it for editing.',
-      targetSelector: '.editor-panel',
-      requiredView: 'main',
-      tooltipPosition: 'right',
-      completionCheck: 'node_selected',
-      completionLabel: 'Node selected',
-      pendingLabel: 'Click a node in the graph to select it, or skip',
-    },
-    {
-      id: 'console-panel',
-      title: 'Console Panel',
-      content:
-        'The console at the bottom shows errors, validation results, logs, and terminal sessions.\n\nAfter provisioning, right-click any node in the graph and select "Open Terminal" for an SSH session. Drag the top edge to resize.',
-      targetSelector: '.bottom-panel',
-      requiredView: 'main',
-      tooltipPosition: 'top',
-    },
-    {
       id: 'done',
       title: 'You\'re All Set!',
       content:
-        'You now know the basics of LoomAI. Here\'s what to try next:\n\n\u2022 Load a weave and click Submit to provision a slice\n\u2022 Explore the Map view to see FABRIC sites worldwide\n\u2022 Try the AI Tools to create slices with natural language\n\u2022 Right-click elements for context menus\n\u2022 Hover over any label for a tooltip\n\nFind more tours on the Help page or restart this one from the landing page.',
+        'LoomAI is configured and ready to use! Here are two recommended next tours:\n\n\u2022 Hello, FABRIC \u2014 Run the Hello FABRIC weave to deploy your first slice with one click. A great way to verify everything works.\n\n\u2022 Build Your First Slice \u2014 Manually create a single-node slice, submit it, and SSH into it. Learn the core workflow.\n\nStart either tour from the Help page (click the ? in the title bar) or from the landing page.',
       targetSelector: '[data-help-id="titlebar.help"]',
       requiredView: 'main',
       tooltipPosition: 'bottom',
@@ -357,19 +349,19 @@ const artifactsWeaves: TourDef = {
     },
     {
       id: 'aw-local',
-      title: 'Local Artifacts',
+      title: 'My Artifacts',
       content:
-        'The Artifacts view has three tabs: My Artifacts, Published, and Community Marketplace.\n\nThe My Artifacts tab shows artifacts on your machine, organized by category. These include any you\'ve created or downloaded from the marketplace.\n\nEach card shows the artifact name, description, and action buttons.',
-      targetSelector: '.libraries-view',
+        'The Artifacts view has three tabs: My Artifacts, Published (by me), and Community Marketplace.\n\nThe My Artifacts tab shows artifacts on your machine. Each card displays:\n\u2022 Name and description\n\u2022 Remote status badge \u2014 Linked (connected to marketplace), Update Available (newer version exists), Local Only, or Remote Deleted\n\u2022 Action buttons \u2014 Open, Publish, Edit, Delete\n\nArtifacts downloaded from the marketplace automatically track their remote version, so you\'ll see an "Update available" notification when a newer version is published.',
+      targetSelector: '[data-help-id="libraries.my-artifacts"]',
       requiredView: 'libraries',
       tooltipPosition: 'bottom',
     },
     {
       id: 'aw-marketplace',
-      title: 'Marketplace',
+      title: 'Community Marketplace',
       content:
-        'The Community Marketplace tab lets you browse artifacts published by the FABRIC community.\n\n\u2022 Search by name or description\n\u2022 Filter by category (Weave, VM Template, Recipe, Notebook)\n\u2022 Filter by tags or author\n\u2022 Sort by popularity, newest, or alphabetically\n\nClick "Get" to download an artifact to your local artifact library.',
-      targetSelector: '.libraries-view',
+        'The Community Marketplace tab connects to the FABRIC Artifact Manager (artifacts.fabric-testbed.net) and lets you browse artifacts published by the community.\n\n\u2022 Search by name or description\n\u2022 Filter by category (Weave, VM Template, Recipe, Notebook)\n\u2022 Filter by tags or author\n\u2022 Sort by popularity, newest, or alphabetically\n\u2022 Toggle grid vs table view\n\nClick "Get" to download an artifact. For multi-version artifacts, a version picker lets you choose which version to install. Downloaded artifacts show an "Installed" badge.',
+      targetSelector: '[data-help-id="libraries.marketplace"]',
       requiredView: 'libraries',
       tooltipPosition: 'bottom',
     },
@@ -407,7 +399,16 @@ const artifactsWeaves: TourDef = {
       id: 'aw-publish',
       title: 'Publishing Artifacts',
       content:
-        'Share your artifacts with the FABRIC community:\n\n1. Find your artifact in the My Artifacts tab\n2. Click "Publish" to open the publish dialog\n3. Set visibility (public or project-only), add tags, and write a description\n4. Published artifacts appear in the Community Marketplace for others to use\n\nYou can manage your published artifacts from the Published tab \u2014 update descriptions, add new versions, or unpublish.',
+        'Share your artifacts with the FABRIC community:\n\n1. Find your artifact in the My Artifacts tab and click "Publish"\n2. Fill in the publish dialog:\n   \u2022 Title and short description (shown on cards)\n   \u2022 Long description (detailed documentation)\n   \u2022 Visibility: author-only, project, or public\n   \u2022 Project association and author credits\n   \u2022 Tags for categorization\n3. Choose an action: New (first publish), Update (new version), or Fork (based on someone else\'s artifact)\n\nManage published artifacts from the Published tab \u2014 edit metadata, add versions, change visibility.',
+      targetSelector: '[data-help-id="libraries.publish"]',
+      requiredView: 'libraries',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'aw-versions',
+      title: 'Version Tracking',
+      content:
+        'LoomAI tracks which version of each marketplace artifact you have installed.\n\n\u2022 When a newer version is published, a teal "Update available" badge appears on your local copy\n\u2022 Click "Get" on the marketplace version to update\n\u2022 Use "Reset" to revert to the originally downloaded version\n\u2022 The detail panel shows your installed version number and the latest available version\n\nThis helps you keep your experiment templates current with community improvements.',
       targetSelector: '.libraries-view',
       requiredView: 'libraries',
       tooltipPosition: 'bottom',
@@ -764,11 +765,311 @@ const fileManager: TourDef = {
 };
 
 // ════════════════════════════════════════════════════════════════════
+// 11. HELLO FABRIC — Run the Hello FABRIC weave
+// ════════════════════════════════════════════════════════════════════
+
+const helloFabric: TourDef = {
+  id: 'hello-fabric',
+  title: 'Hello, FABRIC',
+  description: 'Deploy your first slice by running the Hello FABRIC weave \u2014 one-click provisioning to verify your setup.',
+  icon: '\u{1F44B}',
+  autoStart: false,
+  helpSections: ['templates', 'bottom'],
+  steps: [
+    {
+      id: 'hf-intro',
+      title: 'Hello, FABRIC!',
+      content:
+        'In this tour you\'ll deploy your first FABRIC slice by running the "Hello FABRIC" weave. This is the fastest way to verify your credentials and see LoomAI in action.\n\nThe weave will create a single Ubuntu VM, wait for it to provision, and configure SSH access \u2014 all automatically.',
+      targetSelector: '.title-bar',
+      requiredView: 'main',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'hf-open-marketplace',
+      title: 'Step 1: Open the Marketplace',
+      content:
+        'First, let\'s get the Hello FABRIC weave from the community marketplace.\n\nSwitch to the Artifacts view using the View selector in the title bar, then click the "Community Marketplace" tab.',
+      targetSelector: '[data-help-id="libraries.marketplace"]',
+      requiredView: 'libraries',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'hf-search',
+      title: 'Step 2: Search for "Hello"',
+      content:
+        'Type "Hello" in the search bar above. The artifact list will filter as you type.',
+      targetSelector: '.tv-mp-toolbar',
+      requiredView: 'libraries',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'hf-filter',
+      title: 'Step 3: Filter by Weave',
+      content:
+        'Click the "Weave" button highlighted above to narrow results to weave artifacts only. You should see the "Hello FABRIC" weave appear in the results below.',
+      targetSelector: '[data-tour-id="mp-filter-weave"]',
+      requiredView: 'libraries',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'hf-get',
+      title: 'Step 4: Download the Weave',
+      content:
+        'Find the "Hello FABRIC" card below and click its "Get" button to download it to your local artifacts. You should see a confirmation message.',
+      targetSelector: '.title-bar',
+      requiredView: 'libraries',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'hf-back-to-main',
+      title: 'Step 5: Return to the Editor',
+      content:
+        'Great! The Hello FABRIC weave is now in your local artifacts. Switch back to the Topology view using the View selector in the title bar.\n\nYou\'ll see the Hello FABRIC weave in the Weaves tab of the side panel on the right.',
+      targetSelector: '.template-panel',
+      requiredView: 'main',
+      tooltipPosition: 'left',
+    },
+    {
+      id: 'hf-run-weave',
+      title: 'Step 6: Run the Weave',
+      content:
+        'Find "Hello FABRIC" in the Weaves tab and click the \u25B6 Run button (or use the \u22EF menu \u2192 Run). You\'ll be prompted for a slice name \u2014 the default "hello-fabric" works fine.\n\nThe weave.sh script will:\n1. Create the slice with a single Ubuntu VM\n2. Submit it to FABRIC\n3. Wait for provisioning (this takes 2\u20135 minutes)\n4. Run post-boot configuration\n5. Report the management IP and SSH command',
+      targetSelector: '.template-panel',
+      requiredView: 'main',
+      tooltipPosition: 'left',
+    },
+    {
+      id: 'hf-watch-log',
+      title: 'Watch the Build Log',
+      content:
+        'The console at the bottom will open a "run:Hello FABRIC" tab showing the script output in real-time.\n\nYou\'ll see progress milestones as the slice provisions. Wait until you see a success message with the VM\'s IP address.',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'hf-ssh',
+      title: 'Connect to Your VM',
+      content:
+        'Once the slice is provisioned (state: StableOK), you can SSH into it:\n\n\u2022 Right-click the node in the topology graph \u2192 "Open Terminal"\n\u2022 Or use the Local Terminal tab to run SSH commands manually\n\nCongratulations \u2014 you\'ve deployed your first FABRIC slice!',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'hf-done',
+      title: 'What\'s Next?',
+      content:
+        'You\'ve verified that your credentials work and deployed a slice. Here\'s what to explore next:\n\n\u2022 Try "Build Your First Slice" tour to learn manual slice creation\n\u2022 Explore the Map view to see all FABRIC sites\n\u2022 Browse the Community Marketplace for more weaves\n\u2022 Launch an AI Tool to build experiments with natural language\n\nWhen you\'re done, delete the hello-fabric slice from the toolbar to free resources.',
+      targetSelector: '[data-help-id="titlebar.help"]',
+      requiredView: 'main',
+      tooltipPosition: 'bottom',
+    },
+  ],
+};
+
+// ════════════════════════════════════════════════════════════════════
+// 12. BUILD YOUR FIRST SLICE — Manual single-node creation
+// ════════════════════════════════════════════════════════════════════
+
+const buildFirstSlice: TourDef = {
+  id: 'build-first-slice',
+  title: 'Build Your First Slice',
+  description: 'Manually create a single-node slice, submit it to FABRIC, and SSH into it \u2014 learn the core workflow.',
+  icon: '\u{1F9F1}',
+  autoStart: false,
+  helpSections: ['toolbar', 'editor', 'topology'],
+  steps: [
+    {
+      id: 'bfs-intro',
+      title: 'Build Your First Slice',
+      content:
+        'In this tour you\'ll manually create a slice with one VM, submit it to FABRIC, and SSH into it. This teaches the core slice-building workflow that you\'ll use for more complex experiments.',
+      targetSelector: '.title-bar',
+      requiredView: 'main',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'bfs-new-slice',
+      title: 'Step 1: Create a New Slice',
+      content:
+        'Click "+ New" in the toolbar to create a new draft slice. Enter a name like "my-first-slice" and press Enter.\n\nA draft slice is local until you submit it to FABRIC.',
+      targetSelector: '[data-help-id="toolbar.new"]',
+      requiredView: 'main',
+      tooltipPosition: 'bottom',
+      completionCheck: 'slice_loaded',
+      completionLabel: 'Slice created',
+      pendingLabel: 'Click "+ New" to create a slice, or skip',
+    },
+    {
+      id: 'bfs-add-node',
+      title: 'Step 2: Add a VM Node',
+      content:
+        'In the Editor panel on the left, click the "+" button to add a new element, then select "VM Node".\n\nConfigure the node:\n\u2022 Name: any unique name (e.g., "node1")\n\u2022 Site: leave as "auto" for automatic placement\n\u2022 Cores: 2, RAM: 8 GB, Disk: 10 GB\n\u2022 Image: default_ubuntu_22 (recommended)\n\nClick "Add Node" to add it to the slice.',
+      targetSelector: '.editor-panel',
+      requiredView: 'main',
+      tooltipPosition: 'right',
+      completionCheck: 'has_nodes',
+      completionLabel: 'Node added',
+      pendingLabel: 'Add a VM node using the + button, or skip',
+    },
+    {
+      id: 'bfs-review',
+      title: 'Step 3: Review the Topology',
+      content:
+        'Your node appears in the topology graph. Click it to see its properties in the Editor panel.\n\nThe Validation tab in the console should show a green checkmark \u2014 meaning your slice is valid and ready to submit.\n\nIf you see warnings about site availability, the auto-assign resolver will handle placement when you submit.',
+      targetSelector: '[data-help-id="topology.graph"]',
+      requiredView: 'main',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'bfs-submit',
+      title: 'Step 4: Submit to FABRIC',
+      content:
+        'Click "Submit" in the toolbar to provision the slice on FABRIC.\n\nThe system will:\n1. Refresh resource availability from all FABRIC sites\n2. Assign your node to a site with available resources\n3. Submit the slice for provisioning\n\nProvisioning takes 2\u20135 minutes. Auto-refresh will poll for status updates automatically.',
+      targetSelector: '[data-help-id="toolbar.submit"]',
+      requiredView: 'main',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'bfs-wait',
+      title: 'Step 5: Wait for Provisioning',
+      content:
+        'The slice state will progress: Nascent \u2192 Configuring \u2192 StableOK.\n\nWhile waiting, you can:\n\u2022 Watch the slice state badge in the toolbar\n\u2022 Check the Validation and Errors tabs in the console\n\u2022 Explore the Map view to see where your node was placed\n\nOnce the state shows StableOK (green), your VM is ready.',
+      targetSelector: '.toolbar',
+      requiredView: 'main',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'bfs-ssh',
+      title: 'Step 6: SSH into Your VM',
+      content:
+        'Right-click the node in the topology graph and select "Open Terminal". This opens an SSH session to your VM in the console panel.\n\nYou\'re now connected to a FABRIC VM! Try running:\n\u2022 hostname \u2014 see the VM\'s name\n\u2022 ip addr \u2014 see network interfaces\n\u2022 uname -a \u2014 see the kernel version',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'bfs-done',
+      title: 'Congratulations!',
+      content:
+        'You\'ve built and deployed a FABRIC slice from scratch. You now know the core workflow: create \u2192 add nodes \u2192 submit \u2192 connect.\n\nNext steps:\n\u2022 Add more nodes and networks to build multi-node topologies\n\u2022 Attach GPUs, SmartNICs, or FPGAs via the Components tab\n\u2022 Set up boot scripts to automate VM configuration\n\u2022 Save your topology as a weave for reuse\n\nWhen done, delete the slice from the toolbar to free resources.\n\nMore tours available from the Help page \u2014 click ? in the title bar.',
+      targetSelector: '[data-help-id="titlebar.help"]',
+      requiredView: 'main',
+      tooltipPosition: 'bottom',
+    },
+  ],
+};
+
+// ════════════════════════════════════════════════════════════════════
+// 13. DISCOVER LOOMAI — Visual overview / sales pitch
+// ════════════════════════════════════════════════════════════════════
+
+const discoverLoomai: TourDef = {
+  id: 'discover-loomai',
+  title: 'Discover LoomAI',
+  description: 'A visual tour of LoomAI\u2019s capabilities \u2014 see how AI-powered tools, visual editors, and automated workflows come together to build experiments on FABRIC.',
+  icon: '\u2728',
+  autoStart: false,
+  helpSections: ['overview'],
+  steps: [
+    {
+      id: 'dl-welcome',
+      title: 'Welcome to LoomAI',
+      content:
+        'LoomAI is FABRIC\u2019s AI-powered loom for weaving custom network fabrics.\n\nFABRIC is a global research infrastructure with 35 sites offering programmable networking, bare-metal VMs, GPUs, FPGAs, SmartNICs, and high-speed optical links. LoomAI gives you a visual, browser-based sandbox to design, deploy, and manage experiments \u2014 aided by embedded AI coding assistants.\n\nLet\u2019s take a quick look at what LoomAI can do.',
+      targetSelector: '_fullscreen',
+      requiredView: 'landing',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'dl-topology',
+      title: 'Visual Slice Design',
+      content:
+        'Design experiment topologies with an interactive graph editor. Drag to add VM nodes, connect them with L2/L3 networks, attach GPUs and SmartNICs, and configure boot scripts \u2014 all visually.\n\n\u2022 Six graph layout algorithms for clear topology views\n\u2022 Automatic site and host placement based on real-time resource availability\n\u2022 Site co-location groups (@group tags) for multi-site experiments\n\u2022 One-click submit to provision on FABRIC\n\u2022 Export topology diagrams as PNG for publications',
+      targetSelector: '_fullscreen',
+      requiredView: 'landing',
+      tooltipPosition: 'bottom',
+      imageUrl: '/tours/overview-topology.svg',
+      imageAlt: 'LoomAI topology editor showing a multi-node slice with graph view and editor panel',
+    },
+    {
+      id: 'dl-infrastructure',
+      title: 'Explore FABRIC Infrastructure',
+      content:
+        'An interactive geographic map shows all 35 FABRIC sites worldwide with real-time resource availability, backbone network links, and live site metrics.\n\n\u2022 Click any site to see available cores, RAM, disk, GPUs, FPGAs, and SmartNICs\n\u2022 View backbone link bandwidth between sites\n\u2022 Live CPU load and dataplane traffic metrics\n\u2022 Per-host resource availability for precise placement\n\u2022 Connect to external facilities: AWS, GCP, Azure, Chameleon, CloudLab, ACCESS',
+      targetSelector: '_fullscreen',
+      requiredView: 'landing',
+      tooltipPosition: 'bottom',
+      imageUrl: '/tours/overview-map.svg',
+      imageAlt: 'Geographic map showing FABRIC sites worldwide with resource availability',
+    },
+    {
+      id: 'dl-ai-tools',
+      title: 'AI-Powered Development',
+      content:
+        'Four AI coding assistants are embedded directly into LoomAI, each pre-configured with FABRIC domain knowledge and direct access to testbed operations:\n\n\u2022 Aider \u2014 AI pair programming for editing deployment scripts\n\u2022 OpenCode \u2014 Full-featured coding assistant with FABRIC-specific skills and agents\n\u2022 Crush \u2014 Elegant terminal AI from Charm with FABRIC and NRP model support\n\u2022 Claude Code \u2014 Anthropic\u2019s CLI with deep FABRIC MCP integration\n\nFree tools use FABRIC AI (ai.fabric-testbed.net). Use natural language to create topologies, generate scripts, debug networking, and automate experiment workflows.',
+      targetSelector: '_fullscreen',
+      requiredView: 'landing',
+      tooltipPosition: 'bottom',
+      imageUrl: '/tours/overview-ai-tools.svg',
+      imageAlt: 'AI Tools launcher showing available coding assistants',
+    },
+    {
+      id: 'dl-artifacts',
+      title: 'Artifact Marketplace',
+      content:
+        'Share and discover reusable experiment building blocks through the FABRIC Artifact Manager marketplace.\n\n\u2022 Browse community-published weaves, VM templates, recipes, and notebooks\n\u2022 Download artifacts with one click \u2014 version tracking notifies you of updates\n\u2022 Publish your own artifacts with visibility controls (public, project, or private)\n\u2022 Fork and build on community contributions with provenance tracking\n\u2022 Manage versions, tags, authors, and descriptions',
+      targetSelector: '_fullscreen',
+      requiredView: 'landing',
+      tooltipPosition: 'bottom',
+      imageUrl: '/tours/overview-artifacts.svg',
+      imageAlt: 'Artifact marketplace showing community-published weaves and templates',
+    },
+    {
+      id: 'dl-weave-experiments',
+      title: 'Automated Weave Experiments',
+      content:
+        'Weaves are the heart of LoomAI \u2014 reusable experiment packages that automate the full lifecycle:\n\n1. \uD83D\uDCD0 Define topology, boot configuration, and run scripts in a weave\n2. \uD83D\uDE80 One-click Deploy provisions infrastructure, configures networking, and installs software\n3. \u2699\uFE0F Run scripts execute your experiment autonomously for up to 30 minutes\n4. \uD83D\uDCCA Build Log streams real-time progress with milestone tracking\n\nUse AI tools to write weave.sh scripts that orchestrate multi-slice experiments, collect data, and manage their own lifecycle \u2014 all under AI control.',
+      targetSelector: '_fullscreen',
+      requiredView: 'landing',
+      tooltipPosition: 'bottom',
+      imageUrl: '/tours/overview-weave-deploy.svg',
+      imageAlt: 'Weave deploy pipeline showing automated provisioning and build log output',
+    },
+    {
+      id: 'dl-jupyter',
+      title: 'Interactive Development',
+      content:
+        'A complete development environment is built into LoomAI:\n\n\u2022 Embedded JupyterLab for interactive notebooks with full Python + FABlib access\n\u2022 SSH terminals to every provisioned VM \u2014 right-click a node to connect\n\u2022 Local shell on the backend container for FABlib CLI and debugging\n\u2022 Dual-panel file manager for transferring files between storage and VMs\n\u2022 Boot configuration editor for post-provisioning automation',
+      targetSelector: '_fullscreen',
+      requiredView: 'landing',
+      tooltipPosition: 'bottom',
+      imageUrl: '/tours/overview-jupyter.svg',
+      imageAlt: 'JupyterLab embedded view with notebook and terminal access',
+    },
+    {
+      id: 'dl-get-started',
+      title: 'Ready to Build?',
+      content:
+        'LoomAI gives you everything you need to design, deploy, and manage research experiments on FABRIC \u2014 from visual topology design to AI-powered automation.\n\nTo get started:\n\u2022 Take the Getting Started tour to configure your credentials\n\u2022 Or jump straight in \u2014 click "+ New" in the toolbar to create your first slice\n\u2022 Visit the Help page for detailed documentation on every feature\n\nHappy experimenting!',
+      targetSelector: '_fullscreen',
+      requiredView: 'landing',
+      tooltipPosition: 'bottom',
+    },
+  ],
+};
+
+// ════════════════════════════════════════════════════════════════════
 // Exports
 // ════════════════════════════════════════════════════════════════════
 
 export const tours: Record<string, TourDef> = {
+  'discover-loomai': discoverLoomai,
   'getting-started': gettingStarted,
+  'hello-fabric': helloFabric,
+  'build-first-slice': buildFirstSlice,
   'topology-editor': topologyEditor,
   'ai-tools': aiTools,
   'artifacts-weaves': artifactsWeaves,
@@ -781,7 +1082,10 @@ export const tours: Record<string, TourDef> = {
 };
 
 export const tourList: TourDef[] = [
+  discoverLoomai,
   gettingStarted,
+  helloFabric,
+  buildFirstSlice,
   topologyEditor,
   aiTools,
   artifactsWeaves,

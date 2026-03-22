@@ -522,7 +522,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
   const rightEditableName = rightSelected.size === 1 ? Array.from(rightSelected)[0] : null;
 
   return (
-    <div className="ftv-outer">
+    <div className="ftv-outer" data-help-id="files.view">
     <div className="file-transfer-view">
       {/* ============ LEFT PANEL: Container ============ */}
       <div className={`ftv-panel ftv-left ${dragOver ? 'fb-dropzone-active' : ''}`}

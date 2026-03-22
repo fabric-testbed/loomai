@@ -42,6 +42,11 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
   - Tool-calling loop tests
   - Terminal WebSocket tests
 
+### AI Tool Configuration & Validation (Audited 2025-03-22)
+- **All 6 tools have correct config propagation** — API key and server URL injected via env vars (`OPENAI_API_KEY`, `OPENAI_BASE_URL`) for Aider, OpenCode, Crush, Deep Agents; LoomAI reads settings directly; Claude Code uses Anthropic's own key
+- **Crush and Deep Agents are lazy-installed** — npm (`@charmland/crush`) and pip (`deepagents-cli`) packages install on first launch via ToolInstallOverlay; both packages verified available in registries
+- **Runtime validation needed** — end-to-end test of Crush and Deep Agents after lazy-install to confirm they connect to FABRIC AI and produce responses; currently only config-level verified
+
 ### AI/LLM Provider Configuration
 - **NRP/Nautilus LLM integration** — use NRP's hosted LLM service (`ellm.nrp-nautilus.io`) as a built-in provider option alongside the FABRIC AI server (`ai.fabric-testbed.net`)
 - **Arbitrary LLM providers via API keys** — configure self-hosted or commercial LLM providers (OpenAI, Anthropic, local Ollama, vLLM, etc.) by supplying an API key and base URL in settings

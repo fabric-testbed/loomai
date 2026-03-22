@@ -32,7 +32,7 @@ export default React.memo(function DetailPanel({
 }: DetailPanelProps) {
   if (!selectedElement) {
     return (
-      <div className="detail-panel">
+      <div className="detail-panel" data-help-id="detail.panel">
         <div className="detail-header" {...(dragHandleProps || {})}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <span className="panel-drag-handle">{'\u283F'}</span>
@@ -62,7 +62,7 @@ export default React.memo(function DetailPanel({
   const hasTabs = elementType === 'site' || elementType === 'infra_link';
 
   return (
-    <div className="detail-panel">
+    <div className="detail-panel" data-help-id="detail.panel">
       <div className="detail-header" {...(dragHandleProps || {})}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <span className="panel-drag-handle">{'\u283F'}</span>

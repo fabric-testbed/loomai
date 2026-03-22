@@ -430,7 +430,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     <div className="configure-view">
       <div className="configure-card">
         {/* Header */}
-        <div className="configure-header">
+        <div className="configure-header" data-tour-id="save-close">
           <h2 className="configure-title">{'\u2699'} Settings</h2>
           <div className="configure-header-actions">
             <button
@@ -667,7 +667,8 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           <h3>SSH Keys</h3>
 
           {/* Bastion Key */}
-          <p data-tour-id="bastion-key"><strong>Bastion Key</strong> — Upload your FABRIC bastion private key (from the portal).</p>
+          <div data-tour-id="bastion-key">
+          <p><strong>Bastion Key</strong> — Upload your FABRIC bastion private key (from the portal).</p>
           <div className="btn-row">
             <input
               ref={bastionKeyRef}
@@ -684,6 +685,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
             </button>
             {status?.has_bastion_key && <span className="status-item"><span className="status-dot ok" /> Uploaded</span>}
           </div>
+          </div>
           {status?.bastion_key_fingerprint && (
             <div className="key-info">
               <span className="key-info-label">Fingerprint:</span> {status.bastion_key_fingerprint}
@@ -694,7 +696,8 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           )}
 
           {/* Slice Key Sets */}
-          <p style={{ marginTop: 16 }} data-tour-id="slice-keys"><strong>Slice Key Sets</strong> — Manage named SSH key pairs for slice access.</p>
+          <div data-tour-id="slice-keys" style={{ marginTop: 16 }}>
+          <p><strong>Slice Key Sets</strong> — Manage named SSH key pairs for slice access.</p>
 
           {/* Key Set List */}
           {keySets.length > 0 && (
@@ -781,6 +784,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
               </div>
             </div>
           )}
+          </div>
 
           {generatedPubKey && (
             <div className="key-info" style={{ marginTop: 8 }}>
@@ -853,7 +857,8 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                 Show guided tour on next session
               </label>
 
-              <p style={{ marginTop: 16, fontWeight: 600 }}>AI Companion</p>
+              <div data-tour-id="ai-api-key" style={{ marginTop: 16 }}>
+              <p style={{ fontWeight: 600 }}>AI Companion</p>
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, marginBottom: 6 }} data-help-id="settings.ai-api-key">
                 API key for FABRIC AI services (ai.fabric-testbed.net). Used by Aider, OpenCode, and Crush.
               </p>
@@ -868,6 +873,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                 {status?.ai_api_key_set && !litellmApiKey && (
                   <span style={{ fontSize: 12, color: '#008e7a', whiteSpace: 'nowrap' }}>{'\u2713'} Configured</span>
                 )}
+              </div>
               </div>
 
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 10, marginBottom: 6 }} data-help-id="settings.nrp-api-key">

@@ -646,7 +646,7 @@ export default React.memo(function CytoscapeGraph({
 
   return (
     <div className="graph-panel">
-      <div className="cytoscape-container" ref={containerRef} />
+      <div className="cytoscape-container" ref={containerRef} data-help-id="topology.graph" />
       <div className="graph-controls">
         <label>Layout:</label>
         <select value={layout} onChange={(e) => onLayoutChange(e.target.value)} data-help-id="topology.layout">

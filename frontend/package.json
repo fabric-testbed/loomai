@@ -1,7 +1,7 @@
 {
   "name": "fabric-webgui",
   "private": true,
-  "version": "0.0.5",
+  "version": "0.0.6",
   "type": "module",
   "scripts": {
     "dev": "next dev -p 3000",
@@ -27,7 +27,7 @@
     "cytoscape-cola": "^2.5.1",
     "cytoscape-dagre": "^2.5.0",
     "leaflet": "^1.9.4",
-    "next": "^15.5.10",
+    "next": "^15.5.14",
     "react": "^18.3.1",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^18.3.1",

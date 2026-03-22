@@ -434,7 +434,7 @@ def _setup_claude_workspace(cwd: str) -> None:
         logger.info("Created %d Claude Code commands from shared skills", skill_count)
 
 
-def _setup_crush_workspace(cwd: str, api_key: str) -> None:
+def _setup_crush_workspace(cwd: str, api_key: str, model_override: str = "") -> None:
     """Seed Crush configuration and FABRIC context into the workspace.
 
     Creates:
@@ -449,7 +449,9 @@ def _setup_crush_workspace(cwd: str, api_key: str) -> None:
 
     # Build .crush.json with FABRIC and NRP providers
     models = _fetch_models(api_key) if api_key else []
-    default_model = _pick_model(models, _PREFERRED_MODELS, "qwen3-coder-30b") if models else "qwen3-coder-30b"
+    default_model = model_override if model_override else (
+        _pick_model(models, _PREFERRED_MODELS, "qwen3-coder-30b") if models else "qwen3-coder-30b"
+    )
 
     fabric_models = [{"id": m, "name": m} for m in (models if models else [default_model])]
 
@@ -500,12 +502,13 @@ def _setup_crush_workspace(cwd: str, api_key: str) -> None:
     logger.info("Wrote .crush.json for Crush with %d providers", len(providers))
 
 
-def _setup_deepagents_workspace(cwd: str) -> None:
+def _setup_deepagents_workspace(cwd: str, api_key: str = "", model_override: str = "") -> None:
     """Seed Deep Agents configuration and FABRIC context into the workspace.
 
     Creates:
     - AGENTS.md (shared FABRIC context)
     - .deepagents/AGENTS.md (Deep Agents project instructions)
+    - .deepagents/config.json (FABRIC + NRP provider config with models)
     """
     # Shared FABRIC context
     agents_md = os.path.join(cwd, "AGENTS.md")
@@ -520,6 +523,58 @@ def _setup_deepagents_workspace(cwd: str) -> None:
     if os.path.isfile(src_agents):
         shutil.copy2(src_agents, os.path.join(da_dir, "AGENTS.md"))
         logger.info("Wrote .deepagents/AGENTS.md for Deep Agents")
+
+    # Copy shared skills and agents into .deepagents/
+    shared_skills = os.path.join(_SHARED_DIR, "skills")
+    shared_agents = os.path.join(_SHARED_DIR, "agents")
+    da_skills = os.path.join(da_dir, "skills")
+    da_agents = os.path.join(da_dir, "agents")
+    if os.path.isdir(shared_skills) and not os.path.isdir(da_skills):
+        shutil.copytree(shared_skills, da_skills)
+        logger.info("Copied %d skills to .deepagents/skills/", len(os.listdir(da_skills)))
+    if os.path.isdir(shared_agents) and not os.path.isdir(da_agents):
+        shutil.copytree(shared_agents, da_agents)
+        logger.info("Copied %d agents to .deepagents/agents/", len(os.listdir(da_agents)))
+
+    # Build provider config with available models (like Crush)
+    models = _fetch_models(api_key) if api_key else []
+    default_model = model_override if model_override else (
+        _pick_model(models, _PREFERRED_MODELS, "qwen3-coder-30b") if models else "qwen3-coder-30b"
+    )
+
+    providers: dict = {
+        "fabric": {
+            "id": "fabric",
+            "base_url": f"{_ai_server_url()}/v1",
+            "type": "openai",
+            "api_key": api_key,
+            "models": models if models else [default_model],
+        }
+    }
+
+    nrp_key = _get_nrp_api_key()
+    if nrp_key:
+        nrp_models = _fetch_nrp_models(nrp_key)
+        if nrp_models:
+            providers["nrp"] = {
+                "id": "nrp",
+                "base_url": f"{_nrp_server_url()}/v1",
+                "type": "openai",
+                "api_key": nrp_key,
+                "models": nrp_models,
+            }
+
+    config = {
+        "providers": providers,
+        "default_provider": "fabric",
+        "default_model": default_model,
+    }
+
+    config_path = os.path.join(da_dir, "config.json")
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+    logger.info("Wrote .deepagents/config.json with %d providers, default model: %s",
+                len(providers), default_model)
 
 
 def _start_model_proxy(
@@ -599,6 +654,8 @@ TOOL_CONFIGS = {
         "env": lambda key: {
             "OPENAI_API_KEY": key,
             "OPENAI_BASE_URL": f"{_ai_server_url()}/v1",
+            "NRP_API_KEY": _get_nrp_api_key() or "",
+            "NRP_BASE_URL": f"{_nrp_server_url()}/v1",
         },
         "cmd": ["deepagents"],
         "needs_key": True,
@@ -995,10 +1052,10 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = "", cwd: 
             _setup_claude_workspace(cwd)
         elif tool == "crush":
             _ensure_git_ready(cwd)
-            _setup_crush_workspace(cwd, api_key)
+            _setup_crush_workspace(cwd, api_key, model_override=model)
         elif tool == "deepagents":
             _ensure_git_ready(cwd)
-            _setup_deepagents_workspace(cwd)
+            _setup_deepagents_workspace(cwd, api_key, model_override=model)
 
         # Build opencode.json dynamically from available models on the AI server
         if tool == "opencode":
@@ -1359,9 +1416,9 @@ def seed_ai_tool_defaults() -> None:
         except Exception as e:
             logger.warning("Could not seed Crush config: %s", e)
 
-    # --- Deep Agents: .deepagents/AGENTS.md ---
+    # --- Deep Agents: .deepagents/AGENTS.md + config.json ---
     try:
-        _setup_deepagents_workspace(cwd)
+        _setup_deepagents_workspace(cwd, _get_ai_api_key())
     except Exception as e:
         logger.warning("Could not seed Deep Agents config: %s", e)
 

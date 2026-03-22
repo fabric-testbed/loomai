@@ -801,6 +801,7 @@ export interface RemoteArtifact {
   category: string;
   authors: { name: string; affiliation: string }[];
   versions: { uuid: string; version: string; urn: string; active: boolean; created: string; version_downloads: number }[];
+  project_uuid?: string;
   project_name?: string;
   artifact_views: number;
   artifact_downloads_active: number;
@@ -859,6 +860,7 @@ export function publishArtifact(params: {
   tags?: string[];
   visibility?: string;
   project_uuid?: string;
+  authors?: { name: string; affiliation: string }[];
   action?: 'update' | 'fork';
 }): Promise<{
   status: string;
@@ -899,14 +901,18 @@ export interface LocalArtifact {
   description_long?: string;
   source: string;
   artifact_uuid?: string;
+  version_uuid?: string;
+  version?: string;
   created: string;
   tags: string[];
   dir_name: string;
   category: string;
   is_from_marketplace: boolean;
-  remote_status?: 'linked' | 'not_linked' | 'remote_deleted';
+  remote_status?: 'linked' | 'not_linked' | 'remote_deleted' | 'check_failed';
   is_author?: boolean;
   remote_artifact?: RemoteArtifact | null;
+  update_available?: boolean;
+  latest_version?: string;
 }
 
 export interface MyArtifactsResponse {

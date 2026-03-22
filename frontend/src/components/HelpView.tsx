@@ -1,9 +1,34 @@
 'use client';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import { helpSections } from '../data/helpData';
 import { tourList, toursBySection } from '../data/tourSteps';
 import '../styles/help.css';
 import '../styles/guided-tour.css';
+
+/** Lightweight markdown-to-HTML for help descriptions.
+ *  Handles: paragraphs, **bold**, `code`, ```code blocks```, [links](url), - lists.
+ */
+function renderMarkdown(md: string): string {
+  // Escape HTML
+  let html = md.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Code blocks (``` ... ```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Links [text](url)
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  // Bare URLs (not already in an href)
+  html = html.replace(/(?<!href=")(https?:\/\/[^\s<)]+)/g,
+    '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+  // Paragraphs (double newline)
+  html = html.replace(/\n\n/g, '</p><p>');
+  // Line breaks
+  html = html.replace(/\n/g, '<br/>');
+  return `<p>${html}</p>`;
+}
 
 interface HelpViewProps {
   scrollToSection?: string;
@@ -121,7 +146,7 @@ export default function HelpView({ scrollToSection, onClose, onStartTour }: Help
               {section.entries.map((entry) => (
                 <div key={entry.id} className="help-entry-card" id={`help-entry-${entry.id}`}>
                   <h4 className="help-entry-label">{entry.label}</h4>
-                  <p className="help-entry-desc">{entry.description}</p>
+                  <div className="help-entry-desc" dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.description) }} />
                 </div>
               ))}
             </div>

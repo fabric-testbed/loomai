@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import fnmatch
 import json
 import logging
 import os
@@ -306,6 +307,7 @@ class PublishRequest(BaseModel):
     tags: list[str] = []
     visibility: str = "author"
     project_uuid: str = ""
+    authors: list[dict] = []
     action: str = ""  # "update", "fork", or "" for auto/new
 
 
@@ -508,15 +510,26 @@ async def download_artifact(req: DownloadRequest):
                 weave_data = json.load(f)
         except Exception:
             pass
+
+    # Always stamp identity fields — these override whatever the archive
+    # contained, because the download UUID is the authoritative link to
+    # the remote artifact.  (The archive may carry a stale artifact_uuid
+    # from a previous publish cycle; the download path is authoritative.)
+    weave_data["source"] = "artifact-manager"
+    weave_data["artifact_uuid"] = req.uuid
+    weave_data["tags"] = tag_strs
+    weave_data["version_uuid"] = version["uuid"]
+    weave_data["version"] = version.get("version", "")
+
+    # Fill display fields only when missing (respect the archive's own values)
     if not weave_data.get("name"):
         weave_data["name"] = art.get("title", local_name)
-        weave_data.setdefault("description", art.get("description_long", "") or art.get("description_short", ""))
-        weave_data["source"] = "artifact-manager"
-        weave_data["artifact_uuid"] = req.uuid
-        weave_data.setdefault("created", datetime.now(timezone.utc).isoformat())
-        weave_data["tags"] = tag_strs
-        with open(weave_path, "w") as f:
-            json.dump(weave_data, f, indent=2)
+    if not weave_data.get("description"):
+        weave_data["description"] = art.get("description_long", "") or art.get("description_short", "")
+    weave_data.setdefault("created", datetime.now(timezone.utc).isoformat())
+
+    with open(weave_path, "w") as f:
+        json.dump(weave_data, f, indent=2)
 
     # Save a clean reference copy for reset functionality, keyed by UUID
     originals_dir = os.path.join(_storage_dir(), ".artifact-originals")
@@ -709,13 +722,73 @@ _META_FILES_MAP: dict[str, list[str]] = {
 }
 
 
+# Default patterns always excluded from published artifacts
+_DEFAULT_IGNORE_PATTERNS = [
+    "__pycache__",
+    "*.pyc",
+    ".git",
+    ".env",
+    "*.log",
+    ".vscode",
+    ".idea",
+    ".DS_Store",
+    "*.swp",
+    "*.swo",
+]
+
+
+def _build_tar_filter(src_dir: str):
+    """Build a tar filter that respects .weaveignore patterns.
+
+    Reads .weaveignore from the artifact directory (gitignore-style:
+    one pattern per line, # comments, blank lines skipped).
+    Built-in defaults always apply.
+    """
+    patterns = list(_DEFAULT_IGNORE_PATTERNS)
+    ignore_path = os.path.join(src_dir, ".weaveignore")
+    if os.path.isfile(ignore_path):
+        with open(ignore_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    patterns.append(line)
+
+    def _filter(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
+        # Get the path relative to the archive root (strip the top-level dir_name)
+        parts = info.name.split("/", 1)
+        rel = parts[1] if len(parts) > 1 else ""
+        if not rel:
+            return info  # always include the root directory itself
+        basename = os.path.basename(rel)
+        for pat in patterns:
+            # Match against basename (e.g. "*.pyc", "__pycache__")
+            if fnmatch.fnmatch(basename, pat):
+                return None
+            # Match against relative path (e.g. "data/*", "output/results")
+            if fnmatch.fnmatch(rel, pat):
+                return None
+            # Pattern with trailing / means directory — match as prefix
+            if pat.endswith("/") and (rel.startswith(pat) or basename == pat.rstrip("/")):
+                return None
+        return info
+
+    return _filter  # type: ignore[return-value]
+
+
 async def _upload_content(headers: dict[str, str], artifact_uuid: str,
                           src_dir: str, dir_name: str) -> dict[str, Any]:
-    """Tar a local directory and upload it as artifact content."""
+    """Tar a local directory and upload it as artifact content.
+
+    Note: The archive may include a stale artifact_uuid in the metadata
+    file (because _write_local_metadata runs after upload).  This is safe
+    because the download path always overwrites artifact_uuid with the
+    correct value from the download request.
+    """
+    tar_filter = _build_tar_filter(src_dir)
     with tempfile.TemporaryDirectory() as tmpdir:
         tar_path = os.path.join(tmpdir, f"{dir_name}.tar.gz")
         with tarfile.open(tar_path, "w:gz") as tf:
-            tf.add(src_dir, arcname=dir_name)
+            tf.add(src_dir, arcname=dir_name, filter=tar_filter)
 
         upload_data = json.dumps({
             "artifact": artifact_uuid,
@@ -761,6 +834,8 @@ async def _create_new_artifact(headers: dict[str, str], req: PublishRequest,
         create_body["tags"] = publish_tags
     if req.project_uuid:
         create_body["project_uuid"] = req.project_uuid
+    if req.authors:
+        create_body["authors"] = [{"name": a.get("name", ""), "affiliation": a.get("affiliation", "")} for a in req.authors]
     try:
         r = await fabric_client.post(
             f"{ARTIFACT_API}/artifacts",
@@ -1127,10 +1202,13 @@ async def get_my_artifacts():
     local_list = list_local_artifacts()["artifacts"]
 
     # Fetch remote catalog (cached)
+    remote_fetch_ok = True
     try:
         remote_list = await _fetch_all_artifacts()
     except Exception:
+        logger.warning("Failed to fetch remote artifact catalog for cross-reference", exc_info=True)
         remote_list = []
+        remote_fetch_ok = False
 
     remote_by_uuid: dict[str, dict] = {a["uuid"]: a for a in remote_list}
 
@@ -1145,14 +1223,29 @@ async def get_my_artifacts():
             art["remote_artifact"] = remote
             art["is_author"] = _is_user_author(remote, user_email, user_name)
             local_remote_uuids.add(art_uuid)
+            # Check if a newer version is available
+            local_version_uuid = art.get("version_uuid", "")
+            if local_version_uuid and remote.get("versions"):
+                latest = remote["versions"][0]
+                art["update_available"] = latest["uuid"] != local_version_uuid
+                art["latest_version"] = latest.get("version", "")
+            else:
+                art["update_available"] = False
+                art["latest_version"] = ""
         elif art_uuid:
-            art["remote_status"] = "remote_deleted"
+            # UUID present but not in remote catalog — only mark as deleted
+            # if the fetch actually succeeded; otherwise it's indeterminate.
+            art["remote_status"] = "remote_deleted" if remote_fetch_ok else "check_failed"
             art["is_author"] = False
             art["remote_artifact"] = None
+            art["update_available"] = False
+            art["latest_version"] = ""
         else:
             art["remote_status"] = "not_linked"
             art["is_author"] = False
             art["remote_artifact"] = None
+            art["update_available"] = False
+            art["latest_version"] = ""
 
     # Find remote artifacts the user authors but hasn't downloaded
     authored_remote_only = []
@@ -1263,10 +1356,11 @@ async def upload_artifact_version(uuid: str, req: UploadVersionRequest):
     if not os.path.isdir(src_dir):
         raise HTTPException(status_code=404, detail=f"Local artifact '{req.dir_name}' not found")
 
+    tar_filter = _build_tar_filter(src_dir)
     with tempfile.TemporaryDirectory() as tmpdir:
         tar_path = os.path.join(tmpdir, f"{req.dir_name}.tar.gz")
         with tarfile.open(tar_path, "w:gz") as tf:
-            tf.add(src_dir, arcname=req.dir_name)
+            tf.add(src_dir, arcname=req.dir_name, filter=tar_filter)
 
         upload_data = json.dumps({
             "artifact": uuid,
@@ -1461,6 +1555,8 @@ async def revert_local_artifact(dir_name: str, req: RevertRequest):
         "description": art.get("description_long", "") or art.get("description_short", ""),
         "source": "artifact-manager",
         "artifact_uuid": artifact_uuid,
+        "version_uuid": version["uuid"],
+        "version": version.get("version", ""),
         "created": datetime.now(timezone.utc).isoformat(),
         "tags": tag_strs,
     })

@@ -54,6 +54,7 @@ export default function GuidedTour({
   // Check if the current step has a completion requirement and whether it's met
   const completionCheck = currentStep?.completionCheck;
   const isStepComplete = completionCheck ? (tourContext[completionCheck] ?? false) : undefined;
+  const isFullscreen = currentStep?.targetSelector === '_fullscreen';
 
   // Measure target element position, scrolling it into view first
   const measure = useCallback(() => {
@@ -266,13 +267,20 @@ export default function GuidedTour({
       {/* Tooltip card */}
       <div
         ref={tooltipRef}
-        className={`tour-tooltip ${centered ? 'centered' : ''}`}
+        className={`tour-tooltip ${centered ? 'centered' : ''} ${isFullscreen ? 'tour-tooltip-fullscreen' : ''}`}
         style={centered ? undefined : tooltipStyle}
       >
         {arrowClass && !centered && (
           <div className={`tour-arrow ${arrowClass}`} style={arrowStyle} />
         )}
         <h3 className="tour-tooltip-title">{currentStep.title}</h3>
+        {currentStep.imageUrl && (
+          <img
+            className="tour-tooltip-image"
+            src={currentStep.imageUrl}
+            alt={currentStep.imageAlt || currentStep.title}
+          />
+        )}
         <p className="tour-tooltip-content">{currentStep.content}</p>
 
         {/* Completion indicator for interactive steps */}

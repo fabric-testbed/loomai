@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SliceData, FileEntry } from '../types/fabric';
 import type {
   RemoteArtifact, TagInfo, ValidTag,
-  LocalArtifact,
+  LocalArtifact, PersonSearchResult,
 } from '../api/client';
 import * as api from '../api/client';
 import '../styles/libraries-view.css';
@@ -74,6 +74,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   const [mpEditing, setMpEditing] = useState<string | null>(null); // uuid
   const [mpEditTitle, setMpEditTitle] = useState('');
   const [mpEditDesc, setMpEditDesc] = useState('');
+  const [mpEditDescLong, setMpEditDescLong] = useState('');
   const [mpEditVisibility, setMpEditVisibility] = useState('author');
   const [mpEditTags, setMpEditTags] = useState<Set<string>>(new Set());
   const [mpEditValidTags, setMpEditValidTags] = useState<ValidTag[]>([]);
@@ -127,6 +128,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   // Remote settings within editor
   const [editRemoteTitle, setEditRemoteTitle] = useState('');
   const [editRemoteDesc, setEditRemoteDesc] = useState('');
+  const [editRemoteDescLong, setEditRemoteDescLong] = useState('');
   const [editRemoteVisibility, setEditRemoteVisibility] = useState('author');
   const [editRemoteTags, setEditRemoteTags] = useState<Set<string>>(new Set());
   const [editRemoteValidTags, setEditRemoteValidTags] = useState<ValidTag[]>([]);
@@ -163,6 +165,19 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   const [pubForkConfirmed, setPubForkConfirmed] = useState(false);
   const [pubLoadingInfo, setPubLoadingInfo] = useState(false);
   const [pubRemoteTitle, setPubRemoteTitle] = useState('');
+  // Project and authors for publish dialog
+  const [pubProjectUuid, setPubProjectUuid] = useState('');
+  const [pubProjects, setPubProjects] = useState<{ name: string; uuid: string }[]>([]);
+  const [pubAuthors, setPubAuthors] = useState<{ name: string; affiliation: string }[]>([]);
+  const [pubShowAuthorSearch, setPubShowAuthorSearch] = useState(false);
+  const [pubAuthorSearch, setPubAuthorSearch] = useState('');
+  const [pubAuthorResults, setPubAuthorResults] = useState<PersonSearchResult[]>([]);
+  const [pubAuthorSearching, setPubAuthorSearching] = useState(false);
+  const pubAuthorSearchRef = useRef<HTMLDivElement>(null);
+
+  // Table sort state
+  const [myTblSort, setMyTblSort] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'name', dir: 'asc' });
+  const [mpTblSort, setMpTblSort] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'title', dir: 'asc' });
 
   // Notebook actions
   const [launchingNotebook, setLaunchingNotebook] = useState<string | null>(null);
@@ -175,6 +190,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   // Inline metadata editing in detail view (local)
   const [detailEditName, setDetailEditName] = useState('');
   const [detailEditDesc, setDetailEditDesc] = useState('');
+  const [detailEditDescLong, setDetailEditDescLong] = useState('');
   const [detailEditing, setDetailEditing] = useState<string | null>(null); // dir_name
   const [detailSaving, setDetailSaving] = useState(false);
 
@@ -481,7 +497,11 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   };
 
   const handleDeleteLocal = async (art: LocalArtifact) => {
-    if (!confirm(`Delete local artifact "${art.name}"?`)) return;
+    const isPublished = art.is_author && art.remote_artifact;
+    const msg = isPublished
+      ? `Delete "${art.name}"?\n\nThis artifact is published on the FABRIC Artifact Manager. This will only delete the local copy. To permanently remove it from the marketplace, use the Published tab.`
+      : `Delete local artifact "${art.name}"?`;
+    if (!confirm(msg)) return;
     try {
       if (art.category === 'weave') {
         await api.deleteTemplate(art.dir_name);
@@ -506,6 +526,11 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     setPubCanFork(false);
     setPubForkConfirmed(false);
     setPubRemoteTitle('');
+    setPubProjectUuid('');
+    setPubAuthors([]);
+    setPubShowAuthorSearch(false);
+    setPubAuthorSearch('');
+    setPubAuthorResults([]);
     setPubLoadingInfo(true);
     setPubOpen(true);
 
@@ -533,6 +558,10 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         setPubDescLong(art.description_long || stripCategoryMarker(r.description_long || ''));
         setPubVisibility(r.visibility || 'author');
         setPubTags(new Set(r.tags || []));
+        if (r.project_uuid) setPubProjectUuid(r.project_uuid);
+        if (r.authors && r.authors.length > 0) {
+          setPubAuthors(r.authors.map((a: any) => ({ name: a.name || '', affiliation: a.affiliation || '' })));
+        }
       } else if (info.can_fork) {
         // Not author but has remote link — fork only
         setPubAction('fork');
@@ -553,6 +582,55 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     } catch {
       setPubValidTags([]);
     }
+
+    try {
+      const { projects } = await api.listUserProjects();
+      setPubProjects(projects);
+    } catch {
+      setPubProjects([]);
+    }
+  };
+
+  // Author search for publish dialog (debounced)
+  const pubAuthorSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handlePubAuthorSearch = (q: string) => {
+    setPubAuthorSearch(q);
+    if (pubAuthorSearchTimer.current) clearTimeout(pubAuthorSearchTimer.current);
+    if (q.length < 3) { setPubAuthorResults([]); return; }
+    setPubAuthorSearching(true);
+    pubAuthorSearchTimer.current = setTimeout(async () => {
+      try {
+        const { results } = await api.searchPeople(q);
+        setPubAuthorResults(results);
+      } catch {
+        setPubAuthorResults([]);
+      } finally {
+        setPubAuthorSearching(false);
+      }
+    }, 300);
+  };
+
+  const addPubAuthor = (person: PersonSearchResult) => {
+    if (!pubAuthors.some(a => a.name === person.name)) {
+      setPubAuthors(prev => [...prev, { name: person.name, affiliation: person.affiliation || '' }]);
+    }
+    setPubShowAuthorSearch(false);
+    setPubAuthorSearch('');
+    setPubAuthorResults([]);
+  };
+
+  const addPubAuthorCustom = () => {
+    const name = pubAuthorSearch.trim();
+    if (name && !pubAuthors.some(a => a.name === name)) {
+      setPubAuthors(prev => [...prev, { name, affiliation: '' }]);
+    }
+    setPubShowAuthorSearch(false);
+    setPubAuthorSearch('');
+    setPubAuthorResults([]);
+  };
+
+  const removePubAuthor = (idx: number) => {
+    setPubAuthors(prev => prev.filter((_, i) => i !== idx));
   };
 
   const handlePublish = async () => {
@@ -560,6 +638,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     const shortDesc = pubDesc.trim() || pubTitle.trim();
     if (shortDesc.length < 5) { setPubError('Short description must be at least 5 characters'); return; }
     if (shortDesc.length > 255) { setPubError('Short description must be at most 255 characters'); return; }
+    if (pubVisibility === 'project' && !pubProjectUuid) { setPubError('Please select a project for project visibility'); return; }
     setPubBusy(true);
     setPubError('');
     try {
@@ -571,6 +650,8 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         description_long: pubDescLong.trim() || undefined,
         tags: [...pubTags],
         visibility: pubVisibility,
+        project_uuid: pubProjectUuid || undefined,
+        authors: pubAuthors.length > 0 ? pubAuthors : undefined,
         action: pubAction || undefined,
       });
       setPubOpen(false);
@@ -578,11 +659,11 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       fetchMyArtifacts();
       fetchMarketplace(true);
       if (result.status === 'updated') {
-        alert(`Updated "${result.title}" — new version ${result.version} published`);
+        alert(`Updated "${result.title}" — version ${result.version} published\nArtifact: ${result.uuid}`);
       } else if (result.forked_from) {
-        alert(`Forked "${result.title}" as new artifact (${result.visibility})`);
+        alert(`Forked "${result.title}" as new artifact (${result.visibility})\nNew artifact: ${result.uuid}`);
       } else {
-        alert(`Published "${result.title}" to FABRIC Artifact Manager (${result.visibility})`);
+        alert(`Published "${result.title}" to FABRIC Artifact Manager (${result.visibility})\nArtifact: ${result.uuid}`);
       }
     } catch (e: any) {
       setPubError(e.message);
@@ -719,7 +800,8 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   const openMpEdit = async (art: RemoteArtifact) => {
     setMpEditing(art.uuid);
     setMpEditTitle(art.title || '');
-    setMpEditDesc(stripCategoryMarker(art.description_long || art.description_short || ''));
+    setMpEditDesc(stripCategoryMarker(art.description_short || ''));
+    setMpEditDescLong(stripCategoryMarker(art.description_long || ''));
     setMpEditVisibility(art.visibility || 'author');
     setMpEditTags(new Set(art.tags || []));
     setMpEditError('');
@@ -741,6 +823,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       await api.updateRemoteArtifact(mpEditing, {
         title: mpEditTitle.trim(),
         description: mpEditDesc.trim(),
+        description_long: mpEditDescLong.trim(),
         visibility: mpEditVisibility,
         tags: [...mpEditTags],
         category: cat,
@@ -776,7 +859,8 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   const openDetailEdit = (art: LocalArtifact) => {
     setDetailEditing(art.dir_name);
     setDetailEditName(art.name || '');
-    setDetailEditDesc(art.description || '');
+    setDetailEditDesc(art.description_short || art.description || '');
+    setDetailEditDescLong(art.description_long || '');
   };
 
   const saveDetailEdit = async (dirName: string) => {
@@ -785,6 +869,8 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       await api.updateLocalArtifactMetadata(dirName, {
         name: detailEditName.trim(),
         description: detailEditDesc.trim(),
+        description_short: detailEditDesc.trim(),
+        description_long: detailEditDescLong.trim(),
       });
       setDetailEditing(null);
       fetchMyArtifacts();
@@ -824,7 +910,8 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     if (art.remote_artifact) {
       const r = art.remote_artifact;
       setEditRemoteTitle(r.title || '');
-      setEditRemoteDesc(stripCategoryMarker(r.description_long || r.description_short || ''));
+      setEditRemoteDesc(stripCategoryMarker(r.description_short || ''));
+      setEditRemoteDescLong(stripCategoryMarker(r.description_long || ''));
       setEditRemoteVisibility(r.visibility || 'author');
       setEditRemoteTags(new Set(r.tags || []));
       setEditAuthors([...(r.authors || [])]);
@@ -851,7 +938,8 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     setEditingRemote(art);
     setEditing(null);
     setEditRemoteTitle(art.title || '');
-    setEditRemoteDesc(stripCategoryMarker(art.description_long || art.description_short || ''));
+    setEditRemoteDesc(stripCategoryMarker(art.description_short || ''));
+    setEditRemoteDescLong(stripCategoryMarker(art.description_long || ''));
     setEditRemoteVisibility(art.visibility || 'author');
     setEditRemoteTags(new Set(art.tags || []));
     setEditAuthors([...(art.authors || [])]);
@@ -1055,6 +1143,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       await api.updateRemoteArtifact(uuid, {
         title: editRemoteTitle,
         description: editRemoteDesc,
+        description_long: editRemoteDescLong,
         visibility: editRemoteVisibility,
         tags: [...editRemoteTags],
         authors: editAuthors.length > 0 ? editAuthors : undefined,
@@ -1135,6 +1224,54 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const toggleTblSort = (
+    setter: React.Dispatch<React.SetStateAction<{ col: string; dir: 'asc' | 'desc' }>>,
+    current: { col: string; dir: 'asc' | 'desc' },
+    col: string,
+  ) => {
+    if (current.col === col) setter({ col, dir: current.dir === 'asc' ? 'desc' : 'asc' });
+    else setter({ col, dir: 'asc' });
+  };
+
+  const handleColResizeStart = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const handle = e.currentTarget;
+    const th = handle.parentElement as HTMLTableCellElement;
+    const nextTh = th.nextElementSibling as HTMLTableCellElement | null;
+    if (!nextTh) return;
+    const startX = e.clientX;
+    const startW = th.offsetWidth;
+    const nextStartW = nextTh.offsetWidth;
+    handle.classList.add('active');
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const newW = Math.max(40, startW + dx);
+      const newNextW = Math.max(40, nextStartW - dx);
+      th.style.width = `${newW}px`;
+      nextTh.style.width = `${newNextW}px`;
+    };
+    const onUp = () => {
+      handle.classList.remove('active');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, []);
+
+  const tblSortArrow = (col: string, active: string, dir: 'asc' | 'desc') => (
+    <span className={`sort-arrow ${active === col ? 'active' : ''}`}>
+      {active === col ? (dir === 'asc' ? '\u25B2' : '\u25BC') : '\u25B4'}
+    </span>
+  );
+
+  const fmtPubDate = (art: { versions?: { created: string }[] } | undefined | null): string => {
+    const created = art?.versions?.[0]?.created;
+    if (!created) return '—';
+    return new Date(created).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   };
 
   const categoryLabel = (c: string) => {
@@ -1227,7 +1364,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           {!art.is_from_marketplace && !art.is_author && <span className="tv-badge tv-badge-source-local">Local</span>}
 
         </div>
-        {art.description && <div className="tv-card-desc">{art.description}</div>}
+        {(art.description_short || art.description) && <div className="tv-card-desc">{art.description_short || art.description}</div>}
         <div className="tv-card-meta">
           {art.remote_status === 'linked' && art.remote_artifact && (
             <>
@@ -1236,6 +1373,9 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
             </>
           )}
           {art.remote_status === 'remote_deleted' && <span className="tv-meta-warn">Remote artifact deleted</span>}
+          {art.remote_status === 'check_failed' && <span className="tv-meta-warn" style={{color: 'var(--fabric-orange, #ff8542)'}}>Could not verify remote status</span>}
+          {art.update_available && <span className="tv-meta-update" style={{color: 'var(--fabric-teal, #008e7a)', fontWeight: 600}} title={`Version ${art.latest_version} available`}>Update available</span>}
+          {art.remote_artifact?.versions?.[0]?.created && <span>{fmtPubDate(art.remote_artifact)}</span>}
         </div>
 
         {art.category === 'notebook' && resetConfirmNotebook === art.dir_name && (
@@ -1287,7 +1427,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           {isAuthored && <span className="tv-badge tv-badge-source-author">Author</span>}
           {isDownloaded && <span className="tv-badge tv-badge-source-downloaded">Installed</span>}
         </div>
-        {(art.description_long || art.description_short) && <div className="tv-card-desc">{stripCategoryMarker(art.description_long || art.description_short)}</div>}
+        {art.description_short && <div className="tv-card-desc">{stripCategoryMarker(art.description_short)}</div>}
         <div className="tv-card-meta">
           {art.authors?.length > 0 && (
             <span title={art.authors.map(a => `${a.name}${a.affiliation ? ` (${a.affiliation})` : ''}`).join(', ')}>
@@ -1296,6 +1436,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           )}
           <span>{art.artifact_downloads_active} downloads</span>
           {art.number_of_versions > 1 && <span>{art.number_of_versions} versions</span>}
+          {art.versions?.[0]?.created && <span>{fmtPubDate(art)}</span>}
         </div>
         {art.tags?.length > 0 && (
           <div className="tv-mp-tags">
@@ -1328,6 +1469,9 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           {isAuthored && (
             <button className="tv-btn" onClick={() => openRemoteEditor(art)}>Edit</button>
           )}
+          {isAuthored && (
+            <button className="tv-btn tv-btn-danger" onClick={() => setDeleteConfirmUuid(art.uuid)}>Delete</button>
+          )}
           <button className="tv-btn" onClick={() => setMpExpanded(isExpanded ? null : art.uuid)}>
             {isExpanded ? 'Less' : 'Details'}
           </button>
@@ -1340,14 +1484,34 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   // Table renderers
   // ---------------------------------------------------------------------------
 
-  const renderMyTable = () => (
+  const renderMyTable = () => {
+    const sorted = [...filteredMyArtifacts].sort((a, b) => {
+      let av: string | number = '';
+      let bv: string | number = '';
+      switch (myTblSort.col) {
+        case 'name': av = a.name.toLowerCase(); bv = b.name.toLowerCase(); break;
+        case 'category': av = a.category; bv = b.category; break;
+        case 'source': av = sourceLabel(a); bv = sourceLabel(b); break;
+        case 'downloads': av = a.remote_artifact?.artifact_downloads_active ?? -1; bv = b.remote_artifact?.artifact_downloads_active ?? -1; break;
+        case 'published': av = a.remote_artifact?.versions?.[0]?.created || ''; bv = b.remote_artifact?.versions?.[0]?.created || ''; break;
+        case 'status': av = a.remote_status || ''; bv = b.remote_status || ''; break;
+      }
+      if (typeof av === 'number' && typeof bv === 'number') return myTblSort.dir === 'asc' ? av - bv : bv - av;
+      if (av < bv) return myTblSort.dir === 'asc' ? -1 : 1;
+      if (av > bv) return myTblSort.dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    const h = (col: string, label: string) => (
+      <th onClick={() => toggleTblSort(setMyTblSort, myTblSort, col)}>{label} {tblSortArrow(col, myTblSort.col, myTblSort.dir)}<div className="tv-col-resize" onMouseDown={handleColResizeStart} /></th>
+    );
+    return (
     <div className="tv-table-wrap">
       <table className="tv-table">
         <thead><tr>
-          <th>Name</th><th>Category</th><th>Source</th><th>Downloads</th><th>Status</th><th>Actions</th>
+          {h('name', 'Name')}{h('category', 'Category')}{h('source', 'Source')}{h('downloads', 'Downloads')}{h('published', 'Published')}{h('status', 'Status')}<th>Actions</th>
         </tr></thead>
         <tbody>
-          {filteredMyArtifacts.map(art => {
+          {sorted.map(art => {
             return (
               <tr key={`${art.category}-${art.dir_name}`}>
                 <td className="tv-table-name">
@@ -1356,7 +1520,8 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                 <td><span className={`tv-badge tv-badge-cat tv-badge-cat-${art.category}`}>{categoryLabel(art.category)}</span></td>
                 <td>{sourceLabel(art)}</td>
                 <td>{art.remote_artifact?.artifact_downloads_active ?? '—'}</td>
-                <td>{art.remote_status === 'linked' ? 'Linked' : art.remote_status === 'remote_deleted' ? 'Remote Deleted' : 'Local Only'}</td>
+                <td>{fmtPubDate(art.remote_artifact)}</td>
+                <td>{art.remote_status === 'linked' ? (art.update_available ? 'Update Available' : 'Linked') : art.remote_status === 'remote_deleted' ? 'Remote Deleted' : art.remote_status === 'check_failed' ? 'Check Failed' : 'Local Only'}</td>
                 <td className="tv-table-actions">
                   <button className="tv-btn tv-btn-primary" onClick={() => handleOpenArtifact(art)}>Open</button>
                   <button className="tv-btn tv-btn-publish" onClick={() => handlePublishArtifact(art)}>
@@ -1372,16 +1537,38 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         </tbody>
       </table>
     </div>
-  );
+  );};
 
-  const renderMpTable = (arts: RemoteArtifact[] = filteredMpArtifacts) => (
+  const renderMpTable = (arts: RemoteArtifact[] = filteredMpArtifacts) => {
+    const sorted = [...arts].sort((a, b) => {
+      let av: string | number = '';
+      let bv: string | number = '';
+      switch (mpTblSort.col) {
+        case 'title': av = a.title.toLowerCase(); bv = b.title.toLowerCase(); break;
+        case 'category': av = a.category; bv = b.category; break;
+        case 'authors': av = a.authors?.map(x => x.name).join(', ') || ''; bv = b.authors?.map(x => x.name).join(', ') || ''; break;
+        case 'downloads': av = a.artifact_downloads_active; bv = b.artifact_downloads_active; break;
+        case 'published': av = a.versions?.[0]?.created || ''; bv = b.versions?.[0]?.created || ''; break;
+        case 'versions': av = a.number_of_versions; bv = b.number_of_versions; break;
+        case 'visibility': av = a.visibility; bv = b.visibility; break;
+        case 'tags': av = a.tags?.join(', ') || ''; bv = b.tags?.join(', ') || ''; break;
+      }
+      if (typeof av === 'number' && typeof bv === 'number') return mpTblSort.dir === 'asc' ? av - bv : bv - av;
+      if (av < bv) return mpTblSort.dir === 'asc' ? -1 : 1;
+      if (av > bv) return mpTblSort.dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    const h = (col: string, label: string) => (
+      <th onClick={() => toggleTblSort(setMpTblSort, mpTblSort, col)}>{label} {tblSortArrow(col, mpTblSort.col, mpTblSort.dir)}<div className="tv-col-resize" onMouseDown={handleColResizeStart} /></th>
+    );
+    return (
     <div className="tv-table-wrap">
       <table className="tv-table">
         <thead><tr>
-          <th>Title</th><th>Category</th><th>Authors</th><th>Downloads</th><th>Versions</th><th>Visibility</th><th>Tags</th><th>Actions</th>
+          {h('title', 'Title')}{h('category', 'Category')}{h('authors', 'Authors')}{h('downloads', 'Downloads')}{h('published', 'Published')}{h('versions', 'Versions')}{h('visibility', 'Visibility')}{h('tags', 'Tags')}<th>Actions</th>
         </tr></thead>
         <tbody>
-          {arts.map(art => (
+          {sorted.map(art => (
             <tr key={art.uuid}>
               <td className="tv-table-name">
                 <span className="tv-table-name-text">{art.title}</span>
@@ -1391,6 +1578,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
               <td><span className={`tv-badge tv-badge-cat tv-badge-cat-${art.category}`}>{categoryLabel(art.category)}</span></td>
               <td>{art.authors?.map(a => a.name).join(', ') || '—'}</td>
               <td>{art.artifact_downloads_active}</td>
+              <td>{fmtPubDate(art)}</td>
               <td>{art.number_of_versions}</td>
               <td>{art.visibility}</td>
               <td className="tv-table-tags">{art.tags?.join(', ') || '—'}</td>
@@ -1401,13 +1589,18 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                 {allAuthoredArtifacts.some(a => a.uuid === art.uuid) && (
                   <button className="tv-btn" onClick={() => openRemoteEditor(art)}>Edit</button>
                 )}
+                {allAuthoredArtifacts.some(a => a.uuid === art.uuid) && (
+                  <button className="tv-btn tv-btn-danger" onClick={() => setDeleteConfirmUuid(art.uuid)}>
+                    <BtnText full="Delete" short="Del" />
+                  </button>
+                )}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
-  );
+  );};
 
   // ---------------------------------------------------------------------------
   // Preview renderers
@@ -1425,8 +1618,14 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
               <input className="tv-pub-input" value={detailEditName} onChange={e => setDetailEditName(e.target.value)} />
             </div>
             <div className="tv-editor-field-row" style={{ marginBottom: 8 }}>
-              <label className="tv-edit-label">Description</label>
-              <textarea className="tv-pub-textarea" value={detailEditDesc} onChange={e => setDetailEditDesc(e.target.value)} rows={3} />
+              <label className="tv-edit-label">Short Description</label>
+              <input className="tv-pub-input" value={detailEditDesc} onChange={e => setDetailEditDesc(e.target.value)}
+                maxLength={255} placeholder="Brief summary (5-255 chars)" />
+            </div>
+            <div className="tv-editor-field-row" style={{ marginBottom: 8 }}>
+              <label className="tv-edit-label">Long Description</label>
+              <textarea className="tv-pub-textarea" value={detailEditDescLong} onChange={e => setDetailEditDescLong(e.target.value)}
+                rows={3} placeholder="Detailed description (optional)" />
             </div>
             <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
               <button className="tv-btn tv-btn-primary" onClick={() => saveDetailEdit(art.dir_name)} disabled={detailSaving}>
@@ -1438,7 +1637,8 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         ) : (
           <>
             <h2 className="tv-pv-detail-name">{art.name}</h2>
-            {art.description && <p className="tv-pv-detail-desc">{art.description}</p>}
+            {(art.description_short || art.description) && <p className="tv-pv-detail-desc">{art.description_short || art.description}</p>}
+            {art.description_long && <p className="tv-pv-detail-desc" style={{ marginTop: 4, fontSize: 12, opacity: 0.85 }}>{art.description_long}</p>}
           </>
         )}
         <div className="tv-pv-detail-badges">
@@ -1459,6 +1659,9 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
               <span className="tv-pv-label">Version</span><span>{r.versions?.[0]?.version || 'N/A'}</span>
               <span className="tv-pv-label">Downloads</span><span>{r.artifact_downloads_active}</span>
               <span className="tv-pv-label">Visibility</span><span>{r.visibility}</span>
+              {r.versions?.[0]?.created && <><span className="tv-pv-label">Published</span><span>{new Date(r.versions[0].created).toLocaleString()}</span></>}
+              <span className="tv-pv-label">Artifact UUID</span><span className="tv-pv-uuid" title={r.uuid}>{r.uuid}</span>
+              {r.versions?.[0]?.uuid && <><span className="tv-pv-label">Version UUID</span><span className="tv-pv-uuid" title={r.versions[0].uuid}>{r.versions[0].uuid}</span></>}
             </>
           )}
         </div>
@@ -1496,8 +1699,14 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
               <input className="tv-pub-input" value={mpEditTitle} onChange={e => setMpEditTitle(e.target.value)} />
             </div>
             <div className="tv-editor-field-row" style={{ marginBottom: 6 }}>
-              <label className="tv-edit-label">Description</label>
-              <textarea className="tv-pub-textarea" value={mpEditDesc} onChange={e => setMpEditDesc(e.target.value)} rows={3} />
+              <label className="tv-edit-label">Short Description</label>
+              <input className="tv-pub-input" value={mpEditDesc} onChange={e => setMpEditDesc(e.target.value)}
+                maxLength={255} placeholder="Brief summary (5-255 chars)" />
+            </div>
+            <div className="tv-editor-field-row" style={{ marginBottom: 6 }}>
+              <label className="tv-edit-label">Long Description</label>
+              <textarea className="tv-pub-textarea" value={mpEditDescLong} onChange={e => setMpEditDescLong(e.target.value)}
+                rows={3} placeholder="Detailed description (optional)" />
             </div>
             <div className="tv-editor-field-row" style={{ marginBottom: 6 }}>
               <label className="tv-edit-label">Visibility</label>
@@ -1545,7 +1754,8 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         ) : (
           <>
             <h2 className="tv-pv-detail-name">{art.title}</h2>
-            {(art.description_long || art.description_short) && <p className="tv-pv-detail-desc">{stripCategoryMarker(art.description_long || art.description_short)}</p>}
+            {art.description_short && <p className="tv-pv-detail-desc">{stripCategoryMarker(art.description_short)}</p>}
+            {art.description_long && <p className="tv-pv-detail-desc" style={{ marginTop: 4, fontSize: 12, opacity: 0.85 }}>{stripCategoryMarker(art.description_long)}</p>}
           </>
         )}
 
@@ -1559,9 +1769,12 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
             <span className="tv-pv-label">Views</span><span>{art.artifact_views}</span>
             <span className="tv-pv-label">Versions</span><span>{art.number_of_versions}</span>
             {art.versions?.length > 0 && <><span className="tv-pv-label">Latest</span><span>{art.versions[0].version} ({art.versions[0].version_downloads} downloads)</span></>}
+            {art.versions?.[0]?.created && <><span className="tv-pv-label">Published</span><span>{new Date(art.versions[0].created).toLocaleString()}</span></>}
             <span className="tv-pv-label">Created</span><span>{new Date(art.created).toLocaleDateString()}</span>
             {art.modified && <><span className="tv-pv-label">Updated</span><span>{new Date(art.modified).toLocaleDateString()}</span></>}
             {art.tags?.length > 0 && <><span className="tv-pv-label">Tags</span><span>{art.tags.join(', ')}</span></>}
+            <span className="tv-pv-label">Artifact UUID</span><span className="tv-pv-uuid" title={art.uuid}>{art.uuid}</span>
+            {art.versions?.length > 0 && <><span className="tv-pv-label">Version UUID</span><span className="tv-pv-uuid" title={art.versions[0].uuid}>{art.versions[0].uuid}</span></>}
           </div>
         )}
 
@@ -1674,8 +1887,14 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         <input className="tv-pub-input" value={editRemoteTitle} onChange={e => setEditRemoteTitle(e.target.value)} />
       </div>
       <div className="tv-editor-field-row">
-        <label className="tv-edit-label">Description</label>
-        <textarea className="tv-pub-textarea" value={editRemoteDesc} onChange={e => setEditRemoteDesc(e.target.value)} rows={2} />
+        <label className="tv-edit-label">Short Description</label>
+        <input className="tv-pub-input" value={editRemoteDesc} onChange={e => setEditRemoteDesc(e.target.value)}
+          maxLength={255} placeholder="Brief summary (5-255 chars)" />
+      </div>
+      <div className="tv-editor-field-row">
+        <label className="tv-edit-label">Long Description</label>
+        <textarea className="tv-pub-textarea" value={editRemoteDescLong} onChange={e => setEditRemoteDescLong(e.target.value)}
+          rows={2} placeholder="Detailed description (optional)" />
       </div>
       <div className="tv-editor-field-row">
         <label className="tv-edit-label">Visibility</label>
@@ -2023,13 +2242,13 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       )}
 
       <div className="tv-tabs">
-        <button className={`tv-tab ${tab === 'my-artifacts' ? 'active' : ''}`} onClick={() => setTab('my-artifacts')}>
+        <button className={`tv-tab ${tab === 'my-artifacts' ? 'active' : ''}`} onClick={() => setTab('my-artifacts')} data-help-id="libraries.my-artifacts">
           My Artifacts ({myArtifacts.length})
         </button>
-        <button className={`tv-tab ${tab === 'published' ? 'active' : ''}`} onClick={() => { setTab('published'); if (!mpLoaded) fetchMarketplace(); }}>
+        <button className={`tv-tab ${tab === 'published' ? 'active' : ''}`} onClick={() => { setTab('published'); if (!mpLoaded) fetchMarketplace(); }} data-help-id="libraries.publish">
           Published {mpLoaded ? `(${allAuthoredArtifacts.length})` : ''}
         </button>
-        <button className={`tv-tab ${tab === 'community' ? 'active' : ''}`} onClick={() => { setTab('community'); if (!mpLoaded) fetchMarketplace(); }}>
+        <button className={`tv-tab ${tab === 'community' ? 'active' : ''}`} onClick={() => { setTab('community'); if (!mpLoaded) fetchMarketplace(); }} data-help-id="libraries.marketplace">
           Community Marketplace {mpLoaded ? `(${mpAllArtifacts.length})` : ''}
         </button>
       </div>
@@ -2205,7 +2424,8 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                   <span className="tv-my-filter-label">Category:</span>
                   {(['all', ...mpUniqueCategories] as CategoryFilter[]).map(c => (
                     <button key={c} className={`tv-my-filter-chip ${mpCategoryFilter === c ? 'active' : ''}`}
-                      onClick={() => setMpCategoryFilter(c)}>
+                      onClick={() => setMpCategoryFilter(c)}
+                      {...(c === 'weave' ? { 'data-tour-id': 'mp-filter-weave' } : {})}>
                       {c === 'all' ? 'All' : categoryLabel(c)}
                     </button>
                   ))}
@@ -2391,6 +2611,66 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                 ))}
               </div>
             </div>
+            {pubVisibility === 'project' && pubProjects.length > 0 && (
+              <div className="tv-pub-field">
+                <label className="tv-pub-label">Project</label>
+                <select className="tv-pub-select" value={pubProjectUuid} onChange={e => setPubProjectUuid(e.target.value)}>
+                  <option value="">Select a project...</option>
+                  {pubProjects.map(p => <option key={p.uuid} value={p.uuid}>{p.name}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="tv-pub-field">
+              <label className="tv-pub-label">Authors</label>
+              <div className="tv-pub-authors">
+                {pubAuthors.map((a, i) => (
+                  <div key={i} className="tv-pub-author-row">
+                    <span className="tv-pub-author-name">{a.name}</span>
+                    {a.affiliation && <span className="tv-pub-author-affil">{a.affiliation}</span>}
+                    <button className="tv-pub-author-remove" onClick={() => removePubAuthor(i)}>&times;</button>
+                  </div>
+                ))}
+                {pubShowAuthorSearch ? (
+                  <div className="tv-pub-author-search" ref={pubAuthorSearchRef}>
+                    <input
+                      value={pubAuthorSearch}
+                      onChange={e => handlePubAuthorSearch(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && pubAuthorSearch.trim()) { e.preventDefault(); addPubAuthorCustom(); }
+                        else if (e.key === 'Escape') { setPubShowAuthorSearch(false); setPubAuthorSearch(''); setPubAuthorResults([]); }
+                      }}
+                      placeholder="Search by name, email, or UUID..."
+                      autoFocus
+                    />
+                    {(pubAuthorSearch.length >= 3 || pubAuthorSearching) && (
+                      <div className="tv-pub-author-dropdown">
+                        {pubAuthorSearching ? (
+                          <div className="tv-pub-author-no-results">Searching...</div>
+                        ) : pubAuthorResults.length > 0 ? (
+                          pubAuthorResults.map(person => (
+                            <button key={person.uuid} className="tv-pub-author-option" onClick={() => addPubAuthor(person)}>
+                              <span className="tv-pub-author-option-name">{person.name}</span>
+                              <span className="tv-pub-author-option-detail">
+                                {person.email}{person.affiliation ? ` — ${person.affiliation}` : ''}
+                              </span>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="tv-pub-author-no-results">
+                            No matching users.{' '}
+                            <button className="tv-pub-author-add-custom" onClick={addPubAuthorCustom}>
+                              Add &quot;{pubAuthorSearch}&quot;
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <button className="tv-pub-add-author-btn" onClick={() => setPubShowAuthorSearch(true)}>+ Add Author</button>
+                )}
+              </div>
+            </div>
             <div className="tv-pub-field">
               <label className="tv-pub-label">Tags</label>
               <div className="tv-pub-tags">
@@ -2486,6 +2766,35 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                 {mpDownloading === versionPickerArt.uuid ? 'Getting...' : 'Get Latest'}
               </button>
               <button className="tv-btn" onClick={() => setVersionPickerArt(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {deleteConfirmUuid && (
+        <div className="tv-pub-overlay" onClick={() => setDeleteConfirmUuid(null)}>
+          <div className="tv-pub-dialog" onClick={e => e.stopPropagation()} style={{ width: '420px' }}>
+            <div className="tv-pub-header">
+              Delete Published Artifact
+              <button className="tv-btn" onClick={() => setDeleteConfirmUuid(null)} style={{ marginLeft: 'auto' }}>Close</button>
+            </div>
+            <div className="tv-pub-field" style={{ fontSize: 13 }}>
+              <p style={{ margin: '0 0 12px' }}>
+                This will <strong>permanently delete</strong> this artifact from the FABRIC Artifact Manager. All versions will be removed and this action cannot be undone.
+              </p>
+              <p style={{ margin: '0 0 12px', color: 'var(--fabric-coral, #e25241)' }}>
+                Other users who have downloaded this artifact will keep their local copies, but no new downloads or updates will be possible.
+              </p>
+              <p style={{ margin: 0, fontSize: 11, opacity: 0.7 }}>
+                UUID: {deleteConfirmUuid}
+              </p>
+            </div>
+            <div className="tv-pub-actions">
+              <button className="tv-btn tv-btn-danger" onClick={() => handleDeleteRemote(deleteConfirmUuid)} disabled={deleteBusy}>
+                {deleteBusy ? 'Deleting...' : 'Yes, Permanently Delete'}
+              </button>
+              <button className="tv-btn" onClick={() => setDeleteConfirmUuid(null)}>Cancel</button>
             </div>
           </div>
         </div>

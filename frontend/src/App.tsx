@@ -512,6 +512,7 @@ export default function App() {
     has_bastion_key: !!configStatus?.has_bastion_key,
     has_slice_key: !!configStatus?.has_slice_key,
     configured: !!configStatus?.configured,
+    has_ai_api_key: !!configStatus?.ai_api_key_set,
     // Slices
     has_slices: slices.length > 0,
     slice_loaded: !!sliceData,
@@ -2227,7 +2228,7 @@ export default function App() {
               onOpenSettings={() => setSettingsOpen(true)}
               listLoaded={listLoaded}
               onLoadSlices={refreshSliceList}
-              onStartTour={() => startTour('getting-started')}
+              onStartTour={(id: string) => startTour(id)}
             />
           ) : currentView === 'jupyter' ? (
             <JupyterLabView initialPath={jupyterPath} dark={dark} />

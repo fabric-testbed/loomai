@@ -8,7 +8,7 @@ interface LandingViewProps {
   onOpenSettings: () => void;
   listLoaded: boolean;
   onLoadSlices: () => void;
-  onStartTour: () => void;
+  onStartTour: (tourId: string) => void;
 }
 
 const QUICK_LINKS: Array<{ view: TopView; icon: string; label: string; desc: string }> = [
@@ -31,9 +31,14 @@ export default function LandingView({ onNavigate, onOpenSettings, listLoaded, on
           <p className="landing-hero-subtitle">
             FABRIC's loom for weaving custom network fabrics &mdash; aided by AI
           </p>
-          <button className="landing-tour-btn" onClick={onStartTour}>
-            Take the Guided Tour
-          </button>
+          <div className="landing-tour-buttons">
+            <button className="landing-tour-btn landing-tour-btn-primary" onClick={() => onStartTour('discover-loomai')}>
+              Discover LoomAI
+            </button>
+            <button className="landing-tour-btn landing-tour-btn-secondary" onClick={() => onStartTour('getting-started')}>
+              Getting Started
+            </button>
+          </div>
         </section>
 
         {/* About cards */}

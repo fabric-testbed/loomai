@@ -177,6 +177,29 @@
   display: none;
 }
 
+/* Fullscreen / image-based tour steps */
+.tour-tooltip.tour-tooltip-fullscreen {
+  width: min(640px, 90vw);
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.tour-tooltip-image {
+  display: block;
+  width: 100%;
+  max-height: 340px;
+  object-fit: contain;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  margin: 8px 0 12px;
+  background: #f5f5f5;
+}
+
+[data-theme="dark"] .tour-tooltip-image {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #2a2a2a;
+}
+
 /* Help page "Start Tour" button */
 .help-tour-btn {
   padding: 6px 18px;
