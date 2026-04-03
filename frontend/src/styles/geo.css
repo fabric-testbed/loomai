@@ -105,6 +105,76 @@
   color: #5798bc;
 }
 
+/* Map legend overlay (bottom-left) */
+.geo-legend {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 1000;
+  background: rgba(255, 255, 255, 0.92);
+  color: #333;
+  border-radius: 6px;
+  padding: 10px 14px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  font-size: 11px;
+  line-height: 1.5;
+  pointer-events: auto;
+  max-width: 160px;
+}
+
+.geo-legend-section {
+  margin-bottom: 6px;
+}
+.geo-legend-section:last-child {
+  margin-bottom: 0;
+}
+
+.geo-legend-title {
+  display: block;
+  font-weight: 700;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #666;
+  margin-bottom: 3px;
+}
+
+.geo-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 0;
+}
+
+.geo-legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  flex-shrink: 0;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.25);
+}
+
+.geo-legend-line {
+  display: inline-block;
+  width: 20px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* Dark mode adjustments for legend */
+[data-theme="dark"] .geo-legend,
+.dark .geo-legend {
+  background: rgba(30, 30, 40, 0.92);
+  color: #ddd;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+[data-theme="dark"] .geo-legend-title,
+.dark .geo-legend-title {
+  color: #aaa;
+}
+
 /* Site popup */
 .site-popup h3 {
   font-size: 14px;

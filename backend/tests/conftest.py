@@ -108,6 +108,10 @@ def client(mock_fablib, storage_dir):
     original_lifespan = main_module.app.router.lifespan_context
     main_module.app.router.lifespan_context = _noop_lifespan
 
+    # Reset the call manager singleton so cached data doesn't leak between tests
+    from app.fabric_call_manager import reset_call_manager
+    reset_call_manager()
+
     # Clear draft state between tests
     from app.routes import slices as slices_mod
     slices_mod._draft_slices.clear()
@@ -117,11 +121,12 @@ def client(mock_fablib, storage_dir):
     slices_mod._draft_l3_config.clear()
     slices_mod._draft_project_id.clear()
 
-    # Pre-populate the resources cache so /api/sites doesn't call FABlib
+    # Pre-populate the call manager's sites cache so /api/sites doesn't call FABlib
     import time
-    from app.routes import resources as res_mod
+    from app.fabric_call_manager import get_call_manager, CacheEntry
     sites_data = default_sites()
-    res_mod._cache["sites"] = (time.time(), sites_data)
+    mgr = get_call_manager()
+    mgr._cache["sites"] = CacheEntry(data=sites_data, timestamp=time.time())
 
     # Also patch resources.get_cached_sites for routes that use it
     # and jupyter.ensure_slice_workdir which is called during slice creation

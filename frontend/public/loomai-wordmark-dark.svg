@@ -1,0 +1,5 @@
+<svg width="320" height="80" viewBox="0 0 320 80" xmlns="http://www.w3.org/2000/svg">
+  <!-- LoomAI Wordmark Only — Dark Background -->
+  <rect width="320" height="80" fill="#0d1520"/>
+  <text x="16" y="54" font-size="52" font-weight="700" letter-spacing="-1.5" fill="#e8f0f8" font-family="'Inter','Helvetica Neue',Arial,sans-serif">Loom<tspan fill="#27aae1">AI</tspan></text>
+</svg>

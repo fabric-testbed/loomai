@@ -755,6 +755,10 @@
   background: rgba(226, 82, 65, 0.1);
   color: var(--fabric-coral, #e25241);
 }
+.tv-badge-cat-experiment {
+  background: rgba(156, 39, 176, 0.12);
+  color: #9c27b0;
+}
 .tv-badge-cat-other {
   background: rgba(100, 100, 100, 0.1);
   color: var(--fabric-text-muted);

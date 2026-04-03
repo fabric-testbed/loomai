@@ -7,14 +7,14 @@ Help the user clone, export, or import FABRIC slices.
 
 ### Clone a Slice
 Create a copy of an existing slice as a new draft:
-1. `fabric_get_slice(slice_name)` — verify the source exists
+1. `get_slice(slice_name)` — verify the source exists
 2. Clone creates a new draft with the same topology but a new name
 3. The clone is a draft — it must be submitted separately
 4. Useful for: creating variations, testing changes without affecting the original
 
 ### Export a Slice
 Save the slice topology as a `.fabric.json` file:
-1. `fabric_get_slice(slice_name)` — get current topology
+1. `get_slice(slice_name)` — get current topology
 2. Export produces a JSON file with nodes, networks, components, and boot config
 3. File is saved to `/home/fabric/work/` for later use
 4. Useful for: sharing topologies, version control, documentation

@@ -4,12 +4,12 @@ description: Install software tools on FABRIC VMs with OS detection and proper p
 Help the user install software on FABRIC VM nodes.
 
 1. **Identify the target**:
-   - `fabric_get_slice(slice_name)` — verify slice is StableOK
-   - `fabric_node_info(slice_name, node_name)` — get node image/OS
+   - `get_slice(slice_name)` — verify slice is StableOK
+   - `get_slice(slice_name, node_name)` — get node image/OS
 
 2. **Detect OS** on the node:
    ```
-   fabric_slice_ssh(slice, node, "cat /etc/os-release | head -5")
+   ssh_execute(slice, node, "cat /etc/os-release | head -5")
    ```
    - Ubuntu/Debian → `apt-get`
    - Rocky/CentOS/Fedora → `dnf` (or `yum` for older)
@@ -34,7 +34,7 @@ Help the user install software on FABRIC VM nodes.
 
 6. **Verify installation**:
    ```
-   fabric_slice_ssh(slice, node, "<tool> --version")
+   ssh_execute(slice, node, "<tool> --version")
    ```
 
 **Tips:**

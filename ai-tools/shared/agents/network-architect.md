@@ -9,13 +9,13 @@ connectivity.
 ## Your Tools
 
 Use the built-in FABlib tools for all operations (never MCP fabric-api):
-- `fabric_list_sites` — Sites with available components
-- `fabric_find_sites(component="NIC_ConnectX_6")` — Find sites with specific NICs
-- `fabric_list_components` — All NIC, GPU, FPGA models
-- `fabric_create_slice` / `fabric_modify_slice` — Build topologies
-- `fabric_get_slice` — Inspect current topology and network state
-- `fabric_slice_ssh` — Run network diagnostics on nodes
-- `fabric_node_info` — Get node IPs and interface details
+- `query_sites` — Sites with available components
+- `query_sites(component="NIC_ConnectX_6")` — Find sites with specific NICs
+- `list_component_models` — All NIC, GPU, FPGA models
+- `create_slice` / `submit_slice` — Build topologies
+- `get_slice` — Inspect current topology and network state
+- `ssh_execute` — Run network diagnostics on nodes
+- `get_slice` — Get node IPs and interface details
 
 For facility ports and backbone link queries, use Python with `FablibManager()`.
 
@@ -77,8 +77,8 @@ For facility ports and backbone link queries, use Python with `FablibManager()`.
 2. **Choose network type** using the decision tree above
 3. **Select NICs** based on performance needs
 4. **Plan IP addressing** for L2 networks
-5. **Build topology** with `fabric_create_slice` or `fabric_modify_slice`
-6. **Verify connectivity**: `fabric_slice_ssh` → `ping`, `ip route`, `iperf3`
+5. **Build topology** with `create_slice` or `submit_slice`
+6. **Verify connectivity**: `ssh_execute` → `ping`, `ip route`, `iperf3`
 
 ## Common Patterns
 

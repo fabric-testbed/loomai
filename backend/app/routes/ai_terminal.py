@@ -15,8 +15,8 @@ import termios
 import time
 import urllib.request
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.settings_manager import get_fabric_api_key as _get_ai_api_key, get_nrp_api_key as _get_nrp_api_key
 from app.tool_installer import (
@@ -61,8 +61,8 @@ _PREFERRED_SMALL = [
 ]
 
 
-def _fetch_models(api_key: str) -> list[str]:
-    """Query the FABRIC AI server for available model IDs."""
+def _fetch_models(api_key: str) -> list[dict]:
+    """Query the FABRIC AI server for available models with metadata."""
     url = f"{_ai_server_url()}/v1/models"
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {api_key}",
@@ -70,14 +70,20 @@ def _fetch_models(api_key: str) -> list[str]:
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = json.loads(resp.read())
-        return [m["id"] for m in body.get("data", [])]
+        return [
+            {
+                "id": m["id"],
+                "context_length": m.get("context_length") or m.get("context_window"),
+            }
+            for m in body.get("data", [])
+        ]
     except Exception as e:
         logger.warning("Could not fetch models from %s: %s", url, e)
         return []
 
 
-def _fetch_nrp_models(api_key: str) -> list[str]:
-    """Query the NRP LLM server for available model IDs."""
+def _fetch_nrp_models(api_key: str) -> list[dict]:
+    """Query the NRP LLM server for available models with metadata."""
     url = f"{_nrp_server_url()}/v1/models"
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {api_key}",
@@ -85,19 +91,58 @@ def _fetch_nrp_models(api_key: str) -> list[str]:
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = json.loads(resp.read())
-        return [m["id"] for m in body.get("data", [])]
+        return [
+            {
+                "id": m["id"],
+                "context_length": m.get("context_length") or m.get("context_window"),
+            }
+            for m in body.get("data", [])
+        ]
     except Exception as e:
         logger.warning("Could not fetch models from %s: %s", url, e)
         return []
 
 
-def _pick_model(models: list[str], preferences: list[str], fallback: str) -> str:
+def _check_model_health(server_url: str, api_key: str, model_id: str) -> bool:
+    """Send a minimal completion to verify the model actually works.
+
+    Returns True if the model responds successfully, False otherwise.
+    Uses max_tokens=1 to minimize cost/latency.
+    """
+    try:
+        data = json.dumps({
+            "model": model_id,
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1,
+        }).encode()
+        req = urllib.request.Request(
+            f"{server_url}/v1/chat/completions",
+            data=data,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status == 200
+    except Exception as e:
+        logger.debug("Model health check failed for %s: %s", model_id, e)
+        return False
+
+
+def _model_ids(models: list) -> list[str]:
+    """Extract model IDs from a list that may be strings or dicts."""
+    return [m["id"] if isinstance(m, dict) else m for m in models]
+
+
+def _pick_model(models: list, preferences: list[str], fallback: str) -> str:
     """Pick the best model from available list using preference order."""
+    ids = _model_ids(models)
     for pref in preferences:
-        for m in models:
+        for m in ids:
             if pref in m.lower():
                 return m
-    return models[0] if models else fallback
+    return ids[0] if ids else fallback
 
 
 def _build_opencode_config(
@@ -132,7 +177,7 @@ def _build_opencode_config(
 
     # Build models dict — each available model gets an entry
     models_dict = {}
-    for m in (models if models else [default]):
+    for m in (_model_ids(models) if models else [default]):
         models_dict[m] = {"name": m}
     if default not in models_dict:
         models_dict[default] = {"name": default}
@@ -156,7 +201,7 @@ def _build_opencode_config(
     if nrp_key:
         nrp_models = _fetch_nrp_models(nrp_key)
         if nrp_models:
-            nrp_models_dict = {m: {"name": m} for m in nrp_models}
+            nrp_models_dict = {m: {"name": m} for m in _model_ids(nrp_models)}
             providers["nrp"] = {
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "NRP",
@@ -175,7 +220,7 @@ def _build_opencode_config(
         "small_model": f"fabric/{small}",
         # Internal: used to configure the model proxy (not written to JSON)
         "_default": default,
-        "_allowed": models if models else [default],
+        "_allowed": _model_ids(models) if models else [default],
     }
 
     # Merge workspace config (mcp, agent, command)
@@ -207,6 +252,132 @@ _DEEPAGENTS_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "deepagents")
 # Skills to skip (conflict with OpenCode internals)
 _SKIP_SKILLS = {"compact", "help"}
 
+# Per-tool preambles explaining how each tool should execute FABRIC operations.
+# Prepended to AGENTS.md so the AI knows its available methods.
+_TOOL_PREAMBLES = {
+    "opencode": """\
+# How to Execute FABRIC Operations (OpenCode)
+
+You are running inside the LoomAI container. **Always use the `loomai` CLI** as your
+primary way to manage FABRIC slices, resources, SSH, and file transfers. It is faster
+and more reliable than curl, and outputs structured data (`--format json` for parsing).
+
+**Quick reference:**
+```bash
+loomai slices list                                # List slices
+loomai slices create my-exp                       # Create draft
+loomai nodes add my-exp node1 --site RENC --cores 4 --ram 16 --disk 50
+loomai slices submit my-exp --wait                # Submit and wait for ready
+loomai ssh my-exp node1 -- hostname               # Run command on node
+loomai exec my-exp "apt update" --all --parallel  # Run on all nodes
+loomai scp my-exp node1 ./file.sh /tmp/file.sh    # Upload file
+loomai sites find --cores 8 --gpu GPU_RTX6000     # Find sites
+loomai weaves run Hello_FABRIC --args SLICE_NAME=test  # Run weave
+loomai artifacts list --remote                    # Browse marketplace
+```
+
+**Fallback methods** (for complex automation only):
+- curl to `http://localhost:8000/api/*`
+- Python scripts using FABlib (`from fabrictestbed_extensions.fablib.fablib import FablibManager`)
+
+**MCP Tool Calling (advanced):**
+OpenCode can also call FABRIC operations via MCP tool servers (configured in `.opencode/mcp-scripts/`).
+These provide direct API access without shell commands. Prefer `loomai` CLI for most tasks.
+
+---
+
+""",
+    "aider": """\
+# How to Execute FABRIC Operations (Aider)
+
+You are running inside the LoomAI container. **Use the `loomai` CLI** for all FABRIC
+operations. You do NOT have tool-calling — run shell commands or write code files.
+
+```bash
+loomai slices list                    # List slices
+loomai slices create my-exp           # Create draft
+loomai nodes add my-exp node1 --site auto --cores 4 --ram 16 --disk 50
+loomai slices submit my-exp --wait    # Submit and wait
+loomai ssh my-exp node1 -- hostname   # SSH command
+loomai exec my-exp "cmd" --all        # Run on all nodes
+loomai sites list --available         # Available sites
+```
+
+All commands support `--format json` for structured output.
+
+---
+
+""",
+    "claude-code": """\
+# How to Execute FABRIC Operations (Claude Code)
+
+You are running inside the LoomAI container. **Use the `loomai` CLI** for all FABRIC
+operations — it's the fastest and most reliable method.
+
+```bash
+loomai slices list                                # List slices
+loomai slices create my-exp && loomai nodes add my-exp node1 --site RENC --cores 4 --ram 16
+loomai slices submit my-exp --wait --timeout 600  # Submit and wait
+loomai ssh my-exp node1 -- "uname -a"             # SSH command
+loomai exec my-exp "df -h" --all --parallel       # Multi-node exec
+loomai sites find --gpu GPU_RTX6000               # Find GPU sites
+loomai --format json slices show my-exp           # JSON output for parsing
+```
+
+---
+
+""",
+    "crush": """\
+# How to Execute FABRIC Operations (Crush)
+
+You are running inside the LoomAI container. **Use the `loomai` CLI** for FABRIC operations.
+
+```bash
+loomai slices list                    # List slices
+loomai sites list --available         # Available sites
+loomai ssh my-exp node1 -- hostname   # SSH command
+loomai exec my-exp "cmd" --all        # Multi-node exec
+```
+
+---
+
+""",
+    "deepagents": """\
+# How to Execute FABRIC Operations (Deep Agents)
+
+You are running inside the LoomAI container. **Use the `loomai` CLI** as your primary
+tool for managing FABRIC slices, SSH, file transfers, and resource queries.
+
+```bash
+loomai slices list                                # List slices
+loomai slices create my-exp                       # Create draft
+loomai nodes add my-exp node1 --site auto --cores 4 --ram 16 --disk 50
+loomai slices submit my-exp --wait                # Submit and wait
+loomai exec my-exp "apt update" --all --parallel  # Multi-node parallel exec
+loomai scp my-exp ./data.tar.gz /tmp/ --all       # Upload to all nodes
+loomai sites find --cores 16 --ram 64             # Find matching sites
+```
+
+---
+
+""",
+}
+
+
+def _write_agents_md(cwd: str, tool_name: str) -> None:
+    """Write AGENTS.md with a tool-specific preamble + shared FABRIC_AI.md content."""
+    agents_md = os.path.join(cwd, "AGENTS.md")
+    if os.path.isfile(agents_md):
+        return  # Don't overwrite existing
+    if not os.path.isfile(_FABRIC_AI_MD_PATH):
+        return
+    preamble = _TOOL_PREAMBLES.get(tool_name, "")
+    with open(_FABRIC_AI_MD_PATH) as f:
+        content = f.read()
+    with open(agents_md, "w") as f:
+        f.write(preamble + content)
+    logger.info("Wrote AGENTS.md for %s (with preamble)", tool_name)
+
 
 def _setup_opencode_workspace(cwd: str) -> dict:
     """Set up FABRIC tools, skills, agents, MCP servers, and instructions.
@@ -227,10 +398,7 @@ def _setup_opencode_workspace(cwd: str) -> dict:
     oc_dir = os.path.join(cwd, ".opencode")
 
     # --- AGENTS.md (auto-discovered by OpenCode as project instructions) ---
-    agents_md = os.path.join(cwd, "AGENTS.md")
-    if os.path.isfile(_FABRIC_AI_MD_PATH):
-        shutil.copy2(_FABRIC_AI_MD_PATH, agents_md)
-        logger.info("Wrote AGENTS.md from FABRIC_AI.md")
+    _write_agents_md(cwd, "opencode")
 
     # --- Skills → .opencode/skills/<name>/SKILL.md ---
     skills_src = os.path.join(_OPENCODE_DEFAULTS_DIR, "skills")
@@ -364,12 +532,12 @@ def _setup_aider_workspace(cwd: str) -> None:
     Copies:
     - .aider.conf.yml from ai-tools/aider/
     - AGENTS.md (shared FABRIC context, also used by Aider as read-only)
+
+    NRP support: Aider connects via the model proxy (OPENAI_API_BASE in
+    TOOL_CONFIGS) which routes to both FABRIC and NRP providers.
     """
-    # Shared FABRIC context
-    agents_md = os.path.join(cwd, "AGENTS.md")
-    if os.path.isfile(_FABRIC_AI_MD_PATH) and not os.path.isfile(agents_md):
-        shutil.copy2(_FABRIC_AI_MD_PATH, agents_md)
-        logger.info("Wrote AGENTS.md for Aider from FABRIC_AI.md")
+    # Shared FABRIC context with Aider-specific preamble
+    _write_agents_md(cwd, "aider")
 
     # Aider config
     src_conf = os.path.join(_AIDER_DEFAULTS_DIR, ".aider.conf.yml")
@@ -393,11 +561,8 @@ def _setup_claude_workspace(cwd: str) -> None:
     - AGENTS.md (shared FABRIC context, referenced by CLAUDE.md)
     - .claude/commands/*.md — shared skills as Claude Code slash commands
     """
-    # Shared FABRIC context
-    agents_md = os.path.join(cwd, "AGENTS.md")
-    if os.path.isfile(_FABRIC_AI_MD_PATH) and not os.path.isfile(agents_md):
-        shutil.copy2(_FABRIC_AI_MD_PATH, agents_md)
-        logger.info("Wrote AGENTS.md for Claude Code from FABRIC_AI.md")
+    # Shared FABRIC context with Claude Code-specific preamble
+    _write_agents_md(cwd, "claude-code")
 
     # Claude Code project instructions
     src_claude = os.path.join(_CLAUDE_DEFAULTS_DIR, "CLAUDE.md")
@@ -441,11 +606,8 @@ def _setup_crush_workspace(cwd: str, api_key: str, model_override: str = "") -> 
     - AGENTS.md (shared FABRIC context)
     - .crush.json with FABRIC and NRP LLM providers configured
     """
-    # Shared FABRIC context
-    agents_md = os.path.join(cwd, "AGENTS.md")
-    if os.path.isfile(_FABRIC_AI_MD_PATH) and not os.path.isfile(agents_md):
-        shutil.copy2(_FABRIC_AI_MD_PATH, agents_md)
-        logger.info("Wrote AGENTS.md for Crush from FABRIC_AI.md")
+    # Shared FABRIC context with Crush-specific preamble
+    _write_agents_md(cwd, "crush")
 
     # Build .crush.json with FABRIC and NRP providers
     models = _fetch_models(api_key) if api_key else []
@@ -501,6 +663,24 @@ def _setup_crush_workspace(cwd: str, api_key: str, model_override: str = "") -> 
         json.dump(crush_config, f, indent=2)
     logger.info("Wrote .crush.json for Crush with %d providers", len(providers))
 
+    # Copy shared skills and agents so Crush has FABRIC context
+    skills_src = os.path.join(_SHARED_DIR, "skills")
+    if os.path.isdir(skills_src):
+        skills_dst = os.path.join(cwd, ".crush", "skills")
+        os.makedirs(skills_dst, exist_ok=True)
+        for fname in os.listdir(skills_src):
+            if fname.endswith(".md"):
+                shutil.copy2(os.path.join(skills_src, fname), os.path.join(skills_dst, fname))
+        logger.info("Copied shared skills to .crush/skills/")
+    agents_src = os.path.join(_SHARED_DIR, "agents")
+    if os.path.isdir(agents_src):
+        agents_dst = os.path.join(cwd, ".crush", "agents")
+        os.makedirs(agents_dst, exist_ok=True)
+        for fname in os.listdir(agents_src):
+            if fname.endswith(".md"):
+                shutil.copy2(os.path.join(agents_src, fname), os.path.join(agents_dst, fname))
+        logger.info("Copied shared agents to .crush/agents/")
+
 
 def _setup_deepagents_workspace(cwd: str, api_key: str = "", model_override: str = "") -> None:
     """Seed Deep Agents configuration and FABRIC context into the workspace.
@@ -510,11 +690,8 @@ def _setup_deepagents_workspace(cwd: str, api_key: str = "", model_override: str
     - .deepagents/AGENTS.md (Deep Agents project instructions)
     - .deepagents/config.json (FABRIC + NRP provider config with models)
     """
-    # Shared FABRIC context
-    agents_md = os.path.join(cwd, "AGENTS.md")
-    if os.path.isfile(_FABRIC_AI_MD_PATH) and not os.path.isfile(agents_md):
-        shutil.copy2(_FABRIC_AI_MD_PATH, agents_md)
-        logger.info("Wrote AGENTS.md for Deep Agents from FABRIC_AI.md")
+    # Shared FABRIC context with Deep Agents-specific preamble
+    _write_agents_md(cwd, "deepagents")
 
     # Deep Agents project instructions
     da_dir = os.path.join(cwd, ".deepagents")
@@ -616,7 +793,7 @@ TOOL_CONFIGS = {
     "aider": {
         "env": lambda key: {
             "OPENAI_API_KEY": key,
-            "OPENAI_API_BASE": f"{_ai_server_url()}/v1",
+            "OPENAI_API_BASE": f"http://localhost:{_model_proxy_port()}/v1",
         },
         "cmd": [
             "aider",
@@ -940,22 +1117,361 @@ async def aider_web_status():
     return {"port": _AIDER_WEB_PORT if running else None, "status": "running" if running else "stopped"}
 
 
-@router.get("/api/ai/models")
-async def list_ai_models():
-    """Return available models from the FABRIC AI server and NRP."""
+def _fetch_all_models() -> dict:
+    """Fetch models from both providers (sync, for call manager caching)."""
+    api_key = _get_ai_api_key()
+    nrp_key = _get_nrp_api_key()
+
+    # Try FABRIC models — even without key, some servers allow listing
+    fabric_models_raw: list[dict] = []
+    fabric_error = ""
+    try:
+        key = api_key or "anonymous"
+        fabric_models_raw = _fetch_models(key)
+    except Exception as e:
+        fabric_error = str(e)
+
+    # Try NRP models
+    nrp_models_raw: list[dict] = []
+    nrp_error = ""
+    try:
+        if nrp_key:
+            nrp_models_raw = _fetch_nrp_models(nrp_key)
+        else:
+            nrp_models_raw = _fetch_nrp_models("anonymous")
+    except Exception as e:
+        nrp_error = str(e)
+
+    # Extract IDs for backward compat
+    fabric_model_ids = [m["id"] for m in fabric_models_raw]
+    nrp_model_ids = [m["id"] for m in nrp_models_raw]
+
+    # Health-check models: FABRIC first (preferred order), then NRP.
+    fabric_server = _ai_server_url()
+    fabric_key = api_key or "anonymous"
+    default = ""
+
+    # Sort FABRIC models so preferred ones are checked first
+    preferred_order = []
+    rest = []
+    ctx_map: dict[str, int | None] = {}  # model_id → context_length
+    for m in fabric_models_raw:
+        mid = m["id"]
+        ctx_map[mid] = m.get("context_length")
+        if any(p in mid.lower() for p in [p.lower() for p in _PREFERRED_MODELS]):
+            preferred_order.append(mid)
+        else:
+            rest.append(mid)
+    ordered_fabric = preferred_order + rest
+
+    from app.chat_context import get_model_profile
+
+    fabric_entries = []
+    for mid in ordered_fabric:
+        healthy = _check_model_health(fabric_server, fabric_key, mid)
+        profile = get_model_profile(mid, context_length=ctx_map.get(mid))
+        fabric_entries.append({
+            "id": mid, "name": mid, "healthy": healthy,
+            "context_length": ctx_map.get(mid) or profile["context_window"],
+            "tier": profile["tier"],
+            "supports_tools": profile.get("supports_tools", True),
+        })
+        if healthy and not default:
+            default = mid
+        logger.info("Model health: FABRIC/%s (ctx=%s) → %s%s", mid,
+                     ctx_map.get(mid, "?"),
+                     "ok" if healthy else "FAILED",
+                     " (default)" if mid == default else "")
+
+    # Then check NRP models
+    nrp_server = _nrp_server_url()
+    nrp_entries = []
+    for m in nrp_models_raw:
+        mid = m["id"]
+        ctx = m.get("context_length")
+        healthy = _check_model_health(nrp_server, nrp_key or "anonymous", mid)
+        profile = get_model_profile(mid, context_length=ctx)
+        nrp_entries.append({
+            "id": mid, "name": mid, "healthy": healthy,
+            "context_length": ctx or profile["context_window"],
+            "tier": profile["tier"],
+            "supports_tools": profile.get("supports_tools", True),
+        })
+        if healthy and not default:
+            default = mid
+        logger.info("Model health: NRP/%s (ctx=%s) → %s", mid, ctx or "?", "ok" if healthy else "FAILED")
+
+    # Check custom providers
+    from app.settings_manager import _get_settings
+    custom_providers_config = _get_settings().get("ai", {}).get("custom_providers", [])
+    custom_entries: dict[str, list[dict]] = {}
+    for cp in custom_providers_config:
+        cp_name = cp.get("name", "custom")
+        cp_url = cp.get("base_url", "")
+        cp_key = cp.get("api_key", "")
+        if not cp_url:
+            continue
+        try:
+            url = f"{cp_url.rstrip('/')}/v1/models"
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {cp_key}"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = json.loads(resp.read())
+            cp_models = []
+            for m in body.get("data", []):
+                mid = m["id"]
+                healthy = _check_model_health(cp_url.rstrip("/"), cp_key, mid)
+                cp_models.append({"id": mid, "name": mid, "healthy": healthy,
+                                  "context_length": m.get("context_length")})
+                if healthy and not default:
+                    default = f"{cp_name}:{mid}"
+            custom_entries[cp_name] = cp_models
+        except Exception as e:
+            logger.warning("Custom provider '%s' failed: %s", cp_name, e)
+            custom_entries[cp_name] = []
+
+    # Set default_model only if none is configured yet (don't overwrite user choice)
+    if default:
+        from app import settings_manager
+        current = settings_manager.get_default_model()
+        if not current:
+            source = "fabric"
+            if any(m["id"] == default for m in nrp_entries):
+                source = "nrp"
+            for cp_name, cp_models in custom_entries.items():
+                if any(m["id"] == default.replace(f"{cp_name}:", "") for m in cp_models):
+                    source = f"custom:{cp_name}"
+                    break
+            settings_manager.set_default_model(default, source)
+            logger.info("Set initial default_model: %s (%s)", default, source)
+
+    return {
+        "fabric": fabric_entries,
+        "nrp": nrp_entries,
+        "custom": custom_entries,
+        "default": default,
+        "has_key": {"fabric": bool(api_key), "nrp": bool(nrp_key)},
+        "errors": {
+            "fabric": fabric_error if not fabric_model_ids else "",
+            "nrp": nrp_error if not nrp_model_ids else "",
+        },
+        # Backward compat
+        "models": fabric_model_ids,
+        "nrp_models": nrp_model_ids,
+    }
+
+
+def _find_first_healthy_model() -> dict:
+    """Quickly find the first healthy model (checks preferred models only).
+
+    Much faster than _fetch_all_models — stops after finding one healthy model.
+    Used for immediate default model selection.
+    """
     api_key = _get_ai_api_key()
     if not api_key:
-        return {"models": [], "default": "", "error": "AI API key not configured"}
-    models = _fetch_models(api_key)
-    default = _pick_model(models, _PREFERRED_MODELS, "qwen3-coder-30b") if models else "qwen3-coder-30b"
+        return {"default": "", "source": ""}
 
-    # Include NRP models if key is available
-    nrp_models: list[str] = []
+    server_url = _ai_server_url()
+    model_ids = _model_ids(_fetch_models(api_key))
+
+    # Check preferred models first
+    for pref in _PREFERRED_MODELS:
+        for m in model_ids:
+            if pref in m.lower():
+                if _check_model_health(server_url, api_key, m):
+                    return {"default": m, "source": "fabric"}
+                break  # This preferred model failed, try next preference
+
+    # Check remaining FABRIC models
+    for m in model_ids:
+        if _check_model_health(server_url, api_key, m):
+            return {"default": m, "source": "fabric"}
+
+    # Try NRP
     nrp_key = _get_nrp_api_key()
     if nrp_key:
-        nrp_models = _fetch_nrp_models(nrp_key)
+        nrp_ids = _model_ids(_fetch_nrp_models(nrp_key))
+        for m in nrp_ids:
+            if _check_model_health(_nrp_server_url(), nrp_key, m):
+                return {"default": m, "source": "nrp"}
 
-    return {"models": models, "default": default, "nrp_models": nrp_models}
+    return {"default": "", "source": ""}
+
+
+def discover_and_persist_default_model() -> dict:
+    """Discover the first healthy model and persist it to settings.json.
+
+    Called at startup. Only discovers a new model if no default is set.
+    Never overwrites a user-chosen model — even if it's temporarily unhealthy.
+    """
+    from app import settings_manager
+
+    current_model = settings_manager.get_default_model()
+    current_source = settings_manager.get_default_model_source()
+
+    if current_model:
+        # User has a chosen model — respect it, don't overwrite
+        logger.info("Default model already set: %s (%s) — keeping user choice",
+                    current_model, current_source)
+        return {"default": current_model, "source": current_source}
+
+    # No default set — discover the first healthy model
+    result = _find_first_healthy_model()
+
+    if result["default"]:
+        settings_manager.set_default_model(result["default"], result["source"])
+        logger.info("Set initial default model to %s (source: %s)",
+                    result["default"], result["source"])
+    else:
+        logger.warning("No healthy models found — default_model remains empty")
+
+    return result
+
+
+@router.get("/api/ai/models/default")
+async def get_default_model():
+    """Return the default model. Fast path reads from settings; slow path discovers.
+
+    Use this for immediate model selection. Call GET /api/ai/models for the
+    full list with health status (slower, cached for 10 min).
+    """
+    from app import settings_manager
+
+    # Fast path: return persisted default if set
+    persisted = settings_manager.get_default_model()
+    if persisted:
+        return {
+            "default": persisted,
+            "source": settings_manager.get_default_model_source(),
+        }
+
+    # Slow path: discover and cache
+    from app.fabric_call_manager import get_call_manager
+    mgr = get_call_manager()
+    result = await mgr.get(
+        "ai:models:default",
+        fetcher=_find_first_healthy_model,
+        max_age=600,
+        stale_while_revalidate=True,
+    )
+
+    # Persist for future fast-path returns
+    if result.get("default"):
+        settings_manager.set_default_model(result["default"], result.get("source", ""))
+
+    return result
+
+
+@router.put("/api/ai/models/default")
+async def set_default_model_endpoint(request: Request):
+    """Set the default model in shared settings.
+
+    Body: {"model": "model-id", "source": "fabric"|"nrp"|"custom:name"}
+    Both chat panel and CLI call this to sync their model selection.
+    """
+    from app import settings_manager
+
+    body = await request.json()
+    model = body.get("model", "")
+    source = body.get("source", "")
+
+    if not model:
+        return JSONResponse({"error": "model is required"}, status_code=400)
+
+    # Auto-detect source if not provided
+    if not source:
+        if model.startswith("nrp:"):
+            source = "nrp"
+            model = model[4:]  # strip prefix for storage
+        else:
+            source = "fabric"
+
+    settings_manager.set_default_model(model, source)
+    logger.info("User set default model to %s (source: %s)", model, source)
+    return {"default": model, "source": source}
+
+
+@router.post("/api/ai/models/test")
+async def test_model_health(request: Request):
+    """Test a specific model's health with latency details.
+
+    Body: {"model": "model-id", "source": "fabric"|"nrp"}
+    Returns: {"healthy": bool, "latency_ms": int, "error": str}
+    """
+    import time
+
+    body = await request.json()
+    model_id = body.get("model", "")
+    source = body.get("source", "fabric")
+
+    if not model_id:
+        return JSONResponse({"error": "model is required"}, status_code=400)
+
+    if source == "nrp":
+        server_url = _nrp_server_url()
+        api_key = _get_nrp_api_key()
+    else:
+        server_url = _ai_server_url()
+        api_key = _get_ai_api_key()
+
+    if not api_key:
+        return {"healthy": False, "latency_ms": 0, "error": "API key not configured",
+                "model": model_id, "source": source}
+
+    start = time.time()
+    try:
+        data = json.dumps({
+            "model": model_id,
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1,
+        }).encode()
+        req = urllib.request.Request(
+            f"{server_url}/v1/chat/completions",
+            data=data,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            latency = int((time.time() - start) * 1000)
+            return {"healthy": resp.status == 200, "latency_ms": latency,
+                    "error": "", "model": model_id, "source": source}
+    except Exception as e:
+        latency = int((time.time() - start) * 1000)
+        return {"healthy": False, "latency_ms": latency,
+                "error": str(e), "model": model_id, "source": source}
+
+
+@router.post("/api/ai/models/refresh")
+async def refresh_model_health():
+    """Force-refresh all model health checks (ignores cache)."""
+    from app.fabric_call_manager import get_call_manager
+    mgr = get_call_manager()
+    mgr.invalidate("ai:models")
+    result = await mgr.get(
+        "ai:models",
+        fetcher=_fetch_all_models,
+        max_age=0,
+    )
+    return result
+
+
+@router.get("/api/ai/models")
+async def list_ai_models():
+    """Return available models from FABRIC AI and NRP servers, grouped by source.
+
+    Always returns the model list even without API keys — users can browse
+    what's available.  Uses the call manager for caching (10-minute TTL).
+    Health checks run on each model (can take 30+ seconds on first call).
+    """
+    from app.fabric_call_manager import get_call_manager
+    mgr = get_call_manager()
+    return await mgr.get(
+        "ai:models",
+        fetcher=_fetch_all_models,
+        max_age=600,  # 10-minute cache
+        stale_while_revalidate=True,
+    )
 
 
 @router.get("/api/ai/browse-folders")
@@ -1312,10 +1828,27 @@ def seed_ai_tool_defaults() -> None:
 
     Places configuration files where each tool expects to find them by default:
     - Claude Code: ~/.claude/CLAUDE.md, ~/.claude/settings.json, <cwd>/.mcp.json
-    - OpenCode:    ~/.opencode.json, <cwd>/.opencode/ (skills, agents)
+    - OpenCode:    ~/.opencode.json, <cwd>/.opencode/ (skills, agents, MCP)
     - Aider:       ~/.aider.conf.yml, ~/.aiderignore
-    - Crush:       ~/.config/crush/crush.json
-    - All tools:   <cwd>/AGENTS.md (shared FABRIC context)
+    - Crush:       ~/.config/crush/crush.json, .crush/skills/, .crush/agents/
+    - Deep Agents: .deepagents/AGENTS.md, config.json, skills/, agents/
+    - All tools:   <cwd>/AGENTS.md (shared FABRIC context with tool-specific preamble)
+
+    Provider configuration status (verified Phase 12):
+    ┌──────────────┬─────────┬──────┬────────┬────────┬───────────┐
+    │ Tool         │ FABRIC  │ NRP  │ Skills │ Agents │ AGENTS.md │
+    ├──────────────┼─────────┼──────┼────────┼────────┼───────────┤
+    │ LoomAI Chat  │ ✓       │ ✓    │ N/A    │ ✓      │ ✓         │
+    │ OpenCode     │ ✓       │ ✓*   │ ✓      │ ✓      │ ✓         │
+    │ Aider        │ ✓ proxy │ ✓**  │ —†     │ —†     │ ✓         │
+    │ Claude Code  │ —‡      │ —‡   │ ✓      │ —†     │ ✓         │
+    │ Crush        │ ✓       │ ✓    │ ✓      │ ✓      │ ✓         │
+    │ Deep Agents  │ ✓       │ ✓    │ ✓      │ ✓      │ ✓         │
+    └──────────────┴─────────┴──────┴────────┴────────┴───────────┘
+    * OpenCode accesses NRP via documented curl/CLI in AGENTS.md
+    ** Aider routes through model proxy which serves both providers
+    † Tool has no skills/agents system — uses AGENTS.md via read: config
+    ‡ Claude Code uses its own Anthropic API; FABRIC via CLI/curl per preamble
     """
     from app.settings_manager import get_storage_dir as _storage
     home = os.path.expanduser("~")
@@ -1426,6 +1959,129 @@ def seed_ai_tool_defaults() -> None:
     _ensure_git_ready(cwd)
 
     logger.info("AI tool defaults seeded to home=%s, workspace=%s", home, cwd)
+
+
+# ---------------------------------------------------------------------------
+# Config propagation — update all AI tool workspace configs when settings change
+# ---------------------------------------------------------------------------
+
+
+def propagate_ai_configs() -> dict:
+    """Re-generate workspace configs for all AI tools using current settings.
+
+    Called as a background task after settings are saved so that changes to
+    API keys, server URLs, or model preferences take effect without requiring
+    a container restart or manual re-seed.
+
+    Returns a dict mapping tool names to their propagation status.
+    """
+    from app.settings_manager import get_storage_dir as _storage
+
+    home = os.path.expanduser("~")
+    cwd = _storage() if os.path.isdir(_storage()) else home
+    api_key = _get_ai_api_key()
+    nrp_key = _get_nrp_api_key()
+
+    results: dict[str, str] = {}
+
+    # --- OpenCode: rebuild opencode.json with current providers/models ---
+    try:
+        if api_key:
+            ws_config = _setup_opencode_workspace(cwd)
+            oc_config = _build_opencode_config(api_key, workspace_config=ws_config)
+            write_cfg = {k: v for k, v in oc_config.items() if not k.startswith("_")}
+
+            with open(os.path.join(home, ".opencode.json"), "w") as f:
+                json.dump(write_cfg, f, indent=2)
+            with open(os.path.join(cwd, "opencode.json"), "w") as f:
+                json.dump(write_cfg, f, indent=2)
+            results["opencode"] = "ok"
+        else:
+            results["opencode"] = "skipped (no API key)"
+    except Exception as e:
+        logger.warning("Failed to propagate OpenCode config: %s", e)
+        results["opencode"] = f"error: {e}"
+
+    # --- Aider: re-copy config files (uses model proxy for LLM access) ---
+    try:
+        _setup_aider_workspace(cwd)
+        # Also update global aider config
+        src_aider_conf = os.path.join(_AIDER_DEFAULTS_DIR, ".aider.conf.yml")
+        if os.path.isfile(src_aider_conf):
+            shutil.copy2(src_aider_conf, os.path.join(home, ".aider.conf.yml"))
+        src_aider_ignore = os.path.join(_AIDER_DEFAULTS_DIR, ".aiderignore")
+        if os.path.isfile(src_aider_ignore):
+            shutil.copy2(src_aider_ignore, os.path.join(home, ".aiderignore"))
+            shutil.copy2(src_aider_ignore, os.path.join(cwd, ".aiderignore"))
+        results["aider"] = "ok"
+    except Exception as e:
+        logger.warning("Failed to propagate Aider config: %s", e)
+        results["aider"] = f"error: {e}"
+
+    # --- Claude Code: re-seed workspace context ---
+    try:
+        _setup_claude_workspace(cwd)
+        results["claude"] = "ok"
+    except Exception as e:
+        logger.warning("Failed to propagate Claude Code config: %s", e)
+        results["claude"] = f"error: {e}"
+
+    # --- Crush: rebuild .crush.json with current providers/models ---
+    try:
+        if api_key:
+            _setup_crush_workspace(cwd, api_key)
+            # Also copy to global location
+            crush_global_dir = os.path.join(home, ".config", "crush")
+            os.makedirs(crush_global_dir, exist_ok=True)
+            crush_workspace = os.path.join(cwd, ".crush.json")
+            if os.path.isfile(crush_workspace):
+                shutil.copy2(crush_workspace, os.path.join(crush_global_dir, "crush.json"))
+            results["crush"] = "ok"
+        else:
+            results["crush"] = "skipped (no API key)"
+    except Exception as e:
+        logger.warning("Failed to propagate Crush config: %s", e)
+        results["crush"] = f"error: {e}"
+
+    # --- Deep Agents: rebuild .deepagents/config.json with current providers ---
+    try:
+        _setup_deepagents_workspace(cwd, api_key or "")
+        results["deepagents"] = "ok"
+    except Exception as e:
+        logger.warning("Failed to propagate Deep Agents config: %s", e)
+        results["deepagents"] = f"error: {e}"
+
+    # --- Jupyter AI: reconfigure with current providers ---
+    try:
+        from app.routes.jupyter import _configure_jupyter_ai
+        # Build a minimal env dict — _configure_jupyter_ai reads from settings_manager
+        env: dict[str, str] = dict(os.environ)
+        if api_key:
+            env["OPENAI_API_KEY"] = api_key
+            env["FABRIC_AI_API_KEY"] = api_key
+            env["OPENAI_BASE_URL"] = f"{_ai_server_url()}/v1"
+        if nrp_key:
+            env["NRP_API_KEY"] = nrp_key
+        _configure_jupyter_ai(env)
+        results["jupyter_ai"] = "ok"
+    except Exception as e:
+        logger.warning("Failed to propagate Jupyter AI config: %s", e)
+        results["jupyter_ai"] = f"error: {e}"
+
+    logger.info("AI config propagation complete: %s", results)
+    return results
+
+
+@router.post("/api/ai/propagate-config")
+async def propagate_config_endpoint():
+    """Manually trigger AI config propagation to all tool workspaces.
+
+    Re-generates workspace configuration files for all AI tools (OpenCode,
+    Aider, Claude Code, Crush, Deep Agents, Jupyter AI) using the current
+    settings.  Useful after changing API keys or server URLs.
+    """
+    results = propagate_ai_configs()
+    return {"status": "ok", "tools": results}
 
 
 def _read_master(fd: int) -> str:

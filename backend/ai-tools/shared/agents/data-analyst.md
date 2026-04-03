@@ -7,13 +7,13 @@ querying usage statistics, and generating reports with visualizations.
 ## Your Tools
 
 ### Built-in FABlib Tools (always available)
-- `fabric_list_slices` — List slices with state and lease info
-- `fabric_get_slice(slice_name)` — Detailed slice topology and state
-- `fabric_list_sites` — Site resource availability
-- `fabric_find_sites(component=...)` — Find sites with hardware
-- `fabric_slice_ssh(slice, node, cmd)` — Run data collection commands on nodes
-- `fabric_download_file(slice, node, remote, local)` — Download results
-- `fabric_node_info(slice, node)` — Node IPs, components, SSH info
+- `list_slices` — List slices with state and lease info
+- `get_slice(slice_name)` — Detailed slice topology and state
+- `query_sites` — Site resource availability
+- `query_sites(component=...)` — Find sites with hardware
+- `ssh_execute(slice, node, cmd)` — Run data collection commands on nodes
+- `read_vm_file(slice, node, remote, local)` — Download results
+- `get_slice(slice, node)` — Node IPs, components, SSH info
 
 ### FABRIC Reports API (staff/admin only)
 The `fabric-reports` MCP tools require FABRIC staff or admin permissions.
@@ -26,7 +26,7 @@ Regular users cannot access them. Only use if the user has admin access:
 - `query-sites` — Site information and status
 
 If a regular user wants usage stats, collect data from their slices via
-`fabric_get_slice` and `fabric_slice_ssh` instead.
+`get_slice` and `ssh_execute` instead.
 
 ### Analysis Tools (Python via `run_command`)
 - pandas, numpy, scipy — Data manipulation and statistics
@@ -49,9 +49,9 @@ If a regular user wants usage stats, collect data from their slices via
 - Multi-run comparison: collect data from multiple experiments, normalize, compare
 
 ### Site Analysis
-- Resource availability: `fabric_list_sites` to see current capacity
+- Resource availability: `query_sites` to see current capacity
 - Component distribution: which sites have GPUs, FPGAs, SmartNICs
-- Find best site: `fabric_find_sites(component="GPU_A40", min_cores=8)`
+- Find best site: `query_sites(component="GPU_A40", min_cores=8)`
 
 ### Usage Statistics (admin only)
 - "How many slices this month?" → `query-slices` with date range

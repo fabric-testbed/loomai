@@ -23,6 +23,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall -y jupyter-collaboration jupyter-collaboration-ui jupyter-docprovider jupyter-server-ydoc jupyter-server-documents 2>/dev/null || true \
+    && rm -f /usr/local/etc/jupyter/jupyter_server_config.d/jupyter_server_documents.json \
+       /usr/local/etc/jupyter/jupyter_server_config.d/jupyter_collaboration.json 2>/dev/null || true \
     && apt-get purge -y gcc python3-dev libffi-dev \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* /tmp/* /root/.cache
@@ -124,6 +127,10 @@ CONF
 
 # Copy static assets that change occasionally
 COPY ai-tools/ ai-tools/
+
+# Install loomai CLI (pure Python — no compiled deps)
+COPY cli/ /app/cli/
+RUN pip install --no-cache-dir /app/cli/ && rm -rf /app/cli/
 
 # Copy built frontend (changes on frontend builds)
 COPY --from=frontend-build /app/dist /usr/share/nginx/html

@@ -24,6 +24,8 @@ interface LibrariesPanelProps {
   onRunExperiment?: (templateDirName: string, weaveName: string, args: Record<string, string>) => void;
   // Active background runs (for showing "running" state on weave cards)
   activeRuns?: BackgroundRun[];
+  // Weave dir_names that have a deploy in progress (slice being created/submitted/provisioned)
+  deployingWeaves?: Set<string>;
   // View output of a running/completed weave run
   onViewRunOutput?: (dirName: string, weaveName: string) => void;
   // Stop a running background run
@@ -50,6 +52,8 @@ interface LibrariesPanelProps {
   onNavigateToMarketplace?: (category: 'weave' | 'vm-template' | 'recipe' | 'notebook') => void;
   // Edit artifact in editor view
   onEditArtifact?: (dirName: string) => void;
+  // Load experiment template (cross-testbed) with variable substitution
+  onLoadExperiment?: (name: string, dirName: string) => void;
   // Panel chrome
   onCollapse: () => void;
   dragHandleProps?: DragHandleProps;
@@ -122,10 +126,10 @@ function OverflowMenu({ items, isOpen, onToggle, onClose }: {
 }
 
 export default React.memo(function LibrariesPanel({
-  onSliceImported, onDeployWeave, onRunWeaveScript, onRunExperiment, activeRuns, onViewRunOutput, onStopRun, onResetArtifact,
+  onSliceImported, onDeployWeave, onRunWeaveScript, onRunExperiment, activeRuns, deployingWeaves, onViewRunOutput, onStopRun, onResetArtifact,
   onVmTemplatesChanged, sliceName, sliceData, onNodeAdded,
   onExecuteRecipe, executingRecipe, onRecipesChanged, onLaunchNotebook, onPublishNotebook,
-  onPublishArtifact, onNavigateToMarketplace, onEditArtifact, onCollapse, dragHandleProps, panelIcon,
+  onPublishArtifact, onNavigateToMarketplace, onEditArtifact, onLoadExperiment, onCollapse, dragHandleProps, panelIcon,
 }: LibrariesPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('weaves');
   const [overflowOpen, setOverflowOpen] = useState<string | null>(null);
@@ -274,7 +278,7 @@ export default React.memo(function LibrariesPanel({
   const [recipeNodePicker, setRecipeNodePicker] = useState<string | null>(null);
 
   // ─── Notebooks state ───
-  const [notebooks, setNotebooks] = useState<{ name: string; description?: string; dir_name: string; created?: string; artifact_uuid?: string }[]>([]);
+  const [notebooks, setNotebooks] = useState<{ name: string; description?: string; description_short?: string; dir_name: string; created?: string; artifact_uuid?: string }[]>([]);
   const [notebooksLoading, setNotebooksLoading] = useState(false);
   const [notebookSearchFilter, setNotebookSearchFilter] = useState('');
   const [launchingNotebook, setLaunchingNotebook] = useState<string | null>(null);
@@ -646,6 +650,8 @@ export default React.memo(function LibrariesPanel({
               .map((t) => {
               const weaveRuns = (activeRuns || []).filter(r => r.weave_dir_name === t.dir_name);
               const isRunning = weaveRuns.some(r => r.status === 'running');
+              const isDeploying = deployingWeaves?.has(t.dir_name) ?? false;
+              const isBusy = isRunning || isDeploying;
               const hasCompleted = weaveRuns.some(r => r.status === 'done' || r.status === 'error' || r.status === 'interrupted');
               // Pick the most recently started run (API order is not chronological)
               const lastRun = weaveRuns.length > 0
@@ -661,6 +667,12 @@ export default React.memo(function LibrariesPanel({
                 if (isRunning) {
                   // Stop the running script
                   activeRunId && onStopRun?.(activeRunId);
+                } else if (isDeploying) {
+                  // Deploy in progress — no action (could add cancel later)
+                  return;
+                } else if (t.is_experiment && onLoadExperiment) {
+                  // Experiment template — use variable substitution flow
+                  onLoadExperiment(t.name, t.dir_name);
                 } else if (playMode === 'run' && onRunWeaveScript) {
                   openRunModal(t);
                 } else if (playMode === 'deploy' && onDeployWeave) {
@@ -676,9 +688,10 @@ export default React.memo(function LibrariesPanel({
               <div className="template-card" key={t.dir_name}>
                 <div className="template-card-header">
                   <span className="template-card-name">{t.name}</span>
-                  {isRunning && <span className="tp-status-badge tp-status-running">{'\u25CF'} running</span>}
-                  {!isRunning && lastRun?.status === 'done' && <span className="tp-status-badge tp-status-done">{'\u2713'} done</span>}
-                  {!isRunning && (lastRun?.status === 'error' || lastRun?.status === 'interrupted') && <span className="tp-status-badge tp-status-error">{'\u2717'} error</span>}
+                  {isDeploying && <span className="tp-status-badge tp-status-running">{'\u25CF'} deploying</span>}
+                  {isRunning && !isDeploying && <span className="tp-status-badge tp-status-running">{'\u25CF'} running</span>}
+                  {!isBusy && lastRun?.status === 'done' && <span className="tp-status-badge tp-status-done">{'\u2713'} done</span>}
+                  {!isBusy && (lastRun?.status === 'error' || lastRun?.status === 'interrupted') && <span className="tp-status-badge tp-status-error">{'\u2717'} error</span>}
                   <OverflowMenu
                     isOpen={overflowOpen === `weave-${t.dir_name}`}
                     onToggle={() => setOverflowOpen(overflowOpen === `weave-${t.dir_name}` ? null : `weave-${t.dir_name}`)}
@@ -686,6 +699,7 @@ export default React.memo(function LibrariesPanel({
                     items={[
                       { label: 'Publish', onClick: () => onPublishArtifact?.(t.dir_name, 'weave'), disabled: !onPublishArtifact },
                       { label: 'View Log', onClick: () => onViewRunOutput?.(t.dir_name, t.name), disabled: !onViewRunOutput },
+                      { label: 'Clean / Reset', onClick: () => { const cs = t.weave_config?.cleanup_script || 'weave_cleanup.sh'; api.startBackgroundRun(t.dir_name, cs, {}); }, disabled: !t.has_cleanup_script || isBusy },
                       { label: '', onClick: () => {}, separator: true },
                       { label: 'Edit', onClick: () => onEditArtifact?.(t.dir_name), disabled: !onEditArtifact },
                       { label: 'JupyterLab', onClick: () => handleEditInJupyter(t.dir_name), disabled: launchingNotebook === t.dir_name },
@@ -694,8 +708,14 @@ export default React.memo(function LibrariesPanel({
                     ]}
                   />
                 </div>
-                {t.description && (
-                  <div className="template-card-desc">{t.description}</div>
+                {(t as any).source_marketplace && (
+                  <span className={`source-badge source-${(t as any).source_marketplace}`}>{(t as any).source_marketplace === 'trovi' ? 'Trovi' : (t as any).source_marketplace === 'artifact-manager' ? 'FABRIC' : 'Local'}</span>
+                )}
+                {t.is_experiment && (
+                  <span className="source-badge source-experiment">Experiment</span>
+                )}
+                {(t.description_short || t.description) && (
+                  <div className="template-card-desc">{t.description_short || t.description}</div>
                 )}
                 <div className="template-card-actions">
                   <div className="tp-transport-group">
@@ -708,6 +728,15 @@ export default React.memo(function LibrariesPanel({
                           {'\u25A0'} Stop
                         </button>
                       </Tooltip>
+                    ) : isDeploying ? (
+                      <Tooltip text="Slice is being deployed for this weave">
+                        <button
+                          className="tp-transport-btn tp-transport-stop"
+                          disabled
+                        >
+                          {'\u29D7'} Deploying
+                        </button>
+                      </Tooltip>
                     ) : (
                       <Tooltip text={playMode === 'run' ? 'Execute weave script' : playMode === 'deploy' ? 'Deploy this weave' : 'Load as new draft slice'}>
                         <button
@@ -716,6 +745,20 @@ export default React.memo(function LibrariesPanel({
                           data-help-id="templates.load"
                         >
                           {'\u25B6'} {playMode === 'run' ? 'Run' : playMode === 'deploy' ? 'Deploy' : 'Load'}
+                        </button>
+                      </Tooltip>
+                    )}
+                    {t.has_cleanup_script && !isRunning && !isDeploying && (
+                      <Tooltip text="Run cleanup script to reset weave state">
+                        <button
+                          className="tp-transport-btn tp-transport-reset"
+                          onClick={() => {
+                            const cs = t.weave_config?.cleanup_script || 'weave_cleanup.sh';
+                            api.startBackgroundRun(t.dir_name, cs, {});
+                          }}
+                          disabled={isBusy}
+                        >
+                          {'\u21BA'} Clean
                         </button>
                       </Tooltip>
                     )}
@@ -893,8 +936,8 @@ export default React.memo(function LibrariesPanel({
                     ]}
                   />
                 </div>
-                {t.description && (
-                  <div className="vmt-card-desc">{t.description}</div>
+                {(t.description_short || t.description) && (
+                  <div className="vmt-card-desc">{t.description_short || t.description}</div>
                 )}
                 <div className="vmt-card-meta">
                   {t.variant_count > 0 ? (
@@ -999,8 +1042,8 @@ export default React.memo(function LibrariesPanel({
                     ]}
                   />
                 </div>
-                {r.description && (
-                  <div className="vmt-card-desc">{r.description}</div>
+                {(r.description_short || r.description) && (
+                  <div className="vmt-card-desc">{r.description_short || r.description}</div>
                 )}
                 <div className="vmt-card-meta">
                   <span>Images: {Object.keys(r.image_patterns).join(', ')}</span>
@@ -1086,8 +1129,8 @@ export default React.memo(function LibrariesPanel({
                     ]}
                   />
                 </div>
-                {n.description && (
-                  <div className="vmt-card-desc">{n.description}</div>
+                {(n.description_short || n.description) && (
+                  <div className="vmt-card-desc">{n.description_short || n.description}</div>
                 )}
                 {n.created && (
                   <div className="vmt-card-meta">

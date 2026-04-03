@@ -8,8 +8,8 @@ test.describe('Dark Mode', () => {
 
   test('defaults to light mode', async ({ page }) => {
     await page.goto('/');
-    // Wait for React to hydrate and set the attribute
-    await expect(page.locator('.landing-hero-title')).toBeVisible();
+    // Wait for React to hydrate — landing hero section is the indicator
+    await expect(page.locator('.landing-hero')).toBeVisible();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   });
 

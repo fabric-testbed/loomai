@@ -46,7 +46,7 @@ Respond to the user's intent:
 
 ### OpenCode Skills: 30–60 lines
 - Action-oriented, reference AGENTS.md for domain knowledge
-- List specific tool names (`fabric_list_slices`, etc.)
+- List specific tool names (`list_slices`, etc.)
 - Handle errors (empty results, auth failures, resource unavailable)
 - Format: `name:` + `description:` + `---` + prompt body
 

@@ -189,9 +189,10 @@ viewable in the console via "View Log".
 |--------|------|-------------|
 | GET | `/config` | FABRIC config status (token, keys, project_id) |
 | POST | `/config/token` | Upload token JSON file |
-| GET | `/config/login` | CM OAuth login URL |
+| GET | `/config/login` | CM OAuth login URL (accepts `origin` query param for `redirect_uri`) |
 | POST | `/config/token/paste` | Paste token JSON text |
 | GET | `/config/callback` | OAuth callback (saves token, resets FABlib) |
+| POST | `/config/auto-setup` | Post-login auto-setup: set project, generate bastion/slice keys, create LLM key |
 | GET | `/config/projects` | Decode JWT, derive projects and bastion_login |
 | POST | `/config/keys/bastion` | Upload bastion private key |
 | GET | `/config/keys/slice/list` | List named slice key sets |
@@ -276,14 +277,48 @@ viewable in the console via "View Log".
 | GET | `/authored` | List user's published artifacts |
 | DELETE | `/{name}` | Delete local artifact |
 
-#### AI Terminal (`routes/ai_terminal.py` → WebSocket)
+#### AI Terminal (`routes/ai_terminal.py` → `/api/ai` + WebSocket)
+
+**Tool management:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/ai/tools/status` | List available AI tools with install/run status |
+| POST | `/api/ai/tools/{tool_id}/install` | Install an AI tool (synchronous) |
+| POST | `/api/ai/tools/{tool_id}/install-stream` | Install an AI tool (SSE progress stream) |
+
+**Web-based AI tools:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/ai/aider-web/status` | Aider web UI process status |
+| POST | `/api/ai/aider-web/start` | Start Aider web UI |
+| POST | `/api/ai/aider-web/stop` | Stop Aider web UI |
+| GET | `/api/ai/opencode-web/status` | OpenCode web UI process status |
+| POST | `/api/ai/opencode-web/start` | Start OpenCode web UI |
+| POST | `/api/ai/opencode-web/stop` | Stop OpenCode web UI |
+
+**Models & browsing:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/ai/models` | List available LLMs from FABRIC, NRP, custom providers (with health status) |
+| GET | `/api/ai/models/default` | Get default healthy model (fast path from settings, slow path discovers) |
+| GET | `/api/ai/browse-folders` | Browse workspace folders for AI tool context |
+
+**Terminal WebSocket:**
 
 | Protocol | Path | Description |
 |----------|------|-------------|
-| WS | `/ws/ai/{tool}` | AI tool terminal (aider, opencode, crush, claude) |
-| GET | `/api/ai/tools` | List available AI tools with status |
-| POST | `/api/ai/tools/{tool}/start` | Start an AI tool process |
-| POST | `/api/ai/tools/{tool}/stop` | Stop an AI tool process |
+| WS | `/ws/terminal/ai/{tool}` | AI tool terminal (aider, opencode, crush, claude, deep-agents) |
+
+#### AI Chat (`routes/ai_chat.py` → `/api`)
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| POST | `/api/ai/chat/stream` | Stream AI responses with tool calling (SSE) |
+| POST | `/api/ai/chat/stop` | Stop active chat stream by request ID |
+| GET | `/api/ai/chat/agents` | List available AI agent personas |
 
 #### Metrics (`routes/metrics.py` → `/api/metrics`)
 
@@ -374,7 +409,7 @@ A 15-second interval refreshes the slice list while any slice is in a transition
 
 ### Guided Tour System
 
-10 interactive guided tours provide step-by-step walkthroughs of all features:
+14 interactive guided tours provide step-by-step walkthroughs of all features:
 
 | Tour | Steps | Interactive Checks |
 |------|-------|-------------------|
@@ -388,6 +423,10 @@ A 15-second interval refreshes the slice list while any slice is in a transition
 | JupyterLab | 3 | — |
 | Console & Terminals | 6 | Load a slice |
 | File Manager | 3 | Load slices |
+| Hello FABRIC | — | Run the Hello FABRIC weave end-to-end |
+| Build First Slice | — | Manual slice creation walkthrough |
+| Discover LoomAI | — | Exploration overview of all features |
+| CLI Terminal | — | Interactive `loomai` CLI shell with `/ask`, `/model` |
 
 **Architecture**: `tourSteps.ts` defines `TourDef` and `TourStep` types. `GuidedTour.tsx` renders a spotlight overlay with tooltip card. Steps can have a `completionCheck` key that maps to a `tourContext` object computed in `App.tsx`. The context is reactive — it updates from app state (slice loaded, node selected, etc.) without polling. Config-based checks (`has_token`, `has_bastion_key`, etc.) poll `GET /api/config` every 2 seconds.
 
@@ -623,6 +662,76 @@ sudo ./build/build-lxc.sh --tag v0.1.4
 # Builds a Proxmox-ready .tar.gz with systemd services
 ```
 
+## CLI Tool (`loomai`)
+
+A Click-based Python CLI providing full FABRIC testbed management from the terminal. Pre-installed in the Docker container at `/usr/local/bin/loomai`. Source: `cli/loomai_cli/`.
+
+### Command Groups
+
+| Group | Subcommands | Description |
+|-------|-------------|-------------|
+| `slices` | list, show, create, delete, submit, modify, validate, renew, refresh, slivers, wait, clone, export, import, archive | Full slice lifecycle |
+| `nodes` | add, update, remove | VM node management in drafts |
+| `networks` | add, update, remove | L2/L3 network management |
+| `components` | add, remove | GPU, NIC, FPGA attachment |
+| `facility-ports` | list, add, remove | External connectivity |
+| `sites` | list, show, hosts, find | Resource discovery |
+| `ssh` | — | SSH into VMs |
+| `exec` | — | Run commands on one/all nodes |
+| `scp` | — | File transfer to/from VMs |
+| `rsync` | — | Directory sync to VMs |
+| `weaves` | list, show, load, run, stop, logs, runs | Weave management |
+| `boot-config` | show, set, run, log | Boot configuration |
+| `artifacts` | list, search, show, get, publish, update, delete, tags, versions, push-version, delete-version | Artifact marketplace |
+| `recipes` | list, show, run | Software recipes |
+| `vm-templates` | list, show | VM templates |
+| `monitor` | enable, disable, status, metrics | Node monitoring |
+| `config` | show, settings | Configuration |
+| `projects` | list, switch | FABRIC projects |
+| `keys` | list, generate | SSH keys |
+| `ai` | chat, models, agents | AI assistant |
+| `completions` | bash, zsh, fish | Shell completion scripts |
+
+### Interactive Shell
+
+Running `loomai` with no arguments enters an interactive REPL with:
+
+- **Tab completion** — readline-based completer for commands, subcommands, and API-backed arguments (slice names, site names, etc.)
+- **Command history** — persisted to `~/.loomai/history`, navigable with up/down arrows
+- **Context selection** — `use slice my-exp` sets defaults for subsequent commands; prompt shows context
+- **AI assistant** — `/ask <question>` or `? <question>` streams responses from the LoomAI chat backend
+- **Model picker** — `/model` shows available models with health/context/tier badges
+- **Shortcuts** — `ls` → `slices list`, `sites` → `sites list`, `slivers` → `slices slivers <current>`
+
+### Dynamic Tab Completion (`completions.py`)
+
+Custom `click.ParamType` subclasses with `shell_complete()` methods query the backend API for live data:
+
+| Completer | API Endpoint | Cache |
+|-----------|-------------|-------|
+| `SliceNameComplete` | `GET /slices?max_age=30` | 5s |
+| `NodeNameComplete` | `GET /slices/{name}` → nodes | per-call |
+| `SiteNameComplete` | `GET /sites?max_age=300` | 5s |
+| `WeaveNameComplete` | `GET /templates` | 5s |
+| `RunIdComplete` | `GET /templates/runs` | per-call |
+| `ArtifactComplete` | `GET /artifacts/local` | 5s |
+| `RecipeNameComplete` | `GET /recipes` | 5s |
+
+Inside the shell, a readline completer function (`_shell_completer`) maps the current input buffer to the appropriate completer class.
+
+### Configuration
+
+- `LOOMAI_URL` env var → backend URL (default: `http://localhost:8000`)
+- `~/.loomai/config` → JSON with model preference
+- `~/.loomai/history` → readline command history (1000 entries)
+- Output: `--format table|json|yaml` on all commands
+
+### Testing
+
+- Unit tests: `cli/tests/` — 154+ tests using `click.testing.CliRunner` with mocked HTTP
+- Integration tests: gated behind `--integration` flag, require running backend
+- Run: `cd cli && python -m pytest tests/ -v`
+
 ## AI Provider Abstraction Layer
 
 The backend integrates with OpenAI-compatible LLM APIs for the 6 AI tools. No `openai` Python library is used — all calls go through `httpx.AsyncClient`.
@@ -659,12 +768,70 @@ AI-related settings under the `ai` key:
 - `ai.ai_server_url` — FABRIC AI server URL
 - `ai.nrp_server_url` — NRP fallback URL
 - `ai.fabric_api_key` / `ai.nrp_api_key` — API keys
+- `ai.default_model` — Auto-discovered or user-set default LLM model ID
+- `ai.default_model_source` — Source provider: "fabric", "nrp", "custom:<name>", or ""
 - `ai.tools` — per-tool enable/disable toggles
 - `services.model_proxy_port` — local model proxy port
 
 ### Tool Calling
 
 LoomAI (`ai_chat.py`) uses OpenAI function-calling format: tools are defined as JSON schemas, the model returns `tool_calls` in its response, and the backend executes them and feeds results back in a loop.
+
+## Chameleon Cloud Integration
+
+### Architecture
+
+Chameleon integration uses direct OpenStack API calls (Keystone v3, Nova, Neutron, Glance, Blazar) via `chameleon_manager.py`. Sessions are per-site with application credential authentication. API calls run in a dedicated thread pool (`chameleon_executor.py`).
+
+### Core Modules
+
+| Module | Role |
+|--------|------|
+| `app/chameleon_manager.py` | Per-site session management, Keystone auth, token refresh, service catalog |
+| `app/chameleon_executor.py` | Thread pool for blocking OpenStack API calls |
+| `app/routes/chameleon.py` | All Chameleon endpoints (60+): sites, instances, leases, networks, keypairs, FIPs, security groups, slices, boot config, recipes, bastion |
+
+### Key Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/chameleon/sites` | List configured Chameleon sites |
+| GET | `/api/chameleon/sites/{site}/images` | List OS images (paginated, all pages) |
+| GET | `/api/chameleon/sites/{site}/availability` | Node type availability |
+| POST | `/api/chameleon/sites/{site}/ensure-network` | Ensure routable network (prefers sharednet1) |
+| POST | `/api/chameleon/instances` | Create Nova instance (supports dual-NIC via `network_ids`) |
+| POST | `/api/chameleon/instances/{id}/associate-ip` | Allocate + associate floating IP via Neutron |
+| POST | `/api/chameleon/instances/{id}/execute-recipe` | Execute recipe on instance via SSH |
+| GET | `/api/chameleon/leases` | List Blazar leases |
+| POST | `/api/chameleon/keypairs/ensure` | Ensure keypair + private key exist (auto-create if needed) |
+| GET | `/api/chameleon/slices` | List all Chameleon slices |
+| POST | `/api/chameleon/drafts` | Create new draft slice |
+| POST | `/api/chameleon/drafts/{id}/deploy` | Deploy draft as Blazar lease |
+| POST | `/api/chameleon/slices/{id}/auto-network-setup` | Security groups + floating IPs for all instances |
+| POST | `/api/chameleon/slices/{id}/ensure-bastion` | Create bastion instance (dual-NIC, sharednet1 + experiment net) |
+| POST | `/api/chameleon/slices/{id}/check-readiness` | Probe SSH port 22 on all instances |
+| POST | `/api/chameleon/slices/{id}/import-reservation` | Import instances from a Blazar lease into a slice |
+| GET | `/api/chameleon/boot-config/{slice}/{node}` | Load Chameleon boot config |
+| PUT | `/api/chameleon/boot-config/{slice}/{node}` | Save Chameleon boot config |
+| POST | `/api/chameleon/boot-config/{slice}/{node}/execute` | Execute boot config via SSH (commands + SFTP uploads) |
+| WS | `/ws/terminal/chameleon/{instance_id}` | SSH terminal (direct or two-hop via bastion) |
+
+### Storage
+
+| Path | Contents |
+|------|----------|
+| `{STORAGE_DIR}/.loomai/chameleon_slices.json` | Persisted slice data (drafts + deployed) |
+| `{STORAGE_DIR}/.boot-config/chameleon/{slice_id}/` | Per-node boot config JSON |
+| `{CONFIG_DIR}/chameleon_key_{site}` | Per-site SSH private keys |
+
+### SSH Access
+
+- **Direct**: Instances with floating IPs — connect directly via paramiko
+- **Bastion**: Instances without floating IPs — two-hop SSH through a bastion instance (bastion on sharednet1 + experiment network)
+- **Key management**: `ensure_keypair` auto-creates `loomai-key` at each site, saves private key per-site
+- **Username**: `cc` for all Chameleon images
+
+---
 
 ## FABRIC API Integration
 
@@ -681,14 +848,35 @@ A dedicated `ThreadPoolExecutor` with 4 workers (thread prefix: `"fablib"`) runs
 - **FABRIC services**: Bearer token from `id_token.json` (auto-refreshed by FABlib)
 - **SSH to VMs**: Two-hop bastion: Backend → `bastion.fabric-testbed.net` → VM management IP (via paramiko `ProxyJump`)
 
-### Caching Strategy
+### Caching & Polling — Unified FabricCallManager
+
+All FABlib read calls go through `FabricCallManager` (`backend/app/fabric_call_manager.py`) — a singleton with caller-specified `max_age`, request coalescing, stale-while-revalidate, mutation invalidation, and stale-on-error fallback.
+
+**Cache keys:**
+
+| Key | FABlib Call | Default `max_age` | Invalidated by |
+|-----|-----------|-------------------|----------------|
+| `slices:list` | `get_slices()` | 30s | submit, delete, create, archive, run_manager |
+| `slice:{name}:slivers` | `get_slice()` → node states | 15s | submit, modify, refresh, delete |
+| `sites` | site names + per-site detail | 300s | manual refresh, submit-time force-refresh |
+| `links` | backbone topology parsing | 300s | — |
+| `facility_ports` | `get_facility_ports()` | 300s | — |
+
+**Adaptive frontend polling** (`App.tsx`):
+- STEADY mode (all settled): `max_age=300` — cache hits, near-zero API cost
+- ACTIVE mode (transitional slices or 3-min cooldown after mutation): `max_age=30` — real API calls
+- External change detection: polling compares responses with previous state; new slices or state transitions auto-trigger ACTIVE mode
+- Sliver state polling: `GET /slices/{id}/slivers?max_age=N` updates individual node colors during provisioning
+
+**Run manager integration**: `run_manager.py` invalidates `slices:list` on weave start, process exit, and stale run recovery — ensures frontend detects weave-initiated slice changes within 15s.
+
+**Other caches (not in call manager):**
 
 | Data | TTL | Mechanism |
 |------|-----|-----------|
+| Serialization cache | State-keyed | `(name, state)` → serialized slice + graph JSON |
 | Artifacts list | 300s | In-memory dict with timestamp |
 | Update check | 3600s | In-memory timestamp |
-| Site availability | 5 min | Stale-while-revalidate with background refresh |
-| Slice list dedup | 5s | `asyncio.Lock` + timestamp |
 | Template/recipe lists | 10s | In-memory TTL cache |
 | SSH tunnel idle | 600s | Idle timeout, then close |
 

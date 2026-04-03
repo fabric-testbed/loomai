@@ -74,12 +74,24 @@ def _artifacts_dir() -> str:
 def _detect_category(entry_dir: str) -> str:
     """Detect artifact category from files present in the directory.
 
+    - experiment.json with ``loomai-experiment-v1`` format → experiment
     - weave.json → weave
     - vm-template.json → vm-template
     - recipe.json → recipe
     - *.ipynb files → notebook
     - otherwise → other
     """
+    # Check for cross-testbed experiment (experiment.json with v1 format)
+    exp_path = os.path.join(entry_dir, "experiment.json")
+    if os.path.isfile(exp_path):
+        try:
+            with open(exp_path) as f:
+                exp_data = json.load(f)
+            if exp_data.get("format") == "loomai-experiment-v1":
+                return "experiment"
+        except Exception:
+            pass
+
     has_weave_json = os.path.isfile(os.path.join(entry_dir, "weave.json"))
     has_vm = os.path.isfile(os.path.join(entry_dir, "vm-template.json"))
     has_recipe = os.path.isfile(os.path.join(entry_dir, "recipe.json"))
@@ -109,6 +121,7 @@ _CATEGORY_MARKERS = {
     "vm-template": "[LoomAI VM Template]",
     "recipe": "[LoomAI Recipe]",
     "notebook": "[LoomAI Notebook]",
+    "experiment": "[LoomAI Experiment]",
 }
 
 _CATEGORY_TAGS: dict[str, str] = {
@@ -116,6 +129,7 @@ _CATEGORY_TAGS: dict[str, str] = {
     "vm-template": "loomai:vm",
     "recipe": "loomai:recipe",
     "notebook": "loomai:notebook",
+    "experiment": "loomai:experiment",
 }
 
 

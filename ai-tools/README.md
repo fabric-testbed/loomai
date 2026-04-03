@@ -53,3 +53,13 @@ When updating skills or agents:
 1. Edit the files in this directory (not in `backend/app/` or the container)
 2. Rebuild the container (`/rebuild`)
 3. Start a new AI terminal session to pick up the changes
+
+## Feature Propagation
+
+When adding new features to LoomAI that AI tools should know about, follow the process documented in [docs/FEATURE_PROPAGATION.md](../docs/FEATURE_PROPAGATION.md).
+
+Key steps:
+1. Update `FABRIC_AI.md` with the new feature documentation
+2. Add skills in `shared/skills/` if needed
+3. Rebuild the container
+4. Re-seed active sessions via `POST /api/ai/propagate-config`

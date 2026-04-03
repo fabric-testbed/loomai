@@ -1,0 +1,5 @@
+<svg width="300" height="72" viewBox="0 0 300 72" xmlns="http://www.w3.org/2000/svg">
+  <!-- LoomAI Text — Black on white -->
+  <rect width="300" height="72" fill="#ffffff"/>
+  <text x="16" y="54" font-size="52" font-weight="700" letter-spacing="-1.5" fill="#1a1a1a" font-family="'Inter','Helvetica Neue',Arial,sans-serif">Loom<tspan fill="#1a1a1a">AI</tspan></text>
+</svg>

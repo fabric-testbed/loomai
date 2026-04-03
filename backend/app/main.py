@@ -8,8 +8,12 @@ import os
 import asyncio
 from contextlib import asynccontextmanager
 
-from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, recipes, experiments, http_proxy, tunnels, ai_terminal, ai_chat, jupyter, artifacts
+import logging
+
+from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, recipes, experiments, http_proxy, tunnels, ai_terminal, ai_chat, ai_agents, jupyter, artifacts, chameleon, trovi, schedule, composite, monitoring
 from app.tunnel_manager import get_tunnel_manager
+
+logger = logging.getLogger(__name__)
 
 
 def _startup_storage():
@@ -262,6 +266,9 @@ def _startup_settings():
         if user_dir and not os.path.isdir(user_dir):
             logger.warning("Active user dir %s missing — creating it", user_dir)
             user_registry.ensure_user_dir(active_uuid)
+        # Ensure top-level symlinks point to the active user's directories
+        from app.routes.config import _ensure_user_symlinks
+        _ensure_user_symlinks(active_uuid)
 
     if not os.path.isfile(settings_manager.get_settings_path()):
         logger.info("No settings.json found — migrating from legacy config")
@@ -298,6 +305,20 @@ async def lifespan(app: FastAPI):
     _startup_settings()
     _startup_ai_tools()
 
+    # Load persisted Chameleon slices
+    try:
+        from app.routes.chameleon import load_chameleon_slices
+        load_chameleon_slices()
+    except Exception:
+        logger.warning("Chameleon slice loading failed (non-fatal)", exc_info=True)
+
+    # Load persisted composite slices
+    try:
+        from app.routes.composite import load_composite_slices
+        load_composite_slices()
+    except Exception:
+        logger.warning("Composite slice loading failed (non-fatal)", exc_info=True)
+
     # Mark stale runs from previous container lifecycle
     try:
         from app.run_manager import recover_stale_runs
@@ -315,11 +336,16 @@ async def lifespan(app: FastAPI):
     # Periodically warm the site resource cache in background (every 4 min)
     # so users never hit a cold cache stall
     async def _site_cache_warmer():
-        from app.routes.resources import _trigger_bg_site_refresh
+        from app.fabric_call_manager import get_call_manager
+        from app.routes.resources import _fetch_sites_locked
         # Initial delay — let the app finish starting before first refresh
         await asyncio.sleep(30)
         while True:
-            _trigger_bg_site_refresh()
+            mgr = get_call_manager()
+            try:
+                await mgr.get("sites", fetcher=_fetch_sites_locked, max_age=0)
+            except Exception:
+                logger.warning("Background site cache warm failed", exc_info=True)
             await asyncio.sleep(240)  # 4 minutes
 
     # Periodically back up Claude Code config so credentials survive
@@ -335,13 +361,45 @@ async def lifespan(app: FastAPI):
                 logger.warning("Periodic Claude config backup failed: %s", e)
             await asyncio.sleep(300)  # Every 5 minutes
 
+    # Background reservation checker — auto-submit slices when scheduled time arrives
+    async def _reservation_checker():
+        await asyncio.sleep(15)  # Let the server finish starting
+        while True:
+            try:
+                from app.reservation_manager import check_and_execute_reservations
+                executed = check_and_execute_reservations()
+                if executed:
+                    logger.info("Reservation checker processed %d reservation(s)", len(executed))
+            except Exception as e:
+                logger.warning("Reservation checker failed (non-fatal): %s", e)
+            await asyncio.sleep(60)
+
+    # Background model discovery — find first healthy LLM and persist as default
+    async def _model_discovery():
+        await asyncio.sleep(5)  # Let the server finish starting
+        try:
+            from app.routes.ai_terminal import discover_and_persist_default_model
+            from app.fablib_executor import run_in_fablib_pool
+            result = await run_in_fablib_pool(discover_and_persist_default_model)
+            if result.get("default"):
+                logger.info("Background model discovery: %s (%s)",
+                            result["default"], result.get("source"))
+            else:
+                logger.warning("Background model discovery: no healthy models found")
+        except Exception as e:
+            logger.warning("Background model discovery failed (non-fatal): %s", e)
+
     task = asyncio.create_task(_cleanup_loop())
     cache_task = asyncio.create_task(_site_cache_warmer())
     backup_task = asyncio.create_task(_claude_config_backup_loop())
+    reservation_task = asyncio.create_task(_reservation_checker())
+    model_task = asyncio.create_task(_model_discovery())
     yield
     task.cancel()
     cache_task.cancel()
     backup_task.cancel()
+    reservation_task.cancel()
+    model_task.cancel()
     mgr.close_all()
 
     # Close shared httpx connection pools
@@ -362,7 +420,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Claude Code config backup failed on shutdown: %s", e)
 
 
-app = FastAPI(title="FABRIC Web GUI API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="LoomAI API", version="0.1.0", lifespan=lifespan)
 
 from app.error_handler import install_error_handlers
 install_error_handlers(app)
@@ -384,6 +442,7 @@ app.include_router(resources.router, prefix="/api")
 app.include_router(metrics.router, prefix="/api")
 app.include_router(ai_terminal.router)
 app.include_router(ai_chat.router)
+app.include_router(ai_agents.router)
 app.include_router(terminal.router)
 app.include_router(config.router)
 app.include_router(files.router)
@@ -396,6 +455,11 @@ app.include_router(http_proxy.router)
 app.include_router(tunnels.router)
 app.include_router(jupyter.router)
 app.include_router(artifacts.router)
+app.include_router(chameleon.router)
+app.include_router(trovi.router)
+app.include_router(schedule.router, prefix="/api")
+app.include_router(composite.router)
+app.include_router(monitoring.router)
 
 # Serve frontend static files in production
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
@@ -403,10 +467,158 @@ if os.path.isdir(static_dir):
     app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 
 
+import time as _time
+_APP_START_TIME = _time.time()
+
+
 @app.get("/api/health")
 def health():
     from app.fablib_manager import is_configured
     return {"status": "ok", "configured": is_configured()}
+
+
+@app.get("/api/health/detailed")
+async def health_detailed():
+    """Extended health check with subsystem status, resource info, and uptime."""
+    import shutil
+    from app.fablib_manager import is_configured
+    from app.routes.config import CURRENT_VERSION
+
+    checks: dict = {}
+
+    # 1. FABlib check
+    try:
+        configured = is_configured()
+        checks["fablib"] = {
+            "ok": configured,
+            "message": "Connected" if configured else "Not configured",
+        }
+    except Exception as e:
+        checks["fablib"] = {"ok": False, "message": str(e)}
+
+    # 2. Storage check
+    storage_dir = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    try:
+        exists = os.path.exists(storage_dir)
+        if exists:
+            usage = shutil.disk_usage(storage_dir)
+            free_gb = round(usage.free / (1024 ** 3), 1)
+            checks["storage"] = {
+                "ok": True,
+                "message": f"{storage_dir} exists, {free_gb}GB free",
+            }
+        else:
+            checks["storage"] = {
+                "ok": False,
+                "message": f"{storage_dir} does not exist",
+            }
+    except Exception as e:
+        checks["storage"] = {"ok": False, "message": str(e)}
+
+    # 3. AI server check
+    try:
+        from app import settings_manager
+        settings = settings_manager.load_settings()
+        ai_url = settings.get("ai", {}).get("ai_server_url", "")
+        if ai_url:
+            import httpx
+            t0 = _time.time()
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(f"{ai_url}/v1/models")
+            latency_ms = round((_time.time() - t0) * 1000)
+            checks["ai_server"] = {
+                "ok": resp.status_code == 200,
+                "latency_ms": latency_ms,
+            }
+        else:
+            checks["ai_server"] = {"ok": False, "message": "No AI server URL configured"}
+    except Exception as e:
+        checks["ai_server"] = {"ok": False, "message": str(e)}
+
+    # 4. Chameleon check
+    try:
+        from app import settings_manager
+        settings = settings_manager.load_settings()
+        cham_sites = settings.get("chameleon", {}).get("sites", {})
+        configured_count = sum(
+            1 for s in cham_sites.values()
+            if isinstance(s, dict) and s.get("enabled")
+        )
+        checks["chameleon"] = {
+            "ok": configured_count > 0,
+            "sites_configured": configured_count,
+        }
+    except Exception as e:
+        checks["chameleon"] = {"ok": False, "message": str(e)}
+
+    # 5. Jupyter check
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get("http://localhost:8889/api/status")
+        checks["jupyter"] = {
+            "ok": resp.status_code == 200,
+            "port": 8889,
+        }
+    except Exception:
+        checks["jupyter"] = {"ok": False, "port": 8889}
+
+    # Slice counts
+    slices_info: dict = {"active": 0, "total": 0}
+    try:
+        if is_configured():
+            from app.fablib_executor import run_in_fablib_pool
+            from app.fablib_manager import get_fablib
+
+            def _count_slices():
+                fablib = get_fablib()
+                all_slices = fablib.get_slices()
+                active = sum(
+                    1 for s in all_slices
+                    if str(s.get_state()) in {"StableOK", "StableError", "ModifyOK", "Configuring"}
+                )
+                return {"active": active, "total": len(all_slices)}
+
+            slices_info = await run_in_fablib_pool(_count_slices)
+    except Exception:
+        pass
+
+    # Memory usage
+    memory_mb: float | None = None
+    try:
+        import psutil
+        proc = psutil.Process()
+        memory_mb = round(proc.memory_info().rss / (1024 * 1024), 1)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    # Disk free
+    disk_free_gb: float | None = None
+    try:
+        if os.path.exists(storage_dir):
+            usage = shutil.disk_usage(storage_dir)
+            disk_free_gb = round(usage.free / (1024 ** 3), 1)
+    except Exception:
+        pass
+
+    uptime = round(_time.time() - _APP_START_TIME, 1)
+    overall_ok = all(c.get("ok", False) for c in checks.values())
+
+    result: dict = {
+        "status": "healthy" if overall_ok else "degraded",
+        "uptime_seconds": uptime,
+        "version": CURRENT_VERSION,
+        "checks": checks,
+        "slices": slices_info,
+    }
+    if memory_mb is not None:
+        result["memory_mb"] = memory_mb
+    if disk_free_gb is not None:
+        result["disk_free_gb"] = disk_free_gb
+
+    return result
 
 
 # Fast 404 for /metrics — prevents Prometheus scraper from clogging the threadpool

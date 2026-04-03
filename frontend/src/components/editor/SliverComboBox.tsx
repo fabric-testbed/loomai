@@ -14,6 +14,7 @@ interface SliverComboBoxProps {
   selectedSliverKey: string;
   onSelect: (key: string) => void;
   errorMessages?: SliceErrorMessage[];
+  tabFilter?: 'fabric' | 'chameleon' | 'experiment';
 }
 
 function buildOptions(sliceData: SliceData | null, errorMessages?: SliceErrorMessage[]): SliverOption[] {
@@ -62,19 +63,38 @@ function buildOptions(sliceData: SliceData | null, errorMessages?: SliceErrorMes
       hasFailed: failedNames.has(pm.name),
     });
   }
+  for (const chi of (sliceData.chameleon_nodes ?? [])) {
+    options.push({
+      key: `chi:${chi.name}`,
+      name: chi.name,
+      type: 'CHI',
+      group: 'Chameleon Nodes',
+      hasFailed: failedNames.has(chi.name),
+    });
+  }
   return options;
 }
 
-export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect, errorMessages }: SliverComboBoxProps) {
+export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect, errorMessages, tabFilter }: SliverComboBoxProps) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const allOptions = buildOptions(sliceData, errorMessages);
+
+  // Filter by tab context, then by text search
+  const tabFiltered = tabFilter ? allOptions.filter(opt => {
+    const g = opt.group.toLowerCase();
+    if (tabFilter === 'fabric') return (g.includes('node') && !g.includes('chameleon')) || (g.includes('network') && !g.includes('chameleon'));
+    if (tabFilter === 'chameleon') return g.includes('chameleon');
+    if (tabFilter === 'experiment') return g.includes('facility') || g.includes('mirror');
+    return true;
+  }) : allOptions;
+
   const filtered = filter
-    ? allOptions.filter((o) => o.name.toLowerCase().includes(filter.toLowerCase()))
-    : allOptions;
+    ? tabFiltered.filter((o) => o.name.toLowerCase().includes(filter.toLowerCase()))
+    : tabFiltered;
 
   const selectedOption = allOptions.find((o) => o.key === selectedSliverKey);
 
@@ -127,7 +147,7 @@ export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect,
               <>
                 <span className="sliver-combo-name">{selectedOption.name}</span>
                 {selectedOption.hasFailed && <span className="sliver-badge sliver-badge-failed">Failed</span>}
-                <span className={`sliver-badge sliver-badge-${selectedOption.type === 'VM' ? 'vm' : selectedOption.type === 'FP' ? 'fp' : selectedOption.type === 'Mirror' ? 'pm' : 'net'}`}>
+                <span className={`sliver-badge sliver-badge-${selectedOption.type === 'VM' ? 'vm' : selectedOption.type === 'FP' ? 'fp' : selectedOption.type === 'Mirror' ? 'pm' : selectedOption.type === 'CHI' ? 'chi' : 'net'}`}>
                   {selectedOption.type}
                 </span>
               </>
@@ -161,7 +181,7 @@ export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect,
                   >
                     <span className="sliver-combo-opt-name">{opt.name}</span>
                     {opt.hasFailed && <span className="sliver-badge sliver-badge-failed">Failed</span>}
-                    <span className={`sliver-badge sliver-badge-${opt.type === 'VM' ? 'vm' : opt.type === 'FP' ? 'fp' : opt.type === 'Mirror' ? 'pm' : 'net'}`}>
+                    <span className={`sliver-badge sliver-badge-${opt.type === 'VM' ? 'vm' : opt.type === 'FP' ? 'fp' : opt.type === 'Mirror' ? 'pm' : opt.type === 'CHI' ? 'chi' : 'net'}`}>
                       {opt.type}
                     </span>
                   </div>

@@ -10,15 +10,16 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.fablib_manager import get_fablib
 from app.fablib_executor import run_in_fablib_pool
+from app.fabric_call_manager import get_call_manager
 from app.user_context import get_user_storage
 from app.slice_serializer import slice_to_dict, slice_summary, check_has_errors
-from app.graph_builder import build_graph
+from app.graph_builder import build_graph, STATE_COLORS, DEFAULT_STATE
 from app.site_resolver import resolve_sites
 from app.routes.resources import get_cached_sites, get_fresh_sites
 from app.slice_registry import (
@@ -354,15 +355,24 @@ def _serialize(slice_obj, dirty: bool = False) -> dict[str, Any]:
     state = data.get("state", "")
     is_new = _is_new_draft(name) if _is_draft(name) else False
 
+    # Check if Chameleon slice nodes exist for this slice (bypass cache if so)
+    _has_chi_nodes = False
+    try:
+        from app.routes.chameleon import _chameleon_slice_nodes
+        _has_chi_nodes = bool(_chameleon_slice_nodes.get(name))
+    except ImportError:
+        pass
+
     # Check serialization cache for stable, non-dirty slices
-    if not dirty and not is_new:
+    # Skip cache when Chameleon nodes are attached (they change independently)
+    if not dirty and not is_new and not _has_chi_nodes:
         cached = _serialize_cache.get(name)
         if cached and cached[0] == state:
             return cached[1]
 
-    # Only mark as "Draft" if it's a genuinely new local slice with no UUID.
-    # A slice that has a UUID was submitted to FABRIC and must show its real state.
-    if is_new and not data.get("id"):
+    # Mark as "Draft" for genuinely new local slices (never submitted to FABRIC).
+    # Draft slices have a "draft-*" UUID — they should always show as Draft until submitted.
+    if is_new:
         data["state"] = "Draft"
     # Always inject the ID from the registry (draft-UUID or FABRIC UUID)
     # so the frontend can identify this slice by ID.
@@ -389,11 +399,20 @@ def _serialize(slice_obj, dirty: bool = False) -> dict[str, Any]:
     # Re-persist new drafts to disk when modified
     if dirty and is_new:
         _persist_draft(name, slice_obj)
+    # Inject Chameleon slice nodes if any exist for this slice
+    try:
+        from app.routes.chameleon import _chameleon_slice_nodes
+        chi_nodes = _chameleon_slice_nodes.get(name, [])
+        if chi_nodes:
+            data["chameleon_nodes"] = chi_nodes
+    except ImportError:
+        pass  # Chameleon module not available
     graph = build_graph(data)
     result = {**data, "graph": graph}
 
     # Cache the result for stable, non-dirty slices
-    if not dirty and not is_new:
+    # Skip caching when Chameleon nodes are attached (they change independently)
+    if not dirty and not is_new and not _has_chi_nodes:
         _serialize_cache[name] = (state, result)
 
     return result
@@ -475,75 +494,49 @@ class ResolveSitesRequest(BaseModel):
 # Heavy FABlib calls use async + asyncio.to_thread() so they don't block
 # the event loop or exhaust the default threadpool for other requests.
 
-# Request deduplication for list_slices: avoid concurrent FABlib calls
-# from overlapping poll requests.
-_list_slices_lock = asyncio.Lock()
-_list_slices_cache: tuple[float, list[dict[str, Any]]] | None = None
-_LIST_SLICES_CACHE_TTL = 5  # seconds
-
-
-def _invalidate_list_cache():
-    """Invalidate the list_slices dedup cache after mutations."""
-    global _list_slices_cache
-    _list_slices_cache = None
-
 @router.get("/slices")
-async def list_slices() -> list[dict[str, Any]]:
+async def list_slices(max_age: float = Query(30.0, ge=0)) -> list[dict[str, Any]]:
     """List all slices visible to the current user.
+
+    Uses the unified FabricCallManager for caching and request coalescing.
+    The ``max_age`` query parameter controls acceptable data staleness:
+    - ``max_age=30`` (default): accept data up to 30s old
+    - ``max_age=0``: force a fresh FABlib call
+    - ``max_age=300``: accept 5-minute-old data (steady-state polling)
+    """
+    mgr = get_call_manager()
+    return await mgr.get(
+        "slices:list",
+        fetcher=_list_slices_sync,
+        max_age=max_age,
+        stale_while_revalidate=(max_age > 0),
+    )
+
+
+def _list_slices_sync() -> list[dict[str, Any]]:
+    """Synchronous fetcher for slice list (runs in FABlib thread pool).
 
     1. Fast ``fablib.get_slices()`` — returns only active/non-terminal slices.
     2. Bulk-register results into the registry.
-    3. For each non-archived registry entry with a UUID that was NOT in the
-       fast results, individually query by UUID to get its current state and
-       ``has_errors``.  This catches slices that transitioned to terminal
-       states (Dead, Closing, StableError) since the last list.
-    4. Scan drafts dir on disk for new drafts (e.g. created externally).
+    3. For stale registry entries not in fast results, use last-known state.
+    4. Scan drafts dir on disk for new drafts.
     5. Append new (never-submitted) draft slices.
-
-    Uses a 5-second result cache + async lock to deduplicate concurrent polls.
     """
-    import time as _time
-    global _list_slices_cache
-
-    # Fast path: return cached result if still fresh (no lock needed)
-    cached = _list_slices_cache
-    if cached and _time.time() - cached[0] < _LIST_SLICES_CACHE_TTL:
-        return cached[1]
-
-    # Acquire lock to prevent concurrent FABlib calls from overlapping polls
-    async with _list_slices_lock:
-        # Double-check after acquiring lock (another request may have filled cache)
-        cached = _list_slices_cache
-        if cached and _time.time() - cached[0] < _LIST_SLICES_CACHE_TTL:
-            return cached[1]
-
-        result = await _list_slices_impl()
-        _list_slices_cache = (_time.time(), result)
-        return result
-
-
-async def _list_slices_impl() -> list[dict[str, Any]]:
-    """Core implementation of list_slices (extracted for dedup caching)."""
     # Scan drafts dir for any new drafts not yet in memory
     try:
-        await asyncio.to_thread(_load_persistent_drafts)
+        _load_persistent_drafts()
     except Exception:
         logger.warning("Failed to load persistent drafts", exc_info=True)
 
     current_pid = os.environ.get("FABRIC_PROJECT_ID", "")
 
-    def _fast_query():
-        fablib = get_fablib()
-        slices = fablib.get_slices()
-        # Filter to current project — get_slices() returns all accessible slices
-        if current_pid:
-            slices = [s for s in slices
-                      if (getattr(s, 'get_project_id', lambda: '')() or '') == current_pid]
-        return [slice_summary(s) for s in slices]
-    try:
-        fabric_results = await run_in_fablib_pool(_fast_query)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    fablib = get_fablib()
+    slices = fablib.get_slices()
+    # Filter to current project — get_slices() returns all accessible slices
+    if current_pid:
+        slices = [s for s in slices
+                  if (getattr(s, 'get_project_id', lambda: '')() or '') == current_pid]
+    fabric_results = [slice_summary(s) for s in slices]
 
     # Load non-archived registry entries for the current project
     registry = get_all_entries(include_archived=False, project_id=current_pid)
@@ -591,6 +584,10 @@ async def _list_slices_impl() -> list[dict[str, Any]]:
             continue
         if entry.get("uuid"):
             uuid = entry["uuid"]
+            # Skip draft slices — they're not on FABRIC yet, so get_slices()
+            # won't return them. Don't mark them as Dead.
+            if uuid.startswith("draft-"):
+                continue
             state = entry.get("state", "Dead")
             # If the state is not terminal, it likely transitioned to Dead
             # since get_slices() didn't return it. Mark as Dead.
@@ -657,7 +654,7 @@ async def _list_slices_impl() -> list[dict[str, Any]]:
 @router.post("/slices/archive-terminal")
 async def archive_terminal_slices() -> dict[str, Any]:
     """Archive all slices in terminal states (Dead, Closing, StableError)."""
-    _invalidate_list_cache()
+    get_call_manager().invalidate("slices:list")
     archived = registry_archive_all_terminal()
     return {"archived": archived, "count": len(archived)}
 
@@ -724,12 +721,16 @@ async def reconcile_projects() -> dict[str, Any]:
 
 
 @router.get("/slices/{slice_name}")
-async def get_slice(slice_name: str) -> dict[str, Any]:
+async def get_slice(slice_name: str, max_age: float = Query(0, ge=0)) -> dict[str, Any]:
     """Get full slice data including topology graph.
 
     For submitted slices this always fetches a fresh copy from FABRIC
     (by UUID) so the state is up-to-date.  New drafts (never submitted)
     are served from the in-memory store.
+
+    The ``max_age`` parameter is accepted for API consistency but defaults
+    to 0 (always fresh) because this endpoint has write side effects
+    (draft storage, registry updates).
     """
     slice_name = _resolve_slice_name(slice_name)
     def _do():
@@ -739,7 +740,7 @@ async def get_slice(slice_name: str) -> dict[str, Any]:
         # and fall through to the FABRIC lookup below.
         if _is_new_draft(slice_name):
             existing_uuid = get_slice_uuid(slice_name)
-            if not existing_uuid:
+            if not existing_uuid or existing_uuid.startswith("draft-"):
                 slice_obj = _get_draft(slice_name)
                 if slice_obj is not None:
                     return _serialize(slice_obj)
@@ -793,7 +794,7 @@ async def get_slice(slice_name: str) -> dict[str, Any]:
 @router.post("/slices")
 async def create_slice(name: str) -> dict[str, Any]:
     """Create a new empty draft slice."""
-    _invalidate_list_cache()
+    get_call_manager().invalidate("slices:list")
     def _do():
         import uuid as _uuid_mod
         fablib = get_fablib()
@@ -815,8 +816,10 @@ async def create_slice(name: str) -> dict[str, Any]:
 @router.post("/slices/{slice_name}/submit")
 async def submit_slice(slice_name: str) -> dict[str, Any]:
     """Submit a slice — creates new slice or modifies existing one."""
-    _invalidate_list_cache()
+    mgr = get_call_manager()
+    mgr.invalidate("slices:list")
     slice_name = _resolve_slice_name(slice_name)
+    mgr.invalidate_prefix(f"slice:{slice_name}")
     # Capture site groups before popping draft (pop clears them)
     site_groups = _get_site_groups(slice_name)
     draft, is_new = _pop_draft(slice_name)
@@ -972,6 +975,131 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
     raise HTTPException(status_code=400, detail="No pending changes to submit")
 
 
+@router.post("/slices/{slice_name}/submit-composite")
+async def submit_composite_slice(slice_name: str) -> dict[str, Any]:
+    """Submit a composite slice with both FABRIC and Chameleon resources.
+
+    If the slice has Chameleon nodes attached, this orchestrates parallel
+    submission of the FABRIC slice and creation of a Chameleon lease.
+    If no Chameleon nodes exist, falls back to normal FABRIC submit.
+    """
+    slice_name = _resolve_slice_name(slice_name)
+
+    # Check for Chameleon nodes
+    chameleon_nodes: list[dict] = []
+    try:
+        from app.routes.chameleon import _chameleon_slice_nodes
+        chameleon_nodes = _chameleon_slice_nodes.get(slice_name, [])
+    except ImportError:
+        pass
+
+    if not chameleon_nodes:
+        # No Chameleon nodes — delegate to normal submit
+        return await submit_slice(slice_name)
+
+    # --- Composite submission: FABRIC + Chameleon in parallel ---
+
+    async def _submit_fabric() -> dict[str, Any]:
+        """Submit the FABRIC portion of the slice."""
+        return await submit_slice(slice_name)
+
+    async def _create_chameleon_lease() -> dict[str, Any]:
+        """Create a Chameleon lease for the Chameleon nodes in the slice."""
+        # Lazy imports to avoid circular dependencies
+        from app.chameleon_executor import run_in_chi_pool
+        from app.routes.chameleon import _require_enabled
+        from app.chameleon_manager import get_session
+
+        _require_enabled()
+
+        def _create():
+            import json as _json
+            from datetime import datetime, timedelta, timezone
+
+            # Group nodes by site and node_type
+            site_groups: dict[str, dict[str, int]] = {}  # site -> {node_type -> count}
+            for node in chameleon_nodes:
+                site = node.get("site", "CHI@TACC")
+                ntype = node.get("node_type", "compute_haswell")
+                if site not in site_groups:
+                    site_groups[site] = {}
+                site_groups[site][ntype] = site_groups[site].get(ntype, 0) + 1
+
+            # Create a lease at the first site (most common case)
+            # For multi-site Chameleon, would need multiple leases
+            all_results: list[dict] = []
+            for site, type_counts in site_groups.items():
+                session = get_session(site)
+
+                reservations = []
+                for ntype, count in type_counts.items():
+                    reservations.append({
+                        "resource_type": "physical:host",
+                        "resource_properties": _json.dumps(["==", "$node_type", ntype]),
+                        "min": count,
+                        "max": count,
+                        "hypervisor_properties": "",
+                    })
+
+                end_dt = datetime.now(timezone.utc) + timedelta(hours=24)
+                lease_body = {
+                    "name": f"{slice_name}-chi-lease",
+                    "start_date": "now",
+                    "end_date": end_dt.strftime("%Y-%m-%d %H:%M"),
+                    "reservations": reservations,
+                    "events": [],
+                }
+
+                result = session.api_post("reservation", "/leases", lease_body)
+                lease = result.get("lease", result)
+                lease["_site"] = site
+                all_results.append(lease)
+
+            if all_results:
+                return all_results[0]
+            return {"id": None, "status": "FAILED", "error": "No Chameleon leases created"}
+
+        return await run_in_chi_pool(_create)
+
+    # Run FABRIC submit and Chameleon lease creation in parallel
+    fabric_result: dict[str, Any] | Exception
+    chameleon_result: dict[str, Any] | Exception
+
+    results = await asyncio.gather(
+        _submit_fabric(),
+        _create_chameleon_lease(),
+        return_exceptions=True,
+    )
+    fabric_result = results[0]
+    chameleon_result = results[1]
+
+    # Build composite response
+    response: dict[str, Any] = {
+        "status": "submitting_composite",
+    }
+
+    if isinstance(fabric_result, Exception):
+        response["fabric_status"] = "Error"
+        response["fabric_error"] = str(fabric_result)
+        logger.warning("Composite submit: FABRIC submission failed for '%s': %s",
+                        slice_name, fabric_result)
+    else:
+        response["fabric_status"] = fabric_result.get("state", "Configuring")
+        response["fabric_slice"] = fabric_result
+
+    if isinstance(chameleon_result, Exception):
+        response["chameleon_status"] = "ERROR"
+        response["chameleon_lease_id"] = None
+        response["chameleon_error"] = str(chameleon_result)
+        logger.warning("Composite submit: Chameleon lease creation failed for '%s': %s",
+                        slice_name, chameleon_result)
+    else:
+        response["chameleon_lease_id"] = chameleon_result.get("id")
+        response["chameleon_status"] = chameleon_result.get("status", "PENDING")
+
+    return response
+
+
 @router.post("/slices/{slice_name}/refresh")
 async def refresh_slice(slice_name: str) -> dict[str, Any]:
     """Refresh slice state from FABRIC (discards local edits).
@@ -1019,7 +1147,10 @@ async def refresh_slice(slice_name: str) -> dict[str, Any]:
             _store_draft(slice_name, slice_obj, is_new=False)
         return _serialize(slice_obj)
     try:
-        return await run_in_fablib_pool(_do)
+        result = await run_in_fablib_pool(_do)
+        # Invalidate sliver cache so next poll gets fresh data
+        get_call_manager().invalidate_prefix(f"slice:{slice_name}")
+        return result
     except Exception as e:
         # Restore draft so user doesn't lose their work
         if draft_backup is not None:
@@ -1043,6 +1174,68 @@ async def get_slice_state(slice_name: str) -> dict[str, Any]:
             "has_errors": entry.get("has_errors", False),
         }
     raise HTTPException(status_code=404, detail="Slice not found")
+
+
+@router.get("/slices/{slice_name}/slivers")
+async def get_sliver_states(
+    slice_name: str, max_age: float = Query(15.0, ge=0),
+) -> dict[str, Any]:
+    """Return lightweight per-node sliver states for polling.
+
+    Much cheaper than a full slice refresh — skips serialization, graph
+    build, and component enumeration.  Returns only the fields needed to
+    update node colors in the topology/table view during provisioning.
+    """
+    slice_name = _resolve_slice_name(slice_name)
+
+    # Drafts have no slivers
+    if _is_new_draft(slice_name):
+        return {"slice_name": slice_name, "slice_state": "Draft", "nodes": []}
+
+    mgr = get_call_manager()
+    return await mgr.get(
+        f"slice:{slice_name}:slivers",
+        fetcher=lambda: _fetch_sliver_states(slice_name),
+        max_age=max_age,
+    )
+
+
+def _fetch_sliver_states(slice_name: str) -> dict[str, Any]:
+    """Sync fetcher: extract per-node sliver states from a FABlib slice."""
+    fablib = get_fablib()
+    uuid = get_slice_uuid(slice_name) or ""
+    try:
+        slice_obj = (
+            fablib.get_slice(slice_id=uuid) if uuid
+            else fablib.get_slice(name=slice_name)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Slice not found: {e}")
+
+    state = str(slice_obj.get_state())
+    nodes: list[dict[str, Any]] = []
+    for node in slice_obj.get_nodes():
+        try:
+            rs = str(node.get_reservation_state())
+        except Exception:
+            rs = ""
+        try:
+            mgmt_ip = node.get_management_ip() or ""
+        except Exception:
+            mgmt_ip = ""
+        try:
+            err_msg = str(node.get_error_message() or "")
+        except Exception:
+            err_msg = ""
+        nodes.append({
+            "name": node.get_name(),
+            "reservation_state": rs,
+            "site": getattr(node, "get_site", lambda: "")() or "",
+            "management_ip": mgmt_ip,
+            "state_color": STATE_COLORS.get(rs, DEFAULT_STATE)["border"],
+            "error_message": err_msg,
+        })
+    return {"slice_name": slice_name, "slice_state": state, "nodes": nodes}
 
 
 @router.post("/slices/{slice_name}/resolve-sites")
@@ -1122,8 +1315,10 @@ async def resolve_sites_endpoint(slice_name: str, body: ResolveSitesRequest = Re
 @router.delete("/slices/{slice_name}")
 async def delete_slice(slice_name: str) -> dict[str, str]:
     """Delete a slice."""
-    _invalidate_list_cache()
+    mgr = get_call_manager()
+    mgr.invalidate("slices:list")
     slice_name = _resolve_slice_name(slice_name)
+    mgr.invalidate_prefix(f"slice:{slice_name}")
     draft, is_new = _pop_draft(slice_name)
     if draft is not None and is_new:
         # Just a draft that was never submitted — discard it
@@ -1310,24 +1505,38 @@ def validate_slice(slice_name: str) -> dict[str, Any]:
                 "remedy": f"Remove IP hints from non-L3 network '{net_name}'.",
             })
             continue
-        seen_octets: dict[int, str] = {}
+        seen_ips: dict[str, str] = {}
         for iface_name, hint in hints.items():
+            # Validate full IP hints
+            full_ip = hint.get("ip")
+            if full_ip:
+                if full_ip in seen_ips:
+                    issues.append({
+                        "severity": "error",
+                        "message": f"Duplicate IP {full_ip} on '{net_name}': '{seen_ips[full_ip]}' and '{iface_name}'.",
+                        "remedy": f"Choose unique IPs for each interface on '{net_name}'.",
+                    })
+                else:
+                    seen_ips[full_ip] = iface_name
+                continue
+            # Legacy: validate last_octet hints
             octet = hint.get("last_octet")
             if octet is not None:
+                ip_key = str(octet)
                 if not isinstance(octet, int) or not (1 <= octet <= 254):
                     issues.append({
                         "severity": "error",
                         "message": f"IP hint for '{iface_name}' on '{net_name}': last_octet {octet} must be 1-254.",
                         "remedy": f"Fix the last octet value for '{iface_name}'.",
                     })
-                elif octet in seen_octets:
+                elif ip_key in seen_ips:
                     issues.append({
                         "severity": "error",
-                        "message": f"Duplicate last_octet {octet} on '{net_name}': '{seen_octets[octet]}' and '{iface_name}'.",
+                        "message": f"Duplicate last_octet {octet} on '{net_name}': '{seen_ips[ip_key]}' and '{iface_name}'.",
                         "remedy": f"Choose unique last octets for each interface on '{net_name}'.",
                     })
                 else:
-                    seen_octets[octet] = iface_name
+                    seen_ips[ip_key] = iface_name
             range_str = hint.get("last_octet_range", "")
             if range_str:
                 try:
@@ -1753,8 +1962,18 @@ async def apply_ip_hints(slice_name: str, net_name: str) -> dict[str, Any]:
                 except (ValueError, IndexError):
                     pass
 
-        # First pass: fixed last_octet assignments
+        # First pass: full IP assignments (new format)
         for iface_name, hint in hints.items():
+            full_ip = hint.get("ip")
+            if full_ip:
+                assignments[iface_name] = full_ip
+                try:
+                    octet = int(full_ip.rsplit(".", 1)[1])
+                    used_octets.add(octet)
+                except (ValueError, IndexError):
+                    pass
+                continue
+            # Legacy: last_octet assignments
             octet = hint.get("last_octet")
             if octet is not None:
                 if not (1 <= octet <= 254):
@@ -1821,7 +2040,8 @@ async def apply_ip_hints(slice_name: str, net_name: str) -> dict[str, Any]:
                     "id": f"ip-hint-{iface_name}",
                     "iface": iface_name,
                     "mode": "manual",
-                    "ip": f"{ip_str}/{cidr_prefix}",
+                    "ip": ip_str,
+                    "subnet": cidr_prefix,
                     "order": 100,
                 }
                 if routes:
@@ -1930,6 +2150,106 @@ async def run_post_boot_config(slice_name: str) -> dict[str, Any]:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"post_boot_config failed: {e}")
+
+
+@router.post("/slices/{slice_name}/auto-configure-networks")
+async def auto_configure_networks(slice_name: str) -> dict[str, Any]:
+    """Auto-generate boot config network entries from FABlib-assigned IPs.
+
+    For each L3 (FABNetv4/v6) network in the slice, reads the assigned
+    subnet, gateway, and per-interface IPs from FABlib, then writes
+    boot config network entries so the interfaces get configured on
+    the VMs during boot config execution.
+
+    Should be called after post_boot_config() — FABlib assigns the
+    IPs during post_boot_config, and this endpoint reads them back.
+    """
+    slice_name = _resolve_slice_name(slice_name)
+    import ipaddress
+
+    def _do():
+        slice_obj = _get_slice_obj(slice_name)
+        data = slice_to_dict(slice_obj)
+
+        configured: dict[str, list[dict]] = {}  # node_name → list of network entries
+
+        for net in data.get("networks", []):
+            if net.get("layer") != "L3":
+                continue
+            subnet_str = net.get("subnet", "")
+            gateway = net.get("gateway", "")
+            net_name = net.get("name", "")
+            if not subnet_str:
+                continue
+
+            try:
+                network_obj = ipaddress.ip_network(subnet_str, strict=False)
+                cidr_prefix = network_obj.prefixlen
+            except Exception:
+                continue
+
+            # Build routes for FABNet — check L3 config for custom routes, else default
+            default_route = "10.128.0.0/10" if network_obj.version == 4 else "2602:fcfb::/40"
+            l3_cfg = _get_l3_config(slice_name, net_name) if net_name else {}
+            route_mode = l3_cfg.get("route_mode", "default_fabnet")
+            if route_mode == "custom" and l3_cfg.get("custom_routes"):
+                route_subnets = l3_cfg["custom_routes"]
+            elif route_mode == "default_fabnet" and l3_cfg.get("default_fabnet_subnet"):
+                route_subnets = [l3_cfg["default_fabnet_subnet"]]
+            else:
+                route_subnets = [default_route]
+
+            for iface in net.get("interfaces", []):
+                iface_name = iface.get("name", "")
+                node_name = iface.get("node_name", "")
+                ip_addr = iface.get("ip_addr", "")
+                if not iface_name or not node_name or not ip_addr:
+                    continue
+
+                # Build the boot config network entry
+                entry: dict[str, Any] = {
+                    "id": f"auto-{net_name}-{iface_name}",
+                    "iface": iface_name,
+                    "mode": "manual",
+                    "ip": ip_addr,
+                    "subnet": str(cidr_prefix),
+                    "order": 50,  # Before user commands (which default to order 100+)
+                }
+                # Add routes via the gateway (custom or default FABNet aggregate)
+                if gateway:
+                    entry["routes"] = [{"subnet": rs, "gateway": gateway} for rs in route_subnets]
+
+                configured.setdefault(node_name, []).append(entry)
+
+        # Write boot config network entries for each node
+        from app.routes.files import _load_boot_config, _save_boot_config, _storage_dir
+        import os, json
+
+        results: dict[str, list[dict]] = {}
+        for node_name, entries in configured.items():
+            config = _load_boot_config(slice_name, node_name)
+            existing_net = config.get("network", [])
+
+            # Remove any previous auto-generated entries (by id prefix)
+            existing_net = [e for e in existing_net if not e.get("id", "").startswith("auto-")]
+            existing_net.extend(entries)
+            config["network"] = existing_net
+
+            _save_boot_config(slice_name, node_name, config)
+            results[node_name] = entries
+
+        return {
+            "configured": len(results),
+            "nodes": {k: len(v) for k, v in results.items()},
+            "details": results,
+        }
+
+    try:
+        return await run_in_fablib_pool(_do)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"auto_configure_networks failed: {e}")
 
 
 # --- Clone slice ---

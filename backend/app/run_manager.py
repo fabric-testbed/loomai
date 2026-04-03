@@ -26,6 +26,8 @@ from typing import Any
 
 import re
 
+from app.fabric_call_manager import get_call_manager
+
 from app.user_context import get_user_storage
 
 logger = logging.getLogger(__name__)
@@ -124,6 +126,10 @@ def start_run(
         "log_path": actual_log_path,
     }
     _write_meta(run_id, meta)
+
+    # Weave runs typically create/modify slices — invalidate cache so the
+    # next frontend poll picks up changes even in STEADY mode (max_age=300).
+    get_call_manager().invalidate("slices:list")
 
     env = {**os.environ, **args}
     cmd = ["bash", script_path]
@@ -391,6 +397,9 @@ def _wait_for_proc(
     _write_meta(run_id, meta)
     _clear_weave_active_run(meta)
 
+    # Weave finished — invalidate slice cache so frontend sees final state
+    get_call_manager().invalidate("slices:list")
+
     logger.info("Background run %s finished (exit_code=%s)", run_id, exit_code)
 
 
@@ -490,6 +499,7 @@ def recover_stale_runs() -> None:
                     "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
                 )
                 _write_meta(name, meta)
+                get_call_manager().invalidate("slices:list")
                 logger.info("Marked stale run %s as interrupted", name)
         except Exception:
             pass

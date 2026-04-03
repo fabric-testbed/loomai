@@ -1,12 +1,16 @@
-"""Monitoring API routes — enable/disable scraping, retrieve metrics history."""
+"""Monitoring API routes — enable/disable scraping, retrieve metrics history.
+
+Supports both FABRIC slices (via FABlib SSH) and Chameleon slices (via paramiko SSH).
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from app.slice_registry import resolve_slice_name
 
@@ -173,3 +177,35 @@ def _simplify(results):
         value = r.get("value", [None, None])
         out.append({"metric": metric, "value": value})
     return out
+
+
+# ---------------------------------------------------------------------------
+# Chameleon monitoring — cross-testbed support
+# ---------------------------------------------------------------------------
+
+class ChameleonNodeInfo(BaseModel):
+    name: str
+    ip: str
+    site: str = ""
+    key_path: str = ""
+    username: str = "cc"
+
+
+class ChameleonMonitorRequest(BaseModel):
+    slice_name: str
+    nodes: List[ChameleonNodeInfo]
+
+
+@router.post("/chameleon/enable")
+async def enable_chameleon_monitoring(req: ChameleonMonitorRequest) -> Dict[str, Any]:
+    """Enable monitoring for Chameleon nodes (installs exporters via paramiko SSH)."""
+    loop = asyncio.get_event_loop()
+    nodes_dicts = [n.model_dump() for n in req.nodes]
+    try:
+        results = await loop.run_in_executor(
+            None, _mgr().enable_chameleon_nodes, req.slice_name, nodes_dicts
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _mgr().start_scrape_loop(req.slice_name)
+    return {"status": "enabled", "install_results": results}

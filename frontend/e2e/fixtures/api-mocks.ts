@@ -24,8 +24,22 @@ type MockOverrides = {
 /**
  * Set up standard API mocks for all common endpoints.
  * Call this at the start of each test to avoid real backend calls.
+ *
+ * Playwright routes are LIFO — last registered is checked first.
+ * The catch-all is registered FIRST (checked last) as a safety net
+ * for unhandled endpoints. Specific handlers are registered AFTER
+ * and therefore take priority.
  */
 export async function mockAllApis(page: Page, overrides: MockOverrides = {}) {
+  // ── Catch-all (registered FIRST → checked LAST due to LIFO) ───
+  // Falls through to real server for any un-mocked endpoints.
+  // Tests using mocks should stay on pages that don't need complex data.
+  await page.route('**/api/**', (route: Route) => {
+    return route.fallback();
+  });
+
+  // ── Specific handlers (registered AFTER → checked BEFORE catch-all) ───
+
   // Health
   await page.route('**/api/health', (route: Route) =>
     route.fulfill({ json: overrides.health ?? healthResponse })
@@ -48,18 +62,21 @@ export async function mockAllApis(page: Page, overrides: MockOverrides = {}) {
     })
   );
 
-  // Slices
-  await page.route('**/api/slices', (route: Route) => {
-    if (route.request().method() === 'GET') {
-      return route.fulfill({ json: overrides.slices ?? emptySliceList });
+  // Slices — use URL function to match regardless of query params
+  await page.route(
+    (url: URL) => url.pathname === '/api/slices',
+    (route: Route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({ json: overrides.slices ?? emptySliceList });
+      }
+      return route.fallback();
     }
-    // POST create — handled per-test
-    return route.fallback();
-  });
+  );
 
-  // Sites
-  await page.route('**/api/sites', (route: Route) =>
-    route.fulfill({ json: overrides.sites ?? sitesList })
+  // Sites — URL function to match regardless of query params
+  await page.route(
+    (url: URL) => url.pathname === '/api/sites',
+    (route: Route) => route.fulfill({ json: overrides.sites ?? sitesList })
   );
 
   // Component models
@@ -73,20 +90,26 @@ export async function mockAllApis(page: Page, overrides: MockOverrides = {}) {
   );
 
   // Templates
-  await page.route('**/api/templates', (route: Route) => {
-    if (route.request().method() === 'GET') {
-      return route.fulfill({ json: overrides.templates ?? templatesList });
+  await page.route(
+    (url: URL) => url.pathname === '/api/templates',
+    (route: Route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({ json: overrides.templates ?? templatesList });
+      }
+      return route.fallback();
     }
-    return route.fallback();
-  });
+  );
 
   // VM Templates
-  await page.route('**/api/vm-templates', (route: Route) => {
-    if (route.request().method() === 'GET') {
-      return route.fulfill({ json: overrides.vmTemplates ?? vmTemplatesList });
+  await page.route(
+    (url: URL) => url.pathname === '/api/vm-templates',
+    (route: Route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({ json: overrides.vmTemplates ?? vmTemplatesList });
+      }
+      return route.fallback();
     }
-    return route.fallback();
-  });
+  );
 
   // Version
   await page.route('**/api/version', (route: Route) =>
@@ -106,14 +129,15 @@ export async function mockAllApis(page: Page, overrides: MockOverrides = {}) {
     })
   );
 
-  // Jupyter
+  // Jupyter (sub-paths)
   await page.route('**/api/jupyter/**', (route: Route) =>
     route.fulfill({ json: {} })
   );
 
-  // Config (general)
-  await page.route('**/api/config', (route: Route) =>
-    route.fulfill({ json: overrides.configStatus ?? configStatus })
+  // Config (general — exact match to avoid catching /api/config/*)
+  await page.route(
+    (url: URL) => url.pathname === '/api/config',
+    (route: Route) => route.fulfill({ json: overrides.configStatus ?? configStatus })
   );
 
   // Config AI tools
@@ -142,24 +166,70 @@ export async function mockAllApis(page: Page, overrides: MockOverrides = {}) {
     route.fulfill({ json: {} })
   );
 
-  // Artifacts (list — matches /api/artifacts and /api/artifacts/my)
+  // Artifacts (sub-paths)
   await page.route('**/api/artifacts/**', (route: Route) => {
     if (route.request().method() === 'GET') {
       return route.fulfill({ json: [] });
     }
-    return route.fallback();
+    return route.fulfill({ json: {}, status: 200 });
   });
 
-  await page.route('**/api/artifacts', (route: Route) => {
-    if (route.request().method() === 'GET') {
-      return route.fulfill({ json: [] });
+  // Artifacts (exact)
+  await page.route(
+    (url: URL) => url.pathname === '/api/artifacts',
+    (route: Route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({ json: [] });
+      }
+      return route.fulfill({ json: {}, status: 200 });
     }
-    return route.fallback();
-  });
+  );
 
   // Recipes
   await page.route('**/api/recipes', (route: Route) =>
     route.fulfill({ json: [] })
+  );
+
+  // Views status
+  await page.route('**/api/views/status', (route: Route) =>
+    route.fulfill({ json: { fabric_enabled: true, chameleon_enabled: false, composite_enabled: true } })
+  );
+
+  // Chameleon status
+  await page.route('**/api/chameleon/status', (route: Route) =>
+    route.fulfill({ json: { enabled: false, configured: false, sites: {} } })
+  );
+
+  // Chameleon slices
+  await page.route(
+    (url: URL) => url.pathname === '/api/chameleon/slices',
+    (route: Route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({ json: [] });
+      }
+      return route.fulfill({ json: {}, status: 200 });
+    }
+  );
+
+  // Chameleon leases
+  await page.route('**/api/chameleon/leases', (route: Route) =>
+    route.fulfill({ json: [] })
+  );
+
+  // Chameleon instances
+  await page.route('**/api/chameleon/instances', (route: Route) =>
+    route.fulfill({ json: [] })
+  );
+
+  // Composite slices
+  await page.route(
+    (url: URL) => url.pathname === '/api/composite/slices',
+    (route: Route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({ json: [] });
+      }
+      return route.fulfill({ json: {}, status: 200 });
+    }
   );
 
   // AI tools status
@@ -172,7 +242,7 @@ export async function mockAllApis(page: Page, overrides: MockOverrides = {}) {
     route.fulfill({ json: [] })
   );
 
-  // Links (backbone links between sites)
+  // Links
   await page.route('**/api/links', (route: Route) =>
     route.fulfill({ json: [] })
   );
@@ -183,23 +253,18 @@ export async function mockAllApis(page: Page, overrides: MockOverrides = {}) {
   );
 
   // Projects
-  await page.route('**/api/projects', (route: Route) => {
-    if (route.request().method() === 'GET') {
-      return route.fulfill({
-        json: {
-          projects: configStatus.token_info.projects,
-          active_project_id: configStatus.project_id,
-        },
-      });
+  await page.route(
+    (url: URL) => url.pathname === '/api/projects',
+    (route: Route) => {
+      if (route.request().method() === 'GET') {
+        return route.fulfill({
+          json: {
+            projects: configStatus.token_info.projects,
+            active_project_id: configStatus.project_id,
+          },
+        });
+      }
+      return route.fulfill({ json: {}, status: 200 });
     }
-    return route.fallback();
-  });
-
-  // Catch-all for unhandled API routes — return 404 instead of timing out
-  await page.route('**/api/**', (route: Route) => {
-    const method = route.request().method();
-    const url = route.request().url();
-    console.warn(`[mock] Unhandled API: ${method} ${url}`);
-    return route.fallback();
-  });
+  );
 }

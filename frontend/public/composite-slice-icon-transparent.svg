@@ -1,0 +1,28 @@
+<svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- LoomAI Composite Slice — Flow Merge Icon · Transparent Background -->
+  <rect x="4" y="4" width="92" height="92" rx="16" fill="#1c2e4a"/>
+  <!-- Three source slices -->
+  <rect x="7"  y="9"  width="22" height="13" rx="4.5" fill="#4cc4f0" opacity="0.7"/>
+  <rect x="39" y="9"  width="22" height="13" rx="4.5" fill="#27aae1"/>
+  <rect x="71" y="9"  width="22" height="13" rx="4.5" fill="#4cc4f0" opacity="0.7"/>
+  <!-- Woven texture on slices -->
+  <rect x="9"  y="11" width="18" height="4"  rx="1.5" fill="#e8f0f8" opacity="0.25"/>
+  <rect x="41" y="11" width="18" height="4"  rx="1.5" fill="#e8f0f8" opacity="0.3"/>
+  <rect x="73" y="11" width="18" height="4"  rx="1.5" fill="#e8f0f8" opacity="0.25"/>
+  <!-- Converging lines -->
+  <line x1="18"  y1="22" x2="50" y2="52" stroke="#27aae1" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/>
+  <line x1="50"  y1="22" x2="50" y2="52" stroke="#27aae1" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/>
+  <line x1="82"  y1="22" x2="50" y2="52" stroke="#27aae1" stroke-width="1.8" stroke-linecap="round" opacity="0.5"/>
+  <!-- Merge node -->
+  <circle cx="50" cy="55" r="7" fill="#27aae1"/>
+  <circle cx="50" cy="55" r="3.5" fill="#e8f0f8"/>
+  <!-- Connector -->
+  <line x1="50" y1="62" x2="50" y2="65" stroke="#27aae1" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+  <!-- Composite slice -->
+  <rect x="10" y="65" width="80" height="24" rx="7" fill="#27aae1"/>
+  <rect x="16" y="71" width="68" height="7"  rx="3" fill="#e8f0f8" opacity="0.2"/>
+  <rect x="16" y="80" width="68" height="5"  rx="2.5" fill="#e8f0f8" opacity="0.12"/>
+  <rect x="24" y="66" width="8"  height="21" rx="3" fill="#4cc4f0" opacity="0.22"/>
+  <rect x="46" y="66" width="8"  height="21" rx="3" fill="#4cc4f0" opacity="0.22"/>
+  <rect x="68" y="66" width="8"  height="21" rx="3" fill="#4cc4f0" opacity="0.22"/>
+</svg>

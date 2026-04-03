@@ -41,6 +41,9 @@ class NodeMonitoringState:
     # Exponential backoff for unreachable nodes
     consecutive_failures: int = 0
     next_scrape_after: float = 0.0  # unix timestamp — skip scrape until this time
+    # Cross-testbed support: "fabric" (default) or "chameleon"
+    testbed: str = "fabric"
+    ssh_key_path: str = ""  # explicit key path for chameleon nodes
 
 
 @dataclass
@@ -149,6 +152,8 @@ class MonitoringManager:
                     "management_ip": ns.management_ip,
                     "username": ns.username,
                     "site": ns.site,
+                    "testbed": ns.testbed,
+                    "ssh_key_path": ns.ssh_key_path,
                 }
                 for n, ns in state.nodes.items()
             },
@@ -179,6 +184,8 @@ class MonitoringManager:
                         management_ip=nd.get("management_ip", ""),
                         username=nd.get("username", ""),
                         site=nd.get("site", ""),
+                        testbed=nd.get("testbed", "fabric"),
+                        ssh_key_path=nd.get("ssh_key_path", ""),
                     )
                 self._states[sname] = state
             except Exception as e:
@@ -211,6 +218,134 @@ class MonitoringManager:
                 pass
         slice_obj = fablib.get_slice(slice_name)
         return slice_obj.get_nodes()
+
+    # -- Chameleon SSH helper ------------------------------------------------
+
+    def _chameleon_ssh_exec(self, ip: str, key_path: str, username: str, command: str, timeout: int = 30) -> tuple[str, str]:
+        """Execute a command on a Chameleon node via paramiko SSH."""
+        import paramiko
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            pkey = paramiko.RSAKey.from_private_key_file(key_path)
+        except Exception:
+            try:
+                pkey = paramiko.Ed25519Key.from_private_key_file(key_path)
+            except Exception:
+                pkey = paramiko.ECDSAKey.from_private_key_file(key_path)
+        try:
+            client.connect(ip, username=username, pkey=pkey, timeout=timeout, allow_agent=False, look_for_keys=False)
+            _, stdout_ch, stderr_ch = client.exec_command(command, timeout=timeout)
+            return stdout_ch.read().decode(errors="replace"), stderr_ch.read().decode(errors="replace")
+        finally:
+            client.close()
+
+    def enable_chameleon_nodes(self, slice_name: str, nodes: list[dict]) -> dict[str, str]:
+        """Enable monitoring for Chameleon nodes.
+
+        Args:
+            slice_name: Chameleon slice name/id used as monitoring key
+            nodes: list of dicts with keys: name, ip, site, key_path, username (default 'cc')
+        """
+        with self._state_lock:
+            state = self._states.setdefault(
+                slice_name, SliceMonitoringState(slice_name=slice_name)
+            )
+            state.enabled = True
+
+        results: dict[str, str] = {}
+        for node_info in nodes:
+            nname = node_info["name"]
+            ip = node_info.get("ip", "")
+            if not ip:
+                results[nname] = "Skipped — no IP"
+                continue
+            key_path = node_info.get("key_path", "")
+            username = node_info.get("username", "cc")
+            site = node_info.get("site", "")
+
+            with self._state_lock:
+                ns = state.nodes.setdefault(nname, NodeMonitoringState(name=nname))
+                ns.management_ip = ip
+                ns.username = username
+                ns.site = site
+                ns.testbed = "chameleon"
+                ns.ssh_key_path = key_path
+
+            try:
+                msg = self._install_exporter_chameleon(slice_name, nname, ip, key_path, username)
+                results[nname] = msg
+            except Exception as e:
+                results[nname] = f"Error: {e}"
+                with self._state_lock:
+                    ns.last_error = str(e)
+
+        self._persist_state(slice_name)
+        return results
+
+    def _install_exporter_chameleon(self, slice_name: str, node_name: str, ip: str, key_path: str, username: str) -> str:
+        """Install node_exporter on a Chameleon bare-metal node via paramiko."""
+        # Check if already running
+        stdout, _ = self._chameleon_ssh_exec(ip, key_path, username,
+            "curl -s -o /dev/null -w '%{http_code}' http://localhost:9100/metrics 2>/dev/null || echo 'fail'")
+        if stdout.strip() == "200":
+            with self._state_lock:
+                ns = self._states[slice_name].nodes[node_name]
+                ns.exporter_installed = True
+                ns.enabled = True
+            return f"node_exporter already running on {node_name}"
+
+        # Detect OS
+        stdout_os, _ = self._chameleon_ssh_exec(ip, key_path, username,
+            "cat /etc/os-release 2>/dev/null | head -5")
+        is_rocky = "rocky" in stdout_os.lower() or "centos" in stdout_os.lower() or "rhel" in stdout_os.lower()
+
+        if is_rocky:
+            install_cmds = [
+                "sudo dnf install -y dnf-plugins-core 2>/dev/null",
+                "sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo 2>/dev/null || true",
+                "sudo dnf install -y docker-ce docker-ce-cli containerd.io 2>/dev/null || sudo dnf install -y docker 2>/dev/null",
+                "sudo systemctl start docker",
+                "sudo systemctl enable docker",
+            ]
+        else:
+            install_cmds = [
+                "sudo apt-get update -qq",
+                "sudo apt-get install -y -qq docker.io",
+                "sudo systemctl start docker",
+                "sudo systemctl enable docker",
+            ]
+
+        install_cmds.extend([
+            "sudo docker rm -f node_exporter 2>/dev/null || true",
+            "sudo docker run -d --name node_exporter --restart=unless-stopped "
+            "--net=host --pid=host -v /:/host:ro,rslave "
+            "prom/node-exporter --path.rootfs=/host",
+        ])
+
+        errors = []
+        for cmd in install_cmds:
+            try:
+                _, stderr_c = self._chameleon_ssh_exec(ip, key_path, username, cmd, timeout=60)
+                if stderr_c and "error" in stderr_c.lower():
+                    errors.append(f"{cmd}: {stderr_c.strip()}")
+            except Exception as e:
+                errors.append(f"{cmd}: {e}")
+
+        import time as _time
+        _time.sleep(3)
+        stdout_v, _ = self._chameleon_ssh_exec(ip, key_path, username,
+            "curl -s -o /dev/null -w '%{http_code}' http://localhost:9100/metrics 2>/dev/null || echo 'fail'")
+        installed = stdout_v.strip() == "200"
+
+        with self._state_lock:
+            ns = self._states[slice_name].nodes[node_name]
+            ns.exporter_installed = installed
+            ns.enabled = installed
+            if not installed:
+                ns.last_error = f"Installation may have failed: {'; '.join(errors[-3:])}"
+
+        return f"node_exporter {'installed' if installed else 'FAILED'} on {node_name}"
 
     # -- node_exporter installation -----------------------------------------
 
@@ -311,12 +446,27 @@ class MonitoringManager:
 
         Implements exponential backoff for unreachable nodes to avoid
         wasting thread pool time on nodes that are consistently failing.
+        Supports both FABRIC (via FABlib) and Chameleon (via paramiko).
         """
         try:
-            node = self._get_node(slice_name, node_name)
-            stdout, stderr = node.execute(
-                "curl -s --max-time 10 http://localhost:9100/metrics 2>/dev/null"
-            )
+            # Check testbed type
+            with self._state_lock:
+                state = self._states.get(slice_name)
+                ns = state.nodes.get(node_name) if state else None
+                testbed = ns.testbed if ns else "fabric"
+                ip = ns.management_ip if ns else ""
+                key_path = ns.ssh_key_path if ns else ""
+                username = ns.username if ns else "cc"
+
+            if testbed == "chameleon" and ip and key_path:
+                stdout, _ = self._chameleon_ssh_exec(ip, key_path, username,
+                    "curl -s --max-time 10 http://localhost:9100/metrics 2>/dev/null")
+            else:
+                node = self._get_node(slice_name, node_name)
+                stdout, stderr = node.execute(
+                    "curl -s --max-time 10 http://localhost:9100/metrics 2>/dev/null"
+                )
+
             if stdout and "node_cpu_seconds_total" in stdout:
                 # Success — reset backoff
                 with self._state_lock:

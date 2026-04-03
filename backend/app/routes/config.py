@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 
 import httpx
 import paramiko
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -36,6 +36,51 @@ from app.user_context import get_user_storage, get_token_path, notify_user_chang
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Multi-user symlink management
+# ---------------------------------------------------------------------------
+
+_SYMLINKED_DIRS = ["fabric_config", "my_artifacts", "my_slices", "notebooks"]
+
+
+def _ensure_user_symlinks(uuid: str) -> None:
+    """Create or update top-level symlinks to the active user's directories.
+
+    In multi-user mode the per-user data lives under ``users/{uuid}/``.
+    This function maintains symlinks at the storage root so that tools
+    reading the filesystem directly (JupyterLab, terminal, etc.) always
+    see the active user's data at the well-known paths.
+    """
+    from app import settings_manager
+
+    root = settings_manager.get_root_storage_dir()
+    user_dir = os.path.join(root, "users", uuid)
+
+    for name in _SYMLINKED_DIRS:
+        link_path = os.path.join(root, name)
+        target = os.path.join(user_dir, name)
+        os.makedirs(target, exist_ok=True)
+
+        if os.path.islink(link_path):
+            current = os.readlink(link_path)
+            if current == target:
+                continue  # already correct
+            os.unlink(link_path)
+        elif os.path.isdir(link_path):
+            # Real directory from legacy/single-user layout — back it up
+            backup = link_path + ".pre-multiuser"
+            if not os.path.exists(backup):
+                os.rename(link_path, backup)
+                logger.info("Backed up %s → %s", name, backup + "/")
+            else:
+                shutil.rmtree(link_path)
+        elif os.path.exists(link_path):
+            os.unlink(link_path)
+
+        os.symlink(target, link_path)
+        logger.info("Symlinked %s → users/%s/%s", name, uuid, name)
+
 
 # Read version from frontend/src/version.ts (single source of truth)
 def _read_version() -> str:
@@ -124,6 +169,17 @@ def _read_project_id_from_rc() -> str:
     """
     from app.settings_manager import get_project_id
     return get_project_id()
+
+
+def _fetch_uis_person(id_token: str, user_uuid: str) -> dict:
+    """Synchronous UIS people fetch for use with FabricCallManager cache."""
+    resp = httpx.get(
+        f"https://uis.fabric-testbed.net/people/{user_uuid}",
+        headers={"Authorization": f"Bearer {id_token}"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 def _handle_token_write(token_data: dict) -> None:
@@ -344,10 +400,19 @@ async def upload_token(file: UploadFile = File(...)):
 # ---------------------------------------------------------------------------
 
 @router.get("/api/config/login")
-def get_login_url():
+def get_login_url(origin: str = Query(None)):
+    """Return CM OAuth login URL with redirect_uri pointing to our callback.
+
+    The CM requires ``redirect_uri`` to point to ``http://localhost:PORT/...``.
+    We use the caller-supplied *origin* (from ``window.location.origin``) when
+    available so the redirect works regardless of which port the UI is served on.
+    Falls back to ``WEBGUI_BASE_URL`` or ``http://localhost:3000``.
+    """
+    base = origin or os.environ.get("WEBGUI_BASE_URL", "http://localhost:3000")
     params: dict = {
         "scope": "all",
         "lifetime": "4",
+        "redirect_uri": f"{base}/api/config/callback",
     }
     # Include current project_id so the token is scoped to the active project
     pid = os.environ.get("FABRIC_PROJECT_ID", "")
@@ -431,7 +496,7 @@ def oauth_callback(id_token: str, refresh_token: str = ""):
 # ---------------------------------------------------------------------------
 
 @router.get("/api/config/projects")
-def get_projects():
+async def get_projects():
     token_data = _read_token()
     if not token_data or "id_token" not in token_data:
         raise HTTPException(status_code=400, detail="No token available. Upload or login first.")
@@ -446,18 +511,19 @@ def get_projects():
 
     projects = payload.get("projects", [])
 
-    # Get bastion_login from UIS API (authoritative source)
+    # Get bastion_login from UIS API (authoritative source), cached for 10 min
     bastion_login = ""
     user_uuid = payload.get("uuid", "")
     if user_uuid and id_token:
         try:
-            resp = httpx.get(
-                f"https://uis.fabric-testbed.net/people/{user_uuid}",
-                headers={"Authorization": f"Bearer {id_token}"},
-                timeout=15,
+            from app.fabric_call_manager import get_call_manager
+            cm = get_call_manager()
+            data = await cm.get(
+                f"uis:people:{user_uuid}",
+                fetcher=lambda: _fetch_uis_person(id_token, user_uuid),
+                max_age=600,
             )
-            resp.raise_for_status()
-            results = resp.json().get("results", [])
+            results = data.get("results", [])
             if results:
                 bastion_login = results[0].get("bastion_login", "")
         except Exception as e:
@@ -487,6 +553,204 @@ def get_projects():
 # ---------------------------------------------------------------------------
 # POST /api/config/keys/bastion — upload bastion private key
 # ---------------------------------------------------------------------------
+
+class AutoSetupRequest(BaseModel):
+    project_id: str
+
+
+@router.post("/api/config/auto-setup")
+async def auto_setup(req: AutoSetupRequest):
+    """One-call post-login setup: set project, derive bastion username, save config, generate keys."""
+    token_data = _read_token()
+    if not token_data or "id_token" not in token_data:
+        raise HTTPException(status_code=400, detail="No token available. Login first.")
+
+    id_token = token_data["id_token"]
+    try:
+        payload = _decode_jwt_payload(id_token)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not decode token")
+
+    user_email = payload.get("email", "")
+    user_name = payload.get("name", "")
+    user_uuid = payload.get("uuid", "")
+
+    # Resolve bastion_username from UIS API (authoritative), with JWT fallback
+    bastion_login = ""
+    if user_uuid and id_token:
+        try:
+            from app.fabric_call_manager import get_call_manager
+            cm = get_call_manager()
+            data = await cm.get(
+                f"uis:people:{user_uuid}",
+                fetcher=lambda: _fetch_uis_person(id_token, user_uuid),
+                max_age=600,
+            )
+            results = data.get("results", [])
+            if results:
+                bastion_login = results[0].get("bastion_login", "")
+        except Exception as e:
+            logger.warning("auto-setup: UIS bastion_login lookup failed: %s", e)
+
+    if not bastion_login:
+        try:
+            email = payload.get("email", "")
+            sub = payload.get("sub", "")
+            if email and sub:
+                username = email.split("@")[0].replace(".", "_")
+                cilogon_id = sub.rstrip("/").rsplit("/", 1)[-1]
+                if cilogon_id.isdigit():
+                    bastion_login = f"{username}_{cilogon_id.zfill(10)}"
+        except Exception:
+            pass
+
+    # Update settings with project_id and bastion_username, then save (generates fabric_rc + ssh_config)
+    from app import settings_manager
+    settings = settings_manager.load_settings()
+    settings["fabric"]["project_id"] = req.project_id
+    if bastion_login:
+        settings["fabric"]["bastion_username"] = bastion_login
+    settings_manager.save_settings(settings)
+    settings_manager.apply_env_vars(settings)
+
+    config_dir = _ensure_config_dir()
+    core_api_host = settings.get("fabric", {}).get("hosts", {}).get("core_api", "uis.fabric-testbed.net")
+
+    # Generate bastion key via Core API if none exist locally
+    bastion_key_generated = False
+    bastion_priv_path = os.path.join(config_dir, "fabric_bastion_key")
+    bastion_pub_path = os.path.join(config_dir, "fabric_bastion_key.pub")
+    if not os.path.isfile(bastion_priv_path):
+        try:
+            resp = httpx.post(
+                f"https://{core_api_host}/sshkeys",
+                headers={
+                    "Authorization": f"Bearer {id_token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "keytype": "bastion",
+                    "comment": "fabric-bastion-key",
+                    "description": "bastion-key-via-loomai",
+                    "store_pubkey": True,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            if results:
+                key_data = results[0]
+                priv_content = key_data.get("private_openssh", "")
+                pub_content = key_data.get("public_openssh", "")
+                if priv_content:
+                    with open(bastion_priv_path, "w") as f:
+                        f.write(priv_content)
+                    os.chmod(bastion_priv_path, stat.S_IRUSR | stat.S_IWUSR)
+                    bastion_key_generated = True
+                if pub_content:
+                    with open(bastion_pub_path, "w") as f:
+                        f.write(pub_content)
+                    os.chmod(bastion_pub_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        except Exception as e:
+            logger.warning("auto-setup: bastion key generation failed: %s", e)
+
+    # Generate slice keys if none exist
+    slice_keys_generated = False
+    _migrate_legacy_keys(config_dir)
+    priv_path, pub_path = get_default_slice_key_path(config_dir)
+    if not os.path.isfile(priv_path) or not os.path.isfile(pub_path):
+        key = paramiko.RSAKey.generate(2048)
+        key_dir = os.path.dirname(priv_path)
+        os.makedirs(key_dir, exist_ok=True)
+        key.write_private_key_file(priv_path)
+        os.chmod(priv_path, stat.S_IRUSR | stat.S_IWUSR)
+        pub_key_str = f"{key.get_name()} {key.get_base64()} fabric-webgui-generated"
+        with open(pub_path, "w") as f:
+            f.write(pub_key_str + "\n")
+        os.chmod(pub_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        # Register in keys.json
+        data = _load_keys_json(config_dir)
+        if "default" not in data.get("keys", []):
+            data.setdefault("keys", []).append("default")
+        _save_keys_json(config_dir, data)
+        _sync_default_flat_copies(config_dir, "default")
+        slice_keys_generated = True
+
+    # Create FABRIC LLM API key via Credential Manager if none configured
+    llm_key_created = False
+    llm_key_error = ""
+    existing_ai_key = settings_manager.get_fabric_api_key()
+    if not existing_ai_key:
+        try:
+            cm_host = settings.get("fabric", {}).get("hosts", {}).get("credmgr", "cm.fabric-testbed.net")
+            auth_headers = {"Authorization": f"Bearer {id_token}"}
+
+            # Check for existing LLM keys first — reuse if one exists
+            api_key = ""
+            try:
+                keys_resp = httpx.get(
+                    f"https://{cm_host}/credmgr/tokens/llm_keys",
+                    headers=auth_headers,
+                    timeout=15,
+                )
+                if keys_resp.status_code == 200:
+                    existing_keys = keys_resp.json().get("data", [])
+                    for k in existing_keys:
+                        details = k.get("details", {})
+                        key_val = details.get("api_key", "")
+                        if key_val:
+                            api_key = key_val
+                            logger.info("auto-setup: reusing existing FABRIC LLM key '%s'", details.get("key_name", ""))
+                            break
+            except Exception:
+                pass  # Fall through to create
+
+            # Create a new key if none found
+            if not api_key:
+                import uuid as _uuid
+                key_name = f"loomai-{_uuid.uuid4().hex[:8]}"
+                resp = httpx.post(
+                    f"https://{cm_host}/credmgr/tokens/create_llm",
+                    params={
+                        "key_name": key_name,
+                        "comment": "Auto-created by LoomAI login",
+                        "duration": 30,
+                    },
+                    headers=auth_headers,
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                llm_data = resp.json().get("data", [{}])
+                if llm_data:
+                    api_key = llm_data[0].get("details", {}).get("api_key", "")
+
+            if api_key:
+                # Persist the key in settings
+                settings = settings_manager.load_settings()
+                settings["ai"]["fabric_api_key"] = api_key
+                settings_manager.save_settings(settings)
+                settings_manager.apply_env_vars(settings)
+                llm_key_created = True
+                logger.info("auto-setup: FABRIC LLM API key saved")
+        except Exception as e:
+            llm_key_error = str(e)
+            logger.warning("auto-setup: LLM key creation failed (non-fatal): %s", e)
+
+    reset_fablib()
+
+    return {
+        "status": "ok",
+        "email": user_email,
+        "name": user_name,
+        "uuid": user_uuid,
+        "project_id": req.project_id,
+        "bastion_username": bastion_login,
+        "bastion_key_generated": bastion_key_generated,
+        "slice_keys_generated": slice_keys_generated,
+        "llm_key_created": llm_key_created,
+        "llm_key_error": llm_key_error,
+    }
+
 
 @router.post("/api/config/keys/bastion")
 async def upload_bastion_key(file: UploadFile = File(...)):
@@ -1003,6 +1267,19 @@ def set_ai_tools_endpoint(body: dict[str, bool]) -> dict[str, bool]:
 # PUT /api/settings — replace settings
 # ---------------------------------------------------------------------------
 
+@router.get("/api/views/status")
+def views_status():
+    """Return which top-level views are enabled."""
+    from app.settings_manager import is_chameleon_enabled
+    from app.settings_manager import _get_settings
+    views = _get_settings().get("views", {})
+    return {
+        "fabric_enabled": True,  # always on
+        "chameleon_enabled": is_chameleon_enabled(),
+        "composite_enabled": views.get("composite_enabled", False),
+    }
+
+
 @router.get("/api/settings")
 def get_settings():
     """Return the full settings.json contents."""
@@ -1011,12 +1288,22 @@ def get_settings():
 
 
 @router.put("/api/settings")
-def put_settings(body: dict):
-    """Replace settings, regenerate derived files, reset FABlib."""
+def put_settings(body: dict, background_tasks: BackgroundTasks):
+    """Replace settings, regenerate derived files, reset FABlib.
+
+    Also triggers background propagation of AI config to all tool
+    workspaces so changes to API keys and server URLs take effect
+    without a container restart.
+    """
     from app import settings_manager
     settings_manager.save_settings(body)
     settings_manager.apply_env_vars(body)
     reset_fablib()
+
+    # Propagate AI config changes to all tool workspaces in the background
+    from app.routes.ai_terminal import propagate_ai_configs
+    background_tasks.add_task(propagate_ai_configs)
+
     return settings_manager.load_settings()
 
 
@@ -1169,8 +1456,9 @@ def _do_user_switch(uuid: str) -> None:
 
     logger.info("User switch → %s", uuid)
 
-    # Ensure user directory exists
+    # Ensure user directory exists and update top-level symlinks
     user_registry.ensure_user_dir(uuid)
+    _ensure_user_symlinks(uuid)
 
     # Invalidate settings cache so it reloads from the new user's dir
     settings_manager.invalidate_settings_cache()
@@ -1244,8 +1532,9 @@ def _migrate_to_multi_user(first_uuid: str, first_name: str, first_email: str) -
         os.makedirs(dst_settings_dir, exist_ok=True)
         _shutil.copy2(src_settings, os.path.join(dst_settings_dir, "settings.json"))
 
-    # Register the first user
+    # Register the first user and set up top-level symlinks
     user_registry.add_user(first_uuid, first_name, first_email)
+    _ensure_user_symlinks(first_uuid)
     logger.info("Migrated flat layout to multi-user for %s (%s)", first_name, first_uuid)
 
 
@@ -1340,3 +1629,233 @@ def migrate_current_user():
     _do_user_switch(uuid)
 
     return {"status": "ok", "message": f"Migrated to multi-user mode for {name}", "uuid": uuid}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/settings/test/{setting_name} — validate individual settings
+# POST /api/settings/test-all — validate all settings concurrently
+# ---------------------------------------------------------------------------
+
+async def _test_token() -> dict:
+    """Check that the token file exists, is valid JSON with id_token, and not expired."""
+    try:
+        token_data = _read_token()
+        if not token_data:
+            return {"ok": False, "message": "Token file not found"}
+        if "id_token" not in token_data:
+            return {"ok": False, "message": "Token file missing 'id_token' field"}
+
+        payload = _decode_jwt_payload(token_data["id_token"])
+        exp = payload.get("exp")
+        if not exp:
+            return {"ok": False, "message": "Token has no expiration field"}
+
+        from datetime import datetime, timezone
+        expires_at = datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()
+        if time.time() > exp:
+            return {"ok": False, "message": "Token is expired", "expires_at": expires_at}
+
+        return {"ok": True, "message": "Token is valid", "expires_at": expires_at}
+    except Exception as e:
+        return {"ok": False, "message": f"Token check failed: {e}"}
+
+
+async def _test_bastion_ssh() -> dict:
+    """Test SSH connectivity to the FABRIC bastion host."""
+    try:
+        from app import settings_manager
+        settings = settings_manager.load_settings()
+        bastion_host = settings["fabric"]["hosts"].get("bastion", "bastion.fabric-testbed.net")
+        bastion_username = settings["fabric"].get("bastion_username", "")
+        bastion_key_path = settings["paths"].get("bastion_key_file", "")
+
+        if not bastion_username:
+            return {"ok": False, "message": "Bastion username not configured"}
+        if not bastion_key_path or not os.path.isfile(bastion_key_path):
+            return {"ok": False, "message": "Bastion SSH key not found"}
+
+        import asyncio
+        loop = asyncio.get_event_loop()
+
+        def _do_ssh_test():
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            t0 = time.time()
+            try:
+                client.connect(
+                    hostname=bastion_host,
+                    username=bastion_username,
+                    key_filename=bastion_key_path,
+                    timeout=5,
+                    look_for_keys=False,
+                    allow_agent=False,
+                )
+                latency = int((time.time() - t0) * 1000)
+                return {"ok": True, "message": f"Connected to {bastion_host}", "latency_ms": latency}
+            except Exception as e:
+                latency = int((time.time() - t0) * 1000)
+                return {"ok": False, "message": f"SSH connection failed: {e}", "latency_ms": latency}
+            finally:
+                client.close()
+
+        return await loop.run_in_executor(None, _do_ssh_test)
+    except Exception as e:
+        return {"ok": False, "message": f"Bastion SSH test failed: {e}"}
+
+
+async def _test_fablib() -> dict:
+    """Check if FABlib is configured and can be initialized."""
+    try:
+        if not is_configured():
+            return {"ok": False, "message": "FABlib is not configured (missing token, keys, or config)"}
+
+        try:
+            fablib = get_fablib()
+            if fablib is None:
+                return {"ok": False, "message": "get_fablib() returned None"}
+        except Exception as e:
+            return {"ok": False, "message": f"FABlib initialization failed: {e}"}
+
+        return {"ok": True, "message": "FABlib is configured and initialized"}
+    except Exception as e:
+        return {"ok": False, "message": f"FABlib check failed: {e}"}
+
+
+async def _test_ai_server() -> dict:
+    """Ping the FABRIC AI server and check /v1/models."""
+    try:
+        from app import settings_manager
+        url = settings_manager.get_ai_server_url()
+        api_key = settings_manager.get_fabric_api_key()
+
+        if not url:
+            return {"ok": False, "message": "AI server URL not configured"}
+
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        t0 = time.time()
+        resp = await fabric_client.get(
+            f"{url}/v1/models",
+            headers=headers,
+            timeout=5,
+        )
+        latency = int((time.time() - t0) * 1000)
+
+        if resp.status_code != 200:
+            return {"ok": False, "message": f"AI server returned {resp.status_code}", "latency_ms": latency}
+
+        data = resp.json()
+        models = data.get("data", [])
+        model_count = len(models)
+        return {"ok": True, "message": f"AI server reachable ({model_count} models)", "latency_ms": latency, "model_count": model_count}
+    except Exception as e:
+        return {"ok": False, "message": f"AI server test failed: {e}"}
+
+
+async def _test_nrp_server() -> dict:
+    """Ping the NRP/Nautilus AI server and check /v1/models."""
+    try:
+        from app import settings_manager
+        url = settings_manager.get_nrp_server_url()
+        api_key = settings_manager.get_nrp_api_key()
+
+        if not url:
+            return {"ok": False, "message": "NRP server URL not configured"}
+
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        t0 = time.time()
+        resp = await fabric_client.get(
+            f"{url}/v1/models",
+            headers=headers,
+            timeout=5,
+        )
+        latency = int((time.time() - t0) * 1000)
+
+        if resp.status_code != 200:
+            return {"ok": False, "message": f"NRP server returned {resp.status_code}", "latency_ms": latency}
+
+        data = resp.json()
+        models = data.get("data", [])
+        model_count = len(models)
+        return {"ok": True, "message": f"NRP server reachable ({model_count} models)", "latency_ms": latency, "model_count": model_count}
+    except Exception as e:
+        return {"ok": False, "message": f"NRP server test failed: {e}"}
+
+
+async def _test_project() -> dict:
+    """Validate the current project_id against the FABRIC Core API."""
+    try:
+        from app import settings_manager
+        settings = settings_manager.load_settings()
+        project_id = settings["fabric"].get("project_id", "")
+        core_api_host = settings["fabric"]["hosts"].get("core_api", "uis.fabric-testbed.net")
+
+        if not project_id:
+            return {"ok": False, "message": "No project_id configured"}
+
+        token_data = _read_token()
+        if not token_data or "id_token" not in token_data:
+            return {"ok": False, "message": "No token available to validate project"}
+
+        id_token = token_data["id_token"]
+        resp = await fabric_client.get(
+            f"https://{core_api_host}/projects/{project_id}",
+            headers={"Authorization": f"Bearer {id_token}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        results = data.get("results", [data])
+        proj = results[0] if results else data
+        project_name = proj.get("name", "")
+
+        return {"ok": True, "message": f"Project '{project_name}' is valid", "project_name": project_name}
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return {"ok": False, "message": f"Project {project_id} not found"}
+        return {"ok": False, "message": f"Core API error: {e.response.status_code}"}
+    except Exception as e:
+        return {"ok": False, "message": f"Project validation failed: {e}"}
+
+
+_SETTING_TESTS = {
+    "token": _test_token,
+    "bastion_ssh": _test_bastion_ssh,
+    "fablib": _test_fablib,
+    "ai_server": _test_ai_server,
+    "nrp_server": _test_nrp_server,
+    "project": _test_project,
+}
+
+
+@router.post("/api/settings/test/{setting_name}")
+async def test_setting(setting_name: str):
+    """Test an individual setting for validity."""
+    test_fn = _SETTING_TESTS.get(setting_name)
+    if not test_fn:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown setting '{setting_name}'. Valid: {', '.join(_SETTING_TESTS.keys())}",
+        )
+    return await test_fn()
+
+
+@router.post("/api/settings/test-all")
+async def test_all_settings():
+    """Run all setting tests concurrently and return results."""
+    import asyncio
+    tasks = {name: fn() for name, fn in _SETTING_TESTS.items()}
+    results_list = await asyncio.gather(*tasks.values(), return_exceptions=True)
+    results = {}
+    for name, result in zip(tasks.keys(), results_list):
+        if isinstance(result, Exception):
+            results[name] = {"ok": False, "message": f"Test threw exception: {result}"}
+        else:
+            results[name] = result
+    return results

@@ -1,0 +1,57 @@
+.chi-sv-view { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+
+.chi-sv-action-bar {
+  display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+  border-bottom: 1px solid var(--fabric-border); flex-shrink: 0;
+}
+.chi-sv-filter {
+  flex: 1; padding: 5px 10px; border: 1px solid var(--fabric-border);
+  border-radius: 4px; font-size: 12px; background: var(--fabric-white); color: var(--fabric-text);
+}
+.chi-sv-count { font-size: 11px; color: var(--fabric-text-muted); white-space: nowrap; }
+.chi-sv-refresh { font-size: 12px; padding: 4px 8px; border: 1px solid var(--fabric-border); border-radius: 4px; background: none; cursor: pointer; color: var(--fabric-text); }
+.chi-sv-refresh:hover { background: var(--fabric-bg-tint); }
+
+.chi-sv-table-wrapper { flex: 1; overflow: auto; }
+.chi-sv-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.chi-sv-table th {
+  position: sticky; top: 0; background: var(--fabric-bg-tint); padding: 6px 8px;
+  text-align: left; font-size: 11px; font-weight: 600; border-bottom: 2px solid var(--fabric-border);
+  white-space: nowrap; user-select: none;
+}
+.chi-sv-table td { padding: 5px 8px; border-bottom: 1px solid rgba(0,0,0,0.06); }
+
+/* Parent rows */
+.chi-sv-parent { font-weight: 600; background: #f9fafb; cursor: pointer; }
+.chi-sv-parent:hover { background: #f0f6fc !important; }
+.chi-sv-active { background: rgba(57,181,74,0.1) !important; border-left: 3px solid #39B54A; }
+.chi-sv-checked { background: var(--fabric-bg-tint) !important; }
+
+/* Child rows */
+.chi-sv-child { font-weight: 400; font-size: 11px; }
+.chi-sv-child td { border-bottom: 1px solid rgba(0,0,0,0.03); }
+.chi-sv-network td { color: var(--fabric-text-muted); }
+
+/* Expand button */
+.chi-sv-expand-cell { width: 28px; text-align: center; cursor: pointer; }
+.chi-sv-expand-btn { font-size: 8px; color: var(--fabric-text-muted); }
+
+/* Name cell */
+.chi-sv-name { cursor: pointer; }
+.chi-sv-name:hover { color: #39B54A; }
+
+/* Type badges */
+.chi-sv-type-badge {
+  font-size: 9px; font-weight: 600; padding: 1px 5px; border-radius: 3px; margin-left: 6px;
+  background: rgba(150,150,150,0.15); color: #999;
+}
+.chi-sv-type-lease { background: rgba(57,181,74,0.12); color: #39B54A; }
+
+/* Dark mode */
+[data-theme="dark"] .chi-sv-filter { background: #16213e; border-color: rgba(255,255,255,0.12); color: #e0e0e0; }
+[data-theme="dark"] .chi-sv-table th { background: var(--fabric-bg-tint, #16213e); border-color: rgba(255,255,255,0.1); }
+[data-theme="dark"] .chi-sv-table td { border-color: rgba(255,255,255,0.06); }
+[data-theme="dark"] .chi-sv-parent { background: rgba(255,255,255,0.03); }
+[data-theme="dark"] .chi-sv-parent:hover { background: rgba(255,255,255,0.06) !important; }
+[data-theme="dark"] .chi-sv-active { background: rgba(57,181,74,0.12) !important; }
+[data-theme="dark"] .chi-sv-action-bar { border-color: rgba(255,255,255,0.1); }

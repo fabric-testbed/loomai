@@ -1,8 +1,8 @@
 'use client';
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import dynamic from 'next/dynamic';
 import TitleBar from './components/TitleBar';
-import Toolbar from './components/Toolbar';
 import CytoscapeGraph from './components/CytoscapeGraph';
 import type { ContextMenuAction } from './components/CytoscapeGraph';
 import SliverView from './components/SliverView';
@@ -10,7 +10,9 @@ import AllSliversView from './components/AllSliversView';
 import EditorPanel from './components/EditorPanel';
 import LibrariesPanel from './components/LibrariesPanel';
 import LibrariesView from './components/LibrariesView';
+import './styles/infrastructure-view.css';
 import GeoView from './components/GeoView';
+import DetailPanel from './components/DetailPanel';
 import BottomPanel from './components/BottomPanel';
 import type { TerminalTab, RecipeConsoleLine, BootConsoleLine } from './components/BottomPanel';
 import SideConsolePanel from './components/SideConsolePanel';
@@ -24,14 +26,23 @@ const AICompanionView = dynamic(() => import('./components/AICompanionView'), { 
 import AIChatPanel from './components/AIChatPanel';
 const LandingView = dynamic(() => import('./components/LandingView'), { ssr: false });
 const ArtifactEditorView = dynamic(() => import('./components/ArtifactEditorView'), { ssr: false });
-import SlicesView from './components/SlicesView';
+import type { CompositeSubView } from './components/CompositeView';
 const InfrastructureView = dynamic(() => import('./components/InfrastructureView'), { ssr: false });
+const ResourceBrowser = dynamic(() => import('./components/ResourceBrowser'), { ssr: false });
+const FacilityPortsBrowser = dynamic(() => import('./components/FacilityPortsBrowser'), { ssr: false });
+const ResourceCalendar = dynamic(() => import('./components/ResourceCalendar'), { ssr: false });
+const ChameleonView = dynamic(() => import('./components/ChameleonView'), { ssr: false });
+const ChameleonSlicesView = dynamic(() => import('./components/ChameleonSlicesView'), { ssr: false });
+const ChameleonEditor = dynamic(() => import('./components/ChameleonEditor'), { ssr: false });
+const ChameleonOpenStackView = dynamic(() => import('./components/ChameleonOpenStackView'), { ssr: false });
+const CompositeEditorPanel = dynamic(() => import('./components/CompositeEditorPanel'), { ssr: false });
 import type { ClientTarget } from './components/ClientView';
 import HelpContextMenu from './components/HelpContextMenu';
 import GuidedTour from './components/GuidedTour';
 import { tours } from './data/tourSteps';
 import * as api from './api/client';
-import type { SliceSummary, SliceData, ComponentModel, ValidationIssue, ProjectInfo, VMTemplateSummary, BootConfig, RecipeSummary } from './types/fabric';
+import type { SliceSummary, SliceData, ComponentModel, ValidationIssue, ProjectInfo, VMTemplateSummary, BootConfig, RecipeSummary, ExperimentVariable } from './types/fabric';
+import type { ChameleonSite, ChameleonInstance, ChameleonDraft, ChameleonSlice } from './types/chameleon';
 import { useInfrastructure } from './hooks/useInfrastructure';
 
 export default function App() {
@@ -50,12 +61,44 @@ export default function App() {
   const [sliceBootLogs, setSliceBootLogs] = useState<Record<string, BootConsoleLine[]>>({});
   const [sliceBootRunning, setSliceBootRunning] = useState<Record<string, boolean>>({});
   const [sliceBootNodeStatus, setSliceBootNodeStatus] = useState<Record<string, Record<string, 'pending' | 'running' | 'done' | 'error'>>>({});
-  type TopView = 'landing' | 'slices' | 'artifacts' | 'infrastructure' | 'jupyter' | 'ai';
-  type SlicesSubView = 'topology' | 'table' | 'storage' | 'map' | 'apps';
-  type InfraSubView = 'map' | 'browse' | 'facility-ports';
+  type TopView = 'landing' | 'slices' | 'artifacts' | 'infrastructure' | 'jupyter' | 'ai' | 'chameleon';
+  type SlicesSubView = CompositeSubView;
+  type InfraSubView = 'topology' | 'table' | 'storage' | 'map' | 'apps' | 'resources' | 'calendar';
+  type ChameleonSubView = 'topology' | 'slices' | 'map' | 'calendar' | 'openstack';
   const [currentView, setCurrentView] = useState<TopView>('landing');
   const [slicesSubView, setSlicesSubView] = useState<SlicesSubView>('topology');
-  const [infraSubView, setInfraSubView] = useState<InfraSubView>('browse');
+  const [infraSubView, setInfraSubView] = useState<InfraSubView>('table');
+  const [chameleonSubView, setChameleonSubView] = useState<ChameleonSubView>('slices');
+  const [chameleonSlices, setChameleonSlices] = useState<ChameleonSlice[]>([]);
+  const [selectedChameleonSliceId, setSelectedChameleonSliceId] = useState('');
+  const [chameleonSliceData, setChameleonSliceData] = useState<ChameleonSlice | null>(null);
+  // Composite slice state — independent from FABRIC and Chameleon
+  const [compositeSlices, setCompositeSlices] = useState<any[]>([]);
+  const [selectedCompositeSliceId, setSelectedCompositeSliceId] = useState('');
+  const [compositeGraph, setCompositeGraph] = useState<{ nodes: any[]; edges: any[] } | null>(null);
+  const [compositeEnabled, setCompositeEnabled] = useState(false);
+  const [checkedCompositeIds, setCheckedCompositeIds] = useState<Set<string>>(new Set());
+  const [chameleonAutoRefresh, setChameleonAutoRefresh] = useState(true);
+  const [showChameleonLeaseDialog, setShowChameleonLeaseDialog] = useState(false);
+  const [chiLeaseStartNow, setChiLeaseStartNow] = useState(true);
+  const [chiLeaseStartDate, setChiLeaseStartDate] = useState('');
+  const [chiLeaseDuration, setChiLeaseDuration] = useState(24);
+  const [chiLeaseDeploying, setChiLeaseDeploying] = useState(false);
+  const [chiAvailability, setChiAvailability] = useState<Record<string, {earliest_start: string | null; available_now: number; total: number; error: string; approximate?: boolean; warning?: string}>>({});
+  const [chiAvailLoading, setChiAvailLoading] = useState(false);
+  const [chiDeployMode, setChiDeployMode] = useState<'lease-only' | 'auto-deploy' | 'existing-lease'>('auto-deploy');
+  const [chiExistingLeaseId, setChiExistingLeaseId] = useState('');
+  const [chiDeployStatus, setChiDeployStatus] = useState('');
+  const [showChameleonDeleteDialog, setShowChameleonDeleteDialog] = useState(false);
+  const [chiDeleteMode, setChiDeleteMode] = useState<'release' | 'delete-all'>('release');
+  const [chiDeleting, setChiDeleting] = useState(false);
+  const [chiActiveLeases, setChiActiveLeases] = useState<any[]>([]);
+  const deployChiRef = useRef<(() => void) | null>(null);
+  const [chiDeployNetworks, setChiDeployNetworks] = useState<Array<{id: string; name: string; shared?: boolean}>>([]);
+  const [chiSelectedNetworkId, setChiSelectedNetworkId] = useState('');
+  const [chiDraftVersion, setChiDraftVersion] = useState(0);
+  const [chameleonLeases, setChameleonLeases] = useState<any[]>([]);
+  const [resourceCategory, setResourceCategory] = useState<'sites' | 'facility-ports'>('sites');
   const [editingArtifactDirName, setEditingArtifactDirName] = useState('');
   const [jupyterPath, setJupyterPath] = useState<string | undefined>(undefined);
   const [selectedAiTool, setSelectedAiTool] = useState<string | null>(null);
@@ -64,9 +107,13 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
   const [configStatus, setConfigStatus] = useState<import('./types/fabric').ConfigStatus | null>(null);
+  const [chameleonEnabled, setChameleonEnabled] = useState(false);
+  const [chameleonSites, setChameleonSites] = useState<ChameleonSite[]>([]);
+  const [chameleonInstances, setChameleonInstances] = useState<ChameleonInstance[]>([]);
   const [userUuid, setUserUuid] = useState<string>('');
   const [layout, setLayout] = useState('dagre');
   const [selectedElement, setSelectedElement] = useState<Record<string, string> | null>(null);
+  const [selectedResourceKey, setSelectedResourceKey] = useState<string>('');
   const [listLoaded, setListLoaded] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark');
   // Derived display name from selected ID
@@ -79,13 +126,15 @@ export default function App() {
     return '';
   }, [slices, selectedSliceId, sliceData]);
   // --- Draggable panel layout ---
-  type PanelId = 'editor' | 'template' | 'chat' | 'console';
+  type PanelId = 'editor' | 'template' | 'chat' | 'console' | 'details';
   type PanelLayoutEntry = { side: 'left' | 'right'; collapsed: boolean; width: number; order: number };
   type PanelLayoutMap = Record<PanelId, PanelLayoutEntry>;
 
-  const PANEL_ICONS: Record<PanelId, string> = { editor: '\u270E', template: '\u29C9', chat: '\u2728', console: '\u2756' };
-  const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Artifacts', chat: 'LoomAI', console: 'Console' };
-  const PANEL_IDS: PanelId[] = ['editor', 'template', 'chat', 'console'];
+  const PANEL_ICONS: Record<PanelId, string> = { editor: '\u270E', template: '__marketplace_icon__', chat: '__loomai_icon__', console: '\u2756', details: '\u2139' };
+  const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Artifacts', chat: 'LoomAI', console: 'Console', details: 'Details' };
+  const ICON_MAP: Record<string, string> = { '__loomai_icon__': '/loomai-icon-transparent.svg', '__marketplace_icon__': '/marketplace-icon-transparent.svg', '__composite_icon__': '/composite-slice-icon-transparent.svg' };
+  const renderPanelIcon = (iconKey: string, size = 14) => ICON_MAP[iconKey] ? <img src={ICON_MAP[iconKey]} alt="" style={{ height: size }} /> : <>{iconKey}</>;
+  const PANEL_IDS: PanelId[] = ['editor', 'template', 'chat', 'console', 'details'];
   const DEFAULT_PANEL_WIDTH = 280;
   const MIN_PANEL_WIDTH = 180;
 
@@ -94,6 +143,7 @@ export default function App() {
     template: { side: 'right', collapsed: false, width: DEFAULT_PANEL_WIDTH, order: 0 },
     chat: { side: 'right', collapsed: true, width: 320, order: 1 },
     console: { side: 'right', collapsed: true, width: 380, order: 2 },
+    details: { side: 'right', collapsed: true, width: 300, order: 3 },
   };
 
   const [panelLayout, setPanelLayout] = useState<PanelLayoutMap>(() => {
@@ -227,6 +277,8 @@ export default function App() {
   const [consoleHeight, setConsoleHeight] = useState(260);
   const [openBootLogSlices, setOpenBootLogSlices] = useState<string[]>([]);
   const [activeRuns, setActiveRuns] = useState<api.BackgroundRun[]>([]);
+  // Track which weave dir_names have a deploy in progress (for button state in LibrariesPanel)
+  const [deployingWeaves, setDeployingWeaves] = useState<Set<string>>(new Set());
   // Side console panel state (tabs tracked here, layout managed by panel system)
   const [sideConsoleTabs, setSideConsoleTabs] = useState<string[]>([]);
   const [dropIndicator, setDropIndicator] = useState<{ panelId: PanelId; edge: 'left' | 'right' } | null>(null);
@@ -236,8 +288,9 @@ export default function App() {
     localStorage.setItem('fabric-hidden-projects', JSON.stringify([...hiddenProjects]));
   }, [hiddenProjects]);
 
-  // Visible projects = all projects minus hidden ones
-  const visibleProjects = projects.filter(p => !hiddenProjects.has(p.uuid));
+  // Visible projects = non-service projects minus hidden ones
+  const isServiceProject = (p: ProjectInfo) => /^SERVICE\s*[-–—]/i.test(p.name);
+  const visibleProjects = projects.filter(p => !hiddenProjects.has(p.uuid) && !isServiceProject(p));
 
   // Track previous slice states for build log state-transition messages
   const prevSliceStatesRef = useRef<Record<string, string>>({});
@@ -253,6 +306,8 @@ export default function App() {
   // Refs for addError context (moved up so infrastructure hook can use addError)
   const selectedSliceRef = useRef(selectedSliceId);
   selectedSliceRef.current = selectedSliceId;
+  const sliceDataRef = useRef(sliceData);
+  sliceDataRef.current = sliceData;
 
   const projectNameRef = useRef(projectName);
   projectNameRef.current = projectName;
@@ -400,6 +455,52 @@ export default function App() {
     }
   }, [selectedSliceId, appendBuildLog]);
 
+  // Full boot config pipeline: post_boot_config → auto_configure_networks → execute
+  const handleRunFullBootConfigPipeline = useCallback(async (sliceNameOverride?: string) => {
+    const target = sliceNameOverride || selectedSliceId;
+    if (!target) return;
+    setSliceBootRunning(prev => ({ ...prev, [target]: true }));
+    setSliceBootLogs(prev => ({
+      ...prev,
+      [target]: [{ type: 'step', message: `Running full boot config pipeline for "${target}"...` }],
+    }));
+    setConsoleExpanded(true);
+
+    const appendLine = (line: BootConsoleLine) => {
+      setSliceBootLogs(prev => ({
+        ...prev,
+        [target]: [...(prev[target] || []), line],
+      }));
+    };
+
+    // Step 1: FABlib post_boot_config (assigns IPs, hostnames, routes)
+    appendLine({ type: 'step', message: 'Running FABlib post-boot config (networking, routes, hostnames)...' });
+    try {
+      await api.runPostBootConfig(target);
+      appendLine({ type: 'step', message: 'FABlib post-boot config complete' });
+    } catch (e: any) {
+      appendLine({ type: 'error', message: `FABlib post-boot config failed: ${e.message}` });
+    }
+
+    // Step 2: Auto-configure FABNetv4/v6 network interfaces
+    try {
+      appendLine({ type: 'step', message: 'Auto-configuring L3 network interfaces...' });
+      const netResult = await api.autoConfigureNetworks(target);
+      if (netResult.configured > 0) {
+        appendLine({ type: 'step', message: `Auto-configured ${netResult.configured} node(s) with L3 network entries` });
+      } else {
+        appendLine({ type: 'step', message: 'No L3 networks to auto-configure' });
+      }
+    } catch (e: any) {
+      appendLine({ type: 'error', message: `Network auto-configure failed: ${e.message}` });
+    }
+
+    // Step 3: Execute boot config scripts (uploads, network config, commands)
+    await handleRunBootConfigStream(target, true);
+    appendLine({ type: 'step', message: '\u2713 Boot config pipeline complete' });
+    setSliceBootRunning(prev => ({ ...prev, [target]: false }));
+  }, [selectedSliceId, handleRunBootConfigStream]);
+
   // Check config status on mount
   useEffect(() => {
     api.getConfig().then((cfg) => {
@@ -454,11 +555,180 @@ export default function App() {
       setIsConfigured(false);
     });
 
-    // Handle OAuth callback
+    // Check Chameleon status
+    api.getChameleonStatus().then(status => {
+      setChameleonEnabled(status.enabled);
+      if (status.enabled) {
+        api.getChameleonSites().then(setChameleonSites).catch(() => {});
+        api.listChameleonInstances().then(setChameleonInstances).catch(() => {});
+        api.listAllChameleonSlices().then(setChameleonSlices).catch(() => {});
+        api.listChameleonLeases().then(setChameleonLeases).catch(() => {});
+      }
+    }).catch(() => {});
+
+    // Check view status and load composite slices
+    api.getViewsStatus().then(status => {
+      setCompositeEnabled(status.composite_enabled);
+      if (status.composite_enabled) {
+        api.listCompositeSlices().then(setCompositeSlices).catch(() => {});
+      }
+    }).catch(() => {});
+
+    // Load draft data when selection changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // end of mount effect — Chameleon draft/polling effects below
+
+  // Load selected Chameleon slice data
+  useEffect(() => {
+    if (!selectedChameleonSliceId) { setChameleonSliceData(null); return; }
+    api.getChameleonDraft(selectedChameleonSliceId).then(setChameleonSliceData).catch(() => setChameleonSliceData(null));
+  }, [selectedChameleonSliceId]);
+
+  // Chameleon auto-refresh polling
+  useEffect(() => {
+    if (!chameleonAutoRefresh || currentView !== 'chameleon') return;
+    const interval = setInterval(() => {
+      api.listAllChameleonSlices().then(setChameleonSlices).catch(() => {});
+      if (selectedChameleonSliceId) {
+        api.getChameleonDraft(selectedChameleonSliceId).then(newData => {
+          setChameleonSliceData(prev => {
+            if (!prev || !newData) return newData;
+            const prevStatuses = (prev.resources || []).map(r => `${r.id}:${r.status || ''}:${r.floating_ip || ''}`).join(',');
+            const newStatuses = (newData.resources || []).map(r => `${r.id}:${r.status || ''}:${r.floating_ip || ''}`).join(',');
+            if (prevStatuses !== newStatuses) {
+              setChiDraftVersion(v => v + 1);
+            }
+            return newData;
+          });
+        }).catch(() => {});
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [chameleonAutoRefresh, currentView, selectedChameleonSliceId]);
+
+  // --- Post-login project picker state ---
+  const [showPostLoginProjectPicker, setShowPostLoginProjectPicker] = useState(false);
+  const [postLoginProjects, setPostLoginProjects] = useState<Array<{ uuid: string; name: string }>>([]);
+  const [postLoginBusy, setPostLoginBusy] = useState(false);
+
+  const loginPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const loginStartExpRef = useRef<number | undefined>(undefined);
+
+  const handleLogin = useCallback(async () => {
+    try {
+      const { login_url } = await api.getLoginUrl();
+      // Snapshot the current token expiry so we can detect when a new token arrives
+      loginStartExpRef.current = configStatus?.token_info?.exp;
+      // Open CM in popup — the CM's HTML page uses fetch() to deliver
+      // tokens to our /api/config/callback, then shows "close this window".
+      // We poll for token arrival and auto-run setup when detected.
+      const popup = window.open(login_url, 'fabric-login', 'width=600,height=700');
+      // Poll for token arrival every 2 seconds
+      if (loginPollRef.current) clearInterval(loginPollRef.current);
+      loginPollRef.current = setInterval(async () => {
+        try {
+          const cfg = await api.getConfig();
+          // Detect new token: either first token, or expiry changed (re-login)
+          const newExp = cfg.token_info?.exp;
+          const tokenChanged = cfg.has_token && (
+            !loginStartExpRef.current || newExp !== loginStartExpRef.current
+          );
+          if (tokenChanged) {
+            // Token arrived or refreshed! Stop polling and run post-login flow
+            if (loginPollRef.current) { clearInterval(loginPollRef.current); loginPollRef.current = null; }
+            try { popup?.close(); } catch {}
+            setConfigStatus(cfg);
+            // Run post-login setup
+            const projResp = await api.getProjects();
+            const allProjs = projResp.projects || [];
+            // Filter out service projects — they can't provision slices
+            const provisionable = allProjs.filter(p => !/^SERVICE\s*[-–—]/i.test(p.name));
+            if (provisionable.length === 1) {
+              await runAutoSetup(provisionable[0].uuid);
+            } else if (provisionable.length > 1) {
+              setPostLoginProjects(provisionable);
+              setShowPostLoginProjectPicker(true);
+            } else {
+              setErrors(prev => [...prev, 'No FABRIC projects found. Visit the FABRIC Portal to join a project.']);
+              setSettingsOpen(true);
+            }
+          }
+        } catch { /* ignore poll errors */ }
+      }, 2000);
+      // Stop polling after 5 minutes (timeout)
+      setTimeout(() => {
+        if (loginPollRef.current) { clearInterval(loginPollRef.current); loginPollRef.current = null; }
+      }, 300000);
+    } catch (err: any) {
+      setErrors(prev => [...prev, `Login failed: ${err.message}`]);
+    }
+  }, [configStatus?.token_info?.exp, configStatus?.has_token]);
+
+  const runAutoSetup = useCallback(async (chosenProjectId: string) => {
+    setPostLoginBusy(true);
+    try {
+      const result = await api.autoSetup(chosenProjectId);
+      // Refresh config status
+      const cfg = await api.getConfig();
+      setConfigStatus(cfg);
+      setIsConfigured(cfg.configured);
+      if (result.uuid) setUserUuid(result.uuid);
+      if (result.project_id) {
+        setProjectId(result.project_id);
+      }
+      // Notify if LLM key creation failed
+      if (!result.llm_key_created && result.llm_key_error) {
+        addError('FABRIC LLM API key could not be created automatically. Create one at https://cm.fabric-testbed.net and paste it in Settings > LLMs.');
+      }
+      if (cfg.token_info?.projects) {
+        setProjects(cfg.token_info.projects);
+        const proj = cfg.token_info.projects.find((p: any) => p.uuid === result.project_id);
+        if (proj) setProjectName(proj.name);
+      }
+      setShowPostLoginProjectPicker(false);
+      // Load slices and resources
+      refreshSliceList();
+      refreshInfrastructureAndMark();
+      // Also refresh from Core API
+      api.listUserProjects().then((resp) => {
+        setProjects(resp.projects);
+        if (resp.active_project_id) {
+          const proj = resp.projects.find((p) => p.uuid === resp.active_project_id);
+          if (proj) setProjectName(proj.name);
+        }
+      }).catch(() => {});
+    } catch (err: any) {
+      setErrors(prev => [...prev, `Auto-setup failed: ${err.message}. Please configure manually in Settings.`]);
+      setSettingsOpen(true);
+    } finally {
+      setPostLoginBusy(false);
+    }
+  }, []);
+
+  // --- (continued from mount effect) ---
+  useEffect(() => {
+    // Handle OAuth callback redirect (fallback path — main flow uses popup + polling)
     const params = new URLSearchParams(window.location.search);
     if (params.get('configLogin') === 'success') {
-      setSettingsOpen(true);
       window.history.replaceState({}, '', '/');
+      // Run post-login auto-setup flow
+      (async () => {
+        try {
+          const projResp = await api.getProjects();
+          const projectsList = projResp.projects || [];
+          if (projectsList.length === 1) {
+            await runAutoSetup(projectsList[0].uuid);
+          } else if (projectsList.length > 1) {
+            setPostLoginProjects(projectsList);
+            setShowPostLoginProjectPicker(true);
+          } else {
+            setErrors(prev => [...prev, 'No FABRIC projects found. Visit the FABRIC Portal to join a project.']);
+            setSettingsOpen(true);
+          }
+        } catch {
+          setSettingsOpen(true);
+        }
+      })();
     }
   }, []);
 
@@ -573,11 +843,19 @@ export default function App() {
     });
   }, []);
 
-  // --- Auto-refresh polling — refreshes list until all slices are stable/terminal ---
+  // --- Auto-refresh polling — adaptive freshness based on slice/sliver states ---
   const POLL_STATES = new Set(['Configuring', 'Ticketed', 'Nascent', 'ModifyOK', 'ModifyError']);
   const STABLE_STATES = new Set(['StableOK', 'Active']);
   const TERMINAL_STATES_SET = new Set(['Dead', 'Closing', 'StableError']);
   const POLL_INTERVAL = 15000; // 15 seconds
+
+  // Adaptive freshness: STEADY vs ACTIVE mode
+  const STEADY_MAX_AGE = 300;   // 5 minutes — accept cached data when all settled
+  const ACTIVE_MAX_AGE = 30;    // 30 seconds — real API calls during transitions
+  const MUTATION_COOLDOWN = 180_000; // 3 minutes — stay ACTIVE after a mutation
+
+  // Track last mutation time for the 3-minute cooldown
+  const lastMutationRef = useRef<number>(0);
 
   // Track which slices have already had boot configs auto-executed
   const bootConfigRanRef = useRef<Set<string>>(new Set());
@@ -652,33 +930,96 @@ export default function App() {
       pollAbortRef.current = controller;
 
       try {
-        // Refresh slice list
-        const list = await api.listSlices();
+        // Determine ACTIVE vs STEADY mode for adaptive freshness
+        const now = Date.now();
+        const withinCooldown = (now - lastMutationRef.current) < MUTATION_COOLDOWN;
+        // Pre-check: use previous slice list to decide if transitional
+        const hadTransitional = slices.some(s => POLL_STATES.has(s.state));
+        const isActive = hadTransitional || withinCooldown;
+        const maxAge = isActive ? ACTIVE_MAX_AGE : STEADY_MAX_AGE;
+
+        // Refresh slice list with adaptive freshness
+        const list = await api.listSlices(maxAge);
         protectDeletingSlices(list);
         setSlices(list);
         setListLoaded(true);
         syncStateFromList(list);
 
-        // Log state transitions for slices with active build logs
+        // Log state transitions and detect external changes
+        let externalChangeDetected = false;
+        const prevStates = prevSliceStatesRef.current;
+        const prevIds = new Set(Object.keys(prevStates));
         for (const entry of list) {
-          const prev = prevSliceStatesRef.current[entry.name];
+          const prev = prevStates[entry.name];
           if (prev && prev !== entry.state) {
-            // Only log transitions for slices that have an active build
             appendBuildLog(entry.name, { type: 'build', message: `State: ${prev} \u2192 ${entry.state}` });
+            // State changed — if we didn't initiate it, it's external
+            if (!withinCooldown) externalChangeDetected = true;
+          }
+          if (!prevIds.has(entry.name) && entry.state !== 'Draft') {
+            // New slice appeared that we didn't create — external change
+            if (!withinCooldown) externalChangeDetected = true;
           }
           prevSliceStatesRef.current[entry.name] = entry.state;
         }
 
-        // For the currently selected slice: use lightweight state check during transitions,
-        // only do full refresh when it reaches a stable state (to get updated node/graph data)
+        // External change detected — switch to ACTIVE mode
+        if (externalChangeDetected) {
+          console.log('[poll] External slice change detected, switching to ACTIVE mode');
+          lastMutationRef.current = Date.now();
+        }
+
+        // For the currently selected slice:
+        // Always poll sliver states to keep node colors/states up to date.
+        // Merge state changes into existing sliceData WITHOUT replacing the graph
+        // (so CytoscapeGraph's preserveLayout can diff in-place without re-layout).
         const currentId = selectedSliceRef.current;
         const currentEntry = currentId ? list.find(s => s.id === currentId) : null;
-        if (currentId && currentEntry && STABLE_STATES.has(currentEntry.state)) {
-          // Slice just became stable — do a full refresh to get final node/graph data
+        if (currentId && currentEntry && !TERMINAL_STATES_SET.has(currentEntry.state)) {
+          // Poll sliver states — lightweight check for state changes
           try {
-            const data = await api.refreshSlice(currentId);
-            setSliceData(data);
+            const sliverData = await api.getSliverStates(currentId, ACTIVE_MAX_AGE);
+            // Check if any state changed (slice-level or node-level)
+            const prevData = sliceDataRef.current;
+            const newSliceState = sliverData.slice_state || currentEntry.state;
+            const sliceStateChanged = prevData && prevData.state !== newSliceState;
+            const nodeStateChanged = prevData && sliverData.nodes.some((fresh: any) => {
+              const prev = prevData.nodes.find(n => n.name === fresh.name);
+              return prev && prev.reservation_state !== fresh.reservation_state;
+            });
+
+            if (sliceStateChanged || nodeStateChanged) {
+              // State changed — re-fetch full slice to get updated graph with correct state colors.
+              // CytoscapeGraph's preserveLayout will diff in-place (update colors, keep positions).
+              try {
+                const data = await api.getSlice(currentId);
+                setSliceData(data);
+              } catch { /* fallback: merge states manually */ }
+            } else {
+              // No state change — just merge management IPs and error messages
+              setSliceData(prev => {
+                if (!prev || !sliverData.nodes.length) return prev;
+                const updatedNodes = prev.nodes.map(node => {
+                  const fresh = sliverData.nodes.find((s: any) => s.name === node.name);
+                  if (!fresh) return node;
+                  if (node.management_ip === (fresh.management_ip || '') && node.error_message === (fresh.error_message || '')) return node;
+                  return { ...node, management_ip: fresh.management_ip || node.management_ip, error_message: fresh.error_message || node.error_message };
+                });
+                return { ...prev, nodes: updatedNodes };
+              });
+            }
           } catch { /* next poll will retry */ }
+        } else if (currentId && currentEntry && TERMINAL_STATES_SET.has(currentEntry.state)) {
+          // Slice reached terminal state — update sliver states to match
+          setSliceData(prev => {
+            if (!prev) return prev;
+            const terminalState = currentEntry.state;
+            const updatedNodes = prev.nodes.map(node => ({
+              ...node,
+              reservation_state: terminalState,
+            }));
+            return { ...prev, state: terminalState, nodes: updatedNodes };
+          });
         }
 
         // Auto-run boot configs for slices that just reached StableOK
@@ -711,6 +1052,19 @@ export default function App() {
                 addError(`FABlib post_boot_config failed for ${sliceName}: ${e.message}`);
               }
 
+              // Auto-configure FABNetv4/v6 network interfaces from assigned IPs
+              try {
+                appendBuildLog(sliceName, { type: 'step', message: 'Auto-configuring L3 network interfaces...' });
+                const netResult = await api.autoConfigureNetworks(sliceName);
+                if (netResult.configured > 0) {
+                  appendBuildLog(sliceName, { type: 'build', message: `Auto-configured ${netResult.configured} node(s) with L3 network entries` });
+                } else {
+                  appendBuildLog(sliceName, { type: 'step', message: 'No L3 networks to auto-configure' });
+                }
+              } catch (e: any) {
+                appendBuildLog(sliceName, { type: 'error', message: `Network auto-configure failed: ${e.message}` });
+              }
+
               // Run boot configs via streaming endpoint (includes weave.sh + SSH readiness)
               await handleRunBootConfigStream(sliceName, true);
 
@@ -721,14 +1075,11 @@ export default function App() {
           }
         }
 
-        // Check if ALL slices are in a stable or terminal state — if so, stop polling
-        const allSettled = list.every(s => {
-          const st = s.state || '';
-          return st === 'Draft' || STABLE_STATES.has(st) || TERMINAL_STATES_SET.has(st);
-        });
-        if (allSettled) {
-          console.log(`[poll] All slices settled, stopping polling`);
-          stopPolling();
+        // In STEADY mode, polling continues but with high max_age (near-zero cost).
+        // Log mode transitions for debugging.
+        const hasTransitional = list.some(s => POLL_STATES.has(s.state));
+        if (!hasTransitional && !withinCooldown && isActive) {
+          console.log(`[poll] All slices settled, switching to STEADY mode (max_age=${STEADY_MAX_AGE})`);
         }
       } catch {
         // Silently ignore polling errors — next poll will retry
@@ -745,13 +1096,13 @@ export default function App() {
       if (document.visibilityState === 'hidden') {
         stopPolling();
       } else if (document.visibilityState === 'visible') {
-        // On return, refresh slice list and restart polling if needed
-        api.listSlices().then(list => {
+        // On return, refresh slice list (force fresh) and restart polling if needed
+        api.listSlices(0).then(list => {
           protectDeletingSlices(list);
           setSlices(list);
           syncStateFromList(list);
-          const hasTransitional = list.some(s => POLL_STATES.has(s.state));
-          if (hasTransitional && autoRefreshRef.current && !pollingRef.current) {
+          // Always restart polling (STEADY mode is near-free)
+          if (autoRefreshRef.current && !pollingRef.current) {
             startPolling();
           }
         }).catch(() => {});
@@ -763,35 +1114,40 @@ export default function App() {
 
   // Refresh slice data when switching back to a slice-displaying view
   // so the user sees current data even if state changed while on another view.
-  // Also restart polling if any slices are still transitional.
   useEffect(() => {
-    if (currentView === 'slices') {
+    if (currentView === 'slices' || currentView === 'infrastructure') {
       if (selectedSliceId) {
         api.refreshSlice(selectedSliceId).then(data => {
           setSliceData(data);
         }).catch(() => {});
       }
-      // Re-check slice list and restart polling if needed
-      api.listSlices().then(list => {
+      // Re-check slice list (force fresh on view switch) and restart polling
+      api.listSlices(0).then(list => {
         protectDeletingSlices(list);
         setSlices(list);
         syncStateFromList(list);
-        const hasTransitional = list.some(s => POLL_STATES.has(s.state));
-        if (hasTransitional && autoRefreshRef.current && !pollingRef.current) {
+        if (autoRefreshRef.current && !pollingRef.current) {
           startPolling();
         }
       }).catch(() => {});
     }
-  }, [currentView, slicesSubView]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentView, slicesSubView, infraSubView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleAutoRefresh = useCallback(() => {
     setAutoRefresh(prev => {
       const next = !prev;
       localStorage.setItem('auto-refresh', next ? 'on' : 'off');
-      if (!next) stopPolling();
+      if (next) {
+        // Start polling immediately when toggled ON
+        autoRefreshRef.current = true;
+        startPolling();
+      } else {
+        autoRefreshRef.current = false;
+        stopPolling();
+      }
       return next;
     });
-  }, [stopPolling]);
+  }, [stopPolling, startPolling]);
 
   // Load slice list on first interaction or mount
   const refreshSliceList = useCallback(async () => {
@@ -830,9 +1186,8 @@ export default function App() {
         syncStateFromList(list);
       }
 
-      // Start polling if any slices are in transitional states
-      const hasTransitional = list.some(s => POLL_STATES.has(s.state));
-      if (hasTransitional && autoRefreshRef.current) {
+      // Always start polling (STEADY mode is near-free with high max_age)
+      if (autoRefreshRef.current) {
         startPolling();
       }
     } catch (e: any) {
@@ -905,46 +1260,60 @@ export default function App() {
 
 
   // Submit handles both new slice creation and modifications to existing slices
+  // Uses composite submit when Chameleon nodes are present
   const handleSubmit = useCallback(async () => {
     if (!selectedSliceId) return;
     const sliceId = selectedSliceId;
     const name = selectedSliceName;
+    const hasChameleon = (sliceData?.chameleon_nodes || []).length > 0;
+    lastMutationRef.current = Date.now(); // Switch to ACTIVE polling mode
     setLoading(true);
-    setStatusMessage('Submitting slice to FABRIC...');
+    setStatusMessage(hasChameleon ? 'Submitting composite slice (FABRIC + Chameleon)...' : 'Submitting slice to FABRIC...');
 
     // Open build log tab with a fresh log
     setOpenBootLogSlices(prev => prev.includes(name) ? prev : [...prev, name]);
     setConsoleExpanded(true);
     setSliceBootRunning(prev => ({ ...prev, [name]: true }));
     setSliceBootLogs(prev => ({ ...prev, [name]: [] }));
-    appendBuildLog(name, { type: 'build', message: 'Submitting slice to FABRIC...' });
+    appendBuildLog(name, { type: 'build', message: hasChameleon ? 'Submitting composite slice (FABRIC + Chameleon)...' : 'Submitting slice to FABRIC...' });
 
     try {
-      const data = await api.submitSlice(sliceId);
+      let data: SliceData;
+      if (hasChameleon) {
+        const compositeResult = await api.submitCompositeSlice(sliceId);
+        appendBuildLog(name, { type: 'build', message: `Composite submit: FABRIC=${compositeResult.fabric_status}, Chameleon=${compositeResult.chameleon_status || 'N/A'}` });
+        if (compositeResult.chameleon_error) {
+          appendBuildLog(name, { type: 'error', message: `Chameleon error: ${compositeResult.chameleon_error}` });
+        }
+        if (compositeResult.fabric_error) {
+          appendBuildLog(name, { type: 'error', message: `FABRIC error: ${compositeResult.fabric_error}` });
+        }
+        // Use the embedded fabric_slice data, or re-fetch if not included
+        data = compositeResult.fabric_slice || await api.getSlice(sliceId);
+      } else {
+        data = await api.submitSlice(sliceId);
+      }
       if (data.id && data.id !== sliceId) setSelectedSliceId(data.id);
       setSliceData(data);
       setValidationIssues([]);
       setValidationValid(true);
       appendBuildLog(name, { type: 'build', message: `Slice submitted (state: ${data.state || 'unknown'})` });
       prevSliceStatesRef.current[name] = data.state || '';
-      setStatusMessage('Submitted. Refreshing slice state...');
+      // Use submit response directly — no redundant refreshSlice() call.
+      // Just update the slice list (lightweight, uses backend cache).
       let refreshedData = data;
-      try {
-        // Reload slice data to get updated state from FABRIC
-        const refreshed = await api.refreshSlice(sliceId);
-        refreshedData = refreshed;
-        setSliceData(refreshed);
-        runValidation(name);
-        if (refreshed.state && refreshed.state !== data.state) {
-          appendBuildLog(name, { type: 'build', message: `State: ${data.state || 'unknown'} \u2192 ${refreshed.state}` });
-          prevSliceStatesRef.current[name] = refreshed.state;
-        }
-      } catch {}
       setStatusMessage('Refreshing slice list...');
       try {
         const list = await api.listSlices();
         setSlices(list);
         setListLoaded(true);
+        // Check if the list shows a newer state than the submit response
+        const updated = list.find(s => s.id === (data.id || sliceId));
+        if (updated && updated.state && updated.state !== data.state) {
+          appendBuildLog(name, { type: 'build', message: `State: ${data.state || 'unknown'} \u2192 ${updated.state}` });
+          prevSliceStatesRef.current[name] = updated.state;
+          refreshedData = { ...data, state: updated.state };
+        }
       } catch {}
       // If slice reached StableOK immediately, run boot configs now
       console.log(`[submit] refreshedData.state=${refreshedData.state}`);
@@ -961,6 +1330,16 @@ export default function App() {
         } catch (e: any) {
           appendBuildLog(name, { type: 'error', message: `FABlib post-boot config failed: ${e.message}` });
           addError(`FABlib post_boot_config failed: ${e.message}`);
+        }
+        // Auto-configure FABNetv4/v6 network interfaces
+        try {
+          appendBuildLog(name, { type: 'step', message: 'Auto-configuring L3 network interfaces...' });
+          const netResult = await api.autoConfigureNetworks(sliceId);
+          if (netResult.configured > 0) {
+            appendBuildLog(name, { type: 'build', message: `Auto-configured ${netResult.configured} node(s) with L3 network entries` });
+          }
+        } catch (e: any) {
+          appendBuildLog(name, { type: 'error', message: `Network auto-configure failed: ${e.message}` });
         }
         setStatusMessage('Running post-boot configuration (waiting for SSH)...');
         await handleRunBootConfigStream(name, true);
@@ -988,8 +1367,8 @@ export default function App() {
     setLoading(true);
     setStatusMessage('Refreshing slices...');
     try {
-      // Refresh the slice list
-      const list = await api.listSlices();
+      // Manual refresh — force fresh data (max_age=0)
+      const list = await api.listSlices(0);
       protectDeletingSlices(list);
       setSlices(list);
       setListLoaded(true);
@@ -1011,6 +1390,472 @@ export default function App() {
       setStatusMessage('');
     }
   }, [runValidation, syncStateFromList]);
+
+  // --- Chameleon callbacks (mirror FABRIC pattern) ---
+  const handleRefreshChameleonSlices = useCallback(async () => {
+    try { setChameleonSlices(await api.listAllChameleonSlices()); } catch { /* ignore */ }
+  }, []);
+
+  const handleCreateChameleonDraft = useCallback(async () => {
+    const name = prompt('Draft name:');
+    if (!name) return;
+    const site = (chameleonSites || [])[0]?.name || 'CHI@TACC';
+    try {
+      const draft = await api.createChameleonDraft({ name, site });
+      setChameleonSlices(prev => [...prev, draft]);
+      setSelectedChameleonSliceId(draft.id);
+      setChameleonSliceData(draft);
+      setChameleonSubView('topology');
+    } catch (e: any) { setErrors(prev => [...prev, e.message]); }
+  }, [chameleonSites]);
+
+  // --- Composite auto-refresh: poll member states every 30s ---
+  const compositeStatesRef = useRef<string>('');
+  useEffect(() => {
+    if (!selectedCompositeSliceId || !autoRefresh || currentView !== 'slices') return;
+    // Immediate refresh on (re-)activation so the user sees fresh state
+    // without waiting 30s after switching back to the composite view.
+    const refreshComposite = async () => {
+      try {
+        const data = await api.getCompositeSlice(selectedCompositeSliceId);
+        const stateKey = JSON.stringify(data.fabric_member_summaries?.map((m: any) => m.state) || []) +
+                         JSON.stringify(data.chameleon_member_summaries?.map((m: any) => m.state) || []);
+        if (stateKey !== compositeStatesRef.current) {
+          compositeStatesRef.current = stateKey;
+          setCompositeSlices(prev => prev.map(s => s.id === data.id ? data : s));
+          api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+        }
+      } catch { /* ignore polling errors */ }
+    };
+    refreshComposite();
+    const interval = setInterval(refreshComposite, 30000);
+    return () => clearInterval(interval);
+  }, [selectedCompositeSliceId, autoRefresh, currentView]);
+
+  // Refresh composite graph when switching to topology tab
+  useEffect(() => {
+    if (currentView === 'slices' && slicesSubView === 'topology' && selectedCompositeSliceId) {
+      api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+    }
+  }, [slicesSubView, currentView, selectedCompositeSliceId]);
+
+  // Refresh Chameleon graph when switching to topology tab
+  useEffect(() => {
+    if (currentView === 'chameleon' && chameleonSubView === 'topology' && selectedChameleonSliceId) {
+      setChiDraftVersion(v => v + 1);
+    }
+  }, [chameleonSubView, currentView, selectedChameleonSliceId]);
+
+  const handleSubmitChameleonDraft = useCallback(async () => {
+    if (!selectedChameleonSliceId || !chameleonSliceData) return;
+    // One-click submit: deploy directly using config from editor Leases tab
+    // Trigger the deploy flow (defined below, called via setTimeout to avoid stale closure)
+    setTimeout(() => deployChiRef.current?.(), 0);
+  }, [selectedChameleonSliceId, chameleonSliceData]);
+
+  // Derive sites from slice nodes
+  const chiDraftSites = useMemo(() => {
+    if (!chameleonSliceData) return [] as string[];
+    const fromNodes = (chameleonSliceData.nodes || []).map(n => n.site).filter(Boolean);
+    if (fromNodes.length > 0) return [...new Set(fromNodes)].sort();
+    return chameleonSliceData.site ? [chameleonSliceData.site] : [];
+  }, [chameleonSliceData]);
+
+  useEffect(() => {
+    if (!showChameleonLeaseDialog) return;
+    api.listChameleonLeases().then(leases => {
+      setChiActiveLeases(leases.filter((l: any) => l.status === 'ACTIVE'));
+    }).catch(() => {});
+    // Fetch available networks for each site in draft
+    for (const site of chiDraftSites) {
+      api.listChameleonNetworks(site).then(nets => {
+        setChiDeployNetworks(prev => {
+          // Merge: replace networks for this site, keep others
+          const others = (prev || []).filter((n: any) => n.site !== site);
+          return [...others, ...nets];
+        });
+        // Prefer sharednet1 (provider network with external routing) over fabnetv4
+        const sharednet1 = nets.find((n: any) => n.shared && /sharednet/i.test(n.name));
+        const anyShared = nets.find((n: any) => n.shared && !/fabnet/i.test(n.name));
+        const fallback = nets.find((n: any) => n.shared);
+        const preferred = sharednet1 || anyShared || fallback;
+        if (preferred && !chiSelectedNetworkId) setChiSelectedNetworkId(preferred.id);
+      }).catch(() => {});
+    }
+  }, [showChameleonLeaseDialog]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleCheckChiAvailability = useCallback(async () => {
+    if (!chameleonSliceData) return;
+    setChiAvailLoading(true);
+    const results: typeof chiAvailability = {};
+    // Group nodes by site + type
+    const siteTypeMap: Record<string, { site: string; count: number }> = {};
+    for (const n of chameleonSliceData.nodes) {
+      const key = `${n.site}::${n.node_type}`;
+      if (!siteTypeMap[key]) siteTypeMap[key] = { site: n.site, count: 0 };
+      siteTypeMap[key].count += n.count || 1;
+    }
+    for (const [key, { site, count }] of Object.entries(siteTypeMap)) {
+      const nodeType = key.split('::')[1];
+      try {
+        const r = await api.findChameleonAvailability({
+          site,
+          node_type: nodeType,
+          node_count: count,
+          duration_hours: chiLeaseDuration,
+        });
+        results[key] = r;
+      } catch (e: any) {
+        results[key] = { earliest_start: null, available_now: 0, total: 0, error: e.message };
+      }
+    }
+    setChiAvailability(results);
+    setChiAvailLoading(false);
+  }, [chameleonSliceData, chiLeaseDuration]);
+
+  const handleDeployChameleonLease = useCallback(async () => {
+    if (!selectedChameleonSliceId || !chameleonSliceData) return;
+    setChiLeaseDeploying(true);
+    setChiDeployStatus('');
+
+    // Open deploy log in Console panel
+    const deployLogId = `chi:${chameleonSliceData.name || selectedChameleonSliceId}`;
+    setOpenBootLogSlices(prev => prev.includes(deployLogId) ? prev : [...prev, deployLogId]);
+    setConsoleExpanded(true);
+    setSliceBootLogs(prev => ({ ...prev, [deployLogId]: [] }));
+    setSliceBootRunning(prev => ({ ...prev, [deployLogId]: true }));
+    const log = (type: string, message: string) => appendBuildLog(deployLogId, { type, message });
+    log('deploy', `Starting Chameleon deployment for "${chameleonSliceData.name}"...`);
+    log('build', `Sites: ${chiDraftSites.join(', ')} | Nodes: ${chameleonSliceData.nodes.length} | Mode: ${chiDeployMode}`);
+
+    try {
+      // Build site→leaseId map
+      const leaseMap: Record<string, string> = {};
+
+      if (chiDeployMode === 'existing-lease') {
+        if (!chiExistingLeaseId) { setErrors(prev => [...prev, 'Select an existing lease']); setChiLeaseDeploying(false); return; }
+        for (const s of chiDraftSites) leaseMap[s] = chiExistingLeaseId;
+        setChiDeployStatus('Using existing lease...');
+        log('step', `Using existing lease ${chiExistingLeaseId}`);
+      } else {
+        // Create leases from draft (one per site)
+        setChiDeployStatus(`Creating lease${chiDraftSites.length > 1 ? 's' : ''}...`);
+        log('build', `Creating lease${chiDraftSites.length > 1 ? 's' : ''} (${chiDraftSites.join(', ')})...`);
+        const result = await api.deployChameleonDraft(selectedChameleonSliceId, {
+          duration_hours: chiLeaseDuration,
+          ...(chiLeaseStartNow ? {} : { start_date: chiLeaseStartDate }),
+        });
+
+        for (const l of result.leases) {
+          leaseMap[l.site] = l.lease_id;
+          log('step', `Lease created at ${l.site}: ${l.lease_name || l.lease_id} (${l.status})`);
+        }
+        if (result.errors?.length) {
+          for (const err of result.errors) log('error', `Lease error: ${err}`);
+        }
+
+        if (chiDeployMode === 'lease-only') {
+          setChiDeployStatus(`${result.leases.length} lease${result.leases.length !== 1 ? 's' : ''} created.`);
+          log('progress', `\u2713 ${result.leases.length} lease${result.leases.length !== 1 ? 's' : ''} created (lease-only mode)`);
+          setSliceBootRunning(prev => ({ ...prev, [deployLogId]: false }));
+          setShowChameleonLeaseDialog(false);
+          handleRefreshChameleonSlices();
+          setChiLeaseDeploying(false);
+          return;
+        }
+
+        // Auto-deploy: wait for ALL leases to become ACTIVE
+        setChiDeployStatus('Waiting for leases to become ACTIVE...');
+        log('build', 'Waiting for leases to become ACTIVE...');
+        let allActive = false;
+        for (let i = 0; i < 60; i++) {
+          await new Promise(r => setTimeout(r, 5000));
+          const statuses: Record<string, string> = {};
+          for (const [site, leaseId] of Object.entries(leaseMap)) {
+            try {
+              const lease = await api.getChameleonLease(leaseId, site);
+              statuses[site] = lease.status;
+              if (lease.status === 'ERROR') throw new Error(`Lease at ${site} entered ERROR state`);
+            } catch (e: any) {
+              if (e.message.includes('ERROR')) throw e;
+              statuses[site] = 'UNKNOWN';
+            }
+          }
+          const statusStr = Object.entries(statuses).map(([s, st]) => `${s}: ${st}`).join(', ');
+          setChiDeployStatus(`Waiting for ACTIVE... (${statusStr}, ${i * 5}s)`);
+          if (i % 6 === 0) log('step', `Lease status: ${statusStr} (${i * 5}s)`);
+          if (Object.values(statuses).every(s => s === 'ACTIVE')) { allActive = true; break; }
+        }
+        if (!allActive) throw new Error('Leases did not all become ACTIVE within 5 minutes');
+        log('step', '\u2713 All leases ACTIVE');
+      }
+
+      // Get reservation IDs per site
+      setChiDeployStatus('Getting reservation details...');
+      log('step', 'Getting reservation details...');
+      const reservationMap: Record<string, string> = {};
+      for (const [site, leaseId] of Object.entries(leaseMap)) {
+        try {
+          const leaseDetails = await api.getChameleonLease(leaseId, site);
+          const hostRes = (leaseDetails.reservations || []).find(
+            (r: any) => r.resource_type === 'physical:host' || (!r.resource_type && r.id)
+          );
+          if (hostRes) {
+            reservationMap[site] = hostRes.id;
+            log('step', `Reservation at ${site}: ${hostRes.id.slice(0, 12)}...`);
+          }
+        } catch { /* proceed without */ }
+      }
+
+      // Ensure SSH keypair exists at each site AND we have the private key
+      log('step', 'Ensuring SSH keypair at each site...');
+      const keypairName = 'loomai-key';
+      for (const site of Object.keys(leaseMap)) {
+        try {
+          const result = await api.ensureChameleonKeypair(site);
+          log('step', `SSH keypair "${keypairName}" at ${site}: ${result.status}`);
+        } catch (e: any) {
+          log('error', `SSH keypair at ${site}: ${e.message}`);
+        }
+      }
+
+      // Ensure routable networks for floating IPs
+      const hasFips = (chameleonSliceData.floating_ips || []).length > 0;
+      const siteNetworkMap: Record<string, string> = {};
+      if (hasFips) {
+        log('step', 'Ensuring routable networks for floating IP access...');
+        for (const site of Object.keys(leaseMap)) {
+          try {
+            const netResult = await api.ensureChameleonNetwork(site);
+            siteNetworkMap[site] = netResult.network_id;
+            log('step', `Network at ${site}: ${netResult.network_name} (${netResult.type})`);
+          } catch (e: any) {
+            log('error', `Network setup at ${site}: ${e.message}`);
+          }
+        }
+      }
+
+      // Deploy instances — each node uses its own site's lease/reservation
+      setChiDeployStatus('Launching instances...');
+      log('build', `Launching ${chameleonSliceData.nodes.length} instance${chameleonSliceData.nodes.length !== 1 ? 's' : ''}...`);
+      let launched = 0;
+      for (const node of chameleonSliceData.nodes) {
+        const nodeSite = node.site;
+        const nodeLeaseId = leaseMap[nodeSite];
+        if (!nodeLeaseId) {
+          log('error', `No lease for ${node.name} at ${nodeSite}`);
+          setErrors(prev => [...prev, `No lease for ${node.name} at ${nodeSite}`]);
+          continue;
+        }
+        // Collect network IDs from per-node interfaces (multi-NIC) or fallback
+        const ifaces = (node as any).interfaces;
+        const networkIds: string[] = [];
+        if (ifaces && Array.isArray(ifaces)) {
+          for (const ifc of ifaces) {
+            if (ifc.network?.id) networkIds.push(ifc.network.id);
+          }
+        }
+        if (networkIds.length === 0) {
+          // Legacy fallback: single network field or site-level
+          const fallback = (node as any).network?.id || siteNetworkMap[nodeSite] || chiSelectedNetworkId;
+          if (fallback) networkIds.push(fallback);
+        }
+        const networkId = networkIds.length === 1 ? networkIds[0] : undefined;
+        try {
+          log('node', `Launching ${node.name} at ${nodeSite}...`);
+          const instance = await api.createChameleonInstance({
+            site: nodeSite,
+            name: node.name,
+            lease_id: nodeLeaseId,
+            image_id: node.image || 'CC-Ubuntu22.04',
+            key_name: keypairName,
+            ...(reservationMap[nodeSite] ? { reservation_id: reservationMap[nodeSite] } : {}),
+            ...(networkIds.length > 1 ? { network_ids: networkIds } : networkId ? { network_id: networkId } : {}),
+          });
+          launched++;
+          log('step', `\u2713 ${node.name} launched (${instance.id?.slice(0, 12) || '?'}...)`);
+          // Track instance in slice resources (best-effort)
+          try {
+            await api.addChameleonSliceResource(selectedChameleonSliceId, {
+              type: 'instance',
+              id: instance.id || '',
+              name: node.name,
+              site: nodeSite,
+              image: node.image || 'CC-Ubuntu22.04',
+              lease_id: nodeLeaseId,
+            });
+          } catch { /* best-effort tracking */ }
+          setChiDeployStatus(`Launching instances... (${launched}/${chameleonSliceData.nodes.length})`);
+        } catch (e: any) {
+          log('error', `Failed to launch ${node.name}: ${e.message}`);
+          setErrors(prev => [...prev, `Failed to launch ${node.name}: ${e.message}`]);
+        }
+      }
+
+      setChiDeployStatus(`Deployed (${launched} instance${launched !== 1 ? 's' : ''} launched)`);
+
+      // Auto-bastion: if any nodes don't have floating IP, create a bastion for SSH access
+      const fipNodeIds = new Set(chameleonSliceData.floating_ips || []);
+      const nodesWithoutFip = chameleonSliceData.nodes.filter(n => !fipNodeIds.has(n.id));
+      if (nodesWithoutFip.length > 0 && launched > 0) {
+        for (const site of Object.keys(leaseMap)) {
+          log('step', `Ensuring bastion at ${site} for SSH access to private nodes...`);
+          try {
+            const bastionResult = await api.ensureChameleonBastion(selectedChameleonSliceId, {
+              site,
+              experiment_net_id: siteNetworkMap[site] || chiSelectedNetworkId || '',
+              reservation_id: reservationMap[site] || '',
+            });
+            if (bastionResult.floating_ip) {
+              log('step', `\u2713 Bastion at ${site}: ${bastionResult.floating_ip} (${bastionResult.status})`);
+            }
+          } catch (e: any) {
+            log('error', `Bastion at ${site}: ${e.message}`);
+          }
+        }
+      }
+
+      // Auto-setup networking (security groups + floating IPs)
+      // This waits for instances to become ACTIVE, which can take 10+ min for bare-metal.
+      // Run it but don't block the entire deploy on it — the user can also assign FIPs manually.
+      if ((chameleonSliceData.floating_ips || []).length > 0 || launched > 0) {
+        log('build', 'Setting up network access (security groups + floating IPs)...');
+        log('step', 'Waiting for instances to become ACTIVE (this may take several minutes for bare-metal)...');
+        try {
+          const netSetup = await api.autoNetworkSetup(selectedChameleonSliceId);
+          for (const entry of netSetup.results) {
+            if (entry.error) {
+              log('error', `${entry.name}: ${entry.error}`);
+            } else if (entry.floating_ip) {
+              log('step', `\u2713 ${entry.name} (${entry.site}): floating IP ${entry.floating_ip}`);
+            } else {
+              log('step', `\u2713 ${entry.name} (${entry.site}): security group applied`);
+            }
+          }
+        } catch (e: any) {
+          log('error', `Network setup failed: ${e.message}`);
+          log('step', 'You can manually assign floating IPs from the OpenStack tab → Instances → "+ FIP" button');
+        }
+      }
+
+      // Poll SSH readiness (max 2 min, every 10s)
+      if (launched > 0) {
+        log('build', 'Waiting for SSH readiness...');
+        let allReady = false;
+        for (let attempt = 0; attempt < 12; attempt++) {
+          await new Promise(r => setTimeout(r, 10000));
+          try {
+            const readiness = await api.checkSliceReadiness(selectedChameleonSliceId);
+            const ready = readiness.results.filter(r => r.ssh_ready);
+            const total = readiness.results.filter(r => r.ip).length;
+            if (total > 0) {
+              log('step', `SSH readiness: ${ready.length}/${total} nodes reachable`);
+            }
+            // Refresh slice data + graph to show updated state
+            api.getChameleonDraft(selectedChameleonSliceId).then(setChameleonSliceData).catch(() => {});
+            setChiDraftVersion(v => v + 1);
+            if (ready.length > 0 && ready.length >= total) {
+              allReady = true;
+              break;
+            }
+          } catch { /* check-readiness not critical */ }
+        }
+        if (allReady) {
+          log('progress', '\u2713 All nodes SSH-ready');
+        } else {
+          log('build', 'Some nodes not yet SSH-ready (will become available shortly)');
+        }
+
+        // Refresh slice data to show updated IPs in topology (Z3)
+        try {
+          const refreshed = await api.getChameleonDraft(selectedChameleonSliceId);
+          setChameleonSliceData(refreshed);
+          setChiDraftVersion(v => v + 1);
+        } catch {}
+
+        // Auto-run boot config on nodes that have it defined (Z2)
+        for (const node of chameleonSliceData.nodes) {
+          try {
+            const bc = await api.getChameleonBootConfig(selectedChameleonSliceId, node.name);
+            if (bc && (bc.commands?.length > 0 || bc.uploads?.length > 0)) {
+              log('step', `Running boot config on ${node.name}...`);
+              const result = await api.executeChameleonBootConfig(selectedChameleonSliceId, node.name);
+              const ok = (result as any).results?.filter((r: any) => r.status === 'ok').length || 0;
+              const err = (result as any).results?.filter((r: any) => r.status === 'error').length || 0;
+              log('step', `\u2713 Boot config on ${node.name}: ${ok} ok, ${err} errors`);
+            }
+          } catch (e: any) {
+            log('error', `Boot config on ${node.name}: ${e.message}`);
+          }
+        }
+      }
+
+      log('build', `Setting slice state to ${launched > 0 ? 'Active' : 'Error'}...`);
+
+      // Transition slice to Active (or Error if nothing launched)
+      try {
+        await api.setChameleonSliceState(selectedChameleonSliceId, launched > 0 ? 'Active' : 'Error');
+      } catch { /* best-effort */ }
+
+      log('progress', `\u2713 Deployed (${launched} instance${launched !== 1 ? 's' : ''} launched)`);
+      setSliceBootRunning(prev => ({ ...prev, [deployLogId]: false }));
+
+      // Trigger immediate graph refresh to show deployed state
+      setChiDraftVersion(v => v + 1);
+
+      setTimeout(() => {
+        setShowChameleonLeaseDialog(false);
+        setChiDeployStatus('');
+        handleRefreshChameleonSlices();
+      }, 2000);
+    } catch (e: any) {
+      setChiDeployStatus(`Error: ${e.message}`);
+      log('error', `Deployment failed: ${e.message}`);
+      setSliceBootRunning(prev => ({ ...prev, [deployLogId]: false }));
+      setErrors(prev => [...prev, e.message]);
+    }
+    setChiLeaseDeploying(false);
+  }, [selectedChameleonSliceId, chameleonSliceData, chiDeployMode, chiExistingLeaseId, chiLeaseDuration, chiLeaseStartNow, chiLeaseStartDate, chiDraftSites, chiSelectedNetworkId, handleRefreshChameleonSlices, appendBuildLog]);
+
+  // Expose deploy function via ref so handleSubmitChameleonDraft (defined earlier) can call it
+  deployChiRef.current = handleDeployChameleonLease;
+
+  const handleDeleteChameleonDraft = useCallback(async () => {
+    if (!selectedChameleonSliceId) return;
+    const d = chameleonSlices.find(x => x.id === selectedChameleonSliceId);
+    // Draft slices with no deployed resources: simple confirm
+    if (d?.state === 'Draft' && (!d.resources || d.resources.length === 0)) {
+      if (!window.confirm(`Delete draft "${d?.name}"?`)) return;
+      try {
+        await api.deleteChameleonDraft(selectedChameleonSliceId);
+        setSelectedChameleonSliceId('');
+        setChameleonSliceData(null);
+        setChameleonSlices(prev => prev.filter(x => x.id !== selectedChameleonSliceId));
+      } catch (e: any) { setErrors(prev => [...prev, e.message]); }
+    } else {
+      // Slice has resources — open the delete dialog
+      setChiDeleteMode('release');
+      setShowChameleonDeleteDialog(true);
+    }
+  }, [selectedChameleonSliceId, chameleonSlices]);
+
+  const handleConfirmDeleteChameleon = useCallback(async () => {
+    if (!selectedChameleonSliceId) return;
+    setChiDeleting(true);
+    try {
+      const result = await api.deleteChameleonDraft(selectedChameleonSliceId, chiDeleteMode === 'delete-all');
+      if (result.cleanup_errors && result.cleanup_errors.length > 0) {
+        setErrors(prev => [...prev, ...result.cleanup_errors!.map(e => `Cleanup: ${e}`)]);
+      }
+      setSelectedChameleonSliceId('');
+      setChameleonSliceData(null);
+      setChameleonSlices(prev => prev.filter(x => x.id !== selectedChameleonSliceId));
+      setShowChameleonDeleteDialog(false);
+    } catch (e: any) {
+      setErrors(prev => [...prev, e.message]);
+    }
+    setChiDeleting(false);
+  }, [selectedChameleonSliceId, chiDeleteMode]);
 
   const handleDeleteElements = useCallback(async (elements: Record<string, string>[]) => {
     if (!sliceData || elements.length === 0) return;
@@ -1042,6 +1887,7 @@ export default function App() {
     const deletedId = selectedSliceId;
     const deletedName = selectedSliceName;
     const wasDraft = sliceData?.state === 'Draft';
+    lastMutationRef.current = Date.now(); // Switch to ACTIVE polling mode
     setLoading(true);
     setStatusMessage('Deleting slice...');
     try {
@@ -1177,6 +2023,11 @@ export default function App() {
 
   const handleNodeClick = useCallback((data: Record<string, string>) => {
     setSelectedElement(data);
+    // Sync resource key for the Details panel
+    if (data.element_type === 'site') setSelectedResourceKey(`site:${data.name}`);
+    else if (data.element_type === 'infra_link' && data.site_a && data.site_b) {
+      setSelectedResourceKey(`link:${data.site_a} \u2194 ${data.site_b}`);
+    }
   }, []);
 
   const handleEdgeClick = useCallback((data: Record<string, string>) => {
@@ -1231,6 +2082,21 @@ export default function App() {
       setTerminalTabs((prev) => [...prev, ...newTabs]);
     }
   }, [selectedSliceId, terminalIdCounter]);
+
+  // Open SSH terminal for a Chameleon instance (bottom panel tab)
+  const handleOpenChameleonTerminal = useCallback((instance: { id: string; name: string; site: string }) => {
+    const newId = `chi-term-${Date.now()}`;
+    setTerminalTabs(prev => [...prev, {
+      id: newId,
+      label: `${instance.name} (${instance.site})`,
+      sliceName: '',
+      nodeName: '',
+      managementIp: '',
+      chameleonInstanceId: instance.id,
+      chameleonSite: instance.site,
+    }]);
+    setConsoleExpanded(true);
+  }, []);
 
   const handleDeleteComponent = useCallback(async (nodeName: string, componentName: string) => {
     if (!selectedSliceId) return;
@@ -1328,6 +2194,151 @@ export default function App() {
     }
   }, [saveTemplateModal, saveTemplateName, saveTemplateDesc, selectedSliceId, sliceData, refreshVmTemplates]);
 
+  // --- Save-experiment-template modal state ---
+  const [saveExperimentModal, setSaveExperimentModal] = useState(false);
+  const [saveExpName, setSaveExpName] = useState('');
+  const [saveExpDesc, setSaveExpDesc] = useState('');
+  const [saveExpVariables, setSaveExpVariables] = useState<ExperimentVariable[]>([]);
+  const [saveExpBusy, setSaveExpBusy] = useState(false);
+
+  const hasFabricNodes = (sliceData?.nodes || []).length > 0;
+  const hasChameleonNodes = (sliceData?.chameleon_nodes || []).length > 0;
+  const canSaveExperiment = hasFabricNodes && hasChameleonNodes;
+
+  const handleOpenSaveExperiment = useCallback(() => {
+    const name = selectedSliceName || '';
+    setSaveExpName(name);
+    setSaveExpDesc('');
+    // Auto-detect variables from the topology
+    const vars: ExperimentVariable[] = [
+      { name: 'SLICE_NAME', label: 'Slice Name', type: 'string', default: name, required: true },
+    ];
+    // Detect unique site names from FABRIC nodes
+    const fabricSites = new Set<string>();
+    for (const n of sliceData?.nodes || []) {
+      if (n.site && n.site !== 'auto') fabricSites.add(n.site);
+    }
+    if (fabricSites.size > 0) {
+      vars.push({ name: 'FABRIC_SITE', label: 'FABRIC Site', type: 'site', default: [...fabricSites][0], required: false });
+    }
+    // Detect unique Chameleon site names
+    const chamSites = new Set<string>();
+    for (const n of sliceData?.chameleon_nodes || []) {
+      if (n.site) chamSites.add(n.site);
+    }
+    if (chamSites.size > 0) {
+      vars.push({ name: 'CHAMELEON_SITE', label: 'Chameleon Site', type: 'chameleon_site', default: [...chamSites][0], required: false });
+    }
+    // Node counts
+    const fabricCount = (sliceData?.nodes || []).length;
+    const chamCount = (sliceData?.chameleon_nodes || []).length;
+    if (fabricCount > 1) {
+      vars.push({ name: 'FABRIC_NODE_COUNT', label: 'FABRIC Nodes', type: 'number', default: fabricCount, required: false });
+    }
+    if (chamCount > 1) {
+      vars.push({ name: 'CHAMELEON_NODE_COUNT', label: 'Chameleon Nodes', type: 'number', default: chamCount, required: false });
+    }
+    setSaveExpVariables(vars);
+    setSaveExperimentModal(true);
+  }, [selectedSliceName, sliceData]);
+
+  const handleSaveExperimentConfirm = useCallback(async () => {
+    if (!saveExpName.trim()) return;
+    setSaveExpBusy(true);
+    setStatusMessage('Saving experiment template...');
+    try {
+      await api.saveExperiment({
+        name: saveExpName.trim(),
+        description: saveExpDesc.trim(),
+        slice_name: selectedSliceId,
+        variables: saveExpVariables.filter(v => v.name.trim()),
+      });
+      setSaveExperimentModal(false);
+      setSaveExpName('');
+      setSaveExpDesc('');
+      setSaveExpVariables([]);
+    } catch (e: any) {
+      addError(e.message);
+    } finally {
+      setSaveExpBusy(false);
+      setStatusMessage('');
+    }
+  }, [saveExpName, saveExpDesc, selectedSliceId, saveExpVariables]);
+
+  const handleExpVarChange = useCallback((index: number, field: keyof ExperimentVariable, value: any) => {
+    setSaveExpVariables(prev => prev.map((v, i) => i === index ? { ...v, [field]: value } : v));
+  }, []);
+
+  const handleAddExpVar = useCallback(() => {
+    setSaveExpVariables(prev => [...prev, { name: '', label: '', type: 'string', default: '', required: false }]);
+  }, []);
+
+  const handleRemoveExpVar = useCallback((index: number) => {
+    setSaveExpVariables(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
+  // --- Experiment variable substitution popup (for loading experiment templates) ---
+  const [experimentVarsPopup, setExperimentVarsPopup] = useState<{
+    templateName: string;
+    dirName: string;
+    variables: ExperimentVariable[];
+  } | null>(null);
+  const [experimentVarValues, setExperimentVarValues] = useState<Record<string, string>>({});
+
+  const handleLoadExperiment = useCallback(async (name: string, dirName: string) => {
+    try {
+      const template = await api.getExperimentTemplate(dirName);
+      if (template.variables && template.variables.length > 0) {
+        const defaults: Record<string, string> = {};
+        for (const v of template.variables) {
+          defaults[v.name] = String(v.default ?? '');
+        }
+        setExperimentVarValues(defaults);
+        setExperimentVarsPopup({ templateName: name, dirName, variables: template.variables });
+      } else {
+        // No variables, load directly
+        setLoading(true);
+        setStatusMessage('Loading experiment template...');
+        const result = await api.loadExperiment(dirName);
+        updateSliceAndValidate(result);
+        setSlices((prev) => {
+          if (result.id && prev.some((s) => s.id === result.id)) return prev;
+          return [...prev, { name: result.name, id: result.id, state: 'Draft' }];
+        });
+        setSelectedSliceId(result.id);
+        setLoading(false);
+        setStatusMessage('');
+      }
+    } catch (e: any) {
+      addError(e.message);
+      setLoading(false);
+      setStatusMessage('');
+    }
+  }, [updateSliceAndValidate]);
+
+  const handleExperimentVarsSubmit = useCallback(async () => {
+    if (!experimentVarsPopup) return;
+    setLoading(true);
+    setStatusMessage('Loading experiment with variables...');
+    try {
+      const sliceName = experimentVarValues['SLICE_NAME'] || experimentVarsPopup.templateName;
+      const result = await api.loadExperiment(experimentVarsPopup.dirName, sliceName, experimentVarValues);
+      updateSliceAndValidate(result);
+      setSlices((prev) => {
+        if (result.id && prev.some((s) => s.id === result.id)) return prev;
+        return [...prev, { name: result.name, id: result.id, state: 'Draft' }];
+      });
+      setSelectedSliceId(result.id);
+      setExperimentVarsPopup(null);
+      setExperimentVarValues({});
+    } catch (e: any) {
+      addError(e.message);
+    } finally {
+      setLoading(false);
+      setStatusMessage('');
+    }
+  }, [experimentVarsPopup, experimentVarValues, updateSliceAndValidate]);
+
   const handleContextAction = useCallback((action: ContextMenuAction) => {
     if (action.type === 'terminal') {
       handleOpenTerminals(action.elements);
@@ -1356,8 +2367,65 @@ export default function App() {
       const sn = action.sliceNames[0];
       setOpenBootLogSlices(prev => prev.includes(sn) ? prev : [...prev, sn]);
       setConsoleExpanded(true);
+    } else if (action.type === 'chi-ssh' && action.instanceId && action.instanceSite) {
+      handleOpenChameleonTerminal({ id: action.instanceId, name: action.instanceName || '', site: action.instanceSite });
+    } else if (action.type === 'chi-reboot' && action.instanceId && action.instanceSite) {
+      api.rebootChameleonInstance(action.instanceId, action.instanceSite).catch((e: any) => setErrors(prev => [...prev, `Reboot failed: ${e.message}`]));
+    } else if (action.type === 'chi-stop' && action.instanceId && action.instanceSite) {
+      api.stopChameleonInstance(action.instanceId, action.instanceSite).catch((e: any) => setErrors(prev => [...prev, `Stop failed: ${e.message}`]));
+    } else if (action.type === 'chi-start' && action.instanceId && action.instanceSite) {
+      api.startChameleonInstance(action.instanceId, action.instanceSite).catch((e: any) => setErrors(prev => [...prev, `Start failed: ${e.message}`]));
+    } else if (action.type === 'chi-delete' && action.instanceId && action.instanceSite) {
+      api.deleteChameleonInstance(action.instanceId, action.instanceSite).catch((e: any) => setErrors(prev => [...prev, `Delete failed: ${e.message}`]));
+    } else if (action.type === 'chi-assign-fip' && action.instanceId && action.instanceSite) {
+      api.assignChameleonFloatingIp(action.instanceId, action.instanceSite)
+        .then(() => { setChiDraftVersion(v => v + 1); })
+        .catch((e: any) => setErrors(prev => [...prev, `Floating IP failed: ${e.message}`]));
+    } else if (action.type === 'chi-open-web' && action.instanceId && action.instanceSite) {
+      // Find the instance's floating IP and open in browser
+      const inst = chameleonInstances.find(i => i.id === action.instanceId);
+      if (inst?.floating_ip) {
+        window.open(`http://${inst.floating_ip}`, '_blank');
+      }
+    } else if (action.type === 'chi-apply-recipe' && action.recipeName && action.instanceId && action.instanceSite) {
+      // Execute recipe on Chameleon instance via SSH
+      const instName = action.instanceName || action.instanceId;
+      setConsoleExpanded(true);
+      appendBuildLog(instName, { type: 'build', message: `Running recipe "${action.recipeName}" on ${instName}...` });
+      api.executeChameleonRecipe(action.instanceId, action.instanceSite, action.recipeName)
+        .then((result: any) => {
+          appendBuildLog(instName, { type: 'build', message: `Recipe complete: ${result.status || 'done'}` });
+        })
+        .catch((e: any) => {
+          appendBuildLog(instName, { type: 'error', message: `Recipe failed: ${e.message}` });
+          setErrors(prev => [...prev, `Recipe failed: ${e.message}`]);
+        });
+    } else if (action.type === 'chi-run-boot-config' && action.instanceId && action.instanceSite) {
+      const instName = action.instanceName || action.instanceId;
+      setConsoleExpanded(true);
+      appendBuildLog(instName, { type: 'build', message: `Running boot config on ${instName}...` });
+      api.executeChameleonBootConfig(selectedChameleonSliceId, instName)
+        .then(() => appendBuildLog(instName, { type: 'build', message: `Boot config complete for ${instName}` }))
+        .catch((e: any) => {
+          appendBuildLog(instName, { type: 'error', message: `Boot config failed: ${e.message}` });
+          setErrors(prev => [...prev, `Boot config failed: ${e.message}`]);
+        });
+    } else if (action.type === 'chi-save-template' && action.instanceName) {
+      // Reuse the FABRIC save-template modal for Chameleon nodes
+      handleSaveVmTemplate(action.instanceName);
+    } else if (action.type === 'run-boot-config' && action.sliceNames && action.sliceNames.length > 0) {
+      handleRunFullBootConfigPipeline(action.sliceNames[0]);
+    } else if (action.type === 'run-boot-config-node' && action.nodeName && selectedSliceName) {
+      setConsoleExpanded(true);
+      appendBuildLog(selectedSliceName, { type: 'build', message: `Running boot config on ${action.nodeName}...` });
+      api.executeBootConfig(selectedSliceName, action.nodeName)
+        .then(() => appendBuildLog(selectedSliceName, { type: 'build', message: `\u2713 Boot config complete for ${action.nodeName}` }))
+        .catch((e: any) => {
+          appendBuildLog(selectedSliceName, { type: 'error', message: `Boot config failed for ${action.nodeName}: ${e.message}` });
+          setErrors(prev => [...prev, `Boot config failed for ${action.nodeName}: ${e.message}`]);
+        });
     }
-  }, [handleOpenTerminals, handleDeleteElements, handleDeleteSliceByName, handleRefreshSlices, handleDeleteComponent, handleDeleteFacilityPort, handleSaveVmTemplate, handleExecuteRecipe, selectedSliceId]);
+  }, [handleOpenTerminals, handleDeleteElements, handleDeleteSliceByName, handleRefreshSlices, handleDeleteComponent, handleDeleteFacilityPort, handleSaveVmTemplate, handleExecuteRecipe, selectedSliceId, handleOpenChameleonTerminal, handleRunFullBootConfigPipeline, selectedSliceName, appendBuildLog]);
 
   const handleCloseTerminal = useCallback((id: string) => {
     setTerminalTabs((prev) => prev.filter((t) => t.id !== id));
@@ -1385,6 +2453,14 @@ export default function App() {
   const handleSliceUpdated = useCallback((data: SliceData) => {
     updateSliceAndValidate(data);
   }, [updateSliceAndValidate]);
+
+  // Separate handler for composite view — refreshes composite graph after edits
+  const handleCompositeSliceUpdated = useCallback((data: SliceData) => {
+    setSliceData(data);
+    if (selectedCompositeSliceId) {
+      api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+    }
+  }, [selectedCompositeSliceId]);
 
   const handleOpenHelp = useCallback((section?: string) => {
     if (!section && helpOpen) {
@@ -1447,6 +2523,13 @@ export default function App() {
     setErrors([]);
     setLoading(true);
     setStatusMessage('Loading weave template...');
+    lastMutationRef.current = Date.now(); // Switch to ACTIVE polling mode
+
+    // Schedule a forced-fresh refresh after 10s (gives weave time to create slices)
+    setTimeout(() => { lastMutationRef.current = Date.now(); }, 10000);
+
+    // Mark this weave as deploying (for LibrariesPanel button state)
+    setDeployingWeaves(prev => new Set(prev).add(templateDirName));
 
     // Open build log
     setOpenBootLogSlices(prev => prev.includes(sliceNameForDeploy) ? prev : [...prev, sliceNameForDeploy]);
@@ -1461,18 +2544,33 @@ export default function App() {
       const sliceId = data.id || '';
       setSliceData(data);
       setSelectedSliceId(sliceId);
-      setCurrentView('slices'); setSlicesSubView('topology');
+      // Don't switch view tab — let the user stay on their current view.
+      // Build log output appears in the console panel (bottom) regardless.
       setSlices((prev) => {
         if (sliceId && prev.some((s) => s.id === sliceId)) return prev;
         return [...prev, { name: data.name, id: sliceId, state: 'Draft' }];
       });
       appendBuildLog(sliceNameForDeploy, { type: 'build', message: 'Weave loaded as draft slice' });
 
-      // Step 2: Submit the slice
-      setStatusMessage('Submitting slice to FABRIC...');
-      appendBuildLog(sliceNameForDeploy, { type: 'build', message: 'Submitting slice to FABRIC...' });
-      const submitted = await api.submitSlice(sliceId);
-      if (submitted.id && submitted.id !== sliceId) setSelectedSliceId(submitted.id);
+      // Step 2: Submit the slice (composite if Chameleon nodes present)
+      const weaveChameleon = (data.chameleon_nodes || []).length > 0;
+      setStatusMessage(weaveChameleon ? 'Submitting composite slice (FABRIC + Chameleon)...' : 'Submitting slice to FABRIC...');
+      appendBuildLog(sliceNameForDeploy, { type: 'build', message: weaveChameleon ? 'Submitting composite slice (FABRIC + Chameleon)...' : 'Submitting slice to FABRIC...' });
+      let submitted: SliceData;
+      if (weaveChameleon) {
+        const compositeResult = await api.submitCompositeSlice(sliceId);
+        appendBuildLog(sliceNameForDeploy, { type: 'build', message: `Composite: FABRIC=${compositeResult.fabric_status}, Chameleon=${compositeResult.chameleon_status || 'N/A'}` });
+        if (compositeResult.chameleon_error) appendBuildLog(sliceNameForDeploy, { type: 'error', message: `Chameleon: ${compositeResult.chameleon_error}` });
+        if (compositeResult.fabric_error) appendBuildLog(sliceNameForDeploy, { type: 'error', message: `FABRIC: ${compositeResult.fabric_error}` });
+        submitted = compositeResult.fabric_slice || await api.getSlice(sliceId);
+      } else {
+        submitted = await api.submitSlice(sliceId);
+      }
+      if (submitted.id && submitted.id !== sliceId) {
+        setSelectedSliceId(submitted.id);
+        // Update composite slices that reference the old draft ID
+        api.replaceCompositeFabricMember(sliceId, submitted.id).catch(() => {});
+      }
       setSliceData(submitted);
       appendBuildLog(sliceNameForDeploy, { type: 'build', message: `Slice submitted (state: ${submitted.state || 'unknown'})` });
       prevSliceStatesRef.current[sliceNameForDeploy] = submitted.state || '';
@@ -1510,20 +2608,34 @@ export default function App() {
           appendBuildLog(sliceNameForDeploy, { type: 'error', message: `FABlib post-boot config failed: ${e.message}` });
           addError(`FABlib post_boot_config failed: ${e.message}`);
         }
+        // Auto-configure FABNetv4/v6 network interfaces
+        try {
+          appendBuildLog(sliceNameForDeploy, { type: 'step', message: 'Auto-configuring L3 network interfaces...' });
+          const netResult = await api.autoConfigureNetworks(refreshedData.id || sliceId);
+          if (netResult.configured > 0) {
+            appendBuildLog(sliceNameForDeploy, { type: 'build', message: `Auto-configured ${netResult.configured} node(s) with L3 network entries` });
+          }
+        } catch (e: any) {
+          appendBuildLog(sliceNameForDeploy, { type: 'error', message: `Network auto-configure failed: ${e.message}` });
+        }
         setStatusMessage('Running post-boot configuration (waiting for SSH)...');
         await handleRunBootConfigStream(sliceNameForDeploy, true);
         appendBuildLog(sliceNameForDeploy, { type: 'build', message: '\u2713 Deploy complete' });
         setSliceBootRunning(prev => ({ ...prev, [sliceNameForDeploy]: false }));
+        setDeployingWeaves(prev => { const next = new Set(prev); next.delete(templateDirName); return next; });
       } else if (POLL_STATES.has(refreshedData.state || '')) {
         appendBuildLog(sliceNameForDeploy, { type: 'build', message: 'Waiting for slice to become ready...' });
         startPolling();
+        // deployingWeaves stays set — will be cleared when polling detects completion
       } else {
         setSliceBootRunning(prev => ({ ...prev, [sliceNameForDeploy]: false }));
+        setDeployingWeaves(prev => { const next = new Set(prev); next.delete(templateDirName); return next; });
       }
     } catch (e: any) {
       appendBuildLog(sliceNameForDeploy, { type: 'error', message: `Deploy failed: ${e.message}` });
       addError(e.message);
       setSliceBootRunning(prev => ({ ...prev, [sliceNameForDeploy]: false }));
+      setDeployingWeaves(prev => { const next = new Set(prev); next.delete(templateDirName); return next; });
     } finally {
       setLoading(false);
       setStatusMessage('');
@@ -1584,6 +2696,10 @@ export default function App() {
 
     // Clear errors from previous runs
     setErrors([]);
+    lastMutationRef.current = Date.now(); // Switch to ACTIVE polling mode
+
+    // Schedule a forced-fresh refresh after 10s (gives weave time to create slices)
+    setTimeout(() => { lastMutationRef.current = Date.now(); }, 10000);
 
     // Open build log tab for this run
     setOpenBootLogSlices(prev => prev.includes(logKey) ? prev : [...prev, logKey]);
@@ -1628,6 +2744,8 @@ export default function App() {
         const lastLog = logs.length > 0 ? logs[logs.length - 1] : null;
         const deploySucceeded = lastLog?.message?.includes('Deploy complete') || lastLog?.message?.includes('Build complete');
         pendingRunAfterDeploy.current.delete(sliceName);
+        // Clear deploying state for this weave
+        setDeployingWeaves(prev => { const next = new Set(prev); next.delete(runInfo.templateDirName); return next; });
         if (deploySucceeded) {
           appendBuildLog(sliceName, { type: 'build', message: 'Deploy succeeded — starting weave script...' });
           handleRunWeaveScript(runInfo.templateDirName, runInfo.weaveName, runInfo.args);
@@ -1777,6 +2895,7 @@ export default function App() {
   const handleCollapseTemplate = useCallback(() => toggleCollapse('template'), [toggleCollapse]);
   const handleCollapseChat = useCallback(() => toggleCollapse('chat'), [toggleCollapse]);
   const handleCollapseConsole = useCallback(() => toggleCollapse('console'), [toggleCollapse]);
+  const handleCollapseDetails = useCallback(() => toggleCollapse('details'), [toggleCollapse]);
 
   const handleToggleDark = useCallback(() => setDark((d) => !d), []);
   const handleToggleSettings = useCallback(() => setSettingsOpen((prev) => !prev), []);
@@ -1788,11 +2907,13 @@ export default function App() {
   }, []);
 
   // --- Panel rendering helpers (shared between left/right panel groups) ---
-  const showSidePanels = currentView === 'slices' || currentView === 'artifacts';
+  const showSidePanels = currentView === 'slices' || currentView === 'artifacts' || currentView === 'infrastructure' || currentView === 'chameleon' || currentView === 'jupyter';
   // In artifacts view, only show chat and console panels (not editor/template)
+  // In chameleon view, show all panels (editor panel shows Chameleon infrastructure editing)
+  // Details panel only visible in infrastructure view
   const visiblePanelIds: PanelId[] = currentView === 'artifacts'
     ? PANEL_IDS.filter(id => id === 'chat' || id === 'console')
-    : PANEL_IDS;
+    : PANEL_IDS.filter(id => id !== 'details' || currentView === 'infrastructure');
 
   const makeDragProps = (id: PanelId) => ({
     draggable: true,
@@ -1808,6 +2929,101 @@ export default function App() {
     const icon = PANEL_ICONS[id];
     switch (id) {
       case 'editor':
+        // Composite view: show CompositeEditorPanel with member management
+        if (currentView === 'slices') {
+          return (
+            <div key="composite-editor" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+              <div {...dragProps} className="panel-header" style={{ padding: '6px 10px', fontSize: 11, fontWeight: 600, cursor: 'grab', background: 'var(--fabric-bg-tint)', borderBottom: '1px solid var(--fabric-border)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>{icon}</span> Composite Editor
+                <button onClick={handleCollapseEditor} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--fabric-text-muted)' }}>×</button>
+              </div>
+              <div style={{ flex: 1, overflow: 'auto' }}>
+                <CompositeEditorPanel
+                  compositeSliceId={selectedCompositeSliceId}
+                  compositeSlice={compositeSlices.find(s => s.id === selectedCompositeSliceId) || null}
+                  fabricSlices={slices.map(s => ({ id: s.id || s.name, name: s.name, state: s.state }))}
+                  chameleonSlices={chameleonSlices}
+                  chameleonEnabled={chameleonEnabled}
+                  chameleonSites={chameleonSites}
+                  sites={infraSites}
+                  images={images}
+                  componentModels={componentModels}
+                  onFabricSliceUpdated={(data) => { setSliceData(data); handleSliceUpdated(data); }}
+                  onMembersUpdated={(updated) => {
+                    setCompositeSlices(prev => prev.map(s => s.id === updated.id ? updated : s));
+                    // Immediately refresh graph when members change
+                    if (selectedCompositeSliceId) {
+                      api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+                    }
+                  }}
+                  onCompositeGraphRefresh={() => {
+                    if (selectedCompositeSliceId) {
+                      api.getCompositeSlice(selectedCompositeSliceId).then(data => {
+                        setCompositeSlices(prev => prev.map(s => s.id === data.id ? data : s));
+                      }).catch(() => {});
+                      api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+                    }
+                  }}
+                  onError={(msg) => addError(msg)}
+                  onSwitchToSlice={(testbed, sliceId) => {
+                    if (testbed === 'fabric') {
+                      setSelectedSliceId(sliceId);
+                      setCurrentView('infrastructure');
+                    } else {
+                      setSelectedChameleonSliceId(sliceId);
+                      setCurrentView('chameleon');
+                    }
+                  }}
+                  onCreateSlice={async (testbed) => {
+                    const name = prompt(`New ${testbed === 'fabric' ? 'FABRIC' : 'Chameleon'} slice name:`);
+                    if (!name) return;
+                    try {
+                      if (testbed === 'fabric') {
+                        const data = await api.createSlice(name);
+                        // Refresh FABRIC slice list so the new slice appears in FABRIC view
+                        handleRefreshSlices();
+                        // Auto-add to composite
+                        const sliceId = data.id || name;
+                        const newFab = [...(compositeSlices.find(s => s.id === selectedCompositeSliceId)?.fabric_slices || []), sliceId];
+                        await api.updateCompositeMembers(selectedCompositeSliceId, newFab, compositeSlices.find(s => s.id === selectedCompositeSliceId)?.chameleon_slices || []);
+                        api.getCompositeSlice(selectedCompositeSliceId).then(d => setCompositeSlices(prev => prev.map(s => s.id === d.id ? d : s))).catch(() => {});
+                        api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+                      } else {
+                        const data = await api.createChameleonSlice({ name, site: chameleonSites?.[0]?.name || 'CHI@TACC' });
+                        setChameleonSlices(prev => [...prev, data]);
+                        // Auto-add to composite
+                        const newChi = [...(compositeSlices.find(s => s.id === selectedCompositeSliceId)?.chameleon_slices || []), data.id];
+                        await api.updateCompositeMembers(selectedCompositeSliceId, compositeSlices.find(s => s.id === selectedCompositeSliceId)?.fabric_slices || [], newChi);
+                        api.getCompositeSlice(selectedCompositeSliceId).then(d => setCompositeSlices(prev => prev.map(s => s.id === d.id ? d : s))).catch(() => {});
+                        api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+                      }
+                    } catch (e: any) { addError(e.message); }
+                  }}
+                  dark={dark}
+                />
+              </div>
+            </div>
+          );
+        }
+        if (currentView === 'chameleon') {
+          return (
+            <div key="chi-editor-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+              <div {...dragProps} className="panel-header" style={{ padding: '6px 10px', fontSize: 11, fontWeight: 600, cursor: 'grab', background: 'var(--fabric-bg-tint)', borderBottom: '1px solid var(--fabric-border)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>{icon}</span> Chameleon Editor
+              </div>
+              <div style={{ flex: 1, overflow: 'auto' }}>
+                <ChameleonEditor
+                  sites={chameleonSites || []}
+                  onError={(msg: string) => setErrors(prev => [...prev, msg])}
+                  formsOnly
+                  draftId={selectedChameleonSliceId}
+                  onDraftUpdated={(d: ChameleonDraft) => { setChameleonSliceData(d); setChiDraftVersion(v => v + 1); }}
+                  autoRefresh={chameleonAutoRefresh}
+                />
+              </div>
+            </div>
+          );
+        }
         return (
           <EditorPanel
             key="editor"
@@ -1824,9 +3040,10 @@ export default function App() {
             vmTemplates={vmTemplates}
             onSaveVmTemplate={handleSaveVmTemplate}
             onBootConfigErrors={setBootConfigErrors}
-            onRunBootConfig={handleRunBootConfigStream}
+            onRunBootConfig={handleRunFullBootConfigPipeline}
             bootRunning={!!sliceBootRunning[selectedSliceName]}
             facilityPorts={infraFacilityPorts}
+            viewContext="fabric"
           />
         );
       case 'template':
@@ -1838,6 +3055,7 @@ export default function App() {
             onRunWeaveScript={handleRunWeaveScript}
             onRunExperiment={handleRunExperiment}
             activeRuns={activeRuns}
+            deployingWeaves={deployingWeaves}
             onViewRunOutput={handleViewRunOutput}
             onStopRun={handleStopRun}
             onResetArtifact={handleResetArtifact}
@@ -1856,6 +3074,7 @@ export default function App() {
             onPublishArtifact={handlePublishArtifact}
             onNavigateToMarketplace={handleNavigateToMarketplace}
             onEditArtifact={handleEditArtifact}
+            onLoadExperiment={handleLoadExperiment}
           />
         );
       case 'chat':
@@ -1899,6 +3118,80 @@ export default function App() {
             dragHandleProps={dragProps}
             panelIcon={icon}
           />
+        );
+      case 'details':
+        return (
+          <div key="details-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+            <div {...dragProps} className="panel-header" style={{ padding: '6px 10px', fontSize: 11, fontWeight: 600, cursor: 'grab', background: 'var(--fabric-bg-tint)', borderBottom: '1px solid var(--fabric-border)', display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'space-between' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span>{icon}</span> Details
+              </span>
+              <button className="collapse-btn" onClick={(e) => { e.stopPropagation(); handleCollapseDetails(); }} title="Close panel">{'\u2715'}</button>
+            </div>
+            {/* Searchable resource selector */}
+            <div style={{ padding: '6px 8px', borderBottom: '1px solid var(--fabric-border)' }}>
+              <select
+                className="details-resource-select"
+                value={selectedResourceKey}
+                onChange={(e) => {
+                  const key = e.target.value;
+                  setSelectedResourceKey(key);
+                  if (!key) { setSelectedElement(null); return; }
+                  const [type, ...rest] = key.split(':');
+                  const name = rest.join(':');
+                  if (type === 'site') {
+                    const site = infraSites.find(s => s.name === name);
+                    if (site) {
+                      setSelectedElement({
+                        element_type: 'site', name: site.name, state: site.state,
+                        hosts: String(site.hosts), lat: String(site.lat), lon: String(site.lon),
+                        cores_available: String(site.cores_available ?? 0),
+                        cores_capacity: String(site.cores_capacity ?? 0),
+                        ram_available: String(site.ram_available ?? 0),
+                        ram_capacity: String(site.ram_capacity ?? 0),
+                        disk_available: String(site.disk_available ?? 0),
+                        disk_capacity: String(site.disk_capacity ?? 0),
+                      });
+                    }
+                  } else if (type === 'link') {
+                    const link = infraLinks.find((l) => `${l.site_a} \u2194 ${l.site_b}` === name);
+                    if (link) {
+                      setSelectedElement({
+                        element_type: 'infra_link',
+                        name: `${link.site_a} \u2014 ${link.site_b}`,
+                        site_a: link.site_a, site_b: link.site_b,
+                      });
+                    }
+                  }
+                }}
+                style={{ width: '100%', fontSize: 11, padding: '4px 6px' }}
+              >
+                <option value="">-- Select Resource --</option>
+                <optgroup label="Sites">
+                  {infraSites.map(s => <option key={`site:${s.name}`} value={`site:${s.name}`}>{s.name}</option>)}
+                </optgroup>
+                <optgroup label="Links">
+                  {infraLinks.map((l, i) => {
+                    const linkLabel = `${l.site_a} \u2194 ${l.site_b}`;
+                    return <option key={`link:${linkLabel}`} value={`link:${linkLabel}`}>{linkLabel}</option>;
+                  })}
+                </optgroup>
+              </select>
+            </div>
+            {/* Detail content */}
+            <div style={{ flex: 1, overflow: 'auto' }}>
+              <DetailPanel
+                sliceData={sliceData}
+                selectedElement={selectedElement}
+                siteMetricsCache={siteMetricsCache}
+                linkMetricsCache={linkMetricsCache}
+                metricsRefreshRate={metricsRefreshRate}
+                onMetricsRefreshRateChange={setMetricsRefreshRate}
+                onRefreshMetrics={refreshMetrics}
+                metricsLoading={metricsLoading}
+              />
+            </div>
+          </div>
         );
     }
   };
@@ -1992,7 +3285,7 @@ export default function App() {
   const rightCollapsed = sortByOrder(visiblePanelIds.filter(id => panelLayout[id].side === 'right' && panelLayout[id].collapsed));
 
   const AI_TOOL_INFO = [
-    { id: 'loomai', name: 'LoomAI', icon: '\u2728' },
+    { id: 'loomai', name: 'LoomAI', icon: '__loomai_icon__' },
     { id: 'aider', name: 'Aider', icon: 'Ai' },
     { id: 'opencode', name: 'OpenCode', icon: 'OC' },
     { id: 'crush', name: 'Crush', icon: 'Cr' },
@@ -2012,70 +3305,17 @@ export default function App() {
         onOpenSettings={handleToggleSettings}
         onOpenHelp={handleOpenHelpCb}
         onGoHome={handleGoHome}
-        projectName={projectName}
-        projects={visibleProjects}
-        onProjectChange={handleProjectChange}
         aiTools={visibleAiTools}
         selectedAiTool={selectedAiTool}
         onLaunchAiTool={handleLaunchAiTool}
+        chameleonEnabled={chameleonEnabled}
+        compositeEnabled={compositeEnabled}
+        hasToken={configStatus?.has_token ?? undefined}
+        tokenExpired={configStatus?.has_token && configStatus?.token_info?.exp ? configStatus.token_info.exp * 1000 < Date.now() : false}
+        userEmail={configStatus?.token_info?.email}
+        userName={configStatus?.token_info?.name}
+        onLogin={handleLogin}
       />
-
-      {currentView === 'slices' && <Toolbar
-        slices={slices}
-        selectedSlice={selectedSliceId}
-        sliceState={sliceData?.state ?? ''}
-        dirty={sliceData?.dirty ?? false}
-        sliceValid={validationValid}
-        loading={loading}
-        onSelectSlice={(id) => {
-          setSelectedSliceId(id);
-          setSliceData(null);
-          setSelectedElement(null);
-          setValidationIssues([]);
-          setValidationValid(false);
-          // Auto-load the slice data
-          if (id) {
-            setLoading(true);
-            setStatusMessage('Loading slice...');
-            api.getSlice(id).then(data => {
-              setSliceData(data);
-              // Update to real ID if backend returned a different one (e.g. after submit)
-              if (data.id && data.id !== id) setSelectedSliceId(data.id);
-              // Update the slice list entry if the state changed
-              if (data.state) {
-                setSlices(prev => prev.map(s =>
-                  s.id === id && s.state !== data.state
-                    ? { ...s, state: data.state, id: data.id || s.id }
-                    : s
-                ));
-              }
-              runValidation(id);
-            }).catch(e => {
-              addError(e.message);
-            }).finally(() => {
-              setLoading(false);
-              setStatusMessage('');
-            });
-          }
-        }}
-        onCreateSlice={handleCreateSlice}
-        onSubmit={handleSubmit}
-        onRefreshSlices={handleRefreshSlices}
-        onDeleteSlice={handleDeleteSlice}
-        onRefreshTopology={refreshInfrastructureAndMark}
-        infraLoading={infraLoading}
-        onCloneSlice={handleCloneSlice}
-        listLoaded={listLoaded}
-        onLoadSlices={refreshSliceList}
-        infraLoaded={infraLoaded}
-        statusMessage={statusMessage}
-        onSaveSliceTemplate={handleSaveSliceTemplate}
-        onArchiveSlice={handleArchiveSlice}
-        onArchiveAllTerminal={handleArchiveAllTerminal}
-        hasErrors={sliceData?.error_messages != null && sliceData.error_messages.length > 0}
-        autoRefresh={autoRefresh}
-        onToggleAutoRefresh={toggleAutoRefresh}
-      />}
 
       <HelpContextMenu onOpenHelp={handleOpenHelp} />
 
@@ -2145,6 +3385,240 @@ export default function App() {
         </div>
       )}
 
+      {/* FABRIC title bar with tabs — sits above the content grid */}
+      {currentView === 'infrastructure' && !(settingsOpen || helpOpen) && (
+        <div className="fabric-bar">
+          <img src="/fabric_wave_dark.png" alt="" className="fabric-bar-logo fabric-wave-light-mode" />
+          <img src="/fabric_wave_light.png" alt="" className="fabric-bar-logo fabric-wave-dark-mode" />
+          <span className="fabric-bar-title">FABRIC</span>
+          {projectName && (
+            <span
+              className="fabric-bar-project"
+              onClick={handleToggleSettings}
+              title="Active project — open Settings > Projects to switch"
+            >
+              {projectName}
+            </span>
+          )}
+          <div className="fabric-bar-tabs">
+            {([
+              { key: 'table' as InfraSubView, label: 'Slices', needsSlice: false },
+              { key: 'topology' as InfraSubView, label: 'Topology', needsSlice: true },
+              { key: 'storage' as InfraSubView, label: 'Storage', needsSlice: true },
+              { key: 'map' as InfraSubView, label: 'Map', needsSlice: false },
+              { key: 'apps' as InfraSubView, label: 'Apps', needsSlice: true },
+              { key: 'resources' as InfraSubView, label: 'Resources', needsSlice: false },
+              { key: 'calendar' as InfraSubView, label: 'Calendar', needsSlice: false },
+            ]).map(t => (
+              <button
+                key={t.key}
+                className={`fabric-bar-tab${infraSubView === t.key ? ' active' : ''}`}
+                onClick={() => setInfraSubView(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <select
+            className="fabric-bar-slice-select"
+            value={selectedSliceId}
+            onChange={(e) => {
+              const id = e.target.value;
+              setSelectedSliceId(id);
+              if (id && infraSubView === 'map') setInfraSubView('topology');
+            }}
+          >
+            <option value="">-- Select Slice --</option>
+            {slices.filter(s => !['Dead', 'Closing'].includes(s.state)).map(s => (
+              <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
+            ))}
+            {slices.filter(s => ['Dead', 'Closing'].includes(s.state)).length > 0 && (
+              <option disabled>── Past ──</option>
+            )}
+            {slices.filter(s => ['Dead', 'Closing'].includes(s.state)).slice(0, 10).map(s => (
+              <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
+            ))}
+          </select>
+          <button className="fabric-bar-action-btn" onClick={async () => {
+            const name = prompt('Slice name:');
+            if (!name) return;
+            try {
+              const data = await api.createSlice(name);
+              handleSliceUpdated(data);
+              setSelectedSliceId(data.id || '');
+              setInfraSubView('topology');
+              // Add to slice list
+              setSlices(prev => {
+                const newId = data.id || '';
+                if (prev.some(s => s.id === newId)) return prev;
+                return [...prev, { name, id: newId, state: 'Draft' }];
+              });
+            } catch (e: any) { setErrors(prev => [...prev, e.message]); }
+          }} title="Create new slice">+ New</button>
+          <button className="fabric-bar-action-btn" onClick={async () => {
+            if (!selectedSliceId) return;
+            handleSubmit();
+          }} disabled={!selectedSliceId} title="Submit selected slice">Submit</button>
+          <button className="fabric-bar-action-btn fabric-bar-action-danger" onClick={async () => {
+            if (!selectedSliceId || !selectedSliceName) return;
+            if (!window.confirm(`Delete slice "${selectedSliceName}"?`)) return;
+            handleDeleteSlice();
+          }} disabled={!selectedSliceId} title="Delete selected slice">Delete</button>
+          <button className="fabric-bar-action-btn" onClick={handleRefreshSlices} title="Refresh slices">&#x21BB; Slices</button>
+          <button className="fabric-bar-action-btn" onClick={() => refreshInfrastructure(0)} title="Refresh resources">&#x21BB; Resources</button>
+          <button
+            className={`fabric-bar-action-btn ${autoRefresh ? 'fabric-bar-action-active' : ''}`}
+            onClick={toggleAutoRefresh}
+            title={autoRefresh ? 'Disable auto-refresh' : 'Enable auto-refresh'}
+          >
+            {autoRefresh ? '\u25CF Auto: ON' : '\u25CB Auto: OFF'}
+          </button>
+        </div>
+      )}
+
+      {/* Chameleon title bar — mirrors FABRIC bar with extracted callbacks */}
+      {currentView === 'chameleon' && !(settingsOpen || helpOpen) && chameleonEnabled && (
+        <div className="chameleon-bar">
+          <img src="/chameleon-icon.png" alt="" className="chameleon-bar-logo" />
+          <span className="chameleon-bar-title">Chameleon</span>
+          <div className="chameleon-bar-tabs">
+            {([
+              { key: 'slices' as ChameleonSubView, label: 'Slices' },
+              { key: 'topology' as ChameleonSubView, label: 'Topology' },
+              { key: 'map' as ChameleonSubView, label: 'Map' },
+              { key: 'calendar' as ChameleonSubView, label: 'Calendar' },
+              { key: 'openstack' as ChameleonSubView, label: 'OpenStack' },
+            ]).map(t => (
+              <button key={t.key} className={`chameleon-bar-tab${chameleonSubView === t.key ? ' active' : ''}`}
+                onClick={() => setChameleonSubView(t.key)}>{t.label}</button>
+            ))}
+          </div>
+          <select className="chameleon-bar-select" value={selectedChameleonSliceId}
+            onChange={(e) => { setSelectedChameleonSliceId(e.target.value); if (e.target.value) setChameleonSubView('topology'); }}>
+            <option value="">-- Select Slice --</option>
+            {chameleonSlices.filter(s => !['Terminated', 'Error'].includes(s.state || '') || s.id === selectedChameleonSliceId).map(s => {
+              const sites = [...new Set((s.nodes || []).map(n => n.site).filter(Boolean))];
+              const siteLabel = sites.length > 0 ? sites.join(', ') : 'no nodes';
+              return <option key={s.id} value={s.id}>{s.name} [{s.state}] ({siteLabel})</option>;
+            })}
+          </select>
+          <button className="chameleon-bar-btn" onClick={handleCreateChameleonDraft} title="Create new draft">+ New</button>
+          <button className="chameleon-bar-btn" disabled={!selectedChameleonSliceId} onClick={handleSubmitChameleonDraft} title="Deploy as lease">Submit</button>
+          <button className="chameleon-bar-btn chameleon-bar-btn-danger" disabled={!selectedChameleonSliceId} onClick={handleDeleteChameleonDraft} title="Delete draft">Delete</button>
+          <button className="chameleon-bar-btn chameleon-bar-btn-danger" disabled={chameleonSlices.length === 0} onClick={async () => {
+            const drafts = chameleonSlices.filter(s => s.state === 'Draft');
+            const all = chameleonSlices;
+            const target = drafts.length > 0 && drafts.length < all.length ? drafts : all;
+            const label = target.length === drafts.length && drafts.length < all.length ? 'drafts' : 'slices';
+            if (!window.confirm(`Delete all ${target.length} ${label}?`)) return;
+            for (const s of target) {
+              try { await api.deleteChameleonDraft(s.id); } catch {}
+            }
+            setSelectedChameleonSliceId('');
+            setChameleonSliceData(null);
+            handleRefreshChameleonSlices();
+          }} title="Delete all drafts">Delete All</button>
+          <button className="chameleon-bar-btn" onClick={handleRefreshChameleonSlices} title="Refresh slices">&#x21BB; Slices</button>
+          <button className={`chameleon-bar-btn ${chameleonAutoRefresh ? 'chi-action-active' : ''}`}
+            onClick={() => setChameleonAutoRefresh(prev => !prev)}
+            title={chameleonAutoRefresh ? 'Disable auto-refresh' : 'Enable auto-refresh'}>
+            {chameleonAutoRefresh ? '\u25CF Auto: ON' : '\u25CB Auto: OFF'}
+          </button>
+        </div>
+      )}
+
+      {/* Composite Slice bar — mirrors FABRIC/Chameleon bar with LoomAI indigo */}
+      {currentView === 'slices' && !(settingsOpen || helpOpen) && (
+        <div className="composite-bar">
+          <img src="/composite-slice-icon-transparent.svg" alt="" className="composite-bar-logo" />
+          <span className="composite-bar-title">Composite Slices</span>
+          <div className="composite-bar-tabs">
+            {([
+              { key: 'slices' as SlicesSubView, label: 'Slices' },
+              { key: 'topology' as SlicesSubView, label: 'Topology' },
+              { key: 'storage' as SlicesSubView, label: 'Storage' },
+              { key: 'map' as SlicesSubView, label: 'Map' },
+              { key: 'apps' as SlicesSubView, label: 'Apps' },
+              { key: 'calendar' as SlicesSubView, label: 'Calendar' },
+            ]).map(t => (
+              <button
+                key={t.key}
+                className={`composite-bar-tab${slicesSubView === t.key ? ' active' : ''}`}
+                onClick={() => setSlicesSubView(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <select
+            className="composite-bar-select"
+            value={selectedCompositeSliceId}
+            onChange={async (e) => {
+              const id = e.target.value;
+              setSelectedCompositeSliceId(id);
+              setCompositeGraph(null);
+              if (id) {
+                // Load composite slice with member summaries + merged graph
+                api.getCompositeSlice(id).then(data => {
+                  setCompositeSlices(prev => prev.map(s => s.id === data.id ? data : s));
+                }).catch(() => {});
+                api.getCompositeGraph(id).then(setCompositeGraph).catch(err => addError(err.message));
+              }
+            }}
+          >
+            <option value="">-- Select Composite Slice --</option>
+            {compositeSlices.map(s => (
+              <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
+            ))}
+          </select>
+          <button className="composite-bar-btn" onClick={async () => {
+            const name = prompt('Composite slice name:');
+            if (!name) return;
+            try {
+              // Create composite slice (meta-slice with no resources of its own)
+              const data = await api.createCompositeSlice(name);
+              setCompositeSlices(prev => [...prev, data]);
+              setSelectedCompositeSliceId(data.id);
+              setSlicesSubView('slices');
+            } catch (e: any) { addError(e.message); }
+          }} title="Create new composite slice">+ New</button>
+          <button className="composite-bar-btn" onClick={async () => {
+            if (!selectedCompositeSliceId) return;
+            setLoading(true);
+            try {
+              const result = await api.submitCompositeSliceById(selectedCompositeSliceId);
+              if (result.fabric_results) for (const r of result.fabric_results) { if (r.status === 'error') addError(`FABRIC: ${r.error}`); }
+              if (result.chameleon_results) for (const r of result.chameleon_results) { if (r.status === 'error') addError(`Chameleon: ${r.error}`); }
+              // Refresh composite graph immediately + retry after 5s for transitional slices
+              const compId = selectedCompositeSliceId;
+              api.getCompositeGraph(compId).then(setCompositeGraph).catch(() => {});
+              setTimeout(() => { api.getCompositeGraph(compId).then(setCompositeGraph).catch(() => {}); }, 5000);
+              setCompositeSlices(prev => prev.map(s => s.id === compId ? { ...s, state: 'Provisioning' } : s));
+            } catch (e: any) { addError(e.message); }
+            finally { setLoading(false); }
+          }} disabled={!selectedCompositeSliceId || loading} title="Submit composite slice">Submit</button>
+          <button className="composite-bar-btn composite-bar-btn-danger" onClick={() => {
+            if (!selectedCompositeSliceId) return;
+            const name = compositeSlices.find(s => s.id === selectedCompositeSliceId)?.name || '';
+            if (!window.confirm(`Delete composite slice "${name}"?`)) return;
+            api.deleteCompositeSlice(selectedCompositeSliceId).then(() => {
+              setCompositeSlices(prev => prev.filter(s => s.id !== selectedCompositeSliceId));
+              setSelectedCompositeSliceId('');
+              setCompositeGraph(null);
+            }).catch((e: any) => addError(e.message));
+          }} disabled={!selectedCompositeSliceId} title="Delete composite slice">Delete</button>
+          <button className="composite-bar-btn" onClick={handleRefreshSlices} title="Refresh slices">{'\u21BB'} Slices</button>
+          <button className="composite-bar-btn" onClick={() => refreshInfrastructure(0)} title="Refresh resources">{'\u21BB'} Resources</button>
+          <button
+            className={`composite-bar-btn ${autoRefresh ? 'composite-bar-btn-active' : ''}`}
+            onClick={toggleAutoRefresh}
+            title={autoRefresh ? 'Disable auto-refresh' : 'Enable auto-refresh'}
+          >
+            {autoRefresh ? '\u25CF Auto: ON' : '\u25CB Auto: OFF'}
+          </button>
+        </div>
+      )}
+
       <div style={{
         flex: 1,
         display: (settingsOpen || helpOpen) ? 'none' : 'grid',
@@ -2161,36 +3635,23 @@ export default function App() {
             overflow: 'hidden',
           }}>
             {leftExpanded.length > 0 && renderPanelGroup(leftExpanded, 'left')}
+            {leftCollapsed.length > 0 && (
+              <div className="collapsed-tab-rail">
+                {leftCollapsed.map((id) => (
+                  <button key={id} className="panel-icon-tab left" onClick={() => toggleCollapse(id)} title={`Show ${PANEL_LABELS[id]}`}>
+                    {renderPanelIcon(PANEL_ICONS[id])}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         {/* Center column: view content */}
         <div style={{ gridColumn: showSidePanels ? 2 : 1, gridRow: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden', position: 'relative' }}>
-          {/* Collapsed panel icon tabs (topology/sliver views only) */}
+          {/* Drop zones for panel drag-and-drop (topology/sliver views only) */}
           {showSidePanels && (
             <>
-              {leftCollapsed.map((id, i) => (
-                <button
-                  key={id}
-                  className="panel-icon-tab left"
-                  style={{ top: 40 + i * 36 }}
-                  onClick={() => toggleCollapse(id)}
-                  title={`Show ${PANEL_LABELS[id]}`}
-                >
-                  {PANEL_ICONS[id]}
-                </button>
-              ))}
-              {rightCollapsed.map((id, i) => (
-                <button
-                  key={id}
-                  className="panel-icon-tab right"
-                  style={{ top: 40 + i * 36 }}
-                  onClick={() => toggleCollapse(id)}
-                  title={`Show ${PANEL_LABELS[id]}`}
-                >
-                  {PANEL_ICONS[id]}
-                </button>
-              ))}
               {draggingPanel && (
                 <>
                   <div
@@ -2229,6 +3690,9 @@ export default function App() {
               listLoaded={listLoaded}
               onLoadSlices={refreshSliceList}
               onStartTour={(id: string) => startTour(id)}
+              hasToken={configStatus?.has_token ?? undefined}
+              tokenExpired={configStatus?.has_token && configStatus?.token_info?.exp ? configStatus.token_info.exp * 1000 < Date.now() : false}
+              onLogin={handleLogin}
             />
           ) : currentView === 'jupyter' ? (
             <JupyterLabView initialPath={jupyterPath} dark={dark} />
@@ -2262,86 +3726,333 @@ export default function App() {
               />
             )
           ) : currentView === 'infrastructure' ? (
-            <InfrastructureView
-              subView={infraSubView}
-              onSubViewChange={setInfraSubView}
-              sites={infraSites}
-              links={infraLinks}
-              facilityPorts={infraFacilityPorts}
-              linksLoading={infraLoading}
-              siteMetricsCache={siteMetricsCache}
-              linkMetricsCache={linkMetricsCache}
-              metricsRefreshRate={metricsRefreshRate}
-              onMetricsRefreshRateChange={setMetricsRefreshRate}
-              onRefreshMetrics={refreshMetrics}
-              metricsLoading={metricsLoading}
-              selectedElement={selectedElement}
-              onNodeClick={handleNodeClick}
-              infraLoading={infraLoading}
-              onRefreshInfrastructure={refreshInfrastructureAndMark}
-            />
+            /* FABRIC view — content rendered directly, header is above the grid */
+            infraSubView === 'topology' ? (
+              <CytoscapeGraph
+                graph={sliceData?.graph ?? null}
+                layout={layout}
+                dark={dark}
+                sliceData={sliceData}
+                recipes={recipes}
+                bootNodeStatus={sliceBootNodeStatus[selectedSliceName] ?? {}}
+                preserveLayout
+                onLayoutChange={setLayout}
+                onNodeClick={handleNodeClick}
+                onEdgeClick={handleEdgeClick}
+                onBackgroundClick={handleBackgroundClick}
+                onContextAction={handleContextAction}
+              />
+            ) : infraSubView === 'table' ? (
+              <AllSliversView
+                slices={slices}
+                dark={dark}
+                selectedSliceId={selectedSliceId}
+                onSliceSelect={(id) => {
+                  setSelectedSliceId(id);
+                  setInfraSubView('topology');
+                }}
+                onDeleteSlice={handleDeleteSliceByName}
+                onRefreshSlices={handleRefreshSlices}
+                onArchiveSlice={async (name) => {
+                  await api.archiveSlice(name);
+                  handleRefreshSlices();
+                }}
+                onArchiveAllTerminal={async () => {
+                  await api.archiveAllTerminal();
+                  handleRefreshSlices();
+                }}
+                onContextAction={handleContextAction}
+                nodeActivity={nodeActivity}
+                recipes={recipes}
+              />
+            ) : infraSubView === 'storage' ? (
+              <FileTransferView
+                sliceName={selectedSliceName}
+                sliceData={sliceData}
+              />
+            ) : infraSubView === 'map' ? (
+              <GeoView
+                sliceData={selectedSliceId ? sliceData : null}
+                selectedElement={selectedElement}
+                onNodeClick={handleNodeClick}
+                sites={infraSites}
+                links={infraLinks}
+                linksLoading={infraLoading}
+                siteMetricsCache={siteMetricsCache}
+                linkMetricsCache={linkMetricsCache}
+                metricsRefreshRate={metricsRefreshRate}
+                onMetricsRefreshRateChange={setMetricsRefreshRate}
+                onRefreshMetrics={refreshMetrics}
+                metricsLoading={metricsLoading}
+                hideDetail
+                chameleonSites={chameleonEnabled ? chameleonSites : undefined}
+                chameleonInstances={chameleonEnabled ? chameleonInstances : undefined}
+              />
+            ) : infraSubView === 'apps' ? (
+              <ClientView
+                slices={slices}
+                selectedSliceName={selectedSliceName}
+                sliceData={sliceData}
+                clientTarget={clientTarget}
+                onTargetChange={setClientTarget}
+              />
+            ) : infraSubView === 'calendar' ? (
+              <ResourceCalendar sites={infraSites} slices={slices} />
+            ) : infraSubView === 'resources' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+                <div className="resource-category-bar">
+                  <button className={`resource-category-btn${resourceCategory === 'sites' ? ' active' : ''}`} onClick={() => setResourceCategory('sites')}>Sites &amp; Hosts</button>
+                  <button className={`resource-category-btn${resourceCategory === 'facility-ports' ? ' active' : ''}`} onClick={() => setResourceCategory('facility-ports')}>Facility Ports</button>
+                </div>
+                <div style={{ flex: 1, overflow: 'auto' }}>
+                  {resourceCategory === 'sites' ? (
+                    <ResourceBrowser sites={infraSites} />
+                  ) : (
+                    <FacilityPortsBrowser facilityPorts={infraFacilityPorts} loading={infraLoading} />
+                  )}
+                </div>
+              </div>
+            ) : null
+          ) : currentView === 'chameleon' ? (
+            chameleonSubView === 'topology' ? (
+              <ChameleonEditor
+                sites={chameleonSites || []}
+                onError={(msg: string) => setErrors(prev => [...prev, msg])}
+                graphOnly
+                draftId={selectedChameleonSliceId}
+                draftData={chameleonSliceData}
+                draftVersion={chiDraftVersion}
+                onContextAction={handleContextAction}
+                recipes={recipes}
+                autoRefresh={chameleonAutoRefresh}
+              />
+            ) : chameleonSubView === 'slices' ? (
+              <ChameleonSlicesView
+                drafts={chameleonSlices}
+                leases={chameleonLeases}
+                instances={chameleonInstances}
+                selectedDraftId={selectedChameleonSliceId}
+                onDraftSelect={(id) => { setSelectedChameleonSliceId(id); setChameleonSubView('topology'); }}
+                onDeleteDrafts={async (ids) => {
+                  for (const id of ids) {
+                    try { await api.deleteChameleonDraft(id); } catch {}
+                  }
+                  if (ids.includes(selectedChameleonSliceId)) {
+                    setSelectedChameleonSliceId('');
+                    setChameleonSliceData(null);
+                  }
+                  handleRefreshChameleonSlices();
+                }}
+                onOpenTerminal={handleOpenChameleonTerminal}
+                onRefresh={() => { handleRefreshChameleonSlices(); api.listChameleonLeases().then(setChameleonLeases).catch(() => {}); }}
+                loading={false}
+              />
+            ) : chameleonSubView === 'openstack' ? (
+              <ChameleonOpenStackView onError={(msg) => setErrors(prev => [...prev, msg])} onOpenTerminal={handleOpenChameleonTerminal} />
+            ) : (
+              <ChameleonView
+                onError={(msg) => setErrors(prev => [...prev, msg])}
+                forcedTab={chameleonSubView}
+                hideBar
+                onOpenTerminal={handleOpenChameleonTerminal}
+              />
+            )
           ) : currentView === 'slices' ? (
-            <SlicesView subView={slicesSubView} onSubViewChange={setSlicesSubView}>
-              {slicesSubView === 'topology' ? (
+            slicesSubView === 'topology' ? (
+              compositeGraph && (compositeGraph.nodes.length > 0 || compositeGraph.edges.length > 0) ? (
                 <CytoscapeGraph
-                  graph={sliceData?.graph ?? null}
+                  graph={compositeGraph}
                   layout={layout}
                   dark={dark}
-                  sliceData={sliceData}
+                  sliceData={null}
                   recipes={recipes}
-                  bootNodeStatus={sliceBootNodeStatus[selectedSliceName] ?? {}}
+                  bootNodeStatus={{}}
                   onLayoutChange={setLayout}
                   onNodeClick={handleNodeClick}
                   onEdgeClick={handleEdgeClick}
                   onBackgroundClick={handleBackgroundClick}
                   onContextAction={handleContextAction}
                 />
-              ) : slicesSubView === 'table' ? (
-                <AllSliversView
-                  slices={slices}
-                  dark={dark}
-                  onSliceSelect={(id) => {
-                    setSelectedSliceId(id);
-                    setSlicesSubView('topology');
-                  }}
-                  onDeleteSlice={handleDeleteSliceByName}
-                  onRefreshSlices={handleRefreshSlices}
-                  onContextAction={handleContextAction}
-                  nodeActivity={nodeActivity}
-                  recipes={recipes}
-                />
-              ) : slicesSubView === 'storage' ? (
-                <FileTransferView
-                  sliceName={selectedSliceName}
-                  sliceData={sliceData}
-                />
-              ) : slicesSubView === 'map' ? (
-                <GeoView
-                  sliceData={sliceData}
-                  selectedElement={selectedElement}
-                  onNodeClick={handleNodeClick}
-                  sites={infraSites}
-                  links={infraLinks}
-                  linksLoading={infraLoading}
-                  siteMetricsCache={siteMetricsCache}
-                  linkMetricsCache={linkMetricsCache}
-                  metricsRefreshRate={metricsRefreshRate}
-                  onMetricsRefreshRateChange={setMetricsRefreshRate}
-                  onRefreshMetrics={refreshMetrics}
-                  metricsLoading={metricsLoading}
-                  defaultShowInfra={false}
-                  hideDetail
-                />
               ) : (
-                <ClientView
-                  slices={slices}
-                  selectedSliceName={selectedSliceName}
-                  sliceData={sliceData}
-                  clientTarget={clientTarget}
-                  onTargetChange={setClientTarget}
-                />
-              )}
-            </SlicesView>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--fabric-text-muted)', fontSize: 13, textAlign: 'center', padding: 40 }}>
+                  {selectedCompositeSliceId
+                    ? <div><p style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No resources attached</p><p>Attach FABRIC or Chameleon slices to this composite slice to see the unified topology.</p></div>
+                    : <div><p style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No composite slice selected</p><p>Select or create a composite slice from the dropdown above.</p></div>
+                  }
+                </div>
+              )
+            ) : slicesSubView === 'slices' ? (
+              <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
+                {compositeSlices.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: 40, color: 'var(--fabric-text-muted)', fontSize: 13 }}>
+                    <p style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No composite slices</p>
+                    <p>Click "+ New" in the toolbar to create a composite slice.</p>
+                  </div>
+                ) : (
+                  <>
+                  {/* Bulk action bar */}
+                  {checkedCompositeIds.size > 0 && (
+                    <div style={{ padding: '6px 12px', background: 'rgba(39, 170, 225, 0.1)', borderRadius: 6, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                      <span style={{ fontWeight: 600 }}>{checkedCompositeIds.size} selected</span>
+                      <button
+                        style={{ fontSize: 11, padding: '3px 10px', borderRadius: 4, border: '1px solid #e25241', background: 'rgba(226,82,65,0.1)', color: '#e25241', cursor: 'pointer', fontWeight: 600 }}
+                        onClick={async () => {
+                          if (!window.confirm(`Delete ${checkedCompositeIds.size} composite slice${checkedCompositeIds.size !== 1 ? 's' : ''}? Member slices will NOT be affected.`)) return;
+                          for (const id of checkedCompositeIds) {
+                            try { await api.deleteCompositeSlice(id); } catch {}
+                          }
+                          setCompositeSlices(prev => prev.filter(s => !checkedCompositeIds.has(s.id)));
+                          setCheckedCompositeIds(new Set());
+                          if (checkedCompositeIds.has(selectedCompositeSliceId)) {
+                            setSelectedCompositeSliceId('');
+                            setCompositeGraph(null);
+                          }
+                        }}
+                      >Delete Selected</button>
+                    </div>
+                  )}
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid var(--fabric-border)', textAlign: 'left' }}>
+                        <th style={{ padding: '8px 6px', width: 30 }}>
+                          <input
+                            type="checkbox"
+                            checked={checkedCompositeIds.size === compositeSlices.length && compositeSlices.length > 0}
+                            onChange={(e) => {
+                              if (e.target.checked) setCheckedCompositeIds(new Set(compositeSlices.map(s => s.id)));
+                              else setCheckedCompositeIds(new Set());
+                            }}
+                            style={{ accentColor: '#27aae1' }}
+                          />
+                        </th>
+                        <th style={{ padding: '8px 12px', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fabric-text-muted)' }}>Name</th>
+                        <th style={{ padding: '8px 12px', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fabric-text-muted)' }}>State</th>
+                        <th style={{ padding: '8px 12px', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fabric-text-muted)' }}>Members</th>
+                        <th style={{ padding: '8px 12px', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fabric-text-muted)' }}>Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {compositeSlices.map(cs => {
+                        const isSelected = cs.id === selectedCompositeSliceId;
+                        const fabSummaries = cs.fabric_member_summaries || [];
+                        const chiSummaries = cs.chameleon_member_summaries || [];
+                        const fabCount = (cs.fabric_slices || []).length;
+                        const chiCount = (cs.chameleon_slices || []).length;
+                        return (
+                          <React.Fragment key={cs.id}>
+                            <tr
+                              onClick={() => {
+                                setSelectedCompositeSliceId(cs.id);
+                                setCompositeGraph(null);
+                                api.getCompositeSlice(cs.id).then(data => {
+                                  setCompositeSlices(prev => prev.map(s => s.id === data.id ? data : s));
+                                }).catch(() => {});
+                                api.getCompositeGraph(cs.id).then(setCompositeGraph).catch(() => {});
+                              }}
+                              style={{
+                                cursor: 'pointer',
+                                borderBottom: isSelected && (fabSummaries.length > 0 || chiSummaries.length > 0) ? 'none' : '1px solid var(--fabric-border)',
+                                background: isSelected ? 'rgba(39, 170, 225, 0.08)' : undefined,
+                              }}
+                            >
+                              <td style={{ padding: '8px 6px', width: 30 }} onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={checkedCompositeIds.has(cs.id)}
+                                  onChange={(e) => {
+                                    setCheckedCompositeIds(prev => {
+                                      const next = new Set(prev);
+                                      if (e.target.checked) next.add(cs.id); else next.delete(cs.id);
+                                      return next;
+                                    });
+                                  }}
+                                  style={{ accentColor: '#27aae1' }}
+                                />
+                              </td>
+                              <td style={{ padding: '8px 12px', fontWeight: 600 }}>
+                                <span style={{ marginRight: 6 }}>{isSelected ? '▾' : '▸'}</span>
+                                {cs.name}
+                              </td>
+                              <td style={{ padding: '8px 12px' }}>
+                                <span style={{
+                                  fontSize: 10, fontWeight: 600, textTransform: 'uppercase', padding: '2px 6px', borderRadius: 4,
+                                  background: cs.state === 'Active' ? 'rgba(0, 142, 122, 0.15)' : cs.state === 'Degraded' ? 'rgba(226, 82, 65, 0.15)' : 'rgba(39, 170, 225, 0.15)',
+                                  color: cs.state === 'Active' ? '#008e7a' : cs.state === 'Degraded' ? '#e25241' : '#27aae1',
+                                }}>{cs.state}</span>
+                              </td>
+                              <td style={{ padding: '8px 12px' }}>
+                                {fabCount > 0 && <span style={{ color: '#5798bc', fontWeight: 500, marginRight: 8 }}>{fabCount} FABRIC</span>}
+                                {chiCount > 0 && <span style={{ color: '#39B54A', fontWeight: 500 }}>{chiCount} Chameleon</span>}
+                                {fabCount === 0 && chiCount === 0 && <span style={{ color: 'var(--fabric-text-muted)' }}>No members</span>}
+                              </td>
+                              <td style={{ padding: '8px 12px', color: 'var(--fabric-text-muted)', fontSize: 11 }}>{cs.created ? new Date(cs.created).toLocaleDateString() : ''}</td>
+                            </tr>
+                            {/* Expandable member details */}
+                            {isSelected && (fabSummaries.length > 0 || chiSummaries.length > 0) && (
+                              <tr style={{ background: 'rgba(39, 170, 225, 0.04)', borderBottom: '1px solid var(--fabric-border)' }}>
+                                <td colSpan={5} style={{ padding: '4px 12px 8px 36px' }}>
+                                  {fabSummaries.map((m: any) => (
+                                    <div key={m.id} style={{ fontSize: 11, padding: '3px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                      <span style={{ fontSize: 9, fontWeight: 700, color: '#5798bc', background: 'rgba(87, 152, 188, 0.15)', padding: '1px 4px', borderRadius: 3 }}>FAB</span>
+                                      <span style={{ fontWeight: 500 }}>{m.name}</span>
+                                      <span style={{ color: m.state === 'StableOK' ? '#008e7a' : 'var(--fabric-text-muted)', fontSize: 10 }}>{m.state}</span>
+                                      <span style={{ color: 'var(--fabric-text-muted)', fontSize: 10 }}>{m.node_count} node{m.node_count !== 1 ? 's' : ''}</span>
+                                    </div>
+                                  ))}
+                                  {chiSummaries.map((m: any) => (
+                                    <div key={m.id} style={{ fontSize: 11, padding: '3px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                      <span style={{ fontSize: 9, fontWeight: 700, color: '#39B54A', background: 'rgba(57, 181, 74, 0.15)', padding: '1px 4px', borderRadius: 3 }}>CHI</span>
+                                      <span style={{ fontWeight: 500 }}>{m.name}</span>
+                                      <span style={{ color: m.state === 'Active' ? '#008e7a' : 'var(--fabric-text-muted)', fontSize: 10 }}>{m.state}</span>
+                                      {m.site && <span style={{ color: 'var(--fabric-text-muted)', fontSize: 10 }}>@ {m.site}</span>}
+                                    </div>
+                                  ))}
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  </>
+                )}
+              </div>
+            ) : slicesSubView === 'storage' ? (
+              <FileTransferView
+                sliceName={selectedSliceName}
+                sliceData={sliceData}
+              />
+            ) : slicesSubView === 'map' ? (
+              <GeoView
+                sliceData={sliceData}
+                selectedElement={selectedElement}
+                onNodeClick={handleNodeClick}
+                sites={infraSites}
+                links={infraLinks}
+                linksLoading={infraLoading}
+                siteMetricsCache={siteMetricsCache}
+                linkMetricsCache={linkMetricsCache}
+                metricsRefreshRate={metricsRefreshRate}
+                onMetricsRefreshRateChange={setMetricsRefreshRate}
+                onRefreshMetrics={refreshMetrics}
+                metricsLoading={metricsLoading}
+                defaultShowInfra={false}
+                hideDetail
+                chameleonSites={chameleonEnabled ? chameleonSites : undefined}
+                chameleonInstances={chameleonEnabled ? chameleonInstances : undefined}
+              />
+            ) : slicesSubView === 'calendar' ? (
+              <ResourceCalendar sites={infraSites} slices={slices} />
+            ) : (
+              <ClientView
+                slices={slices}
+                selectedSliceName={selectedSliceName}
+                sliceData={sliceData}
+                clientTarget={clientTarget}
+                onTargetChange={setClientTarget}
+              />
+            )
           ) : null}
 
         </div>
@@ -2354,6 +4065,15 @@ export default function App() {
             display: 'flex',
             overflow: 'hidden',
           }}>
+            {rightCollapsed.length > 0 && (
+              <div className="collapsed-tab-rail">
+                {rightCollapsed.map((id) => (
+                  <button key={id} className="panel-icon-tab right" onClick={() => toggleCollapse(id)} title={`Show ${PANEL_LABELS[id]}`}>
+                    {renderPanelIcon(PANEL_ICONS[id])}
+                  </button>
+                ))}
+              </div>
+            )}
             {rightExpanded.length > 0 && renderPanelGroup(rightExpanded, 'right')}
           </div>
         )}
@@ -2454,6 +4174,310 @@ export default function App() {
         </div>
       )}
 
+      {/* Save Experiment Template Modal */}
+      {saveExperimentModal && (
+        <div className="toolbar-modal-overlay" onClick={() => setSaveExperimentModal(false)}>
+          <div className="toolbar-modal toolbar-modal-wide" onClick={(e) => e.stopPropagation()}>
+            <h4>Save as Experiment Template</h4>
+            <p>
+              Save <strong>{selectedSliceName}</strong> as a cross-testbed experiment template
+              with {(sliceData?.nodes || []).length} FABRIC node{(sliceData?.nodes || []).length !== 1 ? 's' : ''} and {(sliceData?.chameleon_nodes || []).length} Chameleon node{(sliceData?.chameleon_nodes || []).length !== 1 ? 's' : ''}.
+            </p>
+            <input
+              type="text"
+              className="toolbar-modal-input"
+              placeholder="Experiment name..."
+              value={saveExpName}
+              onChange={(e) => setSaveExpName(e.target.value)}
+              autoFocus
+            />
+            <textarea
+              className="toolbar-modal-input"
+              placeholder="Description (optional)..."
+              value={saveExpDesc}
+              onChange={(e) => setSaveExpDesc(e.target.value)}
+              rows={2}
+              style={{ resize: 'vertical', marginTop: 8 }}
+            />
+
+            {/* Variable editor */}
+            <div style={{ marginTop: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--fabric-text-muted)' }}>Variables</label>
+                <button
+                  className="toolbar-btn"
+                  onClick={handleAddExpVar}
+                  style={{ fontSize: 11, padding: '2px 8px' }}
+                >
+                  + Add Variable
+                </button>
+              </div>
+              {saveExpVariables.length === 0 && (
+                <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', fontStyle: 'italic', padding: '4px 0' }}>
+                  No variables defined. Add variables to make the experiment template configurable.
+                </div>
+              )}
+              {saveExpVariables.map((v, i) => (
+                <div key={i} className="experiment-var-row">
+                  <input
+                    type="text"
+                    className="experiment-var-input"
+                    placeholder="NAME"
+                    value={v.name}
+                    onChange={(e) => handleExpVarChange(i, 'name', e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'))}
+                    style={{ width: 110 }}
+                  />
+                  <input
+                    type="text"
+                    className="experiment-var-input"
+                    placeholder="Label"
+                    value={v.label}
+                    onChange={(e) => handleExpVarChange(i, 'label', e.target.value)}
+                    style={{ width: 100 }}
+                  />
+                  <select
+                    className="experiment-var-input"
+                    value={v.type}
+                    onChange={(e) => handleExpVarChange(i, 'type', e.target.value)}
+                    style={{ width: 100 }}
+                  >
+                    <option value="string">String</option>
+                    <option value="number">Number</option>
+                    <option value="site">FABRIC Site</option>
+                    <option value="chameleon_site">Chameleon Site</option>
+                  </select>
+                  <input
+                    type={v.type === 'number' ? 'number' : 'text'}
+                    className="experiment-var-input"
+                    placeholder="Default"
+                    value={String(v.default)}
+                    onChange={(e) => handleExpVarChange(i, 'default', v.type === 'number' ? Number(e.target.value) : e.target.value)}
+                    style={{ width: 80 }}
+                  />
+                  <label className="experiment-var-req" title="Required">
+                    <input
+                      type="checkbox"
+                      checked={v.required}
+                      onChange={(e) => handleExpVarChange(i, 'required', e.target.checked)}
+                    />
+                    Req
+                  </label>
+                  <button
+                    className="experiment-var-remove"
+                    onClick={() => handleRemoveExpVar(i)}
+                    title="Remove variable"
+                  >
+                    {'\u2715'}
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="toolbar-modal-actions">
+              <button onClick={() => setSaveExperimentModal(false)}>Cancel</button>
+              <button
+                className="success"
+                onClick={handleSaveExperimentConfirm}
+                disabled={!saveExpName.trim() || saveExpBusy}
+              >
+                {saveExpBusy ? 'Saving...' : 'Save Experiment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Experiment Variable Substitution Popup */}
+      {experimentVarsPopup && (
+        <div className="toolbar-modal-overlay" onClick={() => setExperimentVarsPopup(null)}>
+          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
+            <h4>Load Experiment</h4>
+            <p>
+              Configure variables for <strong>{experimentVarsPopup.templateName}</strong> before loading.
+            </p>
+            {experimentVarsPopup.variables.map((v) => (
+              <div key={v.name} style={{ marginBottom: 8 }}>
+                <label style={{ display: 'block', fontSize: 12, color: 'var(--fabric-text-muted)', marginBottom: 2 }}>
+                  {v.label || v.name}{v.required ? ' *' : ''}
+                </label>
+                <input
+                  type={v.type === 'number' ? 'number' : 'text'}
+                  className="toolbar-modal-input"
+                  placeholder={`${v.label || v.name}...`}
+                  value={experimentVarValues[v.name] || ''}
+                  onChange={(e) => setExperimentVarValues(prev => ({ ...prev, [v.name]: e.target.value }))}
+                  onKeyDown={(e) => e.key === 'Enter' && handleExperimentVarsSubmit()}
+                />
+              </div>
+            ))}
+            <div className="toolbar-modal-actions">
+              <button onClick={() => setExperimentVarsPopup(null)}>Cancel</button>
+              <button
+                className="success"
+                onClick={handleExperimentVarsSubmit}
+                disabled={loading || experimentVarsPopup.variables.some(v => v.required && !experimentVarValues[v.name]?.trim())}
+              >
+                {loading ? 'Loading...' : 'Load'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Chameleon Lease Creation Dialog — portal to body, inline styles for guaranteed centering */}
+      {showChameleonLeaseDialog && chameleonSliceData && typeof document !== 'undefined' && createPortal(
+        <div className="toolbar-modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }} onClick={() => setShowChameleonLeaseDialog(false)}>
+          <div className="toolbar-modal toolbar-modal-wide" onClick={e => e.stopPropagation()} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+            <h4>Create Lease from Draft</h4>
+            {/* Resource summary grouped by site */}
+            <div style={{ marginBottom: 12 }}>
+              <label className="toolbar-modal-label" style={{ marginBottom: 4 }}>Resources</label>
+              <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>
+                {chiDraftSites.map(site => {
+                  const siteNodes = chameleonSliceData.nodes.filter(n => n.site === site);
+                  const typeCounts = siteNodes.reduce((acc: Record<string, number>, n) => {
+                    acc[n.node_type] = (acc[n.node_type] || 0) + (n.count || 1);
+                    return acc;
+                  }, {});
+                  return (
+                    <div key={site} style={{ marginBottom: 4 }}>
+                      <div style={{ fontWeight: 600 }}>{site}</div>
+                      {Object.entries(typeCounts).map(([type, count]) => (
+                        <div key={type} style={{ paddingLeft: 12 }}>{count}{'\u00d7'} {type}</div>
+                      ))}
+                    </div>
+                  );
+                })}
+                {chameleonSliceData.networks.length > 0 && <div>{chameleonSliceData.networks.length} network(s)</div>}
+              </div>
+            </div>
+            {/* Duration */}
+            <label className="toolbar-modal-label">Duration (hours)</label>
+            <input type="number" className="toolbar-modal-input" value={chiLeaseDuration} min={1} max={168}
+              onChange={e => setChiLeaseDuration(parseInt(e.target.value) || 24)} />
+            {/* Start time */}
+            <label className="toolbar-modal-label" style={{ marginTop: 8 }}>Start Time</label>
+            <label className="toolbar-modal-label" style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+              <input type="checkbox" checked={chiLeaseStartNow} onChange={e => setChiLeaseStartNow(e.target.checked)} />
+              Start now
+            </label>
+            {!chiLeaseStartNow && (
+              <input type="datetime-local" className="toolbar-modal-input" value={chiLeaseStartDate}
+                onChange={e => setChiLeaseStartDate(e.target.value)} style={{ marginTop: 4 }} />
+            )}
+            {/* Network selector */}
+            <div style={{ marginTop: 8 }}>
+              <label className="toolbar-modal-label">Network</label>
+              <select className="toolbar-modal-input" value={chiSelectedNetworkId} onChange={e => setChiSelectedNetworkId(e.target.value)}>
+                <option value="">-- Auto (first shared) --</option>
+                {chiDeployNetworks.map((n: any) => (
+                  <option key={n.id} value={n.id}>{n.name}{n.shared ? ' (shared)' : ''}</option>
+                ))}
+              </select>
+            </div>
+            {/* Deploy mode */}
+            <div style={{ marginTop: 12 }}>
+              <label className="toolbar-modal-label" style={{ marginBottom: 4 }}>Deploy Mode</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                  <input type="radio" name="chi-deploy-mode" checked={chiDeployMode === 'auto-deploy'} onChange={() => setChiDeployMode('auto-deploy')} />
+                  Create Lease &amp; Auto-Deploy (recommended)
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                  <input type="radio" name="chi-deploy-mode" checked={chiDeployMode === 'lease-only'} onChange={() => setChiDeployMode('lease-only')} />
+                  Create Lease Only (deploy later)
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                  <input type="radio" name="chi-deploy-mode" checked={chiDeployMode === 'existing-lease'} onChange={() => setChiDeployMode('existing-lease')} />
+                  Deploy on Existing Lease
+                </label>
+              </div>
+              {chiDeployMode === 'existing-lease' && (
+                <select className="toolbar-modal-input" value={chiExistingLeaseId} onChange={e => setChiExistingLeaseId(e.target.value)} style={{ marginTop: 4 }}>
+                  <option value="">-- Select ACTIVE Lease --</option>
+                  {chiActiveLeases.map((l: any) => (
+                    <option key={l.id} value={l.id}>{l.name} ({l._site})</option>
+                  ))}
+                </select>
+              )}
+            </div>
+            {/* Availability check */}
+            <div style={{ marginTop: 12, borderTop: '1px solid var(--fabric-border)', paddingTop: 8 }}>
+              <button onClick={handleCheckChiAvailability} disabled={chiAvailLoading} style={{ fontSize: 11, padding: '3px 10px' }}>
+                {chiAvailLoading ? 'Checking...' : 'Check Availability'}
+              </button>
+              {Object.entries(chiAvailability).map(([type, r]) => (
+                <div key={type} style={{ fontSize: 11, marginTop: 4 }}>
+                  <strong>{type}:</strong>{' '}
+                  {r.error ? (
+                    <span style={{ color: 'var(--fabric-coral, #e25241)' }}>{r.error}</span>
+                  ) : r.earliest_start === 'now' || r.available_now > 0 ? (
+                    <>
+                      <span style={{ color: 'var(--fabric-success, #008e7a)' }}>Available now ({r.available_now}/{r.total})</span>
+                      {r.warning && <div style={{ fontSize: 10, color: 'var(--fabric-warning, #ff8542)', marginTop: 1, fontStyle: 'italic' }}>{r.warning}</div>}
+                    </>
+                  ) : r.earliest_start ? (
+                    <span style={{ color: 'var(--fabric-warning, #ff8542)' }}>Available from {r.earliest_start}</span>
+                  ) : (
+                    <span style={{ color: 'var(--fabric-coral, #e25241)' }}>Not available (0/{r.total})</span>
+                  )}
+                </div>
+              ))}
+            </div>
+            {chiDeployStatus && (
+              <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+                background: chiDeployStatus.startsWith('Error') ? 'var(--state-error-bg, rgba(176,0,32,0.1))' : 'rgba(0,142,122,0.1)',
+                color: chiDeployStatus.startsWith('Error') ? 'var(--state-error, #b00020)' : 'var(--fabric-success, #008e7a)' }}>
+                {chiDeployStatus}
+              </div>
+            )}
+            <div className="toolbar-modal-actions" style={{ marginTop: 16 }}>
+              <button onClick={() => setShowChameleonLeaseDialog(false)}>Cancel</button>
+              <button className="success" onClick={handleDeployChameleonLease} disabled={chiLeaseDeploying || (chiDeployMode === 'existing-lease' && !chiExistingLeaseId)}>
+                {chiLeaseDeploying ? chiDeployStatus || 'Working...' :
+                 chiDeployMode === 'lease-only' ? 'Create Lease' :
+                 chiDeployMode === 'existing-lease' ? 'Deploy on Lease' :
+                 'Create Lease & Deploy'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* Chameleon Delete Slice dialog */}
+      {showChameleonDeleteDialog && typeof document !== 'undefined' && createPortal(
+        <div className="toolbar-modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }} onClick={() => setShowChameleonDeleteDialog(false)}>
+          <div className="toolbar-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+            <h4>Delete Slice</h4>
+            <p style={{ fontSize: 12, color: 'var(--fabric-text-muted)', margin: '8px 0 12px' }}>
+              Choose how to handle deployed resources:
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input type="radio" name="chi-delete-mode" checked={chiDeleteMode === 'release'} onChange={() => setChiDeleteMode('release')} />
+                <span><strong>Release</strong> &mdash; remove slice record only, servers keep running</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input type="radio" name="chi-delete-mode" checked={chiDeleteMode === 'delete-all'} onChange={() => setChiDeleteMode('delete-all')} />
+                <span style={{ color: 'var(--fabric-coral, #e25241)' }}><strong>Delete All</strong> &mdash; terminate instances and delete leases</span>
+              </label>
+            </div>
+            <div className="toolbar-modal-actions" style={{ marginTop: 16 }}>
+              <button onClick={() => setShowChameleonDeleteDialog(false)} disabled={chiDeleting}>Cancel</button>
+              <button
+                className={chiDeleteMode === 'delete-all' ? 'danger' : ''}
+                onClick={handleConfirmDeleteChameleon}
+                disabled={chiDeleting}
+              >
+                {chiDeleting ? 'Deleting...' : chiDeleteMode === 'delete-all' ? 'Delete All' : 'Release'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
       {/* Guided Tour */}
       <GuidedTour
         active={activeTourId !== null}
@@ -2469,6 +4493,45 @@ export default function App() {
         currentView={currentView}
         tourContext={tourContext}
       />
+
+      {/* Post-login project picker modal */}
+      {showPostLoginProjectPicker && createPortal(
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }}>
+          <div style={{ background: 'var(--fabric-white, #fff)', borderRadius: 12, padding: '28px 32px', maxWidth: 420, width: '90%', maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.3)' }}>
+            <h3 style={{ margin: '0 0 6px', fontSize: 16, fontWeight: 700, color: 'var(--fabric-text)' }}>Select a Project</h3>
+            <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--fabric-text-muted)' }}>
+              You belong to multiple FABRIC projects. Choose one to get started.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {postLoginProjects.map((p) => (
+                <button
+                  key={p.uuid}
+                  disabled={postLoginBusy}
+                  onClick={() => runAutoSetup(p.uuid)}
+                  style={{
+                    padding: '10px 16px', borderRadius: 8, border: '1px solid var(--fabric-border-solid, #dde)',
+                    background: 'var(--fabric-bg, #f8f9fa)', cursor: postLoginBusy ? 'wait' : 'pointer',
+                    textAlign: 'left', fontSize: 13, fontWeight: 600, color: 'var(--fabric-text)',
+                    transition: 'border-color 0.15s, background 0.15s',
+                  }}
+                  onMouseEnter={(e) => { (e.target as HTMLElement).style.borderColor = '#5798bc'; }}
+                  onMouseLeave={(e) => { (e.target as HTMLElement).style.borderColor = 'var(--fabric-border-solid, #dde)'; }}
+                >
+                  {p.name}
+                  <span style={{ display: 'block', fontSize: 10, fontWeight: 400, opacity: 0.5, marginTop: 2 }}>{p.uuid}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => { setShowPostLoginProjectPicker(false); setSettingsOpen(true); }}
+              style={{ marginTop: 16, background: 'none', border: 'none', color: 'var(--fabric-text-muted)', fontSize: 12, cursor: 'pointer', padding: 0 }}
+            >
+              Skip — configure manually in Settings
+            </button>
+          </div>
+        </div>,
+        document.body
+      )}
     </>
   );
 }

@@ -156,6 +156,10 @@
   color: var(--fabric-primary);
   border-bottom-color: var(--fabric-primary);
 }
+.editor-top-tabs button.chameleon-tab-active {
+  color: #39B54A;
+  border-bottom-color: #39B54A;
+}
 
 /* Lease renew section */
 .lease-renew-section {
@@ -330,6 +334,10 @@
 .sliver-badge-pm {
   background: rgba(226, 82, 65, 0.15);
   color: var(--fabric-coral, #e25241);
+}
+.sliver-badge-chi {
+  background: rgba(57, 181, 74, 0.15);
+  color: #39B54A;
 }
 .sliver-badge-failed {
   background: rgba(226, 82, 65, 0.2);
@@ -1266,8 +1274,6 @@
 
 /* Panel icon tabs (collapsed panels) */
 .panel-icon-tab {
-  position: absolute;
-  z-index: 10;
   width: 24px;
   height: 28px;
   display: flex;
@@ -1280,6 +1286,7 @@
   cursor: pointer;
   line-height: 1;
   box-shadow: none;
+  flex-shrink: 0;
 }
 .panel-icon-tab:hover {
   background: var(--fabric-border);
@@ -1287,14 +1294,19 @@
   box-shadow: none;
 }
 .panel-icon-tab.left {
-  left: 0;
   border-radius: 0 4px 4px 0;
   border-left: none;
 }
 .panel-icon-tab.right {
-  right: 0;
   border-radius: 4px 0 0 4px;
   border-right: none;
+}
+.collapsed-tab-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 40px 0 4px 0;
+  flex-shrink: 0;
 }
 
 /* Drop zones for panel drag-and-drop */

@@ -10,6 +10,14 @@
   flex-wrap: wrap;
 }
 
+/* Flatten toolbar when nested inside TestbedViewShell header */
+.testbed-toolbar .toolbar {
+  background: none;
+  border: none;
+  padding: 0;
+  gap: 8px;
+}
+
 .toolbar-group {
   display: flex;
   align-items: center;
@@ -371,6 +379,100 @@
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/* Form labels for toolbar modals */
+.toolbar-modal-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 4px 0 3px 0;
+  color: var(--fabric-text-muted);
+}
+.toolbar-modal-label:first-child { margin-top: 0; }
+
+/* Wide variant for experiment template modal */
+.toolbar-modal-wide {
+  max-width: 600px;
+  min-width: 480px;
+}
+
+/* Experiment variable editor rows */
+.experiment-var-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.experiment-var-input {
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: 'Montserrat', sans-serif;
+  border: 1px solid var(--fabric-border);
+  border-radius: 3px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  box-sizing: border-box;
+}
+.experiment-var-input:focus {
+  outline: none;
+  border-color: #5798bc;
+}
+
+.experiment-var-req {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.experiment-var-req input[type="checkbox"] {
+  margin: 0;
+}
+
+.experiment-var-remove {
+  background: none;
+  border: none;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  line-height: 1;
+}
+.experiment-var-remove:hover {
+  color: var(--fabric-coral, #e25241);
+  background: rgba(226, 82, 65, 0.1);
+}
+
+/* Experiment button in toolbar */
+.toolbar-btn-experiment {
+  background: rgba(156, 39, 176, 0.1);
+  color: #9c27b0;
+  border-color: rgba(156, 39, 176, 0.3);
+}
+.toolbar-btn-experiment:hover:not(:disabled) {
+  background: rgba(156, 39, 176, 0.2);
+}
+[data-theme="dark"] .toolbar-btn-experiment {
+  background: rgba(156, 39, 176, 0.15);
+  color: #ce93d8;
+  border-color: rgba(156, 39, 176, 0.3);
+}
+[data-theme="dark"] .toolbar-btn-experiment:hover:not(:disabled) {
+  background: rgba(156, 39, 176, 0.25);
+}
+
+/* Save weave button in toolbar */
+.toolbar-btn-save {
+  background: rgba(87, 152, 188, 0.1);
+  border-color: rgba(87, 152, 188, 0.3);
+}
+.toolbar-btn-save:hover:not(:disabled) {
+  background: rgba(87, 152, 188, 0.2);
 }
 
 /* Slice UUID display */

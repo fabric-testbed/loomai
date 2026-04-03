@@ -6,7 +6,7 @@ Query the FABRIC Reports API for usage statistics and analytics.
 **Important:** The `fabric-reports` MCP tools require **FABRIC staff or admin
 permissions**. Regular users cannot access them. If a regular user asks for
 usage stats, collect data from their slices using FABlib tools instead
-(`fabric_list_slices`, `fabric_get_slice`, `fabric_slice_ssh`).
+(`list_slices`, `get_slice`, `ssh_execute`).
 
 **For staff/admins — use the `fabric-reports` MCP tools:**
 

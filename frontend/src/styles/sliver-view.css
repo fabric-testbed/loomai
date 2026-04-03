@@ -572,6 +572,14 @@
 .slice-row:hover {
   background: #f0f6fc !important;
 }
+.slice-row.active-slice {
+  background: rgba(87, 152, 188, 0.12) !important;
+  border-left: 3px solid #5798bc;
+}
+[data-theme="dark"] .slice-row.active-slice {
+  background: rgba(87, 152, 188, 0.15) !important;
+  border-left: 3px solid #6db3d6;
+}
 
 .slice-name-cell {
   cursor: pointer;

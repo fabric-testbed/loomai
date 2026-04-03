@@ -1,10 +1,28 @@
-/** API client for the FABRIC Web GUI backend. */
+/** API client for the LoomAI backend. */
 
-import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult, UpdateInfo, IpHint, L3Config, FacilityPortInfo, LoomAISettings, ToolConfigStatus, UsersResponse } from '../types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult, UpdateInfo, IpHint, L3Config, FacilityPortInfo, LoomAISettings, ToolConfigStatus, UsersResponse, CalendarData, NextAvailableResult, AlternativeResult, ExperimentVariable } from '../types/fabric';
 
 const BASE = '/api';
 
+// In-flight GET request deduplication — if the same GET URL is already
+// pending, return the existing promise instead of firing a duplicate request.
+const _inflight = new Map<string, Promise<any>>();
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method || 'GET').toUpperCase();
+
+  // Only deduplicate GET requests (mutations must always fire)
+  if (method === 'GET') {
+    const existing = _inflight.get(url);
+    if (existing) return existing as Promise<T>;
+    const promise = _doFetch<T>(url, options).finally(() => _inflight.delete(url));
+    _inflight.set(url, promise);
+    return promise;
+  }
+  return _doFetch<T>(url, options);
+}
+
+async function _doFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${url}`, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
@@ -18,8 +36,9 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
 // --- Slices ---
 
-export function listSlices(): Promise<SliceSummary[]> {
-  return fetchJson('/slices');
+export function listSlices(maxAge?: number): Promise<SliceSummary[]> {
+  const params = maxAge !== undefined ? `?max_age=${maxAge}` : '';
+  return fetchJson(`/slices${params}`);
 }
 
 export function getSlice(name: string): Promise<SliceData> {
@@ -40,6 +59,23 @@ export function refreshSlice(name: string): Promise<SliceData> {
 
 export function getSliceState(name: string): Promise<{name: string; id: string; state: string; has_errors: boolean}> {
   return fetchJson(`/slices/${encodeURIComponent(name)}/state`);
+}
+
+export interface SliverStateEntry {
+  name: string;
+  reservation_state: string;
+  site: string;
+  management_ip: string;
+  state_color: string;
+  error_message: string;
+}
+export interface SliverStatesResponse {
+  slice_name: string;
+  slice_state: string;
+  nodes: SliverStateEntry[];
+}
+export function getSliverStates(nameOrId: string, maxAge: number = 15): Promise<SliverStatesResponse> {
+  return fetchJson(`/slices/${encodeURIComponent(nameOrId)}/slivers?max_age=${maxAge}`);
 }
 
 export function validateSlice(name: string): Promise<ValidationResult> {
@@ -263,6 +299,10 @@ export function runPostBootConfig(sliceName: string): Promise<SliceData> {
   return fetchJson(`/slices/${encodeURIComponent(sliceName)}/post-boot-config`, { method: 'POST' });
 }
 
+export function autoConfigureNetworks(sliceName: string): Promise<{ configured: number; nodes: Record<string, number>; details: Record<string, any[]> }> {
+  return fetchJson(`/slices/${encodeURIComponent(sliceName)}/auto-configure-networks`, { method: 'POST' });
+}
+
 // --- Slice export/import ---
 
 export async function exportSlice(name: string): Promise<void> {
@@ -351,11 +391,14 @@ export interface ScriptManifest {
 export interface TemplateSummary {
   name: string;
   description: string;
+  description_short?: string;
   source_slice: string;
   created: string;
   dir_name: string;
   has_template?: boolean;
-  weave_config?: { run_script: string; log_file: string; args?: ScriptArg[] };
+  has_cleanup_script?: boolean;
+  is_experiment?: boolean;
+  weave_config?: { run_script: string; log_file: string; args?: ScriptArg[]; cleanup_script?: string };
 }
 
 export function listTemplates(): Promise<TemplateSummary[]> {
@@ -565,16 +608,19 @@ export function deleteVmTemplateTool(templateName: string, filename: string): Pr
 
 // --- Resources ---
 
-export function listSites(): Promise<SiteInfo[]> {
-  return fetchJson('/sites');
+export function listSites(maxAge?: number): Promise<SiteInfo[]> {
+  const params = maxAge !== undefined ? `?max_age=${maxAge}` : '';
+  return fetchJson(`/sites${params}`);
 }
 
-export function listLinks(): Promise<LinkInfo[]> {
-  return fetchJson('/links');
+export function listLinks(maxAge?: number): Promise<LinkInfo[]> {
+  const params = maxAge !== undefined ? `?max_age=${maxAge}` : '';
+  return fetchJson(`/links${params}`);
 }
 
-export function listFacilityPorts(): Promise<FacilityPortInfo[]> {
-  return fetchJson('/facility-ports');
+export function listFacilityPorts(maxAge?: number): Promise<FacilityPortInfo[]> {
+  const params = maxAge !== undefined ? `?max_age=${maxAge}` : '';
+  return fetchJson(`/facility-ports${params}`);
 }
 
 export function getSiteDetail(name: string): Promise<SiteDetail> {
@@ -618,8 +664,536 @@ export function getAiTools(): Promise<Record<string, boolean>> {
   return fetchJson('/config/ai-tools');
 }
 
-export function getAiModels(): Promise<{ models: string[]; default: string; nrp_models?: string[]; error?: string }> {
+export interface AIModelEntry { id: string; name: string; healthy?: boolean; }
+export interface AIModelsResponse {
+  fabric: AIModelEntry[];
+  nrp: AIModelEntry[];
+  default: string;
+  has_key: { fabric: boolean; nrp: boolean };
+  models: string[];       // backward compat
+  nrp_models: string[];   // backward compat
+}
+export function getAiModels(): Promise<AIModelsResponse> {
   return fetchJson('/ai/models');
+}
+
+export function getDefaultModel(): Promise<{ default: string; source: string }> {
+  return fetchJson('/ai/models/default');
+}
+
+export function setDefaultModel(model: string, source?: string): Promise<{ default: string; source: string }> {
+  return fetchJson('/ai/models/default', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, source: source || '' }),
+  });
+}
+
+export function testModelHealth(model: string, source?: string): Promise<{ healthy: boolean; latency_ms: number; error: string; model: string; source: string }> {
+  return fetchJson('/ai/models/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, source: source || 'fabric' }),
+  });
+}
+
+export function refreshModelHealth(): Promise<AIModelsResponse> {
+  return fetchJson('/ai/models/refresh', { method: 'POST' });
+}
+
+// --- Chameleon Cloud ---
+
+import type { ChameleonSite, ChameleonLease, ChameleonInstance, ChameleonImage, ChameleonStatus, ChameleonTestResult, ChameleonNetwork, ChameleonNodeTypeDetail, ChameleonDraft, ChameleonSlice } from '../types/chameleon';
+
+export function getChameleonStatus(): Promise<ChameleonStatus> {
+  return fetchJson('/chameleon/status');
+}
+
+export function getChameleonSites(): Promise<ChameleonSite[]> {
+  return fetchJson('/chameleon/sites');
+}
+
+export function getChameleonAvailability(site: string): Promise<{ hosts: any[]; flavors: any[]; site: string }> {
+  return fetchJson(`/chameleon/sites/${encodeURIComponent(site)}/availability`);
+}
+
+export function getChameleonNodeTypes(site: string): Promise<{ site: string; node_types: Array<{ node_type: string; total: number; reservable: number; cpu_arch: string }> }> {
+  return fetchJson(`/chameleon/sites/${encodeURIComponent(site)}/node-types`);
+}
+
+export function getChameleonImages(site: string): Promise<ChameleonImage[]> {
+  return fetchJson(`/chameleon/sites/${encodeURIComponent(site)}/images`);
+}
+
+export function listChameleonLeases(site?: string): Promise<ChameleonLease[]> {
+  const params = site ? `?site=${encodeURIComponent(site)}` : '';
+  return fetchJson(`/chameleon/leases${params}`);
+}
+
+export function getChameleonLease(leaseId: string, site: string): Promise<ChameleonLease> {
+  return fetchJson(`/chameleon/leases/${leaseId}?site=${encodeURIComponent(site)}`);
+}
+
+export function createChameleonLease(params: { site: string; name: string; node_type: string; node_count: number; duration_hours: number }): Promise<ChameleonLease> {
+  return fetchJson('/chameleon/leases', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+export function extendChameleonLease(leaseId: string, site: string, hours: number): Promise<ChameleonLease> {
+  return fetchJson(`/chameleon/leases/${leaseId}/extend`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ site, hours }),
+  });
+}
+
+export function deleteChameleonLease(leaseId: string, site: string): Promise<void> {
+  return fetchJson(`/chameleon/leases/${leaseId}?site=${encodeURIComponent(site)}`, { method: 'DELETE' });
+}
+
+export function listChameleonInstances(site?: string): Promise<ChameleonInstance[]> {
+  const params = site ? `?site=${encodeURIComponent(site)}` : '';
+  return fetchJson(`/chameleon/instances${params}`);
+}
+
+export function createChameleonInstance(params: { site: string; name: string; lease_id: string; reservation_id?: string; image_id: string; key_name?: string; network_id?: string }): Promise<ChameleonInstance> {
+  return fetchJson('/chameleon/instances', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+export function deleteChameleonInstance(instanceId: string, site: string): Promise<void> {
+  return fetchJson(`/chameleon/instances/${instanceId}?site=${encodeURIComponent(site)}`, { method: 'DELETE' });
+}
+
+export function getChameleonSliceNodes(sliceName: string): Promise<Array<{ name: string; site: string; node_type: string; image_id?: string; connection_type?: string; status?: string }>> {
+  return fetchJson(`/chameleon/slice-nodes/${encodeURIComponent(sliceName)}`);
+}
+
+export function addChameleonSliceNode(sliceName: string, node: { name: string; site: string; node_type: string; image_id?: string; connection_type?: string; vlan?: string; fabric_site?: string }): Promise<{ chameleon_nodes: any[] }> {
+  return fetchJson(`/chameleon/slice-nodes/${encodeURIComponent(sliceName)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(node),
+  });
+}
+
+export function removeChameleonSliceNode(sliceName: string, nodeName: string): Promise<{ chameleon_nodes: any[] }> {
+  return fetchJson(`/chameleon/slice-nodes/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}`, { method: 'DELETE' });
+}
+
+export function findChameleonAvailability(params: { site: string; node_type: string; node_count: number; duration_hours: number }): Promise<{ earliest_start: string | null; available_now: number; total: number; error: string }> {
+  return fetchJson('/chameleon/find-availability', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+export function getChameleonGraph(): Promise<{ nodes: any[]; edges: any[] }> {
+  return fetchJson('/chameleon/graph');
+}
+
+export function testChameleonConnection(site: string): Promise<Record<string, ChameleonTestResult>> {
+  return fetchJson('/chameleon/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ site }),
+  });
+}
+
+// Instance actions
+export function rebootChameleonInstance(instanceId: string, site: string, type?: string): Promise<{ status: string }> {
+  return fetchJson(`/chameleon/instances/${instanceId}/reboot`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ site, type: type || 'SOFT' }),
+  });
+}
+
+export function stopChameleonInstance(instanceId: string, site: string): Promise<{ status: string }> {
+  return fetchJson(`/chameleon/instances/${instanceId}/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ site }),
+  });
+}
+
+export function startChameleonInstance(instanceId: string, site: string): Promise<{ status: string }> {
+  return fetchJson(`/chameleon/instances/${instanceId}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ site }),
+  });
+}
+
+export function assignChameleonFloatingIp(instanceId: string, site: string): Promise<{ instance_id: string; floating_ip: string; fip_id: string }> {
+  return fetchJson(`/chameleon/instances/${instanceId}/associate-ip`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ site }),
+  });
+}
+
+export function disassociateChameleonIp(instanceId: string, site: string, floatingIp: string): Promise<{ status: string }> {
+  return fetchJson(`/chameleon/instances/${instanceId}/disassociate-ip`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ site, floating_ip: floatingIp }),
+  });
+}
+
+// Networks
+export function listChameleonNetworks(site?: string): Promise<ChameleonNetwork[]> {
+  const params = site ? `?site=${encodeURIComponent(site)}` : '';
+  return fetchJson(`/chameleon/networks${params}`);
+}
+
+export function createChameleonNetwork(params: { site: string; name: string; cidr?: string }): Promise<ChameleonNetwork> {
+  return fetchJson('/chameleon/networks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+export function deleteChameleonNetwork(networkId: string, site: string): Promise<void> {
+  return fetchJson(`/chameleon/networks/${networkId}?site=${encodeURIComponent(site)}`, { method: 'DELETE' });
+}
+
+// OpenStack resources — key pairs, floating IPs, security groups
+export function ensureChameleonNetwork(site: string): Promise<{ network_id: string; network_name: string; type: string }> {
+  return fetchJson(`/chameleon/sites/${encodeURIComponent(site)}/ensure-network`, { method: 'POST' });
+}
+
+export function ensureChameleonBastion(sliceId: string, params: { site: string; experiment_net_id?: string; reservation_id?: string }): Promise<{ status: string; instance_id: string; floating_ip: string; site: string }> {
+  return fetchJson(`/chameleon/slices/${sliceId}/ensure-bastion`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+}
+
+export function importChameleonReservation(sliceId: string, site: string, leaseId: string): Promise<any> {
+  return fetchJson(`/chameleon/slices/${sliceId}/import-reservation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ site, lease_id: leaseId }),
+  });
+}
+
+export function ensureChameleonKeypair(site: string): Promise<{ name: string; status: string; key_path: string }> {
+  return fetchJson('/chameleon/keypairs/ensure', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ site }),
+  });
+}
+
+export function listChameleonKeypairs(site?: string): Promise<any[]> {
+  return fetchJson(`/chameleon/keypairs${site ? '?site=' + encodeURIComponent(site) : ''}`);
+}
+export function createChameleonKeypair(params: { site: string; name: string; public_key?: string }): Promise<any> {
+  return fetchJson('/chameleon/keypairs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) });
+}
+export function deleteChameleonKeypair(name: string, site: string): Promise<void> {
+  return fetchJson(`/chameleon/keypairs/${encodeURIComponent(name)}?site=${encodeURIComponent(site)}`, { method: 'DELETE' });
+}
+export function listChameleonFloatingIps(site?: string): Promise<any[]> {
+  return fetchJson(`/chameleon/floating-ips${site ? '?site=' + encodeURIComponent(site) : ''}`);
+}
+export function listChameleonSecurityGroups(site?: string): Promise<any[]> {
+  return fetchJson(`/chameleon/security-groups${site ? '?site=' + encodeURIComponent(site) : ''}`);
+}
+export function deleteChameleonSecurityGroup(sgId: string, site: string): Promise<void> {
+  return fetchJson(`/chameleon/security-groups/${encodeURIComponent(sgId)}?site=${encodeURIComponent(site)}`, { method: 'DELETE' });
+}
+export function allocateChameleonFloatingIp(site: string, network?: string): Promise<any> {
+  return fetchJson('/chameleon/floating-ips', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ site, network: network || 'public' }) });
+}
+export function releaseChameleonFloatingIp(ipId: string, site: string): Promise<void> {
+  return fetchJson(`/chameleon/floating-ips/${encodeURIComponent(ipId)}?site=${encodeURIComponent(site)}`, { method: 'DELETE' });
+}
+export function associateChameleonFloatingIp(ipId: string, site: string, portId: string): Promise<any> {
+  return fetchJson(`/chameleon/floating-ips/${encodeURIComponent(ipId)}/associate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ site, port_id: portId }) });
+}
+export function createChameleonSecurityGroup(params: { site: string; name: string; description?: string }): Promise<any> {
+  return fetchJson('/chameleon/security-groups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) });
+}
+export function addChameleonSecurityGroupRule(sgId: string, rule: { site: string; direction: string; protocol?: string; port_range_min?: number; port_range_max?: number; remote_ip_prefix?: string; ethertype?: string }): Promise<any> {
+  return fetchJson(`/chameleon/security-groups/${encodeURIComponent(sgId)}/rules`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rule) });
+}
+export function deleteChameleonSecurityGroupRule(sgId: string, ruleId: string, site: string): Promise<void> {
+  return fetchJson(`/chameleon/security-groups/${encodeURIComponent(sgId)}/rules/${encodeURIComponent(ruleId)}?site=${encodeURIComponent(site)}`, { method: 'DELETE' });
+}
+
+// Enhanced node types with hardware detail
+export function getChameleonNodeTypesDetail(site: string): Promise<{ site: string; node_types: ChameleonNodeTypeDetail[] }> {
+  return fetchJson(`/chameleon/sites/${encodeURIComponent(site)}/node-types?detail=true`);
+}
+
+// Schedule calendar
+export interface ChameleonCalendarData {
+  time_range: { start: string; end: string };
+  sites: Array<{
+    name: string;
+    node_types: Array<{ node_type: string; total: number; reservable: number }>;
+    leases: ChameleonLease[];
+  }>;
+}
+
+export function getChameleonScheduleCalendar(days?: number): Promise<ChameleonCalendarData> {
+  const params = days !== undefined ? `?days=${days}` : '';
+  return fetchJson(`/chameleon/schedule/calendar${params}`);
+}
+
+// --- Chameleon Drafts ---
+
+export function listChameleonDrafts(): Promise<ChameleonDraft[]> {
+  return fetchJson('/chameleon/drafts');
+}
+
+export function createChameleonDraft(params: { name: string; site?: string }): Promise<ChameleonDraft> {
+  return fetchJson('/chameleon/drafts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) });
+}
+
+export function getChameleonDraft(draftId: string): Promise<ChameleonDraft> {
+  return fetchJson(`/chameleon/drafts/${draftId}`);
+}
+
+export function deleteChameleonDraft(draftId: string, deleteResources: boolean = false): Promise<{ status: string; draft_id: string; cleanup_errors?: string[] }> {
+  const params = deleteResources ? '?delete_resources=true' : '';
+  return fetchJson(`/chameleon/drafts/${draftId}${params}`, { method: 'DELETE' });
+}
+
+export function addChameleonDraftNode(draftId: string, node: { name: string; node_type: string; image: string; count?: number; site: string }): Promise<ChameleonDraft> {
+  return fetchJson(`/chameleon/drafts/${draftId}/nodes`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(node) });
+}
+
+export function removeChameleonDraftNode(draftId: string, nodeId: string): Promise<ChameleonDraft> {
+  return fetchJson(`/chameleon/drafts/${draftId}/nodes/${nodeId}`, { method: 'DELETE' });
+}
+
+export function updateChameleonNodeNetwork(draftId: string, nodeId: string, network: { id: string; name: string } | null): Promise<ChameleonDraft> {
+  return fetchJson(`/chameleon/drafts/${draftId}/nodes/${nodeId}/network`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(network) });
+}
+
+export function updateChameleonNodeInterfaces(draftId: string, nodeId: string, interfaces: Array<{ nic: number; network: { id: string; name: string } | null }>): Promise<ChameleonDraft> {
+  return fetchJson(`/chameleon/drafts/${draftId}/nodes/${nodeId}/interfaces`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(interfaces) });
+}
+
+export function addChameleonDraftNetwork(draftId: string, net: { name: string; connected_nodes: string[] }): Promise<ChameleonDraft> {
+  return fetchJson(`/chameleon/drafts/${draftId}/networks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(net) });
+}
+
+export function removeChameleonDraftNetwork(draftId: string, networkId: string): Promise<ChameleonDraft> {
+  return fetchJson(`/chameleon/drafts/${draftId}/networks/${networkId}`, { method: 'DELETE' });
+}
+
+export function deployChameleonDraft(draftId: string, params: { lease_name?: string; duration_hours?: number; start_date?: string }): Promise<import('../types/chameleon').ChameleonDeployResult> {
+  return fetchJson(`/chameleon/drafts/${draftId}/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) });
+}
+
+export function getChameleonDraftGraph(draftId: string): Promise<{ nodes: any[]; edges: any[] }> {
+  return fetchJson(`/chameleon/drafts/${draftId}/graph`);
+}
+
+// --- Chameleon Slices ---
+
+export function listChameleonSlices(): Promise<ChameleonSlice[]> {
+  return fetchJson('/chameleon/slices');
+}
+
+export function listAllChameleonSlices(): Promise<ChameleonSlice[]> {
+  return fetchJson('/chameleon/slices');
+}
+
+export function createChameleonSlice(params: { name: string; site: string }): Promise<ChameleonSlice> {
+  return fetchJson('/chameleon/slices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) });
+}
+
+export function deleteChameleonSlice(sliceId: string): Promise<void> {
+  return fetchJson(`/chameleon/slices/${sliceId}`, { method: 'DELETE' });
+}
+
+export function addChameleonSliceResource(sliceId: string, resource: { type: string; id?: string; name?: string; site?: string; [key: string]: any }): Promise<ChameleonSlice> {
+  return fetchJson(`/chameleon/slices/${sliceId}/add-resource`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(resource) });
+}
+
+export function removeChameleonSliceResource(sliceId: string, resourceId: string): Promise<ChameleonSlice> {
+  return fetchJson(`/chameleon/slices/${sliceId}/remove-resource`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resource_id: resourceId }) });
+}
+
+export function setChameleonSliceState(sliceId: string, state: string): Promise<ChameleonSlice> {
+  return fetchJson(`/chameleon/slices/${sliceId}/state`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ state }),
+  });
+}
+
+export function listUnaffiliatedChameleonInstances(): Promise<ChameleonInstance[]> {
+  return fetchJson('/chameleon/instances/unaffiliated');
+}
+
+export function executeChameleonRecipe(instanceId: string, site: string, recipeDirName: string): Promise<{ status: string }> {
+  return fetchJson(`/chameleon/instances/${instanceId}/execute-recipe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ site, recipe_dir: recipeDirName }),
+  });
+}
+
+export function executeChameleonBootConfig(sliceId: string, nodeName: string): Promise<{ status: string }> {
+  return fetchJson(`/chameleon/boot-config/${encodeURIComponent(sliceId)}/${encodeURIComponent(nodeName)}/execute`, { method: 'POST' });
+}
+
+export function getChameleonBootConfig(sliceId: string, nodeName: string): Promise<any> {
+  return fetchJson(`/chameleon/boot-config/${encodeURIComponent(sliceId)}/${encodeURIComponent(nodeName)}`);
+}
+
+export function saveChameleonBootConfig(sliceId: string, nodeName: string, config: any): Promise<any> {
+  return fetchJson(`/chameleon/boot-config/${encodeURIComponent(sliceId)}/${encodeURIComponent(nodeName)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+}
+
+export function getChameleonSliceGraph(sliceId: string): Promise<{ nodes: any[]; edges: any[] }> {
+  return fetchJson(`/chameleon/slices/${sliceId}/graph`);
+}
+
+export function setDraftFloatingIps(draftId: string, entries: Array<{ node_id: string; nic: number }>): Promise<ChameleonSlice> {
+  return fetchJson(`/chameleon/drafts/${draftId}/floating-ips`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entries }),
+  });
+}
+
+export function autoNetworkSetup(sliceId: string): Promise<{ results: Array<{ name: string; site: string; floating_ip?: string; error?: string; status?: string }> }> {
+  return fetchJson(`/chameleon/slices/${sliceId}/auto-network-setup`, { method: 'POST' });
+}
+
+export function checkSliceReadiness(sliceId: string): Promise<{ results: Array<{ name: string; site: string; instance_id: string; ip: string; ssh_ready: boolean }> }> {
+  return fetchJson(`/chameleon/slices/${sliceId}/check-readiness`, { method: 'POST' });
+}
+
+// --- VLAN Negotiation ---
+
+export interface VlanNegotiationResult {
+  fabric_site: string;
+  chameleon_site: string;
+  fabric_vlans: number[];
+  chameleon_vlans: number[];
+  common_vlans: number[];
+  suggested_vlan: number | null;
+  error?: string;
+}
+
+export function negotiateChameleonVlan(fabricSite: string, chameleonSite: string): Promise<VlanNegotiationResult> {
+  return fetchJson('/chameleon/negotiate-vlan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fabric_site: fabricSite, chameleon_site: chameleonSite }),
+  });
+}
+
+// --- Composite Slice Submit ---
+
+export function submitCompositeSlice(name: string): Promise<{
+  status: string;
+  fabric_status: string;
+  chameleon_lease_id?: string;
+  chameleon_status?: string;
+  fabric_slice?: SliceData;
+  fabric_error?: string;
+  chameleon_error?: string;
+}> {
+  return fetchJson(`/slices/${encodeURIComponent(name)}/submit-composite`, { method: 'POST' });
+}
+
+// --- Composite Slice Management ---
+
+export function listCompositeSlices(): Promise<any[]> {
+  return fetchJson('/composite/slices');
+}
+
+export function getCompositeSlice(id: string): Promise<any> {
+  return fetchJson(`/composite/slices/${encodeURIComponent(id)}`);
+}
+
+export function createCompositeSlice(name: string): Promise<any> {
+  return fetchJson('/composite/slices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+}
+
+export function deleteCompositeSlice(id: string): Promise<any> {
+  return fetchJson(`/composite/slices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export function updateCompositeMembers(compositeId: string, fabricSlices: string[], chameleonSlices: string[]): Promise<any> {
+  return fetchJson(`/composite/slices/${encodeURIComponent(compositeId)}/members`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fabric_slices: fabricSlices, chameleon_slices: chameleonSlices }) });
+}
+
+export function replaceCompositeFabricMember(oldId: string, newId: string): Promise<any> {
+  return fetchJson('/composite/replace-fabric-member', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ old_id: oldId, new_id: newId }) });
+}
+
+export function updateCompositeCrossConnections(compositeId: string, connections: any[]): Promise<any> {
+  return fetchJson(`/composite/slices/${encodeURIComponent(compositeId)}/cross-connections`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(connections) });
+}
+
+export function getCompositeGraph(compositeId: string): Promise<{ nodes: any[]; edges: any[] }> {
+  return fetchJson(`/composite/slices/${encodeURIComponent(compositeId)}/graph`);
+}
+
+export function submitCompositeSliceById(compositeId: string, leaseHours = 24): Promise<any> {
+  return fetchJson(`/composite/slices/${encodeURIComponent(compositeId)}/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lease_hours: leaseHours }) });
+}
+
+export function getViewsStatus(): Promise<{ fabric_enabled: boolean; chameleon_enabled: boolean; composite_enabled: boolean }> {
+  return fetchJson('/views/status');
+}
+
+// --- Trovi Marketplace ---
+
+export interface TroviArtifact {
+  uuid: string;
+  title: string;
+  short_description: string;
+  tags: string[];
+  authors: string[];
+  created_at: string;
+  updated_at: string;
+  visibility: string;
+  versions: number;
+  source: 'trovi';
+}
+
+export function listTroviArtifacts(q?: string, tag?: string): Promise<{ artifacts: TroviArtifact[]; total: number }> {
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (tag) params.set('tag', tag);
+  const qs = params.toString();
+  return fetchJson(`/trovi/artifacts${qs ? '?' + qs : ''}`);
+}
+
+export function getTroviArtifact(uuid: string): Promise<any> {
+  return fetchJson(`/trovi/artifacts/${uuid}`);
+}
+
+export function getTroviTags(): Promise<{ tags: string[] }> {
+  return fetchJson('/trovi/tags');
+}
+
+export function downloadTroviArtifact(uuid: string): Promise<{ status: string; dir_name: string; title: string }> {
+  return fetchJson(`/trovi/artifacts/${uuid}/get`, { method: 'POST' });
 }
 
 // --- AI Tool Install Status ---
@@ -888,8 +1462,14 @@ export function getPublishInfo(dirName: string): Promise<PublishInfo> {
   return fetchJson(`/artifacts/local/${encodeURIComponent(dirName)}/publish-info`);
 }
 
+let _validTagsCache: Promise<{ tags: ValidTag[] }> | null = null;
+
 export function listValidTags(): Promise<{ tags: ValidTag[] }> {
-  return fetchJson('/artifacts/valid-tags');
+  if (!_validTagsCache) {
+    _validTagsCache = fetchJson('/artifacts/valid-tags');
+    _validTagsCache.catch(() => { _validTagsCache = null; });
+  }
+  return _validTagsCache;
 }
 
 // --- My Artifacts (annotated local + authorship) ---
@@ -907,6 +1487,7 @@ export interface LocalArtifact {
   tags: string[];
   dir_name: string;
   category: string;
+  is_experiment?: boolean;
   is_from_marketplace: boolean;
   remote_status?: 'linked' | 'not_linked' | 'remote_deleted' | 'check_failed';
   is_author?: boolean;
@@ -921,8 +1502,19 @@ export interface MyArtifactsResponse {
   user_email: string;
 }
 
+let _myArtifactsPromise: Promise<MyArtifactsResponse> | null = null;
+let _myArtifactsTime = 0;
+const MY_ARTIFACTS_TTL = 5000; // 5s dedup window
+
 export function getMyArtifacts(): Promise<MyArtifactsResponse> {
-  return fetchJson('/artifacts/my');
+  const now = Date.now();
+  if (_myArtifactsPromise && (now - _myArtifactsTime) < MY_ARTIFACTS_TTL) {
+    return _myArtifactsPromise;
+  }
+  _myArtifactsTime = now;
+  _myArtifactsPromise = fetchJson('/artifacts/my');
+  _myArtifactsPromise.catch(() => { _myArtifactsPromise = null; });
+  return _myArtifactsPromise;
 }
 
 export function updateLocalArtifactMetadata(dirName: string, params: {
@@ -986,6 +1578,56 @@ export function revertArtifact(dirName: string, versionUuid?: string): Promise<{
     method: 'POST',
     body: JSON.stringify({ version_uuid: versionUuid || null }),
   });
+}
+
+// --- AI Agents & Skills ---
+
+export interface AgentDetail {
+  id: string;
+  name: string;
+  description: string;
+  source: 'built-in' | 'custom' | 'customized';
+  content?: string;
+}
+
+export interface SkillDetail {
+  id: string;
+  name: string;
+  description: string;
+  source: 'built-in' | 'custom' | 'customized';
+  content?: string;
+}
+
+export function getAgents(): Promise<AgentDetail[]> {
+  return fetchJson('/ai/agents');
+}
+export function getAgent(id: string): Promise<AgentDetail> {
+  return fetchJson(`/ai/agents/${encodeURIComponent(id)}`);
+}
+export function saveAgent(id: string, data: { name: string; description: string; content: string }): Promise<AgentDetail> {
+  return fetchJson(`/ai/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) });
+}
+export function deleteAgent(id: string): Promise<{ status: string }> {
+  return fetchJson(`/ai/agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+export function resetAgent(id: string): Promise<AgentDetail> {
+  return fetchJson(`/ai/agents/${encodeURIComponent(id)}/reset`, { method: 'POST' });
+}
+
+export function getSkills(): Promise<SkillDetail[]> {
+  return fetchJson('/ai/skills');
+}
+export function getSkill(id: string): Promise<SkillDetail> {
+  return fetchJson(`/ai/skills/${encodeURIComponent(id)}`);
+}
+export function saveSkill(id: string, data: { name: string; description: string; content: string }): Promise<SkillDetail> {
+  return fetchJson(`/ai/skills/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) });
+}
+export function deleteSkill(id: string): Promise<{ status: string }> {
+  return fetchJson(`/ai/skills/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+export function resetSkill(id: string): Promise<SkillDetail> {
+  return fetchJson(`/ai/skills/${encodeURIComponent(id)}/reset`, { method: 'POST' });
 }
 
 // --- AI Chat ---
@@ -1056,7 +1698,28 @@ export async function uploadToken(file: File): Promise<{ status: string; message
 }
 
 export function getLoginUrl(): Promise<{ login_url: string }> {
-  return fetchJson('/config/login');
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  return fetchJson(`/config/login?origin=${encodeURIComponent(origin)}`);
+}
+
+export interface AutoSetupResponse {
+  status: string;
+  email: string;
+  name: string;
+  uuid: string;
+  project_id: string;
+  bastion_username: string;
+  bastion_key_generated: boolean;
+  slice_keys_generated: boolean;
+  llm_key_created: boolean;
+  llm_key_error: string;
+}
+
+export function autoSetup(projectId: string): Promise<AutoSetupResponse> {
+  return fetchJson('/config/auto-setup', {
+    method: 'POST',
+    body: JSON.stringify({ project_id: projectId }),
+  });
 }
 
 export function pasteToken(tokenText: string): Promise<{ status: string; message: string }> {
@@ -1375,6 +2038,74 @@ export function writeVmFileContent(sliceName: string, nodeName: string, path: st
   });
 }
 
+// --- Schedule / Calendar ---
+
+export function getScheduleCalendar(days?: number): Promise<CalendarData> {
+  const params = days !== undefined ? `?days=${days}` : '';
+  return fetchJson(`/schedule/calendar${params}`);
+}
+
+export function findNextAvailable(params: { cores?: number; ram?: number; disk?: number; gpu?: string; site?: string }): Promise<NextAvailableResult> {
+  const sp = new URLSearchParams();
+  if (params.cores) sp.set('cores', String(params.cores));
+  if (params.ram) sp.set('ram', String(params.ram));
+  if (params.disk) sp.set('disk', String(params.disk));
+  if (params.gpu) sp.set('gpu', params.gpu);
+  if (params.site) sp.set('site', params.site);
+  return fetchJson(`/schedule/next-available?${sp.toString()}`);
+}
+
+export function getAlternatives(params: { cores?: number; ram?: number; disk?: number; gpu?: string; preferred_site: string }): Promise<AlternativeResult> {
+  const sp = new URLSearchParams();
+  if (params.cores) sp.set('cores', String(params.cores));
+  if (params.ram) sp.set('ram', String(params.ram));
+  if (params.disk) sp.set('disk', String(params.disk));
+  if (params.gpu) sp.set('gpu', params.gpu);
+  sp.set('preferred_site', params.preferred_site);
+  return fetchJson(`/schedule/alternatives?${sp.toString()}`);
+}
+
+// --- Reservations ---
+
+export interface Reservation {
+  id: string;
+  slice_name: string;
+  scheduled_time: string;
+  duration_hours: number;
+  auto_submit: boolean;
+  status: 'pending' | 'active' | 'completed' | 'failed';
+  created_at: string;
+  error?: string | null;
+}
+
+export function listReservations(): Promise<Reservation[]> {
+  return fetchJson('/schedule/reservations');
+}
+
+export function createReservation(data: { slice_name: string; scheduled_time: string; duration_hours?: number; auto_submit?: boolean }): Promise<Reservation> {
+  return fetchJson('/schedule/reservations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+}
+
+export function deleteReservation(id: string): Promise<void> {
+  return fetchJson(`/schedule/reservations/${id}`, { method: 'DELETE' });
+}
+
+// --- Detailed Health Check ---
+
+export interface DetailedHealthCheck {
+  status: 'healthy' | 'degraded';
+  uptime_seconds: number;
+  version: string;
+  checks: Record<string, { ok: boolean; message?: string; latency_ms?: number; port?: number; sites_configured?: number }>;
+  slices: { active: number; total: number };
+  memory_mb?: number;
+  disk_free_gb?: number;
+}
+
+export function getDetailedHealth(): Promise<DetailedHealthCheck> {
+  return fetchJson('/health/detailed');
+}
+
 // --- Provisioning ---
 
 export function addProvision(rule: { source: string; slice_name: string; node_name: string; dest: string }): Promise<ProvisionRule> {
@@ -1473,8 +2204,14 @@ export function getProjectDetails(uuid: string): Promise<ProjectDetails> {
 
 // --- Projects (Core API) ---
 
+let _userProjectsCache: Promise<{ projects: Array<{ name: string; uuid: string }>; active_project_id: string }> | null = null;
+
 export function listUserProjects(): Promise<{ projects: Array<{ name: string; uuid: string }>; active_project_id: string }> {
-  return fetchJson('/projects');
+  if (!_userProjectsCache) {
+    _userProjectsCache = fetchJson('/projects');
+    _userProjectsCache.catch(() => { _userProjectsCache = null; });
+  }
+  return _userProjectsCache;
 }
 
 export function switchProject(projectId: string): Promise<{ status: string; project_id: string; token_refreshed?: boolean; warning?: string; login_url?: string }> {
@@ -1577,12 +2314,30 @@ export interface ExperimentSummary {
   script_count: number;
   has_template: boolean;
   has_readme: boolean;
+  is_experiment?: boolean;
   created?: string;
 }
 
 export interface ExperimentDetail extends ExperimentSummary {
   readme: string;
   scripts: Array<{ filename: string }>;
+  variables?: ExperimentVariable[];
+}
+
+export interface ExperimentTemplate {
+  format: string;
+  name: string;
+  description: string;
+  author: string;
+  tags: string[];
+  created: string;
+  variables: ExperimentVariable[];
+  fabric: { nodes: any[]; networks: any[]; facility_ports: any[]; port_mirrors: any[] };
+  chameleon: { nodes: any[]; networks: any[]; floating_ips: string[] };
+  cross_testbed: { connections: any[] };
+  dir_name?: string;
+  /** @deprecated use fabric/chameleon fields instead */
+  testbeds?: string[];
 }
 
 export function listExperiments(): Promise<ExperimentSummary[]> {
@@ -1601,10 +2356,28 @@ export function deleteExperiment(name: string): Promise<{ status: string }> {
   return fetchJson(`/experiments/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
-export function loadExperiment(name: string, sliceName?: string): Promise<SliceData> {
+export function loadExperiment(name: string, sliceName?: string, variables?: Record<string, string>): Promise<SliceData> {
   return fetchJson(`/experiments/${encodeURIComponent(name)}/load`, {
     method: 'POST',
-    body: JSON.stringify({ slice_name: sliceName || '' }),
+    body: JSON.stringify({ slice_name: sliceName || '', variables: variables || {} }),
+  });
+}
+
+export function getExperimentTemplate(name: string): Promise<ExperimentTemplate> {
+  return fetchJson(`/experiments/${encodeURIComponent(name)}/template`);
+}
+
+export function saveExperiment(data: {
+  name: string;
+  description: string;
+  slice_name: string;
+  variables?: ExperimentVariable[];
+  author?: string;
+  tags?: string[];
+}): Promise<ExperimentTemplate> {
+  return fetchJson('/experiments/save', {
+    method: 'POST',
+    body: JSON.stringify(data),
   });
 }
 
@@ -1763,4 +2536,23 @@ export function removeUser(uuid: string, deleteData: boolean = false): Promise<{
 
 export function migrateCurrentUser(): Promise<{ status: string; message: string; uuid?: string }> {
   return fetchJson('/users/migrate-current', { method: 'POST' });
+}
+
+// --- Settings Validation ---
+
+export interface SettingTestResult {
+  ok: boolean;
+  message: string;
+  latency_ms?: number;
+  expires_at?: string;
+  model_count?: number;
+  project_name?: string;
+}
+
+export function testSetting(settingName: string): Promise<SettingTestResult> {
+  return fetchJson(`/settings/test/${settingName}`, { method: 'POST' });
+}
+
+export function testAllSettings(): Promise<Record<string, SettingTestResult>> {
+  return fetchJson('/settings/test-all', { method: 'POST' });
 }

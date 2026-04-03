@@ -5,18 +5,13 @@ import { VERSION } from '../version';
 import { checkForUpdate } from '../api/client';
 import type { UpdateInfo } from '../types/fabric';
 
-interface ProjectInfo {
-  uuid: string;
-  name: string;
-}
-
 interface AiToolInfo {
   id: string;
   name: string;
   icon: string;
 }
 
-type TopView = 'landing' | 'slices' | 'artifacts' | 'infrastructure' | 'jupyter' | 'ai';
+type TopView = 'landing' | 'slices' | 'artifacts' | 'infrastructure' | 'jupyter' | 'ai' | 'chameleon';
 
 interface TitleBarProps {
   dark: boolean;
@@ -26,31 +21,56 @@ interface TitleBarProps {
   onOpenSettings: () => void;
   onOpenHelp: () => void;
   onGoHome: () => void;
-  projectName?: string;
-  projects?: ProjectInfo[];
-  onProjectChange?: (uuid: string) => void;
   aiTools?: AiToolInfo[];
   selectedAiTool?: string | null;
+  chameleonEnabled?: boolean;
+  compositeEnabled?: boolean;
   onLaunchAiTool?: (toolId: string) => void;
+  hasToken?: boolean;
+  tokenExpired?: boolean;
+  userEmail?: string;
+  userName?: string;
+  onLogin?: () => void;
 }
 
-const VIEWS: Array<{ key: TopView; label: string; icon: string; desc: string }> = [
-  { key: 'slices', label: 'Slices', icon: '\u25A6', desc: 'Slices — build, monitor, transfer files, and launch apps' },
-  { key: 'artifacts', label: 'Artifacts', icon: '\u29C9', desc: 'Artifacts — browse, edit, and publish artifacts' },
-  { key: 'infrastructure', label: 'Infrastructure', icon: '\u25C9', desc: 'Infrastructure — FABRIC testbed resources and availability' },
-  { key: 'jupyter', label: 'JupyterLab', icon: '\uD83D\uDCD3', desc: 'JupyterLab — interactive notebooks' },
+const VIEWS: Array<{ key: TopView; label: string; icon: string; desc: string; requiresChameleon?: boolean; requiresComposite?: boolean }> = [
+  { key: 'slices', label: 'Composite Slice', icon: '__composite_icon__', desc: 'Composite Slice — build, monitor, transfer files, and launch apps', requiresComposite: true },
+  { key: 'artifacts', label: 'Marketplace', icon: '__marketplace_icon__', desc: 'Marketplace — browse, publish, and download experiment artifacts' },
+  { key: 'infrastructure', label: 'FABRIC', icon: '__fabric_logo__', desc: 'FABRIC — testbed slices, resources, and availability' },
+  { key: 'chameleon', label: 'Chameleon', icon: '__chameleon_logo__', desc: 'Chameleon Cloud — leases, instances, and bare-metal resources', requiresChameleon: true },
+  { key: 'jupyter', label: 'JupyterLab', icon: '__jupyter_logo__', desc: 'JupyterLab — interactive notebooks' },
 ];
 
-export default React.memo(function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, projectName, projects, onProjectChange, aiTools, selectedAiTool, onLaunchAiTool }: TitleBarProps) {
-  const currentProject = projects?.find((p) => p.name === projectName);
+function ViewIcon({ icon, size = 12, dark }: { icon: string; size?: number; dark?: boolean }) {
+  if (icon === '__fabric_logo__') {
+    const src = dark ? '/fabric_wave_light.png' : '/fabric_wave_dark.png';
+    return <img src={src} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
+  }
+  if (icon === '__jupyter_logo__') {
+    return <img src="/jupyter-icon.svg" alt="" style={{ height: size, verticalAlign: 'middle' }} />;
+  }
+  if (icon === '__chameleon_logo__') {
+    return <img src="/chameleon-icon.png" alt="" style={{ height: size, verticalAlign: 'middle' }} />;
+  }
+  if (icon === '__loomai_icon__') {
+    return <img src="/loomai-icon-transparent.svg" alt="" style={{ height: size, verticalAlign: 'middle' }} />;
+  }
+  if (icon === '__composite_icon__') {
+    return <img src="/composite-slice-icon-transparent.svg" alt="" style={{ height: size, verticalAlign: 'middle' }} />;
+  }
+  if (icon === '__marketplace_icon__') {
+    return <img src="/marketplace-icon-transparent.svg" alt="" style={{ height: size, verticalAlign: 'middle' }} />;
+  }
+  return <>{icon}</>;
+}
+
+export default React.memo(function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, aiTools, selectedAiTool, onLaunchAiTool, chameleonEnabled, compositeEnabled, hasToken, tokenExpired, userEmail, userName, onLogin }: TitleBarProps) {
   const [viewOpen, setViewOpen] = useState(false);
-  const [projOpen, setProjOpen] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [copiedPull, setCopiedPull] = useState(false);
   const [copiedRun, setCopiedRun] = useState(false);
   const viewRef = useRef<HTMLDivElement>(null);
-  const projRef = useRef<HTMLDivElement>(null);
   const updateRef = useRef<HTMLDivElement>(null);
 
   // Show the selected AI tool name in the pill when an AI view is active
@@ -66,7 +86,6 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (viewRef.current && !viewRef.current.contains(e.target as Node)) setViewOpen(false);
-      if (projRef.current && !projRef.current.contains(e.target as Node)) setProjOpen(false);
       if (updateRef.current && !updateRef.current.contains(e.target as Node)) setUpdateOpen(false);
     };
     document.addEventListener('mousedown', handler);
@@ -109,8 +128,10 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
   return (
     <div className="title-bar">
       <div className="title-left">
-        <img src="/fabric_logo.png" alt="FABRIC" className="fabric-logo" onClick={onGoHome} style={{ cursor: 'pointer' }} title="Go to LoomAI home" />
-        <span className="title-text">LoomAI</span>
+        <span className="loomai-header-brand" onClick={onGoHome} style={{ cursor: 'pointer' }} title="Go to LoomAI home">
+          <img src="/loomai-icon-transparent.svg" alt="" className="loomai-header-icon" />
+          <img src="/loomai-wordmark-transparent-dark-ink-trimmed.svg" alt="LoomAI" className="loomai-header-wordmark" />
+        </span>
         <div className="title-version-wrapper" ref={updateRef}>
           <button className="title-version-btn" onClick={handleVersionClick} title="Version info and updates">
             <span className="title-version">v{displayVersion(VERSION)}</span>
@@ -180,25 +201,27 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
       <div className="title-right">
         {/* View selector pill */}
         <div className="title-pill-wrapper" ref={viewRef} data-help-id="titlebar.view">
-          <button className="title-pill" onClick={() => { setViewOpen(!viewOpen); setProjOpen(false); }}>
+          <button className="title-pill" onClick={() => setViewOpen(!viewOpen)}>
             <span className="title-pill-label">View</span>
             <span className="title-pill-value">
               {currentView === 'ai' && activeAiTool
-                ? <>{activeAiTool.icon} {activeAiTool.name}</>
-                : <>{activeView?.icon} {activeView?.label}</>}
+                ? <>{activeAiTool.icon.startsWith('__') ? <ViewIcon icon={activeAiTool.icon} size={12} dark={dark} /> : activeAiTool.icon} {activeAiTool.name}</>
+                : <>{activeView && <ViewIcon icon={activeView.icon} size={12} dark={dark} />} {activeView?.label}</>}
             </span>
             <span className="title-pill-arrow">{viewOpen ? '\u25B4' : '\u25BE'}</span>
           </button>
           {viewOpen && (
             <div className="title-pill-dropdown">
-              {VIEWS.map((v) => (
+              {VIEWS.filter(v => (!v.requiresChameleon || chameleonEnabled) && (!v.requiresComposite || compositeEnabled)).map((v) => (
                 <button
                   key={v.key}
                   className={`title-pill-option ${currentView === v.key ? 'active' : ''}`}
                   onClick={() => { onViewChange(v.key); setViewOpen(false); }}
                   title={v.desc}
                 >
-                  <span className="title-pill-option-icon">{v.icon}</span>
+                  <span className="title-pill-option-icon">
+                    <ViewIcon icon={v.icon} size={12} dark={dark} />
+                  </span>
                   {v.label}
                   {currentView === v.key && <span className="title-pill-check">{'\u2713'}</span>}
                 </button>
@@ -212,7 +235,9 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
                       className={`title-pill-option ${currentView === 'ai' && selectedAiTool === tool.id ? 'active' : ''}`}
                       onClick={() => { onLaunchAiTool?.(tool.id); setViewOpen(false); }}
                     >
-                      <span className="title-pill-option-icon">{tool.icon}</span>
+                      <span className="title-pill-option-icon">
+                        {tool.icon.startsWith('__') ? <ViewIcon icon={tool.icon} size={12} dark={dark} /> : tool.icon}
+                      </span>
                       {tool.name}
                       <span className={`title-pill-ai-tag ${tool.id === 'claude' ? 'paid' : 'free'}`}>
                         {tool.id === 'claude' ? 'Paid' : 'Free'}
@@ -226,29 +251,17 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
           )}
         </div>
 
-        {/* Project selector pill */}
-        {projects && projects.length > 0 && onProjectChange && (
-          <div className="title-pill-wrapper" ref={projRef} data-help-id="titlebar.project">
-            <button className="title-pill" onClick={() => { setProjOpen(!projOpen); setViewOpen(false); }}>
-              <span className="title-pill-label">Project</span>
-              <span className="title-pill-value">{projectName || 'None'}</span>
-              <span className="title-pill-arrow">{projOpen ? '\u25B4' : '\u25BE'}</span>
-            </button>
-            {projOpen && (
-              <div className="title-pill-dropdown title-pill-dropdown-projects">
-                {projects.map((p) => (
-                  <button
-                    key={p.uuid}
-                    className={`title-pill-option ${currentProject?.uuid === p.uuid ? 'active' : ''}`}
-                    onClick={() => { onProjectChange(p.uuid); setProjOpen(false); }}
-                  >
-                    {p.name}
-                    {currentProject?.uuid === p.uuid && <span className="title-pill-check">{'\u2713'}</span>}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+        {/* Login button or user pill */}
+        {(hasToken === false || tokenExpired) && onLogin && (
+          <button className="title-login-btn" onClick={onLogin} title={tokenExpired ? 'Your token has expired — click to re-authenticate' : 'Login to FABRIC'}>
+            {tokenExpired ? '\u26A0 Re-login' : 'Login'}
+          </button>
+        )}
+        {hasToken && !tokenExpired && userEmail && (
+          <span className="title-user-pill" title={userName || userEmail}>
+            <span className="title-user-avatar">{(userName || userEmail).charAt(0).toUpperCase()}</span>
+            <span className="title-user-email">{userEmail}</span>
+          </span>
         )}
 
         {/* Settings button */}

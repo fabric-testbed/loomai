@@ -158,12 +158,46 @@ def get_default_settings() -> dict:
             "nrp_api_key": "",
             "ai_server_url": "https://ai.fabric-testbed.net",
             "nrp_server_url": "https://ellm.nrp-nautilus.io",
+            "custom_providers": [],  # List of {"name": str, "base_url": str, "api_key": str}
+            "default_model": "",        # Auto-discovered or user-set default LLM
+            "default_model_source": "", # "fabric", "nrp", "custom:<name>", or ""
             "tools": {
                 "aider": True,
                 "opencode": True,
                 "crush": True,
                 "claude": True,
                 "deepagents": True,
+            },
+        },
+        "chameleon": {
+            "enabled": False,
+            "default_site": "CHI@TACC",
+            "ssh_key_file": "",  # Chameleon SSH key; falls back to FABRIC slice key if empty
+            "sites": {
+                "CHI@TACC": {
+                    "auth_url": "https://chi.tacc.chameleoncloud.org:5000/v3",
+                    "app_credential_id": "",
+                    "app_credential_secret": "",
+                    "project_id": "",
+                },
+                "CHI@UC": {
+                    "auth_url": "https://chi.uc.chameleoncloud.org:5000/v3",
+                    "app_credential_id": "",
+                    "app_credential_secret": "",
+                    "project_id": "",
+                },
+                "CHI@Edge": {
+                    "auth_url": "https://chi.edge.chameleoncloud.org:5000/v3",
+                    "app_credential_id": "",
+                    "app_credential_secret": "",
+                    "project_id": "",
+                },
+                "KVM@TACC": {
+                    "auth_url": "https://kvm.tacc.chameleoncloud.org:5000/v3",
+                    "app_credential_id": "",
+                    "app_credential_secret": "",
+                    "project_id": "",
+                },
             },
         },
         "services": {
@@ -381,6 +415,24 @@ def get_nrp_server_url() -> str:
     return _get_settings()["ai"]["nrp_server_url"]
 
 
+def get_default_model() -> str:
+    """Return ``ai.default_model``."""
+    return _get_settings()["ai"].get("default_model", "")
+
+
+def get_default_model_source() -> str:
+    """Return ``ai.default_model_source``."""
+    return _get_settings()["ai"].get("default_model_source", "")
+
+
+def set_default_model(model_id: str, source: str = "") -> None:
+    """Update ``ai.default_model`` and ``ai.default_model_source`` and persist."""
+    settings = _get_settings()
+    settings["ai"]["default_model"] = model_id
+    settings["ai"]["default_model_source"] = source
+    save_settings(settings)
+
+
 def get_jupyter_port() -> int:
     """Return ``services.jupyter_port``."""
     return _get_settings()["services"]["jupyter_port"]
@@ -394,6 +446,63 @@ def get_model_proxy_port() -> int:
 def get_ssh_command_line() -> str:
     """Return ``fabric.ssh_command_line``."""
     return _get_settings()["fabric"]["ssh_command_line"]
+
+
+# ---------------------------------------------------------------------------
+# Chameleon accessors
+# ---------------------------------------------------------------------------
+
+
+def is_chameleon_enabled() -> bool:
+    """Return ``chameleon.enabled``."""
+    return _get_settings().get("chameleon", {}).get("enabled", False)
+
+
+def is_composite_enabled() -> bool:
+    """Return ``views.composite_enabled``."""
+    return _get_settings().get("views", {}).get("composite_enabled", False)
+
+
+def get_chameleon_sites() -> dict:
+    """Return ``chameleon.sites`` dict keyed by site name."""
+    return _get_settings().get("chameleon", {}).get("sites", {})
+
+
+def get_chameleon_site_config(site: str) -> dict:
+    """Return config for a specific Chameleon site."""
+    return get_chameleon_sites().get(site, {})
+
+
+def get_chameleon_default_site() -> str:
+    """Return ``chameleon.default_site``."""
+    return _get_settings().get("chameleon", {}).get("default_site", "CHI@TACC")
+
+
+def get_chameleon_ssh_key() -> str:
+    """Return Chameleon SSH key path, falling back to FABRIC slice key.
+
+    Resolution order:
+    1. ``chameleon.ssh_key_file`` from settings (if non-empty)
+    2. Default FABRIC slice private key (via ``get_default_slice_key_path``)
+    3. Empty string (caller should handle gracefully)
+    """
+    key = _get_settings().get("chameleon", {}).get("ssh_key_file", "")
+    if key:
+        return key
+    # Fall back to default FABRIC slice private key
+    from app.fablib_manager import get_default_slice_key_path
+    try:
+        config_dir = get_config_dir()
+        priv_key, _pub_key = get_default_slice_key_path(config_dir)
+        return priv_key
+    except Exception:
+        return ""
+
+
+def is_chameleon_site_configured(site: str) -> bool:
+    """Check if a Chameleon site has credentials configured."""
+    cfg = get_chameleon_site_config(site)
+    return bool(cfg.get("app_credential_id") and cfg.get("app_credential_secret"))
 
 
 # ---------------------------------------------------------------------------

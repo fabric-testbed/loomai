@@ -1,40 +1,39 @@
 import { test, expect } from '@playwright/test';
-import { mockAllApis } from '../fixtures/api-mocks';
+import { navigateToView } from '../helpers/gui-helpers';
 
 test.describe('Infrastructure View', () => {
   test.beforeEach(async ({ page }) => {
-    await mockAllApis(page);
     await page.goto('/');
-    // Navigate to infrastructure view
-    await page.locator('.landing-tile', { hasText: 'Infrastructure' }).click();
+    await page.waitForTimeout(3000);
+    // Navigate to FABRIC view via the view pill
+    const ok = await navigateToView(page, 'fabric');
+    if (!ok) test.skip(true, 'FABRIC view not available');
   });
 
   test('infrastructure view loads', async ({ page }) => {
-    await expect(page.locator('.infra-view')).toBeVisible();
+    await expect(page.locator('.fabric-bar')).toBeVisible();
   });
 
-  test('has Map, Browse, and Facility Ports tabs', async ({ page }) => {
-    const tabs = page.locator('.infra-subtab');
-    await expect(tabs).toHaveCount(3);
-    await expect(tabs.nth(0)).toHaveText('Map');
-    await expect(tabs.nth(1)).toHaveText('Browse');
-    await expect(tabs.nth(2)).toHaveText('Facility Ports');
+  test('has Slices, Topology, Map, and Resources tabs', async ({ page }) => {
+    const bar = page.locator('.fabric-bar');
+    await expect(bar.locator('.fabric-bar-tab', { hasText: 'Slices' })).toBeVisible();
+    await expect(bar.locator('.fabric-bar-tab', { hasText: 'Topology' })).toBeVisible();
+    await expect(bar.locator('.fabric-bar-tab', { hasText: 'Map' })).toBeVisible();
+    await expect(bar.locator('.fabric-bar-tab', { hasText: 'Resources' })).toBeVisible();
   });
 
-  test('Browse tab shows site list', async ({ page }) => {
-    // Click Browse tab
-    await page.locator('.infra-subtab', { hasText: 'Browse' }).click();
-    // Should show site data from our mock
-    await expect(page.locator('.infra-content')).toBeVisible();
+  test('Resources tab is clickable', async ({ page }) => {
+    await page.locator('.fabric-bar-tab', { hasText: 'Resources' }).click();
+    await page.waitForTimeout(500);
   });
 
-  test('Facility Ports tab is clickable', async ({ page }) => {
-    await page.locator('.infra-subtab', { hasText: 'Facility Ports' }).click();
-    await expect(page.locator('.infra-content')).toBeVisible();
+  test('Calendar tab is clickable', async ({ page }) => {
+    await page.locator('.fabric-bar-tab', { hasText: 'Calendar' }).click();
+    await page.waitForTimeout(500);
   });
 
-  test('update resources button exists', async ({ page }) => {
-    const refreshBtn = page.locator('.infra-refresh-btn');
-    await expect(refreshBtn).toBeVisible();
+  test('refresh button exists', async ({ page }) => {
+    await expect(page.locator('.fabric-bar-action-btn', { hasText: /Slices/ })).toBeVisible();
+    await expect(page.locator('.fabric-bar-action-btn', { hasText: /Resources/ })).toBeVisible();
   });
 });

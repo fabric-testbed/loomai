@@ -7,20 +7,20 @@ specs), see AGENTS.md — it is loaded as context automatically.
 
 ## Tool Categories
 
-**Slice Lifecycle:** `fabric_list_slices`, `fabric_get_slice`, `fabric_create_slice`,
-`fabric_submit_slice`, `fabric_modify_slice`, `fabric_delete_slice`,
-`fabric_renew_slice`, `fabric_wait_slice`
+**Slice Lifecycle:** `list_slices`, `get_slice`, `create_slice`,
+`submit_slice`, `submit_slice`, `delete_slice`,
+`renew_slice`, `refresh_slice`
 
-**SSH & Files:** `fabric_slice_ssh`, `fabric_upload_file`, `fabric_download_file`,
-`fabric_node_info`
+**SSH & Files:** `ssh_execute`, `write_vm_file`, `read_vm_file`,
+`get_slice`
 
-**Resources:** `fabric_list_sites`, `fabric_list_hosts`, `fabric_list_images`,
-`fabric_list_components`, `fabric_find_sites`
+**Resources:** `query_sites`, `get_site_hosts`, `list_images`,
+`list_component_models`, `query_sites`
 
-**Config:** `fabric_get_config`, `fabric_set_config`, `fabric_load_rc`,
-`fabric_list_projects`, `fabric_set_project`
+**Config:** `get_config`, `update_settings`, `get_config`,
+`list_projects`, `switch_project`
 
-**Templates:** `fabric_list_templates`, `fabric_create_from_template`
+**Templates:** `list_templates`, `load_template`
 
 ## When to Use Tools vs Python Scripts
 

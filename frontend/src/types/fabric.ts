@@ -4,6 +4,7 @@ export interface SliceSummary {
   name: string;
   id: string;
   state: string;
+  lease_end?: string;
   archived?: boolean;
   has_errors?: boolean;
 }
@@ -47,6 +48,7 @@ export interface SliceNode {
 export interface IpHint {
   last_octet?: number;
   last_octet_range?: string;
+  ip?: string;
 }
 
 export interface L3Config {
@@ -114,7 +116,19 @@ export interface SliceData {
   networks: SliceNetwork[];
   facility_ports: SliceFacilityPort[];
   port_mirrors: SlicePortMirror[];
+  chameleon_nodes?: ChameleonSliceNode[];
   graph: CyGraph;
+}
+
+export interface ChameleonSliceNode {
+  name: string;
+  site: string;
+  node_type: string;
+  image_id?: string;
+  connection_type?: 'fabnet_v4' | 'l2_stitch';
+  lease_id?: string;
+  instance_id?: string;
+  status?: string;
 }
 
 export interface SiteInfo {
@@ -300,6 +314,7 @@ export interface VMTemplateVariant {
 export interface VMTemplateSummary {
   name: string;
   description: string;
+  description_short?: string;
   image: string;
   created: string;
   dir_name: string;
@@ -388,6 +403,7 @@ export interface ProjectDetails {
 export interface RecipeSummary {
   name: string;
   description: string;
+  description_short?: string;
   image_patterns: Record<string, string>;
   dir_name: string;
   starred: boolean;
@@ -459,13 +475,28 @@ export interface LoomAISettings {
     nrp_api_key: string;
     ai_server_url: string;
     nrp_server_url: string;
+    custom_providers?: Array<{name: string; base_url: string; api_key: string}>;
     tools: Record<string, boolean>;
+  };
+  chameleon?: {
+    enabled: boolean;
+    default_site?: string;
+    ssh_key_file?: string;
+    sites: Record<string, {
+      auth_url?: string;
+      app_credential_id?: string;
+      app_credential_secret?: string;
+      project_id?: string;
+    }>;
   };
   services: {
     jupyter_port: number;
     model_proxy_port: number;
   };
   tool_configs: Record<string, object>;
+  views?: {
+    composite_enabled: boolean;
+  };
 }
 
 export interface ToolConfigStatus {
@@ -485,4 +516,87 @@ export interface UserInfo {
 export interface UsersResponse {
   active_user: string | null;
   users: UserInfo[];
+}
+
+// -- Resource Calendar types ------------------------------------------------
+
+export interface CalendarSliceNode {
+  name: string;
+  cores: number;
+  ram: number;
+  disk: number;
+}
+
+export interface CalendarSlice {
+  name: string;
+  id: string;
+  state: string;
+  lease_end: string;
+  nodes: CalendarSliceNode[];
+}
+
+export interface CalendarSite {
+  name: string;
+  cores_capacity: number;
+  cores_available: number;
+  ram_capacity: number;
+  ram_available: number;
+  slices: CalendarSlice[];
+}
+
+export interface CalendarData {
+  time_range: { start: string; end: string };
+  sites: CalendarSite[];
+}
+
+export interface NextAvailableResult {
+  available_now: Array<{ site: string; cores_available: number; ram_available: number }>;
+  available_soon: Array<{
+    site: string;
+    earliest_time: string;
+    freeing_slices: Array<{ name: string; lease_end: string }>;
+    projected_cores: number;
+    projected_ram: number;
+  }>;
+  not_available: Array<{ site: string; reason: string }>;
+}
+
+export interface AlternativeResult {
+  requested: { cores?: number; ram?: number; disk?: number; gpu?: string };
+  preferred_site: string;
+  preferred_available: boolean;
+  alternatives: Array<{
+    type: 'different_site' | 'reduced_config' | 'wait';
+    site: string;
+    available_now?: boolean;
+    cores_available?: number;
+    ram_available?: number;
+    has_requested_gpu?: boolean;
+    suggestion?: string;
+    earliest_time?: string;
+    freeing_slices?: string[];
+  }>;
+}
+
+// -- Experiment types -------------------------------------------------------
+
+export interface ExperimentVariable {
+  name: string;
+  label: string;
+  type: 'string' | 'number' | 'site' | 'chameleon_site';
+  default: string | number;
+  required: boolean;
+}
+
+// -- Reservation types ------------------------------------------------------
+
+export interface Reservation {
+  id: string;
+  slice_name: string;
+  scheduled_time: string;
+  duration_hours: number;
+  auto_submit: boolean;
+  status: 'pending' | 'active' | 'completed' | 'failed';
+  created_at: string;
+  error?: string | null;
 }

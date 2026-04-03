@@ -14,10 +14,13 @@ import type { TerminalSession } from '../utils/terminalStore';
 
 interface TerminalHostProps {
   sessionId: string;
-  type: 'ssh' | 'local';
+  type: 'ssh' | 'local' | 'chameleon';
   sliceName?: string;
   nodeName?: string;
   managementIp?: string;
+  chameleonInstanceId?: string;
+  chameleonSite?: string;
+  chameleonName?: string;
 }
 
 function refitSession(session: TerminalSession) {
@@ -40,6 +43,9 @@ export default React.memo(function TerminalHost({
   sliceName,
   nodeName,
   managementIp,
+  chameleonInstanceId,
+  chameleonSite,
+  chameleonName,
 }: TerminalHostProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<TerminalSession | null>(null);
@@ -52,7 +58,12 @@ export default React.memo(function TerminalHost({
         ? { sliceName, nodeName, managementIp }
         : undefined;
 
-    const session = createTerminalSession(sessionId, type, sshInfo);
+    const chameleonInfo =
+      type === 'chameleon' && chameleonInstanceId && chameleonSite
+        ? { instanceId: chameleonInstanceId, site: chameleonSite, name: chameleonName || chameleonInstanceId }
+        : undefined;
+
+    const session = createTerminalSession(sessionId, type, sshInfo, chameleonInfo);
     sessionRef.current = session;
     const host = hostRef.current;
 

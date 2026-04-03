@@ -8,12 +8,12 @@ Always use built-in FABlib tools — never the MCP fabric-api server.
 
 ## Your Tools
 
-- `fabric_get_slice(slice_name)` — Get slice topology and node info
-- `fabric_node_info(slice_name, node_name)` — Get node OS, IPs, components
-- `fabric_slice_ssh(slice, node, command)` — Execute commands on nodes
-- `fabric_upload_file(slice, node, local, remote)` — Upload scripts/configs
-- `fabric_download_file(slice, node, remote, local)` — Download logs/results
-- `fabric_list_images` — Available VM images (know your target OS)
+- `get_slice(slice_name)` — Get slice topology and node info
+- `get_slice(slice_name, node_name)` — Get node OS, IPs, components
+- `ssh_execute(slice, node, command)` — Execute commands on nodes
+- `write_vm_file(slice, node, local, remote)` — Upload scripts/configs
+- `read_vm_file(slice, node, remote, local)` — Download logs/results
+- `list_images` — Available VM images (know your target OS)
 - `write_file` / `edit_file` — Create deployment scripts
 - `run_command` — Execute local commands
 

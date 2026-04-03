@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.http_pool import fabric_client, ai_client
-from app.user_context import get_user_storage
+from app.user_context import get_user_storage, register_user_changed_callback
 from app.tool_installer import is_tool_installed, get_tool_binary_path, get_tool_env
 
 router = APIRouter(tags=["jupyter"])
@@ -30,9 +30,36 @@ _jupyter_proc: subprocess.Popen | None = None
 
 
 def _workdir() -> str:
-    d = get_user_storage()
+    """Return the JupyterLab root directory.
+
+    Always uses the root storage dir (``/home/fabric/work``) so that
+    top-level symlinks (``my_artifacts/``, ``fabric_config/``, etc.)
+    are visible.  In multi-user mode the symlinks point to the active
+    user's directories — see ``_ensure_user_symlinks`` in config.py.
+    """
+    from app.settings_manager import get_root_storage_dir
+    d = get_root_storage_dir()
     os.makedirs(d, exist_ok=True)
     return d
+
+
+# Stop JupyterLab when the active user changes so it restarts with
+# the updated symlinks on next access.
+def _on_user_changed() -> None:
+    global _jupyter_proc
+    if _jupyter_proc and _jupyter_proc.poll() is None:
+        logger.info("User changed — stopping JupyterLab (pid=%d)", _jupyter_proc.pid)
+        try:
+            os.killpg(os.getpgid(_jupyter_proc.pid), signal.SIGTERM)
+            _jupyter_proc.wait(timeout=5)
+        except Exception:
+            try:
+                _jupyter_proc.kill()
+            except Exception:
+                pass
+    _jupyter_proc = None
+
+register_user_changed_callback(_on_user_changed)
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +117,250 @@ async def _stop_jupyter() -> None:
     _jupyter_proc = None
 
 
+def _configure_jupyter_ai(env: dict) -> None:
+    """Write Jupyter AI config with all eligible LLM providers.
+
+    Reads FABRIC, NRP, and custom provider settings to populate the
+    Jupyter AI config file so every model the user has access to appears
+    in the Jupyter AI chat sidebar dropdown.  Also sets OPENAI_* env vars
+    for the primary (FABRIC) provider.
+    """
+    from app import settings_manager
+
+    fabric_key = settings_manager.get_fabric_api_key()
+    nrp_key = settings_manager.get_nrp_api_key()
+    fabric_url = settings_manager.get_ai_server_url()
+    nrp_url = settings_manager.get_nrp_server_url()
+    default_model = settings_manager.get_default_model()
+    settings = settings_manager.load_settings()
+    custom_providers = settings.get("ai", {}).get("custom_providers", [])
+
+    if not fabric_key and not nrp_key and not custom_providers:
+        return  # No providers configured
+
+    # Set primary env vars (FABRIC takes precedence)
+    primary_key = fabric_key or nrp_key
+    primary_url = fabric_url if fabric_key else nrp_url
+    if primary_key:
+        env["OPENAI_API_KEY"] = primary_key
+        env["OPENAI_API_BASE"] = f"{primary_url}/v1"
+        env["OPENAI_BASE_URL"] = f"{primary_url}/v1"
+
+    # Build per-model fields for Jupyter AI config
+    fields: dict = {}
+
+    # Try to get cached model list (from the health check cache)
+    fabric_models: list[str] = []
+    nrp_models: list[str] = []
+    try:
+        from app.routes.ai_terminal import _model_ids, _fetch_models, _fetch_nrp_models
+        if fabric_key:
+            fabric_models = _model_ids(_fetch_models(fabric_key))
+        if nrp_key:
+            nrp_models = _model_ids(_fetch_nrp_models(nrp_key))
+    except Exception:
+        # Fall back to just the default model
+        if default_model:
+            fabric_models = [default_model]
+
+    # Register FABRIC models
+    for mid in fabric_models:
+        fields[f"openai-chat:{mid}"] = {"openai_api_base": f"{fabric_url}/v1"}
+
+    # Register NRP models with their own key
+    for mid in nrp_models:
+        entry: dict = {"openai_api_base": f"{nrp_url}/v1"}
+        if nrp_key and nrp_key != fabric_key:
+            entry["openai_api_key"] = nrp_key
+        fields[f"openai-chat:{mid}"] = entry
+
+    # Register custom provider models
+    for cp in custom_providers:
+        cp_name = cp.get("name", "custom")
+        cp_url = cp.get("base_url", "")
+        cp_key = cp.get("api_key", "")
+        if not cp_url:
+            continue
+        try:
+            from app.routes.ai_terminal import _model_ids
+            import urllib.request
+            req = urllib.request.Request(
+                f"{cp_url.rstrip('/')}/v1/models",
+                headers={"Authorization": f"Bearer {cp_key}"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                body = json.loads(resp.read())
+            for m in body.get("data", []):
+                mid = m["id"]
+                entry = {"openai_api_base": f"{cp_url.rstrip('/')}/v1"}
+                if cp_key:
+                    entry["openai_api_key"] = cp_key
+                fields[f"openai-chat:{mid}"] = entry
+        except Exception:
+            pass  # Skip unreachable providers
+
+    if not fields:
+        return
+
+    # Determine default model for Jupyter AI
+    if not default_model:
+        default_model = fabric_models[0] if fabric_models else nrp_models[0] if nrp_models else ""
+    if not default_model:
+        return
+
+    # Build API keys dict
+    api_keys: dict = {}
+    if fabric_key:
+        api_keys["OPENAI_API_KEY"] = fabric_key
+
+    # Write Jupyter AI config
+    jupyter_ai_dir = os.path.expanduser("~/.jupyter/jupyter_ai")
+    os.makedirs(jupyter_ai_dir, exist_ok=True)
+    ai_config = {
+        "model_provider_id": f"openai-chat:{default_model}",
+        "embeddings_provider_id": None,
+        "api_keys": api_keys,
+        "fields": fields,
+    }
+    config_path = os.path.join(jupyter_ai_dir, "config.json")
+    with open(config_path, "w") as f:
+        json.dump(ai_config, f, indent=2)
+
+    model_count = len(fields)
+    providers = []
+    if fabric_models:
+        providers.append(f"FABRIC({len(fabric_models)})")
+    if nrp_models:
+        providers.append(f"NRP({len(nrp_models)})")
+    if custom_providers:
+        providers.append("custom")
+    logger.info("Jupyter AI configured: %d models from %s, default=%s",
+                model_count, "+".join(providers), default_model)
+
+    # Write FABRIC-enhanced system prompt for Jupyter AI
+    _configure_jupyter_ai_prompt()
+
+
+def _configure_jupyter_ai_prompt() -> None:
+    """Patch Jupyter AI's system prompt with FABRIC context and copy skills/agents.
+
+    Writes a jupyter_server_config.py snippet that monkey-patches the
+    CHAT_SYSTEM_PROMPT constant at JupyterLab startup, giving Jupyternaut
+    deep FABRIC testbed knowledge.  Also copies shared skills and agents
+    to a location Jupyter AI users can reference.
+    """
+    # Build a compact FABRIC system prompt (subset of FABRIC_AI.md)
+    fabric_prompt_lines = [
+        "",
+        "",
+        "You are running inside a FABRIC testbed container with full access to FABlib and the loomai CLI.",
+        "You are an expert on the FABRIC testbed — a national research infrastructure for networking and distributed systems experiments.",
+        "",
+        "Key facts:",
+        "- FABRIC provides bare-metal and VM resources across 29+ sites in the US and internationally",
+        "- Users create 'slices' (virtual topologies) with nodes, networks, and specialized hardware (GPUs, FPGAs, SmartNICs)",
+        "- FABlib is the Python library for managing slices: `from fabrictestbed_extensions.fablib.fablib import FablibManager`",
+        "- The `loomai` CLI is available for slice management, SSH, file transfer, monitoring, and AI chat",
+        "- Run `loomai --help` to see all available commands",
+        "",
+        "Common FABlib patterns:",
+        "```python",
+        "from fabrictestbed_extensions.fablib.fablib import FablibManager",
+        "fablib = FablibManager()",
+        "",
+        "# List slices",
+        "slices = fablib.get_slices()",
+        "for s in slices: print(f'{s.get_name()}: {s.get_state()}')",
+        "",
+        "# Create a slice",
+        "slice = fablib.new_slice(name='my-experiment')",
+        "node = slice.add_node(name='node1', site='RENC', cores=4, ram=16, disk=100)",
+        "slice.submit()",
+        "slice.wait_ssh()",
+        "",
+        "# SSH and execute",
+        "node = slice.get_node('node1')",
+        "stdout, stderr = node.execute('hostname')",
+        "```",
+        "",
+        "Common loomai CLI commands:",
+        "- `loomai slices list` — list all slices",
+        "- `loomai ssh <slice> <node>` — SSH to a node",
+        "- `loomai exec <slice> <node> 'command'` — run a command on a node",
+        "- `loomai sites list` — list FABRIC sites with availability",
+        "- `loomai weaves list` — list available weave templates",
+        "",
+        "When writing FABRIC code, always use proper error handling and resource cleanup.",
+        "Suggest `loomai` CLI commands when users ask about managing their experiments.",
+    ]
+    fabric_context = "\n".join(fabric_prompt_lines)
+
+    # Write a startup hook that patches the system prompt
+    jupyter_dir = os.path.expanduser("~/.jupyter")
+    os.makedirs(jupyter_dir, exist_ok=True)
+    config_path = os.path.join(jupyter_dir, "jupyter_server_config.py")
+
+    patch_code = f'''
+# --- FABRIC AI context (auto-generated by Loomai) ---
+def _patch_jupyter_ai_prompt():
+    """Inject FABRIC context into Jupyter AI system prompt."""
+    try:
+        import jupyter_ai_magics.providers as _providers
+        _orig = _providers.CHAT_SYSTEM_PROMPT
+        _fabric_context = """{fabric_context}"""
+        _providers.CHAT_SYSTEM_PROMPT = _orig + _fabric_context
+    except Exception:
+        pass  # jupyter-ai not installed or API changed
+_patch_jupyter_ai_prompt()
+del _patch_jupyter_ai_prompt
+# --- end FABRIC AI context ---
+'''
+
+    # Read existing config, replace or append the FABRIC section
+    existing = ""
+    if os.path.isfile(config_path):
+        with open(config_path) as f:
+            existing = f.read()
+
+    marker_start = "# --- FABRIC AI context (auto-generated by Loomai) ---"
+    marker_end = "# --- end FABRIC AI context ---"
+    if marker_start in existing:
+        # Replace existing section
+        before = existing[:existing.index(marker_start)]
+        after_marker = existing[existing.index(marker_end) + len(marker_end):]
+        existing = before.rstrip() + "\n" + after_marker.lstrip()
+
+    with open(config_path, "w") as f:
+        f.write(existing.rstrip() + "\n" + patch_code)
+
+    # Copy skills and agents to a Jupyter-accessible location for reference
+    ai_tools_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                 "ai-tools", "shared")
+    jupyter_fabric_dir = os.path.join(jupyter_dir, "fabric_context")
+    os.makedirs(jupyter_fabric_dir, exist_ok=True)
+
+    for subdir in ("skills", "agents"):
+        src_dir = os.path.join(ai_tools_dir, subdir)
+        dst_dir = os.path.join(jupyter_fabric_dir, subdir)
+        if os.path.isdir(src_dir):
+            os.makedirs(dst_dir, exist_ok=True)
+            for fname in os.listdir(src_dir):
+                if fname.endswith(".md"):
+                    src = os.path.join(src_dir, fname)
+                    dst = os.path.join(dst_dir, fname)
+                    shutil.copy2(src, dst)
+
+    # Copy FABRIC_AI.md as reference
+    fabric_ai_path = os.path.join(ai_tools_dir, "FABRIC_AI.md")
+    if os.path.isfile(fabric_ai_path):
+        shutil.copy2(fabric_ai_path, os.path.join(jupyter_fabric_dir, "FABRIC_AI.md"))
+
+    logger.info("Jupyter AI FABRIC prompt configured, %s skills + agents copied to %s",
+                len(os.listdir(os.path.join(jupyter_fabric_dir, "skills")))
+                if os.path.isdir(os.path.join(jupyter_fabric_dir, "skills")) else 0,
+                jupyter_fabric_dir)
+
+
 @router.post("/api/jupyter/start")
 async def start_jupyter():
     """Start JupyterLab rooted at the base work directory."""
@@ -117,10 +388,26 @@ async def start_jupyter():
         "--ServerApp.allow_remote_access=True",
         "--ServerApp.base_url=/jupyter/",
         f"--ServerApp.root_dir={workdir}",
+        # Use bash for JupyterLab terminals
+        "--ServerApp.terminado_settings={'shell_command': ['/bin/bash']}",
     ]
 
     env = {**os.environ}
     env.update({k: v for k, v in get_tool_env().items() if k == "PATH"})
+
+    # Configure Jupyter AI with all eligible LLM providers (writes jupyter_server_config.py)
+    _configure_jupyter_ai(env)
+
+    # Ensure ~/.jupyter dir exists for Jupyter AI config
+    jupyter_conf_dir = os.path.join(os.path.expanduser("~"), ".jupyter")
+    os.makedirs(jupyter_conf_dir, exist_ok=True)
+
+    # Clean any stale collaboration extension configs from previous versions
+    labconfig_dir = os.path.join(jupyter_conf_dir, "labconfig")
+    if os.path.isdir(labconfig_dir):
+        page_config_path = os.path.join(labconfig_dir, "page_config.json")
+        if os.path.isfile(page_config_path):
+            os.remove(page_config_path)
 
     try:
         _jupyter_proc = subprocess.Popen(
@@ -135,7 +422,23 @@ async def start_jupyter():
         return {"error": "Failed to start JupyterLab — is jupyterlab installed?",
                 "status": "error"}
 
-    await asyncio.sleep(2)
+    # Poll until JupyterLab is actually listening (up to 30s)
+    import socket
+    for _attempt in range(30):
+        await asyncio.sleep(1)
+        # Check if process died
+        if _jupyter_proc.poll() is not None:
+            return {"error": "JupyterLab process exited unexpectedly", "status": "error"}
+        # Check if port is accepting connections
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                logger.info("JupyterLab ready on :%d after %ds", port, _attempt + 1)
+                return {"port": port, "status": "running"}
+        except (ConnectionRefusedError, OSError, socket.timeout):
+            continue
+
+    # Timed out waiting — process is running but not accepting connections yet
+    logger.warning("JupyterLab started but not responding after 30s")
     return {"port": port, "status": "running"}
 
 
@@ -148,12 +451,18 @@ async def stop_jupyter():
 
 @router.get("/api/jupyter/status")
 async def jupyter_status():
-    """Check JupyterLab server status."""
+    """Check JupyterLab server status and readiness."""
+    import socket
     running = _jupyter_proc is not None and _jupyter_proc.poll() is None
-    return {
-        "port": _jupyter_port() if running else None,
-        "status": "running" if running else "stopped",
-    }
+    if not running:
+        return {"port": None, "status": "stopped"}
+    port = _jupyter_port()
+    # Check if actually listening (not just process alive)
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return {"port": port, "status": "running", "ready": True}
+    except (ConnectionRefusedError, OSError, socket.timeout):
+        return {"port": port, "status": "starting", "ready": False}
 
 
 class ThemeRequest(BaseModel):

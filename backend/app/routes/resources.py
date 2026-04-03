@@ -8,10 +8,11 @@ import threading
 import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.fablib_manager import get_fablib
 from app.fablib_executor import run_in_fablib_pool
+from app.fabric_call_manager import get_call_manager, CacheEntry
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +21,8 @@ router = APIRouter(tags=["resources"])
 # Lock to serialize FABlib resource/topology calls (internal dicts mutate during iteration)
 _fablib_lock = threading.Lock()
 
-# Simple cache for expensive topology queries
-_cache: dict[str, tuple[float, Any]] = {}
-CACHE_TTL = 300  # 5 minutes
-
-# Flag to prevent concurrent background refresh tasks from piling up
-_bg_refresh_running = False
+# Default TTL for resource caches (5 minutes)
+_RESOURCE_TTL = 300
 
 # FABRIC site GPS coordinates (from FABRIC API)
 SITE_LOCATIONS: dict[str, dict[str, float]] = {
@@ -220,7 +217,6 @@ def _fetch_sites_sync() -> list[dict[str, Any]]:
                 "components": components,
                 "hosts_detail": hosts_detail,
             })
-    _cache["sites"] = (time.time(), sites)
     return sites
 
 
@@ -260,53 +256,33 @@ def _fetch_host_details_v1(site) -> list[dict[str, Any]]:
     return hosts_detail
 
 
+def _fetch_sites_locked() -> list[dict[str, Any]]:
+    """Fetch sites with lock held (used as call manager fetcher)."""
+    with _fablib_lock:
+        return _fetch_sites_sync()
+
+
 def get_cached_sites() -> list[dict[str, Any]]:
-    """Return cached sites data, fetching fresh if cache is stale or empty.
+    """Return cached sites data, fetching fresh if cache is empty.
 
     This is used by the site resolver so it doesn't duplicate FABlib calls.
     Safe to call from a synchronous context (e.g. inside asyncio.to_thread).
 
-    Uses stale-while-revalidate: if cache exists but is expired, returns stale
-    data immediately and triggers a background refresh so callers don't block.
+    Reads directly from the call manager cache (safe under GIL).
+    Falls back to a locked fetch if no cached data exists.
     """
-    cached = _cache.get("sites")
-    if cached:
-        if time.time() - cached[0] < CACHE_TTL:
-            return cached[1]
-        # Cache is stale — return stale data, trigger background refresh
-        _trigger_bg_site_refresh()
-        return cached[1]
-    # No cache at all — must block and fetch
-    with _fablib_lock:
-        # Double-check after acquiring lock
-        cached = _cache.get("sites")
-        if cached:
-            return cached[1]
-        return _fetch_sites_sync()
-
-
-def _trigger_bg_site_refresh():
-    """Trigger a background refresh of site data (non-blocking).
-
-    Only one background refresh runs at a time.
-    """
-    global _bg_refresh_running
-    if _bg_refresh_running:
-        return
-    _bg_refresh_running = True
-
-    def _refresh():
-        global _bg_refresh_running
-        try:
-            with _fablib_lock:
-                _fetch_sites_sync()
-            logger.debug("Background site refresh complete")
-        except Exception as e:
-            logger.warning("Background site refresh failed: %s", e)
-        finally:
-            _bg_refresh_running = False
-
-    threading.Thread(target=_refresh, daemon=True).start()
+    mgr = get_call_manager()
+    entry = mgr._cache.get("sites")
+    if entry is not None and entry.data is not None:
+        return entry.data
+    # No cache — must block and fetch
+    result = _fetch_sites_locked()
+    # Store in call manager cache for future use
+    if "sites" not in mgr._cache:
+        mgr._cache["sites"] = CacheEntry()
+    mgr._cache["sites"].data = result
+    mgr._cache["sites"].timestamp = time.time()
+    return result
 
 
 def get_fresh_sites() -> list[dict[str, Any]]:
@@ -316,75 +292,72 @@ def get_fresh_sites() -> list[dict[str, Any]]:
     current resource availability including host-level data.
     Safe to call from a synchronous context (e.g. inside asyncio.to_thread).
     """
-    with _fablib_lock:
-        return _fetch_sites_sync()
+    mgr = get_call_manager()
+    mgr.invalidate("sites")
+    result = _fetch_sites_locked()
+    # Update call manager cache
+    if "sites" not in mgr._cache:
+        mgr._cache["sites"] = CacheEntry()
+    mgr._cache["sites"].data = result
+    mgr._cache["sites"].timestamp = time.time()
+    return result
 
 
 @router.get("/sites")
-async def list_sites() -> list[dict[str, Any]]:
+async def list_sites(max_age: float = Query(_RESOURCE_TTL, ge=0)) -> list[dict[str, Any]]:
     """List all FABRIC sites with location and availability.
 
-    Uses stale-while-revalidate: returns cached data immediately even if
-    expired, and triggers background refresh so the caller doesn't block.
+    Uses stale-while-revalidate via the unified call manager.
     """
-    cached = _cache.get("sites")
-    if cached:
-        if time.time() - cached[0] < CACHE_TTL:
-            return cached[1]
-        # Cache expired — return stale, refresh in background
-        _trigger_bg_site_refresh()
-        return cached[1]
+    mgr = get_call_manager()
+    return await mgr.get(
+        "sites",
+        fetcher=_fetch_sites_locked,
+        max_age=max_age,
+        stale_while_revalidate=(max_age > 0),
+    )
 
-    # No cache at all — must fetch synchronously
-    def _do():
-        with _fablib_lock:
-            return _fetch_sites_sync()
-    try:
-        return await run_in_fablib_pool(_do)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+def _fetch_links_locked() -> list[dict[str, Any]]:
+    """Fetch backbone links with lock held (used as call manager fetcher)."""
+    import re
+    with _fablib_lock:
+        fablib = get_fablib()
+        resources = fablib.get_resources()
+        topo = resources.get_topology()
+        seen: set[tuple[str, str]] = set()
+        links = []
+        for link in list(topo.links.values()):
+            try:
+                parts = re.findall(r"port\+(\w+)-data-sw:", link.name)
+                if len(parts) < 2:
+                    continue
+                site_a, site_b = parts[0].upper(), parts[1].upper()
+                if site_a == site_b:
+                    continue
+                pair = tuple(sorted([site_a, site_b]))
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                links.append({
+                    "site_a": pair[0],
+                    "site_b": pair[1],
+                })
+            except Exception:
+                continue
+        return links
 
 
 @router.get("/links")
-async def list_links() -> list[dict[str, Any]]:
+async def list_links(max_age: float = Query(_RESOURCE_TTL, ge=0)) -> list[dict[str, Any]]:
     """List unique FABRIC backbone links between sites."""
-    import re
-
-    cached = _cache.get("links")
-    if cached and time.time() - cached[0] < CACHE_TTL:
-        return cached[1]
-
-    def _do():
-        with _fablib_lock:
-            fablib = get_fablib()
-            resources = fablib.get_resources()
-            topo = resources.get_topology()
-            seen: set[tuple[str, str]] = set()
-            links = []
-            for link in list(topo.links.values()):
-                try:
-                    parts = re.findall(r"port\+(\w+)-data-sw:", link.name)
-                    if len(parts) < 2:
-                        continue
-                    site_a, site_b = parts[0].upper(), parts[1].upper()
-                    if site_a == site_b:
-                        continue
-                    pair = tuple(sorted([site_a, site_b]))
-                    if pair in seen:
-                        continue
-                    seen.add(pair)
-                    links.append({
-                        "site_a": pair[0],
-                        "site_b": pair[1],
-                    })
-                except Exception:
-                    continue
-            _cache["links"] = (time.time(), links)
-            return links
-    try:
-        return await run_in_fablib_pool(_do)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    mgr = get_call_manager()
+    return await mgr.get(
+        "links",
+        fetcher=_fetch_links_locked,
+        max_age=max_age,
+        stale_while_revalidate=(max_age > 0),
+    )
 
 
 COMPONENT_QUERY_MODELS = [
@@ -404,10 +377,11 @@ COMPONENT_QUERY_MODELS = [
 @router.get("/sites/{site_name}/hosts")
 async def list_site_hosts(site_name: str) -> list[dict[str, Any]]:
     """Get per-host resource availability for a site."""
-    # Try cached data first
-    cached = _cache.get("sites")
-    if cached and time.time() - cached[0] < CACHE_TTL:
-        for site in cached[1]:
+    # Try cached data first (from call manager)
+    mgr = get_call_manager()
+    entry = mgr._cache.get("sites")
+    if entry is not None and entry.data is not None:
+        for site in entry.data:
             if site.get("name") == site_name:
                 return site.get("hosts_detail", [])
 
@@ -552,79 +526,76 @@ async def get_resources() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _fetch_facility_ports_locked() -> list[dict[str, Any]]:
+    """Fetch facility ports with lock held (used as call manager fetcher)."""
+    with _fablib_lock:
+        fablib = get_fablib()
+        fp_obj = fablib.get_facility_ports()
+        raw = getattr(fp_obj, '_facility_ports_data', None)
+        if raw is None:
+            raw = fp_obj.list_facility_ports(output='list') or []
+
+        # Try to load FIM topology for richer data (device_name, region)
+        fim_lookup: dict[str, dict[str, Any]] = {}
+        try:
+            fp_obj._ensure_topology_loaded()
+            topo = fp_obj.get_topology()
+            if topo and hasattr(topo, 'facilities'):
+                for fp_name, fp_node in topo.facilities.items():
+                    for iface in fp_node.interface_list:
+                        labels = iface.labels
+                        if labels:
+                            fim_lookup[fp_name] = {
+                                "device_name": labels.device_name or "",
+                                "region": labels.region or "",
+                                "local_name": labels.local_name or "",
+                            }
+                        break
+        except Exception:
+            pass
+
+        result = []
+        for fp in raw:
+            fp_name = fp.get("name", "")
+            switch = fp.get("switch", "")
+            local_name = switch.split(":")[-1] if ":" in switch else switch
+            vlans_raw = fp.get("vlans", "")
+            if isinstance(vlans_raw, list):
+                vlan_range = vlans_raw
+            elif isinstance(vlans_raw, str) and vlans_raw.startswith("["):
+                try:
+                    vlan_range = ast.literal_eval(vlans_raw)
+                except Exception:
+                    vlan_range = [vlans_raw]
+            else:
+                vlan_range = [vlans_raw] if vlans_raw else []
+
+            fim = fim_lookup.get(fp_name, {})
+            result.append({
+                "name": fp_name,
+                "site": fp.get("site", ""),
+                "interfaces": [{
+                    "name": fp.get("port", ""),
+                    "vlan_range": vlan_range,
+                    "local_name": fim.get("local_name") or local_name,
+                    "device_name": fim.get("device_name", ""),
+                    "allocated_vlans": [],
+                    "region": fim.get("region", ""),
+                }],
+            })
+        return result
+
+
 @router.get("/facility-ports")
-async def list_facility_ports() -> list[dict[str, Any]]:
+async def list_facility_ports(max_age: float = Query(_RESOURCE_TTL, ge=0)) -> list[dict[str, Any]]:
     """List available FABRIC facility ports with VLAN availability."""
-    cached = _cache.get("facility_ports")
-    if cached and time.time() - cached[0] < CACHE_TTL:
-        return cached[1]
-
-    def _do():
-        with _fablib_lock:
-            fablib = get_fablib()
-            fp_obj = fablib.get_facility_ports()
-            # ResourcesV2 stores facility ports as a list of dicts in _facility_ports_data
-            raw = getattr(fp_obj, '_facility_ports_data', None)
-            if raw is None:
-                raw = fp_obj.list_facility_ports(output='list') or []
-
-            # Try to load FIM topology for richer data (device_name, region)
-            fim_lookup: dict[str, dict[str, Any]] = {}
-            try:
-                fp_obj._ensure_topology_loaded()
-                topo = fp_obj.get_topology()
-                if topo and hasattr(topo, 'facilities'):
-                    for fp_name, fp_node in topo.facilities.items():
-                        for iface in fp_node.interface_list:
-                            labels = iface.labels
-                            if labels:
-                                fim_lookup[fp_name] = {
-                                    "device_name": labels.device_name or "",
-                                    "region": labels.region or "",
-                                    "local_name": labels.local_name or "",
-                                }
-                            break
-            except Exception:
-                pass
-
-            result = []
-            for fp in raw:
-                fp_name = fp.get("name", "")
-                # Extract local_name from the switch field (e.g. "port+cern-data-sw:HundredGigE0/0/0/8")
-                switch = fp.get("switch", "")
-                local_name = switch.split(":")[-1] if ":" in switch else switch
-                # Parse vlans string (e.g. "['800-1000']") into a list
-                vlans_raw = fp.get("vlans", "")
-                if isinstance(vlans_raw, list):
-                    vlan_range = vlans_raw
-                elif isinstance(vlans_raw, str) and vlans_raw.startswith("["):
-                    try:
-                        vlan_range = ast.literal_eval(vlans_raw)
-                    except Exception:
-                        vlan_range = [vlans_raw]
-                else:
-                    vlan_range = [vlans_raw] if vlans_raw else []
-
-                # Enrich with FIM topology data
-                fim = fim_lookup.get(fp_name, {})
-                result.append({
-                    "name": fp_name,
-                    "site": fp.get("site", ""),
-                    "interfaces": [{
-                        "name": fp.get("port", ""),
-                        "vlan_range": vlan_range,
-                        "local_name": fim.get("local_name") or local_name,
-                        "device_name": fim.get("device_name", ""),
-                        "allocated_vlans": [],
-                        "region": fim.get("region", ""),
-                    }],
-                })
-            _cache["facility_ports"] = (time.time(), result)
-            return result
-    try:
-        return await run_in_fablib_pool(_do)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    mgr = get_call_manager()
+    return await mgr.get(
+        "facility_ports",
+        fetcher=_fetch_facility_ports_locked,
+        max_age=max_age,
+        stale_while_revalidate=(max_age > 0),
+    )
 
 
 @router.get("/images")

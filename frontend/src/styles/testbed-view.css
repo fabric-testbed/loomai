@@ -1,0 +1,178 @@
+/* Shared Testbed View Shell — used by FABRIC and Chameleon views */
+
+.testbed-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--fabric-panel-bg, #fff);
+}
+
+/* Header: logo + name + tabs + toolbar + refresh */
+.testbed-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--fabric-border);
+  flex-shrink: 0;
+}
+
+.testbed-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.testbed-header-logo {
+  height: 18px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.testbed-header-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--testbed-primary);
+  white-space: nowrap;
+  margin: 0;
+}
+
+/* Tab bar */
+.testbed-tabs {
+  display: flex;
+  gap: 0;
+  flex: 1;
+  overflow-x: auto;
+  align-items: center;
+}
+
+.testbed-tab {
+  padding: 5px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.testbed-tab:hover {
+  color: var(--fabric-text);
+  background: var(--fabric-bg-tint);
+}
+
+.testbed-tab.active {
+  color: var(--testbed-primary);
+  border-bottom-color: var(--testbed-primary);
+}
+
+/* Tab badge (count indicator) */
+.testbed-tab-badge {
+  display: inline-block;
+  background: color-mix(in srgb, var(--testbed-primary) 20%, transparent);
+  color: var(--testbed-primary);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  margin-left: 4px;
+  line-height: 1.4;
+}
+
+.testbed-tab.active .testbed-tab-badge {
+  background: color-mix(in srgb, var(--testbed-primary) 30%, transparent);
+}
+
+/* Toolbar area — sits between tabs and refresh */
+.testbed-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Content area */
+.testbed-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Lease selector dropdown (Chameleon-specific) */
+.testbed-lease-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.testbed-lease-selector select {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-bg, #fff);
+  color: var(--fabric-text);
+  cursor: pointer;
+  max-width: 220px;
+  text-overflow: ellipsis;
+}
+
+.testbed-lease-selector select:focus {
+  outline: none;
+  border-color: var(--testbed-primary);
+}
+
+/* Light-mode / dark-mode logo toggles */
+.testbed-logo-dark-mode { display: none; }
+[data-theme="dark"] .testbed-logo-light-mode { display: none; }
+[data-theme="dark"] .testbed-logo-dark-mode { display: inline; }
+
+/* ===== Dark mode ===== */
+[data-theme="dark"] .testbed-shell {
+  background: var(--fabric-panel-bg, #1a1a2e);
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .testbed-header {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] .testbed-tab {
+  color: #999;
+}
+
+[data-theme="dark"] .testbed-tab:hover {
+  color: #ccc;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+[data-theme="dark"] .testbed-tab.active {
+  color: var(--testbed-primary);
+  border-bottom-color: var(--testbed-primary);
+}
+
+[data-theme="dark"] .testbed-tab-badge {
+  background: color-mix(in srgb, var(--testbed-primary) 25%, transparent);
+}
+
+[data-theme="dark"] .testbed-lease-selector select {
+  background: #16213e;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #e0e0e0;
+}
+
+[data-theme="dark"] .testbed-lease-selector select:focus {
+  border-color: var(--testbed-primary);
+}

@@ -196,6 +196,77 @@ function buildStylesheet(dark: boolean): any[] {
     { selector: ':selected', style: {
       'overlay-color': selectOverlay, 'overlay-opacity': 0.2, 'overlay-padding': 6,
     }},
+    // --- Chameleon Cloud nodes ---
+    { selector: '.chameleon-cluster', style: {
+      'shape': 'round-rectangle',
+      'background-color': dark ? '#3a2008' : '#fff3e0',
+      'border-color': '#ff8542',
+      'border-width': 2,
+      'border-style': 'dashed',
+      'label': 'data(label)',
+      'text-valign': 'top',
+      'text-halign': 'center',
+      'font-size': 11,
+      'color': '#ff8542',
+      'padding': '16px',
+      'font-family': 'Montserrat, sans-serif',
+    }},
+    { selector: '.chameleon-instance', style: {
+      'shape': 'round-rectangle',
+      'width': 160,
+      'height': 50,
+      'background-color': dark ? 'data(bg_color_dark)' : 'data(bg_color)',
+      'border-color': dark ? 'data(border_color_dark)' : 'data(border_color)',
+      'border-width': 2,
+      'label': 'data(label)',
+      'text-wrap': 'wrap',
+      'text-valign': 'center',
+      'text-halign': 'center',
+      'font-size': 10,
+      'color': vmText,
+      'font-family': 'Montserrat, sans-serif',
+    }},
+    { selector: '.edge-cross-testbed', style: {
+      'line-color': '#ff8542',
+      'target-arrow-color': '#ff8542',
+      'target-arrow-shape': 'triangle',
+      'width': 2,
+      'line-style': 'dashed',
+      'label': 'data(label)',
+      'font-size': 9,
+      'text-background-color': edgeLabelBg,
+      'text-background-opacity': 0.9,
+      'text-background-padding': '2px',
+      'color': '#ff8542',
+    }},
+    // --- Composite member bounding boxes ---
+    { selector: '.composite-member', style: {
+      'shape': 'round-rectangle',
+      'border-width': 2,
+      'border-style': 'dashed',
+      'label': 'data(label)',
+      'text-valign': 'top',
+      'text-halign': 'center',
+      'font-size': 12,
+      'font-weight': 'bold' as any,
+      'padding': '20px',
+      'font-family': 'Montserrat, sans-serif',
+    }},
+    { selector: '.composite-member-fabric', style: {
+      'background-color': dark ? '#0d2135' : '#e8f4fc',
+      'border-color': '#5798bc',
+      'color': '#5798bc',
+    }},
+    { selector: '.composite-member-chameleon', style: {
+      'background-color': dark ? '#0d2b12' : '#e8fce8',
+      'border-color': '#39B54A',
+      'color': '#39B54A',
+    }},
+    { selector: '.composite-shared-network', style: {
+      'border-color': '#27aae1',
+      'border-width': 3,
+      'color': '#27aae1',
+    }},
   ];
 }
 
@@ -251,7 +322,7 @@ const LAYOUTS: Record<string, any> = {
 };
 
 export interface ContextMenuAction {
-  type: 'terminal' | 'delete' | 'delete-slice' | 'delete-component' | 'delete-facility-port' | 'save-vm-template' | 'apply-recipe' | 'open-client' | 'open-boot-log';
+  type: 'terminal' | 'delete' | 'delete-slice' | 'delete-component' | 'delete-facility-port' | 'save-vm-template' | 'apply-recipe' | 'open-client' | 'open-boot-log' | 'run-boot-config' | 'run-boot-config-node' | 'chi-ssh' | 'chi-reboot' | 'chi-stop' | 'chi-start' | 'chi-delete' | 'chi-apply-recipe' | 'chi-assign-fip' | 'chi-run-boot-config' | 'chi-open-web' | 'chi-save-template';
   elements: Record<string, string>[];
   sliceNames?: string[];
   nodeName?: string;
@@ -259,6 +330,9 @@ export interface ContextMenuAction {
   fpName?: string;
   recipeName?: string;
   port?: number;
+  instanceId?: string;
+  instanceSite?: string;
+  instanceName?: string;
 }
 
 interface CytoscapeGraphProps {
@@ -268,6 +342,10 @@ interface CytoscapeGraphProps {
   sliceData: SliceData | null;
   recipes?: RecipeSummary[];
   bootNodeStatus?: Record<string, 'pending' | 'running' | 'done' | 'error'>;
+  /** Optional Chameleon graph elements to merge (from /api/chameleon/graph) */
+  chameleonGraph?: { nodes: any[]; edges: any[] } | null;
+  /** When true, update element data in-place without re-running layout */
+  preserveLayout?: boolean;
   onLayoutChange: (layout: string) => void;
   onNodeClick: (data: Record<string, string>) => void;
   onEdgeClick: (data: Record<string, string>) => void;
@@ -294,9 +372,13 @@ export default React.memo(function CytoscapeGraph({
   onEdgeClick,
   onBackgroundClick,
   onContextAction,
+  chameleonGraph,
+  preserveLayout,
 }: CytoscapeGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
+  const prevGraphRef = useRef<CyGraph | null>(null);
+  const prevLayoutRef = useRef<string>(layout);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [showComponents, setShowComponents] = useState(true);
   const showComponentsRef = useRef(showComponents);
@@ -350,7 +432,7 @@ export default React.memo(function CytoscapeGraph({
     cyRef.current = cy;
 
     // Keep component badges attached to their parent VM during drag
-    cy.on('drag', '.vm', (e: any) => {
+    cy.on('drag', '.vm, .chameleon-instance', (e: any) => {
       const vm = e.target;
       const vmId = vm.id();
       const vmPos = vm.position();
@@ -422,14 +504,28 @@ export default React.memo(function CytoscapeGraph({
       if (e.target === cy) onBackgroundClick();
     };
 
+    const handleDblClick = (e: EventObject) => {
+      const data = e.target.data();
+      // Chameleon: double-click ACTIVE instance → SSH
+      if (data.element_type === 'chameleon_instance' && data.status === 'ACTIVE' && data.instance_id && (data.floating_ip || data.ip)) {
+        onContextActionRef.current({ type: 'chi-ssh', elements: [], instanceId: data.instance_id, instanceSite: data.site, instanceName: data.name || data.label });
+      }
+      // FABRIC: double-click VM with IP → terminal
+      else if (data.element_type === 'node' && data.management_ip) {
+        onContextActionRef.current({ type: 'terminal', elements: [data] });
+      }
+    };
+
     cy.on('tap', 'node', handleNodeClick);
     cy.on('tap', 'edge', handleEdgeClick);
     cy.on('tap', handleBgClick);
+    cy.on('dbltap', 'node', handleDblClick);
 
     return () => {
       cy.off('tap', 'node', handleNodeClick);
       cy.off('tap', 'edge', handleEdgeClick);
       cy.off('tap', handleBgClick);
+      cy.off('dbltap', 'node', handleDblClick);
     };
   }, [onNodeClick, onEdgeClick, onBackgroundClick]);
 
@@ -456,6 +552,10 @@ export default React.memo(function CytoscapeGraph({
       const near = r.findNearestElement(pos[0], pos[1], true, false);
 
       if (!near || near.isEdge()) return;
+
+      // Container/cluster nodes don't get a context menu
+      if (near.hasClass('chameleon-cluster')) return;
+      if (near.hasClass('composite-member')) return;
 
       // Right-clicked a slice compound node — show slice-level menu
       if (near.hasClass('slice')) {
@@ -500,43 +600,112 @@ export default React.memo(function CytoscapeGraph({
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    if (!graph) { cy.elements().remove(); return; }
+    if (!graph && !chameleonGraph) { cy.elements().remove(); prevGraphRef.current = null; return; }
 
-    cy.elements().remove();
-
-    const elements: cytoscape.ElementDefinition[] = [
-      ...graph.nodes.map((n) => ({
-        group: 'nodes' as const,
-        data: n.data,
-        classes: n.classes,
-      })),
-      ...graph.edges.map((e) => ({
-        group: 'edges' as const,
-        data: e.data,
-        classes: e.classes,
-      })),
+    // Build the full element set (FABRIC + optional Chameleon)
+    const allNodes = [
+      ...(graph?.nodes ?? []),
+      ...(chameleonGraph?.nodes ?? []),
+    ];
+    const allEdges = [
+      ...(graph?.edges ?? []),
+      ...(chameleonGraph?.edges ?? []),
     ];
 
-    cy.add(elements);
+    // Determine whether we can do a stable in-place update:
+    // preserveLayout is requested AND the graph already has elements AND layout algorithm hasn't changed
+    const layoutChanged = layout !== prevLayoutRef.current;
+    prevLayoutRef.current = layout;
+    const canPreserve = preserveLayout && !layoutChanged && prevGraphRef.current && cy.elements().length > 0;
 
-    // Apply component visibility before layout
-    applyComponentVisibility(cy, showComponentsRef.current);
-    // Apply slice box visibility before layout
-    applySliceBoxVisibility(cy, showSliceBoxRef.current);
-    // Apply fabnet internet visibility before layout
-    applyFabnetInternetVisibility(cy, showFabnetInternetRef.current);
+    if (canPreserve) {
+      // --- Stable update: diff data in-place without re-running layout ---
+      cy.startBatch();
 
-    // Run layout on non-component elements; then position components at VM edges
-    const layoutElements = cy.elements().not('.component');
-    const lay = layoutElements.layout(LAYOUTS[layout] || LAYOUTS.dagre);
-    lay.on('layoutstop', () => {
+      const newNodeIds = new Set(allNodes.map(n => n.data.id));
+      const newEdgeIds = new Set(allEdges.map(e => e.data.id));
+
+      // Update existing nodes or add new ones
+      const addedElements: cytoscape.ElementDefinition[] = [];
+      for (const n of allNodes) {
+        const existing = cy.getElementById(n.data.id);
+        if (existing.length > 0) {
+          // Update data attributes (state colors, labels, etc.) without moving
+          existing.data(n.data);
+          // Update visual classes (preserves position)
+          if (n.classes) existing.classes(n.classes);
+        } else {
+          addedElements.push({ group: 'nodes' as const, data: n.data, classes: n.classes });
+        }
+      }
+
+      // Update existing edges or add new ones
+      for (const e of allEdges) {
+        const existing = cy.getElementById(e.data.id);
+        if (existing.length > 0) {
+          existing.data(e.data);
+          if (e.classes) existing.classes(e.classes);
+        } else {
+          addedElements.push({ group: 'edges' as const, data: e.data, classes: e.classes });
+        }
+      }
+
+      // Remove elements that no longer exist in the new graph
+      cy.nodes().forEach(n => {
+        if (!newNodeIds.has(n.id())) n.remove();
+      });
+      cy.edges().forEach(e => {
+        if (!newEdgeIds.has(e.id())) e.remove();
+      });
+
+      // Add genuinely new elements
+      if (addedElements.length > 0) {
+        cy.add(addedElements);
+      }
+
+      cy.endBatch();
+
+      // Re-apply visibility toggles
+      applyComponentVisibility(cy, showComponentsRef.current);
+      applySliceBoxVisibility(cy, showSliceBoxRef.current);
+      applyFabnetInternetVisibility(cy, showFabnetInternetRef.current);
+
+      // Position components at VM edges (they may have changed)
       if (showComponentsRef.current) {
         positionComponentsAtVmEdge(cy);
       }
-      setTimeout(() => cy.fit(undefined, 30), 100);
-    });
-    lay.run();
-  }, [graph, layout]);
+    } else {
+      // --- Full rebuild: remove everything and re-layout ---
+      cy.elements().remove();
+
+      const elements: cytoscape.ElementDefinition[] = [
+        ...allNodes.map((n) => ({ group: 'nodes' as const, data: n.data, classes: n.classes })),
+        ...allEdges.map((e) => ({ group: 'edges' as const, data: e.data, classes: e.classes })),
+      ];
+
+      cy.add(elements);
+
+      // Apply component visibility before layout
+      applyComponentVisibility(cy, showComponentsRef.current);
+      // Apply slice box visibility before layout
+      applySliceBoxVisibility(cy, showSliceBoxRef.current);
+      // Apply fabnet internet visibility before layout
+      applyFabnetInternetVisibility(cy, showFabnetInternetRef.current);
+
+      // Run layout on non-component elements; then position components at VM edges
+      const layoutElements = cy.elements().not('.component');
+      const lay = layoutElements.layout(LAYOUTS[layout] || LAYOUTS.dagre);
+      lay.on('layoutstop', () => {
+        if (showComponentsRef.current) {
+          positionComponentsAtVmEdge(cy);
+        }
+        setTimeout(() => cy.fit(undefined, 30), 100);
+      });
+      lay.run();
+    }
+
+    prevGraphRef.current = graph;
+  }, [graph, chameleonGraph, layout, preserveLayout]);
 
   // Apply boot config status classes to VM nodes
   useEffect(() => {
@@ -625,6 +794,12 @@ export default React.memo(function CytoscapeGraph({
     ? (sliceData?.nodes.find((n) => n.name === singleVm.name)?.components ?? [])
     : [];
 
+  // Chameleon instance detection
+  const chameleonInstances = (menu?.selected || []).filter(
+    (el: any) => el.element_type === 'chameleon_instance' && el.status && el.status !== 'DRAFT' && el.instance_id
+  );
+  const singleChi = chameleonInstances.length === 1 ? chameleonInstances[0] : null;
+
   const handleTerminal = () => {
     if (vmsWithIp.length > 0) {
       onContextAction({ type: 'terminal', elements: vmsWithIp });
@@ -700,6 +875,12 @@ export default React.memo(function CytoscapeGraph({
           }}>
             {'\u2630'} Open Build Log
           </button>
+          <button className="graph-context-menu-item" onClick={() => {
+            onContextActionRef.current({ type: 'run-boot-config', sliceNames: [menu.sliceName!], elements: [] });
+            setMenu(null);
+          }}>
+            ↻ Run Post-Boot Config
+          </button>
         </div>
       )}
       {menu && !menu.sliceName && (
@@ -717,6 +898,14 @@ export default React.memo(function CytoscapeGraph({
           {vmsWithIp.length > 0 && (
             <button className="graph-context-menu-item" onClick={handleTerminal}>
               ▸ Open Terminal{vmsWithIp.length > 1 ? ` (${vmsWithIp.length})` : ''}
+            </button>
+          )}
+          {vmsWithIp.length === 1 && (
+            <button className="graph-context-menu-item" onClick={() => {
+              onContextActionRef.current({ type: 'run-boot-config-node', elements: vmsWithIp, nodeName: vmsWithIp[0].name });
+              setMenu(null);
+            }}>
+              ↻ Run Boot Config
             </button>
           )}
           {singleVm && singleVm.management_ip && (
@@ -800,6 +989,116 @@ export default React.memo(function CytoscapeGraph({
             <button className="graph-context-menu-item danger" onClick={handleDelete}>
               ✕ Delete{deletable.length > 1 ? ` (${deletable.length})` : ''}
             </button>
+          )}
+          {/* Chameleon instance context menu items */}
+          {singleChi && (singleChi.status === 'ACTIVE' && (singleChi.floating_ip || singleChi.ip)) && (
+            <button className={`graph-context-menu-item${!singleChi.ssh_ready ? ' graph-context-menu-dim' : ''}`} onClick={() => {
+              onContextAction({ type: 'chi-ssh', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
+              setMenu(null);
+            }}>
+              {singleChi.ssh_ready ? '▸ SSH Terminal' : '▸ SSH Terminal (Connecting...)'}
+            </button>
+          )}
+          {/* Open in Web Apps — floating IP instances */}
+          {singleChi && singleChi.status === 'ACTIVE' && singleChi.floating_ip && (
+            <button className="graph-context-menu-item" onClick={() => {
+              onContextAction({ type: 'chi-open-web', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
+              setMenu(null);
+            }}>
+              ▸ Open in Web Apps
+            </button>
+          )}
+          {/* Run Boot Config */}
+          {singleChi && singleChi.status === 'ACTIVE' && (singleChi.floating_ip || singleChi.ip) && (
+            <button className="graph-context-menu-item" onClick={() => {
+              onContextAction({ type: 'chi-run-boot-config', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
+              setMenu(null);
+            }}>
+              ↻ Run Boot Config
+            </button>
+          )}
+          {/* Assign Floating IP — for instances without one */}
+          {singleChi && singleChi.status === 'ACTIVE' && !singleChi.floating_ip && (
+            <button className="graph-context-menu-item" onClick={() => {
+              onContextAction({ type: 'chi-assign-fip', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
+              setMenu(null);
+            }}>
+              + Assign Floating IP
+            </button>
+          )}
+          {/* Recipes — match by image */}
+          {singleChi && singleChi.status === 'ACTIVE' && (singleChi.floating_ip || singleChi.ip) && recipes && recipes.length > 0 && (() => {
+            const chiImage = singleChi.image || '';
+            const compatible = recipes.filter((r) => {
+              if (!r.starred) return false;
+              const patterns = r.image_patterns || {};
+              return Object.keys(patterns).some((key) =>
+                key === '*' || chiImage.toLowerCase().includes(key.toLowerCase())
+              );
+            });
+            if (compatible.length === 0) return null;
+            return (
+              <>
+                <div className="graph-context-menu-sep" />
+                <div className="graph-context-menu-label">Recipes</div>
+                {compatible.map((r) => (
+                  <button
+                    key={r.dir_name}
+                    className="graph-context-menu-item"
+                    onClick={() => {
+                      onContextAction({ type: 'chi-apply-recipe', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label, recipeName: r.dir_name });
+                      setMenu(null);
+                    }}
+                  >
+                    ▸ {r.name}
+                  </button>
+                ))}
+              </>
+            );
+          })()}
+          {singleChi && (
+            <button className="graph-context-menu-item" onClick={() => {
+              onContextAction({ type: 'chi-save-template', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
+              setMenu(null);
+            }}>
+              ⚙ Save as VM Template
+            </button>
+          )}
+          <div className="graph-context-menu-sep" />
+          {singleChi && (singleChi.status === 'ACTIVE' || singleChi.status === 'SHUTOFF') && (
+            <button className="graph-context-menu-item" onClick={() => {
+              onContextAction({ type: 'chi-reboot', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
+              setMenu(null);
+            }}>
+              ↻ Reboot
+            </button>
+          )}
+          {singleChi && singleChi.status === 'ACTIVE' && (
+            <button className="graph-context-menu-item" onClick={() => {
+              onContextAction({ type: 'chi-stop', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
+              setMenu(null);
+            }}>
+              ◼ Stop
+            </button>
+          )}
+          {singleChi && singleChi.status === 'SHUTOFF' && (
+            <button className="graph-context-menu-item" onClick={() => {
+              onContextAction({ type: 'chi-start', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
+              setMenu(null);
+            }}>
+              ▶ Start
+            </button>
+          )}
+          {singleChi && (
+            <>
+              <div className="graph-context-menu-sep" />
+              <button className="graph-context-menu-item danger" onClick={() => {
+                onContextAction({ type: 'chi-delete', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
+                setMenu(null);
+              }}>
+                ✕ Delete Instance
+              </button>
+            </>
           )}
         </div>
       )}

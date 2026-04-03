@@ -50,8 +50,9 @@ export function hasTerminalSession(id: string): boolean {
 
 export function createTerminalSession(
   id: string,
-  type: 'ssh' | 'local',
+  type: 'ssh' | 'local' | 'chameleon',
   sshInfo?: { sliceName: string; nodeName: string; managementIp: string },
+  chameleonInfo?: { instanceId: string; site: string; name: string },
 ): TerminalSession {
   const existing = sessions.get(id);
   if (existing) return existing;
@@ -73,7 +74,14 @@ export function createTerminalSession(
   term.open(containerEl);
 
   let wsUrl: string;
-  if (type === 'ssh' && sshInfo) {
+  if (type === 'chameleon' && chameleonInfo) {
+    term.writeln(
+      `\x1b[32m[chameleon] Opening SSH to ${chameleonInfo.name} (${chameleonInfo.site})...\x1b[0m`,
+    );
+    wsUrl = buildWsUrl(
+      `/ws/terminal/chameleon/${encodeURIComponent(chameleonInfo.instanceId)}?site=${encodeURIComponent(chameleonInfo.site)}`,
+    );
+  } else if (type === 'ssh' && sshInfo) {
     term.writeln(
       `\x1b[36m[terminal] Opening session to ${sshInfo.nodeName} (${sshInfo.managementIp})...\x1b[0m`,
     );

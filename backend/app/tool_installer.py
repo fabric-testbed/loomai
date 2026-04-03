@@ -68,8 +68,8 @@ TOOL_REGISTRY: dict[str, dict] = {
     },
     "jupyterlab": {
         "type": "pip",
-        "packages": ["jupyterlab", "ipykernel", "pandas", "matplotlib", "numpy",
-                     "fabrictestbed-extensions", "plotly", "scipy", "seaborn",
+        "packages": ["jupyterlab", "jupyter-ai", "ipykernel", "pandas", "matplotlib",
+                     "numpy", "fabrictestbed-extensions", "plotly", "scipy", "seaborn",
                      "ipywidgets", "requests"],
         "binary": "jupyter",
         "display_name": "JupyterLab",
@@ -342,6 +342,9 @@ def _setup_jupyter_config() -> None:
     else:
         with open(config_path, "w") as f:
             f.write(config_line)
+
+    # Jupyter AI config is written at JupyterLab startup (jupyter.py) with
+    # fresh model data — no need to write it here at install time.
 
     # Register kernel spec pointing to venv Python explicitly
     kernel_dir = os.path.join(_VENV_DIR, "share", "jupyter", "kernels", "python3")

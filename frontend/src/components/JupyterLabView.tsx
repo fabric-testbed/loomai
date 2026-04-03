@@ -56,11 +56,37 @@ export default function JupyterLabView({ initialPath, dark }: JupyterLabViewProp
     }
   }, []);
 
+  // Poll until JupyterLab is ready (handles "starting" state)
+  const pollUntilReady = useCallback(async () => {
+    setStatus('loading');
+    for (let i = 0; i < 30; i++) {
+      try {
+        const res = await api.getJupyterStatus();
+        if (res.status === 'running' && (res as any).ready !== false && res.port) {
+          setPort(res.port);
+          setStatus('running');
+          return;
+        }
+      } catch { /* keep polling */ }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    // Timed out — try loading anyway (it may work)
+    try {
+      const res = await api.getJupyterStatus();
+      if (res.port) { setPort(res.port); setStatus('running'); return; }
+    } catch { /* ignore */ }
+    setErrorMsg('JupyterLab is taking longer than expected to start');
+    setStatus('error');
+  }, []);
+
   useEffect(() => {
     api.getJupyterStatus().then((res) => {
-      if (res.status === 'running' && res.port) {
+      if (res.status === 'running' && (res as any).ready !== false && res.port) {
         setPort(res.port);
         setStatus('running');
+      } else if (res.status === 'starting') {
+        // Process is alive but not listening yet — poll
+        pollUntilReady();
       } else {
         launch();
       }

@@ -57,6 +57,9 @@ export default React.memo(function DetailPanel({
     site: 'Site',
     infra_link: 'Link',
     'port-mirror': 'Port Mirror',
+    chameleon_instance: 'Chameleon Instance',
+    chameleon_site: 'Chameleon Site',
+    chameleon_node: 'Chameleon Node',
   };
 
   const hasTabs = elementType === 'site' || elementType === 'infra_link';
@@ -97,6 +100,33 @@ export default React.memo(function DetailPanel({
             onRefreshMetrics={onRefreshMetrics}
             metricsLoading={metricsLoading}
           />
+        )}
+        {elementType === 'chameleon_instance' && (
+          <PropTable rows={[
+            ['Name', selectedElement.name],
+            ['Site', selectedElement.site],
+            ['Status', selectedElement.status],
+            ['Image', selectedElement.image || '\u2014'],
+            ['IP Addresses', selectedElement.ip || '\u2014'],
+            ['Floating IP', selectedElement.floating_ip || '\u2014'],
+            ['Created', selectedElement.created || '\u2014'],
+            ['Instance ID', selectedElement.instance_id || '\u2014'],
+          ]} />
+        )}
+        {elementType === 'chameleon_site' && (
+          <PropTable rows={[
+            ['Name', selectedElement.name],
+            ['Provider', selectedElement.provider || 'Chameleon Cloud'],
+            ['Location', selectedElement.city || '\u2014'],
+          ]} />
+        )}
+        {elementType === 'chameleon_node' && (
+          <PropTable rows={[
+            ['Name', selectedElement.name],
+            ['Site', selectedElement.site],
+            ['Node Type', selectedElement.node_type || '\u2014'],
+            ['Image', selectedElement.image || '\u2014'],
+          ]} />
         )}
       </div>
     </div>

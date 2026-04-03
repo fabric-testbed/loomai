@@ -1,0 +1,91 @@
+/* ChameleonNodeTypeComboBox / ChameleonImageComboBox — filterable selectors */
+.chi-combo { position: relative; min-width: 0; }
+.chi-combo-compact { font-size: 11px; }
+
+.chi-combo-input {
+  display: flex; align-items: center; gap: 4px;
+  border: 1px solid var(--fabric-border); border-radius: 4px;
+  padding: 0 8px; background: var(--fabric-white);
+  cursor: pointer; font-size: 12px; min-height: 28px;
+}
+.chi-combo-compact .chi-combo-input { min-height: 24px; font-size: 11px; }
+.chi-combo-input:hover { border-color: #39B54A; }
+.chi-combo-disabled { opacity: 0.5; pointer-events: none; }
+
+.chi-combo-filter {
+  border: none; outline: none; flex: 1; font-size: 12px;
+  background: transparent; padding: 4px 0; min-width: 0; color: var(--fabric-text);
+}
+.chi-combo-compact .chi-combo-filter { font-size: 11px; }
+
+.chi-combo-display {
+  flex: 1; display: flex; align-items: center; gap: 6px;
+  min-width: 0; overflow: hidden;
+}
+.chi-combo-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chi-combo-arrow {
+  flex-shrink: 0; font-size: 8px; color: var(--fabric-text-muted); margin-left: 4px;
+}
+
+.chi-combo-dropdown {
+  position: absolute; top: 100%; left: 0; right: 0;
+  max-height: 280px; overflow-y: auto;
+  background: var(--fabric-white);
+  border: 1px solid var(--fabric-border); border-top: none;
+  border-radius: 0 0 4px 4px;
+  z-index: 200; box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+}
+
+.chi-combo-avail-toggle {
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 10px; font-size: 10px; font-weight: 600;
+  color: var(--fabric-text-muted); border-bottom: 1px solid var(--fabric-border);
+  cursor: pointer; user-select: none;
+}
+.chi-combo-avail-toggle input { margin: 0; }
+
+.chi-combo-option {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px; cursor: pointer; font-size: 12px;
+}
+.chi-combo-compact .chi-combo-option { font-size: 11px; padding: 4px 10px; }
+.chi-combo-option:hover { background: var(--fabric-bg-tint); }
+.chi-combo-option.selected { background: rgba(57,181,74,0.1); }
+.chi-combo-dim { opacity: 0.45; }
+
+.chi-combo-opt-info {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px;
+}
+.chi-combo-opt-name {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chi-combo-opt-desc {
+  font-size: 10px; color: var(--fabric-text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chi-combo-opt-size {
+  font-size: 10px; color: var(--fabric-text-muted); flex-shrink: 0;
+}
+
+.chi-combo-badge {
+  font-size: 9px; font-weight: 700; padding: 1px 5px;
+  border-radius: 3px; flex-shrink: 0; letter-spacing: 0.03em;
+}
+.chi-combo-badge-avail { background: rgba(57,181,74,0.15); color: #39B54A; }
+.chi-combo-badge-unavail { background: rgba(226,82,65,0.15); color: #e25241; }
+.chi-combo-badge-img { background: rgba(87,152,188,0.15); color: var(--fabric-primary); }
+
+.chi-combo-empty {
+  padding: 12px; text-align: center;
+  color: var(--fabric-text-muted); font-size: 11px; font-style: italic;
+}
+
+/* Dark mode */
+[data-theme="dark"] .chi-combo-input { background: #16213e; border-color: rgba(255,255,255,0.12); color: #e0e0e0; }
+[data-theme="dark"] .chi-combo-filter { color: #e0e0e0; }
+[data-theme="dark"] .chi-combo-dropdown { background: #1a1a2e; border-color: rgba(255,255,255,0.1); box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+[data-theme="dark"] .chi-combo-avail-toggle { border-color: rgba(255,255,255,0.08); color: #aaa; }
+[data-theme="dark"] .chi-combo-option:hover { background: rgba(255,255,255,0.05); }
+[data-theme="dark"] .chi-combo-option.selected { background: rgba(57,181,74,0.12); }

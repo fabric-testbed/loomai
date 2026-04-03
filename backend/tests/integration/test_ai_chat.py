@@ -65,6 +65,40 @@ class TestChatStop:
             _cancelled_requests.discard("test-req-123")
 
 
+def _make_llm_response(content="Hello!", tool_calls=None, finish_reason="stop"):
+    """Create a mock httpx Response for an LLM chat/completions call.
+
+    Uses MagicMock (not AsyncMock) because httpx Response.json() is synchronous.
+    """
+    resp = MagicMock()
+    resp.status_code = 200
+    msg = {"content": content, "role": "assistant"}
+    if tool_calls:
+        msg["tool_calls"] = tool_calls
+        msg["content"] = None
+    resp.json.return_value = {"choices": [{"message": msg, "finish_reason": finish_reason}]}
+    return resp
+
+
+def _make_stream_ctx(lines):
+    """Create a mock async context manager for ai_client.stream().
+
+    *lines* is a list of strings that will be yielded by aiter_lines().
+    """
+    async def mock_aiter_lines():
+        for line in lines:
+            yield line
+
+    mock_stream_resp = MagicMock()
+    mock_stream_resp.status_code = 200
+    mock_stream_resp.aiter_lines = mock_aiter_lines
+
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_stream_resp)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    return mock_ctx
+
+
 class TestChatStream:
     """Tests for POST /api/ai/chat/stream.
 
@@ -85,5 +119,112 @@ class TestChatStream:
         assert "error" in payload
         assert "API key" in payload["error"]
 
-    # TODO: Test full SSE streaming with mocked LLM backend
-    # TODO: Test tool-calling loop with mocked tool execution
+    def test_stream_returns_sse_content_type(self, client):
+        """POST /api/ai/chat/stream should return text/event-stream content type."""
+        with patch("app.routes.ai_chat._get_ai_api_key", return_value="fake-key"), \
+             patch("app.routes.ai_chat.execute_tool", new_callable=AsyncMock, return_value='{"slices": []}'), \
+             patch("app.routes.ai_chat.ai_client") as mock_client:
+
+            mock_client.post = AsyncMock(return_value=_make_llm_response("Hello!"))
+            mock_client.stream = MagicMock(return_value=_make_stream_ctx([
+                'data: {"choices": [{"delta": {"content": "Hello!"}}]}',
+                "data: [DONE]",
+            ]))
+
+            resp = client.post("/api/ai/chat/stream", json={
+                "messages": [{"role": "user", "content": "hello"}],
+                "model": "test-model",
+            })
+            assert resp.status_code == 200
+            assert "text/event-stream" in resp.headers.get("content-type", "")
+
+    def test_stream_emits_content_events(self, client):
+        """POST /api/ai/chat/stream should emit SSE data events with content."""
+        with patch("app.routes.ai_chat._get_ai_api_key", return_value="fake-key"), \
+             patch("app.routes.ai_chat.execute_tool", new_callable=AsyncMock, return_value='{"slices": []}'), \
+             patch("app.routes.ai_chat.ai_client") as mock_client:
+
+            mock_client.post = AsyncMock(return_value=_make_llm_response("Hi there!"))
+            mock_client.stream = MagicMock(return_value=_make_stream_ctx([
+                'data: {"choices": [{"delta": {"content": "Hi "}}]}',
+                'data: {"choices": [{"delta": {"content": "there!"}}]}',
+                "data: [DONE]",
+            ]))
+
+            resp = client.post("/api/ai/chat/stream", json={
+                "messages": [{"role": "user", "content": "hello"}],
+                "model": "test-model",
+            })
+            assert resp.status_code == 200
+
+            # Parse SSE events from response body
+            lines = resp.text.strip().split("\n")
+            data_lines = [l for l in lines if l.startswith("data: ") and l != "data: [DONE]"]
+            # Should have at least one data event
+            assert len(data_lines) >= 1
+
+            # Check that we got content or usage events
+            found_content = False
+            found_usage = False
+            for dl in data_lines:
+                try:
+                    payload = json.loads(dl[6:])  # strip "data: "
+                    if "content" in payload:
+                        found_content = True
+                    if "usage" in payload:
+                        found_usage = True
+                except json.JSONDecodeError:
+                    continue
+            assert found_content or found_usage
+
+    def test_stream_with_tool_call(self, client):
+        """POST /api/ai/chat/stream should handle tool call round-trips."""
+        with patch("app.routes.ai_chat._get_ai_api_key", return_value="fake-key"), \
+             patch("app.routes.ai_chat.execute_tool", new_callable=AsyncMock) as mock_exec, \
+             patch("app.routes.ai_chat.ai_client") as mock_client:
+
+            mock_exec.return_value = '{"sites": [{"name": "RENC"}]}'
+
+            # First call — tool call response; second call — text response
+            tool_call_resp = _make_llm_response(
+                tool_calls=[{
+                    "id": "call_1",
+                    "function": {"name": "query_sites", "arguments": "{}"},
+                }],
+                finish_reason="tool_calls",
+            )
+            text_resp = _make_llm_response("RENC is available.")
+            mock_client.post = AsyncMock(side_effect=[tool_call_resp, text_resp])
+
+            mock_client.stream = MagicMock(return_value=_make_stream_ctx([
+                'data: {"choices": [{"delta": {"content": "RENC is available."}}]}',
+                "data: [DONE]",
+            ]))
+
+            resp = client.post("/api/ai/chat/stream", json={
+                "messages": [{"role": "user", "content": "what sites are available?"}],
+                "model": "test-model",
+            })
+            assert resp.status_code == 200
+
+            # Should have tool_call and/or tool_result and/or content events
+            all_text = resp.text
+            assert "tool_call" in all_text or "tool_result" in all_text or "content" in all_text
+
+    def test_stream_empty_messages(self, client):
+        """POST /api/ai/chat/stream with empty messages should return 200 SSE."""
+        with patch("app.routes.ai_chat._get_ai_api_key", return_value="fake-key"), \
+             patch("app.routes.ai_chat.execute_tool", new_callable=AsyncMock, return_value='{"slices": []}'), \
+             patch("app.routes.ai_chat.ai_client") as mock_client:
+
+            mock_client.post = AsyncMock(return_value=_make_llm_response(""))
+            mock_client.stream = MagicMock(return_value=_make_stream_ctx([
+                "data: [DONE]",
+            ]))
+
+            resp = client.post("/api/ai/chat/stream", json={
+                "messages": [],
+                "model": "test-model",
+            })
+            # Should return 200 (SSE stream, possibly with empty content)
+            assert resp.status_code == 200

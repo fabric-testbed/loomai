@@ -6,8 +6,8 @@ Help the user configure or troubleshoot SSH access to FABRIC VMs.
 ## Quick Access (Recommended)
 
 Use the built-in tool — no manual SSH config needed:
-- `fabric_node_info(slice_name, node_name)` — returns the full SSH command, management IP, and username.
-- `fabric_slice_ssh(slice_name, node_name, command)` — run commands directly.
+- `get_slice(slice_name, node_name)` — returns the full SSH command, management IP, and username.
+- `ssh_execute(slice_name, node_name, command)` — run commands directly.
 
 ## SSH Architecture
 
@@ -49,7 +49,7 @@ ssh -F /home/fabric/work/fabric_config/ssh_config \
     <user>@<management_ip>
 ```
 
-Where `<user>` depends on the image (ubuntu, rocky, debian, etc.) and `<management_ip>` comes from `fabric_node_info`.
+Where `<user>` depends on the image (ubuntu, rocky, debian, etc.) and `<management_ip>` comes from `get_slice`.
 
 ## Generate New Slice Keys
 
@@ -63,4 +63,4 @@ ssh-keygen -t rsa -b 3072 -f /home/fabric/work/fabric_config/slice_keys/default/
 - **Permission denied**: `chmod 600` on both bastion key and slice key.
 - **Connection timeout**: Check slice is StableOK, VM may still be booting.
 - **Host key changed**: The `StrictHostKeyChecking no` in ssh_config prevents this.
-- **Wrong user**: Ubuntu images use `ubuntu`, Rocky uses `rocky`, Debian uses `debian`. Check with `fabric_node_info`.
+- **Wrong user**: Ubuntu images use `ubuntu`, Rocky uses `rocky`, Debian uses `debian`. Check with `get_slice`.

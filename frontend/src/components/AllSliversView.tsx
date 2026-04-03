@@ -13,10 +13,15 @@ interface AllSliversViewProps {
   onSliceSelect: (id: string) => void;
   onDeleteSlice: (name: string) => Promise<void>;
   onRefreshSlices: () => void;
+  onArchiveSlice?: (name: string) => Promise<void>;
+  onArchiveAllTerminal?: () => Promise<void>;
   onContextAction?: (action: ContextMenuAction) => void;
   nodeActivity?: Record<string, string>;
   recipes?: RecipeSummary[];
+  selectedSliceId?: string;
 }
+
+const TERMINAL_STATES = new Set(['Dead', 'Closing', 'StableError']);
 
 // --- Helpers ---
 
@@ -73,9 +78,12 @@ export default React.memo(function AllSliversView({
   onSliceSelect,
   onDeleteSlice,
   onRefreshSlices,
+  onArchiveSlice,
+  onArchiveAllTerminal,
   onContextAction,
   nodeActivity,
   recipes,
+  selectedSliceId,
 }: AllSliversViewProps) {
   // Expanded slices
   const [expandedSlices, setExpandedSlices] = useState<Set<string>>(new Set());
@@ -470,6 +478,22 @@ export default React.memo(function AllSliversView({
 
         <div className="graph-context-menu-sep" />
 
+        {/* Archive (hide) terminal slice */}
+        {hasSlices && sliceNames!.length === 1 && onArchiveSlice && (() => {
+          const s = slices.find(sl => sl.name === sliceNames![0]);
+          return s && TERMINAL_STATES.has(s.state);
+        })() && (
+          <button
+            className="graph-context-menu-item"
+            onClick={async () => {
+              await onArchiveSlice!(sliceNames![0]);
+              setMenu(null);
+            }}
+          >
+            {'\uD83D\uDEAB'} Archive (hide from list)
+          </button>
+        )}
+
         {/* Delete slice */}
         {hasSlices && (
           <button
@@ -582,6 +606,21 @@ export default React.memo(function AllSliversView({
             </Tooltip>
           </span>
         )}
+        {/* Archive terminal slices */}
+        {onArchiveAllTerminal && slices.some(s => TERMINAL_STATES.has(s.state)) && (
+          <button
+            className="sliver-action-btn"
+            style={{ marginLeft: 'auto' }}
+            onClick={async () => {
+              const count = slices.filter(s => TERMINAL_STATES.has(s.state)).length;
+              if (!window.confirm(`Archive ${count} terminal slice(s) (Dead, Closing, StableError)? They will be hidden from the list.`)) return;
+              await onArchiveAllTerminal();
+            }}
+            title="Hide all Dead, Closing, and StableError slices from the list"
+          >
+            Clear {slices.filter(s => TERMINAL_STATES.has(s.state)).length} Terminal
+          </button>
+        )}
       </div>
 
       {/* Table */}
@@ -646,7 +685,7 @@ export default React.memo(function AllSliversView({
                 // Slice row
                 <tr
                   key={slice.name}
-                  className={`slice-row ${sliceChecked ? 'multi-selected' : ''}`}
+                  className={`slice-row ${sliceChecked ? 'multi-selected' : ''} ${selectedSliceId === slice.id ? 'active-slice' : ''}`}
                   onContextMenu={(e) => handleSliceContextMenu(e, slice.name)}
                   onDoubleClick={() => onSliceSelect(slice.id)}
                 >
@@ -761,11 +800,14 @@ export default React.memo(function AllSliversView({
                           <td>{node.site || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
                           <td title={node.host || ''}>{node.host || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
                           <td>
-                            {node.reservation_state ? (
-                              <span className={`sliver-state-badge ${stateClass(node.reservation_state)}`}>{node.reservation_state}</span>
-                            ) : (
-                              <span className="sliver-cell-muted">{'\u2014'}</span>
-                            )}
+                            {(() => {
+                              const displayState = TERMINAL_STATES.has(slice.state) ? slice.state : node.reservation_state;
+                              return displayState ? (
+                                <span className={`sliver-state-badge ${stateClass(displayState)}`}>{displayState}</span>
+                              ) : (
+                                <span className="sliver-cell-muted">{'\u2014'}</span>
+                              );
+                            })()}
                           </td>
                           <td>{node.cores ?? ''}{node.ram ? ` / ${node.ram}G` : ''}{node.disk ? ` / ${node.disk}G` : ''}</td>
                           <td title={node.management_ip || ''}>{node.management_ip || <span className="sliver-cell-muted">{'\u2014'}</span>}</td>

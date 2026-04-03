@@ -147,6 +147,195 @@ def _connect_target(
     return target, shell
 
 
+# ---------------------------------------------------------------------------
+# Chameleon instance SSH terminal
+# NOTE: Must be registered BEFORE /ws/terminal/{slice_name}/{node_name}
+# to prevent FastAPI from matching "chameleon" as a slice_name.
+# ---------------------------------------------------------------------------
+
+@router.websocket("/ws/terminal/chameleon/{instance_id}")
+async def chameleon_terminal_ws(websocket: WebSocket, instance_id: str):
+    """WebSocket SSH terminal to a Chameleon Cloud instance.
+
+    Query param: site (default CHI@TACC)
+    Connects directly to the floating IP (no bastion needed).
+    """
+    await websocket.accept()
+    loop = asyncio.get_event_loop()
+    target = None
+    shell = None
+    site = websocket.query_params.get("site", "CHI@TACC")
+
+    try:
+        await websocket.send_text(f"[terminal] Looking up Chameleon instance {instance_id} on {site}...\r\n")
+
+        from app.chameleon_manager import get_session
+        from app.chameleon_executor import run_in_chi_pool
+
+        def _get_instance_info():
+            session = get_session(site)
+            result = session.api_get("compute", f"/servers/{instance_id}")
+            srv = result.get("server", result)
+            ip = None
+            for net_name, addrs in srv.get("addresses", {}).items():
+                for addr in addrs:
+                    if addr.get("OS-EXT-IPS:type") == "floating":
+                        ip = addr["addr"]
+                        break
+                if ip:
+                    break
+            if not ip:
+                for net_name, addrs in srv.get("addresses", {}).items():
+                    for addr in addrs:
+                        ip = addr["addr"]
+                        break
+                    if ip:
+                        break
+            image_id = srv.get("image", {}).get("id", "") if isinstance(srv.get("image"), dict) else ""
+            return ip, srv.get("name", "instance"), image_id
+
+        ip, inst_name, image_id = await run_in_chi_pool(_get_instance_info)
+
+        if not ip:
+            await websocket.send_text("\x1b[31m[terminal] Error: Instance has no IP address. Associate a floating IP first.\x1b[0m\r\n")
+            await websocket.close()
+            return
+
+        await websocket.send_text(f"[terminal] Instance: {inst_name} ({ip})\r\n")
+
+        # Chameleon images all use 'cc' as the default SSH username
+        username = "cc"
+
+        # Find the Chameleon SSH key
+        import os as _os
+        from app.routes.chameleon import get_chameleon_key_path
+        key_path = get_chameleon_key_path(site)
+        if not key_path:
+            ssh_config = _get_ssh_config()
+            key_path = ssh_config.get("slice_key_file", "")
+
+        key_exists = key_path and _os.path.isfile(key_path)
+        await websocket.send_text(f"[terminal] Key: {key_path or '(none)'} (exists={key_exists})\r\n")
+
+        # Check if we need to go through a bastion (private IP, no floating IP)
+        bastion_ip = None
+        slice_id = websocket.query_params.get("slice_id", "")
+        if slice_id:
+            from app.routes.chameleon import _chameleon_slices
+            slice_obj = _chameleon_slices.get(slice_id, {})
+            bastion = slice_obj.get("bastion", {})
+            if bastion.get("floating_ip") and bastion.get("site") == site:
+                # Check if the target IP is private (not the bastion itself)
+                if ip != bastion["floating_ip"]:
+                    bastion_ip = bastion["floating_ip"]
+
+        if bastion_ip:
+            await websocket.send_text(f"[terminal] Using bastion: {bastion_ip}\r\n")
+            await websocket.send_text(f"[terminal] Connecting: bastion → {username}@{ip}...\r\n")
+        else:
+            await websocket.send_text(f"[terminal] Connecting as {username}@{ip}...\r\n")
+
+        def _load_pkey():
+            if not key_path:
+                return None
+            try:
+                return paramiko.RSAKey.from_private_key_file(key_path)
+            except Exception:
+                try:
+                    return paramiko.Ed25519Key.from_private_key_file(key_path)
+                except Exception:
+                    return paramiko.ECDSAKey.from_private_key_file(key_path)
+
+        def _connect():
+            pkey = _load_pkey()
+            connect_kwargs: dict = {
+                "username": username,
+                "timeout": 15,
+                "allow_agent": False,
+                "look_for_keys": False,
+            }
+            if pkey:
+                connect_kwargs["pkey"] = pkey
+
+            if bastion_ip:
+                # Two-hop: bastion → target (same pattern as FABRIC)
+                bastion_client = paramiko.SSHClient()
+                bastion_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                bastion_client.connect(hostname=bastion_ip, port=22, **connect_kwargs)
+                # Open tunnel through bastion to target
+                transport = bastion_client.get_transport()
+                channel = transport.open_channel("direct-tcpip", (ip, 22), ("127.0.0.1", 0))
+                # Connect to target through the tunnel
+                target_client = paramiko.SSHClient()
+                target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                target_client.connect(hostname=ip, port=22, sock=channel, **connect_kwargs)
+                chan = target_client.invoke_shell(term="xterm-256color", width=120, height=30)
+                return target_client, chan
+            else:
+                # Direct connection
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                client.connect(hostname=ip, port=22, **connect_kwargs)
+                chan = client.invoke_shell(term="xterm-256color", width=120, height=30)
+                return client, chan
+
+        target, shell = await loop.run_in_executor(None, _connect)
+        await websocket.send_text("\x1b[32m[terminal] Connected.\x1b[0m\r\n\r\n")
+
+    except Exception as e:
+        logger.exception("Chameleon SSH connection failed for %s@%s (key=%s)", username, ip if 'ip' in dir() else '?', key_path if 'key_path' in dir() else '?')
+        err_type = type(e).__name__
+        await websocket.send_text(f"\r\n\x1b[31m[terminal] SSH connection failed: {err_type}: {e}\x1b[0m\r\n")
+        if "Authentication" in str(e):
+            await websocket.send_text("\x1b[33m[terminal] The SSH key doesn't match. The instance may have been created with a different keypair.\r\n")
+            await websocket.send_text("[terminal] Try: delete this instance, then create a new one (the deploy flow will inject the current loomai-key).\x1b[0m\r\n")
+        await websocket.close()
+        return
+
+    try:
+        async def read_ssh():
+            while True:
+                try:
+                    data = await loop.run_in_executor(None, _read_shell, shell)
+                    if data:
+                        await websocket.send_text(data)
+                    else:
+                        await asyncio.sleep(0.05)
+                except Exception:
+                    break
+
+        read_task = asyncio.create_task(read_ssh())
+
+        while True:
+            try:
+                msg = await websocket.receive_text()
+                parsed = json.loads(msg)
+                if parsed.get("type") == "input":
+                    shell.send(parsed["data"])
+                elif parsed.get("type") == "resize":
+                    shell.resize_pty(width=parsed.get("cols", 80), height=parsed.get("rows", 24))
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
+
+        read_task.cancel()
+
+    finally:
+        try:
+            shell.close()
+        except Exception:
+            pass
+        try:
+            target.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# FABRIC VM SSH terminal
+# ---------------------------------------------------------------------------
+
 @router.websocket("/ws/terminal/{slice_name}/{node_name}")
 async def terminal_ws(websocket: WebSocket, slice_name: str, node_name: str):
     """WebSocket endpoint for interactive SSH terminal."""
@@ -290,9 +479,8 @@ async def container_terminal_ws(websocket: WebSocket):
         # Create a pseudo-terminal
         master_fd, slave_fd = pty.openpty()
 
-        # Start bash in the container, defaulting to storage dir
-        from app.settings_manager import get_storage_dir as _storage
-        cwd = _storage() if os.path.isdir(_storage()) else os.path.expanduser("~")
+        # Start bash in the container, defaulting to fabric user home
+        cwd = os.path.expanduser("~")
         # Always include AI tool paths so tools installed mid-session are accessible
         shell_env = {**os.environ, "TERM": "xterm-256color"}
         venv_bin = os.path.join(AI_TOOLS_DIR, "venv", "bin")

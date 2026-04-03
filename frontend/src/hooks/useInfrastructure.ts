@@ -23,7 +23,7 @@ export interface UseInfrastructureReturn {
   metricsRefreshRate: number;
   setMetricsRefreshRate: React.Dispatch<React.SetStateAction<number>>;
   metricsLoading: boolean;
-  refreshInfrastructure: () => Promise<void>;
+  refreshInfrastructure: (maxAge?: number) => Promise<void>;
   refreshMetrics: () => Promise<void>;
   refreshInfrastructureAndMark: () => Promise<void>;
 }
@@ -44,11 +44,11 @@ export function useInfrastructure(opts: UseInfrastructureOpts): UseInfrastructur
 
   // --- Callbacks ---
 
-  const refreshInfrastructure = useCallback(async () => {
+  const refreshInfrastructure = useCallback(async (maxAge?: number) => {
     setInfraLoading(true);
     setStatusMessage('Loading sites and links...');
     try {
-      const [allSites, links, facilityPorts] = await Promise.all([api.listSites(), api.listLinks(), api.listFacilityPorts().catch(() => [] as FacilityPortInfo[])]);
+      const [allSites, links, facilityPorts] = await Promise.all([api.listSites(maxAge), api.listLinks(maxAge), api.listFacilityPorts(maxAge).catch(() => [] as FacilityPortInfo[])]);
       const filteredSites = allSites.filter((s) => !IGNORED_SITES.has(s.name) && s.lat !== 0 && s.lon !== 0);
       setInfraSites(filteredSites);
       setInfraLinks(links);
@@ -120,8 +120,33 @@ export function useInfrastructure(opts: UseInfrastructureOpts): UseInfrastructur
     }
   }, [selectedElement, addError, setStatusMessage]);
 
+  // --- Refresh all metrics (lightweight — no resource re-fetch, just Prometheus) ---
+  const refreshAllMetrics = useCallback(async () => {
+    if (infraSites.length === 0) return;
+    try {
+      const siteResults = await Promise.allSettled(infraSites.map((s) => api.getSiteMetrics(s.name)));
+      const sCache: Record<string, SiteMetrics> = {};
+      siteResults.forEach((r, i) => {
+        if (r.status === 'fulfilled') sCache[infraSites[i].name] = r.value;
+      });
+      setSiteMetricsCache((prev) => ({ ...prev, ...sCache }));
+
+      const lResults = await Promise.allSettled(infraLinks.map((l) => api.getLinkMetrics(l.site_a, l.site_b)));
+      const lCache: Record<string, LinkMetrics> = {};
+      lResults.forEach((r, i) => {
+        if (r.status === 'fulfilled') {
+          const key = `${infraLinks[i].site_a}-${infraLinks[i].site_b}`;
+          lCache[key] = r.value;
+        }
+      });
+      setLinkMetricsCache((prev) => ({ ...prev, ...lCache }));
+    } catch {
+      // Silently ignore — background refresh
+    }
+  }, [infraSites, infraLinks]);
+
   const refreshInfrastructureAndMark = useCallback(async () => {
-    await refreshInfrastructure();
+    await refreshInfrastructure(0); // Force fresh for manual refresh
     setInfraLoaded(true);
   }, [refreshInfrastructure]);
 
@@ -142,6 +167,84 @@ export function useInfrastructure(opts: UseInfrastructureOpts): UseInfrastructur
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [metricsRefreshRate, selectedElement, refreshMetrics]);
+
+  // --- Background resource refresh (every 5 min, paused when tab hidden) ---
+  const bgRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!infraLoaded) return;
+
+    const RESOURCE_REFRESH_INTERVAL = 300_000; // 5 minutes
+
+    const startBgRefresh = () => {
+      if (bgRefreshRef.current) return;
+      bgRefreshRef.current = setInterval(() => {
+        // Use max_age=300 — near-free (cache hit unless backend warmer refreshed)
+        refreshInfrastructure(300).catch(() => {});
+      }, RESOURCE_REFRESH_INTERVAL);
+    };
+
+    const stopBgRefresh = () => {
+      if (bgRefreshRef.current) {
+        clearInterval(bgRefreshRef.current);
+        bgRefreshRef.current = null;
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        stopBgRefresh();
+      } else {
+        // On return, do an immediate refresh (force fresh) then restart timer
+        refreshInfrastructure(0).catch(() => {});
+        startBgRefresh();
+      }
+    };
+
+    startBgRefresh();
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      stopBgRefresh();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [infraLoaded, refreshInfrastructure]);
+
+  // --- Background metrics-only refresh (every 2 min, paused when tab hidden) ---
+  const metricsRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!infraLoaded) return;
+
+    const METRICS_REFRESH_INTERVAL = 120_000; // 2 minutes
+
+    const startMetricsRefresh = () => {
+      if (metricsRefreshRef.current) return;
+      metricsRefreshRef.current = setInterval(() => {
+        refreshAllMetrics().catch(() => {});
+      }, METRICS_REFRESH_INTERVAL);
+    };
+
+    const stopMetricsRefresh = () => {
+      if (metricsRefreshRef.current) {
+        clearInterval(metricsRefreshRef.current);
+        metricsRefreshRef.current = null;
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        stopMetricsRefresh();
+      } else {
+        refreshAllMetrics().catch(() => {});
+        startMetricsRefresh();
+      }
+    };
+
+    startMetricsRefresh();
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      stopMetricsRefresh();
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [infraLoaded, refreshAllMetrics]);
 
   return {
     infraSites,

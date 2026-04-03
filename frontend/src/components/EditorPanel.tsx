@@ -40,14 +40,45 @@ interface EditorPanelProps {
   onRunBootConfig?: () => void;
   bootRunning?: boolean;
   facilityPorts?: FacilityPortInfo[];
+  chameleonEnabled?: boolean;
+  chameleonSites?: Array<{ name: string; configured: boolean }>;
+  viewContext?: 'fabric' | 'composite' | 'chameleon';
 }
 
-export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCollapse, sites, images, componentModels, selectedElement, dragHandleProps, panelIcon, vmTemplates = [], onSaveVmTemplate, onBootConfigErrors, onRunBootConfig, bootRunning, facilityPorts = [] }: EditorPanelProps) {
+export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUpdated, onCollapse, sites, images, componentModels, selectedElement, dragHandleProps, panelIcon, vmTemplates = [], onSaveVmTemplate, onBootConfigErrors, onRunBootConfig, bootRunning, facilityPorts = [], chameleonEnabled, chameleonSites, viewContext }: EditorPanelProps) {
   const [selectedSliverKey, setSelectedSliverKey] = useState('');
   const [addMode, setAddMode] = useState<AddSliverType | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [editorTab, setEditorTab] = useState<'slice' | 'slivers'>('slice');
+
+  // Context-aware tab labels
+  const experimentLabel = viewContext === 'fabric' ? 'Slice' : viewContext === 'chameleon' ? 'Lease' : 'Experiment';
+  const fabricLabel = viewContext === 'fabric' ? 'Slivers' : viewContext === 'chameleon' ? 'Resources' : 'FABRIC';
+
+  // Chameleon node form state
+  const [chiSite, setChiSite] = useState('');
+  const [chiNodeType, setChiNodeType] = useState('');
+  const [chiImage, setChiImage] = useState('');
+  const [chiConnType, setChiConnType] = useState<'fabnet_v4' | 'l2_stitch'>('fabnet_v4');
+  const [chiNodeTypes, setChiNodeTypes] = useState<Array<{node_type: string; total: number; reservable: number; cpu_arch: string}>>([]);
+  const [chiImages, setChiImages] = useState<Array<{id: string; name: string}>>([]);
+  const [chiNodeTypesLoading, setChiNodeTypesLoading] = useState(false);
+  const [chiImagesLoading, setChiImagesLoading] = useState(false);
+  const [addingChiNode, setAddingChiNode] = useState(false);
+  const [editorTab, setEditorTab] = useState<'experiment' | 'fabric' | 'chameleon'>('experiment');
+
+  // L2 Stitch VLAN negotiation state
+  const [chiVlanFabricSite, setChiVlanFabricSite] = useState('');
+  const [chiVlanNegotiating, setChiVlanNegotiating] = useState(false);
+  const [chiVlanResult, setChiVlanResult] = useState<{ suggested_vlan: number | null; error?: string } | null>(null);
+  const [chiVlan, setChiVlan] = useState('');
+
+  // Chameleon network / floating IP form state
+  const [chiNetName, setChiNetName] = useState('');
+  const [chiNetCidr, setChiNetCidr] = useState('192.168.1.0/24');
+  const [chiFloatingIpNode, setChiFloatingIpNode] = useState('');
+  const [chiNetworks, setChiNetworks] = useState<Array<{name: string; cidr: string}>>([]);
+  const [chiFloatingIps, setChiFloatingIps] = useState<string[]>([]);
 
   // Per-slice key assignment
   const [keySets, setKeySets] = useState<SliceKeySet[]>([]);
@@ -69,6 +100,91 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
     }
   };
 
+  // Fetch Chameleon node types and images when site changes
+  useEffect(() => {
+    if (!chiSite) { setChiNodeTypes([]); setChiImages([]); return; }
+    setChiNodeTypesLoading(true);
+    api.getChameleonNodeTypes(chiSite)
+      .then(r => setChiNodeTypes(r.node_types || []))
+      .catch(() => setChiNodeTypes([]))
+      .finally(() => setChiNodeTypesLoading(false));
+    setChiImagesLoading(true);
+    api.getChameleonImages(chiSite)
+      .then(r => setChiImages(r || []))
+      .catch(() => setChiImages([]))
+      .finally(() => setChiImagesLoading(false));
+  }, [chiSite]);
+
+  // Handler for adding a Chameleon node
+  const handleAddChameleonNode = useCallback(async () => {
+    if (!sliceName || !chiSite || !chiNodeType || !chiImage) return;
+    setAddingChiNode(true);
+    try {
+      const existingChi = sliceData?.chameleon_nodes || [];
+      const name = nextName('chi-', existingChi.map(n => n.name));
+      const nodePayload: { name: string; site: string; node_type: string; image_id: string; connection_type: string; vlan?: string; fabric_site?: string } = {
+        name,
+        site: chiSite,
+        node_type: chiNodeType,
+        image_id: chiImage,
+        connection_type: chiConnType,
+      };
+      if (chiConnType === 'l2_stitch') {
+        if (chiVlan) nodePayload.vlan = chiVlan;
+        if (chiVlanFabricSite) nodePayload.fabric_site = chiVlanFabricSite;
+      }
+      if (viewContext === 'composite') {
+        // Composite view: editing happens in the testbed views, not here
+        return;
+      } else {
+        await api.addChameleonSliceNode(sliceName, nodePayload);
+        // Refresh slice data — try full slice (includes graph), fall back to node list only
+        try {
+          const updated = await api.refreshSlice(sliceName);
+          onSliceUpdated(updated);
+        } catch {
+          try {
+            const updated = await api.getSlice(sliceName);
+            onSliceUpdated(updated);
+          } catch {
+            const chiNodes = await api.getChameleonSliceNodes(sliceName);
+            if (sliceData) {
+              onSliceUpdated({ ...sliceData, chameleon_nodes: chiNodes as any });
+            }
+          }
+        }
+      }
+      setAddMode(null);
+      setChiSite('');
+      setChiNodeType('');
+      setChiImage('');
+      setChiVlan('');
+      setChiVlanFabricSite('');
+      setChiVlanResult(null);
+    } catch (err: any) {
+      setError(err.message || 'Failed to add Chameleon node');
+    } finally {
+      setAddingChiNode(false);
+    }
+  }, [sliceName, chiSite, chiNodeType, chiImage, chiConnType, chiVlan, chiVlanFabricSite, sliceData, onSliceUpdated]);
+
+  // Handler for adding a Chameleon network (stored locally, included in composite submit)
+  const handleAddChameleonNetwork = useCallback(() => {
+    if (!chiNetName) return;
+    setChiNetworks(prev => [...prev, { name: chiNetName, cidr: chiNetCidr }]);
+    setAddMode(null);
+    setChiNetName('');
+    setChiNetCidr('192.168.1.0/24');
+  }, [chiNetName, chiNetCidr]);
+
+  // Handler for adding a Chameleon floating IP (stored locally, included in composite submit)
+  const handleAddChameleonFloatingIp = useCallback(() => {
+    if (!chiFloatingIpNode) return;
+    setChiFloatingIps(prev => [...prev, chiFloatingIpNode]);
+    setAddMode(null);
+    setChiFloatingIpNode('');
+  }, [chiFloatingIpNode]);
+
   // When selectedElement changes from graph click, auto-select in combo box
   useEffect(() => {
     if (!selectedElement) return;
@@ -78,21 +194,30 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
     if (type === 'node') {
       setSelectedSliverKey(`node:${name}`);
       setAddMode(null);
-      setEditorTab('slivers');
+      setEditorTab('fabric');
     } else if (type === 'network') {
       setSelectedSliverKey(`net:${name}`);
       setAddMode(null);
-      setEditorTab('slivers');
+      setEditorTab('fabric');
     } else if (type === 'facility-port') {
       setSelectedSliverKey(`fp:${name}`);
       setAddMode(null);
-      setEditorTab('slivers');
+      setEditorTab('experiment');
     } else if (type === 'port-mirror') {
       setSelectedSliverKey(`pm:${name}`);
       setAddMode(null);
-      setEditorTab('slivers');
+      setEditorTab('experiment');
+    } else if (type === 'chameleon_instance') {
+      setSelectedSliverKey(`chi:${name}`);
+      setAddMode(null);
+      setEditorTab('chameleon');
     }
   }, [selectedElement]);
+
+  // Guard: if chameleon tab active but chameleon disabled, switch to fabric
+  useEffect(() => {
+    if (editorTab === 'chameleon' && !chameleonEnabled) setEditorTab('fabric');
+  }, [chameleonEnabled, editorTab]);
 
   // If the selected sliver no longer exists, clear selection
   useEffect(() => {
@@ -106,6 +231,8 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
     } else if (prefix === 'fp' && !(sliceData.facility_ports ?? []).find((f) => f.name === name)) {
       setSelectedSliverKey('');
     } else if (prefix === 'pm' && !(sliceData.port_mirrors ?? []).find((p) => p.name === name)) {
+      setSelectedSliverKey('');
+    } else if (prefix === 'chi' && !(sliceData.chameleon_nodes ?? []).find((c) => c.name === name)) {
       setSelectedSliverKey('');
     }
   }, [sliceData, selectedSliverKey]);
@@ -127,6 +254,7 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
   const selectedNetwork: SliceNetwork | undefined = sliverPrefix === 'net' ? sliceData?.networks.find((n) => n.name === sliverName) : undefined;
   const selectedFP: SliceFacilityPort | undefined = sliverPrefix === 'fp' ? (sliceData?.facility_ports ?? []).find((f) => f.name === sliverName) : undefined;
   const selectedPM: SlicePortMirror | undefined = sliverPrefix === 'pm' ? (sliceData?.port_mirrors ?? []).find((p) => p.name === sliverName) : undefined;
+  const selectedChi = sliverPrefix === 'chi' ? (sliceData?.chameleon_nodes ?? []).find((c) => c.name === sliverName) : undefined;
 
   // Determine if slice has site groups (from template)
   const hasSiteGroups = sliceData?.nodes.some(n => n.site_group) ?? false;
@@ -182,14 +310,17 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
         </button>
       </div>
 
-      {/* Top-level Slice / Slivers tab bar */}
+      {/* Top-level Experiment / FABRIC / Chameleon tab bar */}
       <div className="editor-top-tabs">
-        <button className={editorTab === 'slice' ? 'active' : ''} onClick={() => setEditorTab('slice')}>Slice</button>
-        <button className={editorTab === 'slivers' ? 'active' : ''} onClick={() => setEditorTab('slivers')}>Slivers</button>
+        <button className={editorTab === 'experiment' ? 'active' : ''} onClick={() => setEditorTab('experiment')}>{experimentLabel}</button>
+        <button className={editorTab === 'fabric' ? 'active' : ''} onClick={() => setEditorTab('fabric')}>{fabricLabel}</button>
+        {chameleonEnabled && viewContext !== 'fabric' && (
+          <button className={`${editorTab === 'chameleon' ? 'active chameleon-tab-active' : ''}`} onClick={() => setEditorTab('chameleon')}>Chameleon</button>
+        )}
       </div>
 
-      {/* ── Slice tab ── */}
-      {editorTab === 'slice' && (
+      {/* ── Experiment tab (slice metadata + cross-testbed services) ── */}
+      {editorTab === 'experiment' && (
         <div className="tab-content">
           {error && <div style={{ color: 'var(--fabric-coral)', fontSize: 12, marginBottom: 8 }}>{error}</div>}
 
@@ -275,11 +406,76 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
               No slice loaded.
             </div>
           )}
+
+          {/* Cross-Testbed Services (facility ports, port mirrors) */}
+          {sliceData && (
+            <>
+              <div style={{ margin: '12px 0 6px', fontSize: 11, fontWeight: 600, color: 'var(--fabric-text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                Cross-Testbed Services
+              </div>
+              <div className="editor-sliver-bar">
+                <SliverComboBox
+                  sliceData={sliceData}
+                  selectedSliverKey={selectedSliverKey}
+                  onSelect={handleSliverSelect}
+                  errorMessages={sliceData?.error_messages}
+                  tabFilter="experiment"
+                />
+                {!isTerminal && <AddSliverMenu onSelect={handleAddSelect} visibleTypes={['facility-port', 'port-mirror']} />}
+              </div>
+              <div className="tab-content">
+                {addMode === 'facility-port' && (
+                  <FacilityPortForm
+                    mode="add"
+                    sites={sites}
+                    sliceName={sliceName}
+                    loading={loading}
+                    sliceData={sliceData}
+                    facilityPorts={facilityPorts}
+                    onSubmit={async (data) => {
+                      const result = await apiCall(() => api.addFacilityPort(sliceName, data));
+                      if (result) setAddMode(null);
+                    }}
+                  />
+                )}
+                {addMode === 'port-mirror' && (
+                  <PortMirrorForm
+                    sliceData={sliceData}
+                    loading={loading}
+                    onSubmit={async (data) => {
+                      const result = await apiCall(() => api.addPortMirror(sliceName, data));
+                      if (result) setAddMode(null);
+                    }}
+                  />
+                )}
+                {!addMode && selectedFP && (
+                  <FacilityPortReadOnlyView
+                    fp={selectedFP}
+                    loading={loading}
+                    onDelete={async () => {
+                      await apiCall(() => api.removeFacilityPort(sliceName, selectedFP.name));
+                      setSelectedSliverKey('');
+                    }}
+                  />
+                )}
+                {!addMode && selectedPM && (
+                  <PortMirrorReadOnlyView
+                    pm={selectedPM}
+                    loading={loading}
+                    onDelete={async () => {
+                      await apiCall(() => api.removePortMirror(sliceName, selectedPM.name));
+                      setSelectedSliverKey('');
+                    }}
+                  />
+                )}
+              </div>
+            </>
+          )}
         </div>
       )}
 
-      {/* ── Slivers tab ── */}
-      {editorTab === 'slivers' && (
+      {/* ── FABRIC tab (VMs, networks, components) ── */}
+      {editorTab === 'fabric' && (
         <>
           {/* Sliver selector + Add button */}
           <div className="editor-sliver-bar" data-help-id="editor.sliver-selector">
@@ -288,8 +484,9 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
               selectedSliverKey={selectedSliverKey}
               onSelect={handleSliverSelect}
               errorMessages={sliceData?.error_messages}
+              tabFilter="fabric"
             />
-            {!isTerminal && <AddSliverMenu onSelect={handleAddSelect} />}
+            {!isTerminal && <AddSliverMenu onSelect={handleAddSelect} visibleTypes={['node', 'l2network', 'l3network']} />}
           </div>
 
           <div className="tab-content">
@@ -307,22 +504,27 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                 sliceData={sliceData}
                 vmTemplates={vmTemplates}
                 onSubmit={async (data) => {
-                  let result = await apiCall(() => api.addNode(sliceName, data));
-                  if (result) {
-                    if (data._pendingComponents?.length) {
-                      for (const comp of data._pendingComponents) {
+                  if (viewContext === 'composite') {
+                    // Composite view: editing happens in the testbed views, not here
+                    return;
+                  } else {
+                    let result = await apiCall(() => api.addNode(sliceName, data));
+                    if (result) {
+                      if (data._pendingComponents?.length) {
+                        for (const comp of data._pendingComponents) {
+                          try {
+                            result = await apiCall(() => api.addComponent(sliceName, data.name, comp)) || result;
+                          } catch { /* ignore */ }
+                        }
+                      }
+                      if (data._pendingBootConfig) {
                         try {
-                          result = await apiCall(() => api.addComponent(sliceName, data.name, comp)) || result;
+                          await api.saveBootConfig(sliceName, data.name, data._pendingBootConfig);
                         } catch { /* ignore */ }
                       }
+                      setSelectedSliverKey(`node:${data.name}`);
+                      setAddMode(null);
                     }
-                    if (data._pendingBootConfig) {
-                      try {
-                        await api.saveBootConfig(sliceName, data.name, data._pendingBootConfig);
-                      } catch { /* ignore */ }
-                    }
-                    setSelectedSliverKey(`node:${data.name}`);
-                    setAddMode(null);
                   }
                 }}
               />
@@ -389,6 +591,7 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                 }}
               />
             )}
+            {/* Chameleon node forms moved to Chameleon tab */}
 
             {/* Edit mode: selected node */}
             {!addMode && selectedNode && (
@@ -435,34 +638,194 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
               />
             )}
 
-            {/* Edit mode: selected facility port (read-only) */}
-            {!addMode && selectedFP && (
-              <FacilityPortReadOnlyView
-                fp={selectedFP}
-                loading={loading}
-                onDelete={async () => {
-                  await apiCall(() => api.removeFacilityPort(sliceName, selectedFP.name));
-                  setSelectedSliverKey('');
-                }}
-              />
-            )}
-
-            {/* Edit mode: selected port mirror (read-only) */}
-            {!addMode && selectedPM && (
-              <PortMirrorReadOnlyView
-                pm={selectedPM}
-                loading={loading}
-                onDelete={async () => {
-                  await apiCall(() => api.removePortMirror(sliceName, selectedPM.name));
-                  setSelectedSliverKey('');
-                }}
-              />
-            )}
-
             {/* Nothing selected, no add mode */}
-            {!addMode && !selectedNode && !selectedNetwork && !selectedFP && !selectedPM && (
+            {!addMode && !selectedNode && !selectedNetwork && (
               <div className="editor-empty">
-                Select a sliver to edit, or click <strong>+</strong> to add one.
+                Select a FABRIC resource to edit, or click <strong>+</strong> to add one.
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ── Chameleon tab (bare-metal servers, networks) ── */}
+      {editorTab === 'chameleon' && chameleonEnabled && (
+        <>
+          <div className="editor-sliver-bar">
+            <SliverComboBox
+              sliceData={sliceData}
+              selectedSliverKey={selectedSliverKey}
+              onSelect={handleSliverSelect}
+              errorMessages={sliceData?.error_messages}
+              tabFilter="chameleon"
+            />
+            {!isTerminal && <AddSliverMenu onSelect={handleAddSelect} visibleTypes={['chameleon-node', 'chameleon-network', 'chameleon-floating-ip']} chameleonEnabled />}
+          </div>
+          <div className="tab-content">
+            {error && <div style={{ color: 'var(--fabric-coral)', fontSize: 12, marginBottom: 8 }}>{error}</div>}
+
+            {addMode === 'chameleon-node' && (
+              <div className="editor-form">
+                <h4 style={{ margin: '0 0 8px' }}>Add Chameleon Node</h4>
+                {error && <div style={{ color: 'var(--fabric-coral)', fontSize: 12, marginBottom: 8 }}>{error}</div>}
+                <label className="editor-label">Site</label>
+                <select className="editor-select" value={chiSite} onChange={e => { setChiSite(e.target.value); setChiNodeType(''); setChiImage(''); }}>
+                  <option value="">-- Select Site --</option>
+                  {(chameleonSites || []).filter(s => s.configured).map(s => (
+                    <option key={s.name} value={s.name}>{s.name}</option>
+                  ))}
+                </select>
+                <label className="editor-label">Node Type</label>
+                <select className="editor-select" value={chiNodeType} onChange={e => setChiNodeType(e.target.value)} disabled={!chiSite || chiNodeTypesLoading}>
+                  <option value="">{chiNodeTypesLoading ? 'Loading...' : '-- Select --'}</option>
+                  {chiNodeTypes.map(nt => (
+                    <option key={nt.node_type} value={nt.node_type}>{nt.node_type} ({nt.reservable ?? '?'}/{nt.total ?? '?'} avail)</option>
+                  ))}
+                </select>
+                <label className="editor-label">Image</label>
+                <select className="editor-select" value={chiImage} onChange={e => setChiImage(e.target.value)} disabled={!chiSite || chiImagesLoading}>
+                  <option value="">{chiImagesLoading ? 'Loading...' : '-- Select --'}</option>
+                  {chiImages.map(img => (
+                    <option key={img.id} value={img.id}>{img.name}</option>
+                  ))}
+                </select>
+                <label className="editor-label">Connection to FABRIC</label>
+                <div style={{ display: 'flex', gap: 12, fontSize: 12, marginBottom: 8 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <input type="radio" name="chi-conn-tab" value="fabnet_v4" checked={chiConnType === 'fabnet_v4'} onChange={() => setChiConnType('fabnet_v4')} />
+                    FABnet v4
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <input type="radio" name="chi-conn-tab" value="l2_stitch" checked={chiConnType === 'l2_stitch'} onChange={() => setChiConnType('l2_stitch')} />
+                    L2 Stitch
+                  </label>
+                </div>
+                {chiConnType === 'l2_stitch' && (
+                  <>
+                    <label className="editor-label">FABRIC Facility Port Site</label>
+                    <select className="editor-select" value={chiVlanFabricSite} onChange={e => setChiVlanFabricSite(e.target.value)}>
+                      <option value="">-- Select FABRIC site --</option>
+                      {sites.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                    </select>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' }}>
+                      <button className="btn" disabled={!chiVlanFabricSite || !chiSite || chiVlanNegotiating}
+                        onClick={async () => {
+                          setChiVlanNegotiating(true);
+                          try {
+                            const result = await api.negotiateChameleonVlan(chiVlanFabricSite, chiSite);
+                            setChiVlanResult(result);
+                            if (result.suggested_vlan) setChiVlan(String(result.suggested_vlan));
+                          } catch (e: any) { setChiVlanResult({ suggested_vlan: null, error: e.message }); }
+                          finally { setChiVlanNegotiating(false); }
+                        }}
+                      >
+                        {chiVlanNegotiating ? 'Negotiating...' : 'Negotiate VLAN'}
+                      </button>
+                      {chiVlanResult && (
+                        chiVlanResult.suggested_vlan
+                          ? <span style={{ fontSize: 11, color: '#008e7a' }}>Suggested: VLAN {chiVlanResult.suggested_vlan}</span>
+                          : <span style={{ fontSize: 11, color: '#e25241' }}>{chiVlanResult.error || 'No common VLANs'}</span>
+                      )}
+                    </div>
+                    <label className="editor-label">VLAN</label>
+                    <input className="editor-input" type="number" value={chiVlan} onChange={e => setChiVlan(e.target.value)} placeholder="VLAN ID" />
+                  </>
+                )}
+                <button className="btn" disabled={!chiSite || !chiNodeType || !chiImage || addingChiNode} onClick={handleAddChameleonNode}>
+                  {addingChiNode ? 'Adding...' : 'Add Chameleon Node'}
+                </button>
+              </div>
+            )}
+
+            {addMode === 'chameleon-network' && (
+              <div className="editor-form">
+                <h4 style={{ margin: '0 0 8px' }}>Add Chameleon Network</h4>
+                <label className="editor-label">Name</label>
+                <input className="editor-input" value={chiNetName} onChange={e => setChiNetName(e.target.value)} placeholder="my-network" />
+                <label className="editor-label">CIDR (optional)</label>
+                <input className="editor-input" value={chiNetCidr} onChange={e => setChiNetCidr(e.target.value)} placeholder="192.168.1.0/24" />
+                <button className="btn" disabled={!chiNetName || !chiSite} onClick={handleAddChameleonNetwork}>
+                  Add Network
+                </button>
+                {chiNetworks.length > 0 && (
+                  <div style={{ fontSize: 11, marginTop: 8, color: 'var(--fabric-text-muted)' }}>
+                    <strong>Pending networks:</strong>
+                    {chiNetworks.map((n, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                        <span>{n.name} ({n.cidr})</span>
+                        <button style={{ background: 'none', border: 'none', color: '#b00020', cursor: 'pointer', fontSize: 11, padding: 0 }}
+                          onClick={() => setChiNetworks(prev => prev.filter((_, j) => j !== i))}>remove</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {addMode === 'chameleon-floating-ip' && (
+              <div className="editor-form">
+                <h4 style={{ margin: '0 0 8px' }}>Add Floating IP Reservation</h4>
+                <p style={{ fontSize: 11, color: 'var(--fabric-text-muted)', margin: '0 0 8px' }}>
+                  Reserve a floating IP for a Chameleon node. Select which node should receive it.
+                </p>
+                <label className="editor-label">Node</label>
+                <select className="editor-select" value={chiFloatingIpNode} onChange={e => setChiFloatingIpNode(e.target.value)}>
+                  <option value="">-- Select node --</option>
+                  {(sliceData?.chameleon_nodes || []).map(n => (
+                    <option key={n.name} value={n.name}>{n.name}</option>
+                  ))}
+                </select>
+                <button className="btn" disabled={!chiFloatingIpNode} onClick={handleAddChameleonFloatingIp}>
+                  Add Floating IP
+                </button>
+                {chiFloatingIps.length > 0 && (
+                  <div style={{ fontSize: 11, marginTop: 8, color: 'var(--fabric-text-muted)' }}>
+                    <strong>Pending floating IPs:</strong>
+                    {chiFloatingIps.map((node, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                        <span>{node}</span>
+                        <button style={{ background: 'none', border: 'none', color: '#b00020', cursor: 'pointer', fontSize: 11, padding: 0 }}
+                          onClick={() => setChiFloatingIps(prev => prev.filter((_, j) => j !== i))}>remove</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!addMode && selectedChi && (
+              <div className="editor-form">
+                <h4 style={{ margin: '0 0 8px' }}>Chameleon Node</h4>
+                <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div><strong>Name:</strong> {selectedChi.name}</div>
+                  <div><strong>Site:</strong> {selectedChi.site}</div>
+                  <div><strong>Node Type:</strong> {selectedChi.node_type}</div>
+                  <div><strong>Connection:</strong> {selectedChi.connection_type === 'fabnet_v4' ? 'FABnet v4' : selectedChi.connection_type === 'l2_stitch' ? 'L2 Stitch' : selectedChi.connection_type || 'N/A'}</div>
+                  <div><strong>Status:</strong> {selectedChi.status || 'draft'}</div>
+                  {selectedChi.image_id && <div><strong>Image:</strong> {selectedChi.image_id}</div>}
+                </div>
+                <button className="btn" style={{ marginTop: 8, color: '#b00020', borderColor: '#b00020' }}
+                  onClick={async () => {
+                    if (!window.confirm(`Delete Chameleon node "${selectedChi.name}"?`)) return;
+                    try {
+                      await api.removeChameleonSliceNode(sliceName, selectedChi.name);
+                      try {
+                        const updated = await api.getSlice(sliceName);
+                        onSliceUpdated(updated);
+                      } catch {
+                        const chiNodes = await api.getChameleonSliceNodes(sliceName);
+                        if (sliceData) onSliceUpdated({ ...sliceData, chameleon_nodes: chiNodes as any });
+                      }
+                      setSelectedSliverKey('');
+                    } catch (err: any) { setError(err.message || 'Failed to delete'); }
+                  }}
+                >Delete Node</button>
+              </div>
+            )}
+
+            {!addMode && !selectedChi && (
+              <div className="editor-empty">
+                Add Chameleon bare-metal nodes to your experiment. Click <strong>+</strong> to add a node.
               </div>
             )}
           </div>
@@ -2603,13 +2966,47 @@ function L3ConfigEditor({
     }).catch(() => {});
   }, [sliceName, network.name]);
 
-  const setOctet = (iface: string, value: string) => {
+  const setIfaceIp = (iface: string, value: string) => {
     setHints(prev => {
       const next = { ...prev };
-      const n = parseInt(value);
-      next[iface] = { last_octet: isNaN(n) ? undefined : n };
+      next[iface] = { ...next[iface], ip: value || undefined };
       return next;
     });
+  };
+
+  // Generate suggested IPs from subnet for interfaces that don't have one yet
+  const suggestIps = (): Record<string, string> => {
+    const subnet = network.subnet || '';
+    if (!subnet) return {};
+    const parts = subnet.split('/');
+    const octets = parts[0].split('.').map(Number);
+    if (octets.length !== 4) return {};
+    const prefix = `${octets[0]}.${octets[1]}.${octets[2]}`;
+    const gw = network.gateway || '';
+    const usedIps = new Set<string>();
+    if (gw) usedIps.add(gw);
+    for (const iface of network.interfaces) {
+      if (iface.ip_addr) usedIps.add(iface.ip_addr);
+    }
+    // Also skip already-hinted IPs
+    for (const h of Object.values(hints)) {
+      if (h.ip) usedIps.add(h.ip);
+    }
+    const suggestions: Record<string, string> = {};
+    let next = 2; // start from .2 (.1 is typically gateway)
+    for (const iface of network.interfaces) {
+      if (hints[iface.name]?.ip) {
+        suggestions[iface.name] = hints[iface.name].ip!;
+        continue;
+      }
+      while (next <= 254 && usedIps.has(`${prefix}.${next}`)) next++;
+      if (next <= 254) {
+        suggestions[iface.name] = `${prefix}.${next}`;
+        usedIps.add(`${prefix}.${next}`);
+        next++;
+      }
+    }
+    return suggestions;
   };
 
   const handleSave = async () => {
@@ -2703,13 +3100,13 @@ function L3ConfigEditor({
           Manual
         </button>
         <button style={modeButtonStyle(l3.mode === 'user_octet')} onClick={() => setL3(prev => ({ ...prev, mode: 'user_octet' }))} disabled={loading}>
-          User Octet
+          Per-Interface
         </button>
       </div>
       <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginBottom: 8 }}>
         {l3.mode === 'auto' && 'FABLib automatically assigns IPs and configures routing.'}
         {l3.mode === 'manual' && 'No automatic configuration. Configure in boot scripts.'}
-        {l3.mode === 'user_octet' && 'Choose last octet per interface. Works with /24 subnets.'}
+        {l3.mode === 'user_octet' && 'Assign IP last octet (1-254) per interface.'}
       </div>
 
       {/* Section 2: Route Configuration (user_octet only) */}
@@ -2785,42 +3182,62 @@ function L3ConfigEditor({
             )}
           </div>
 
-          {/* Section 3: Per-Interface Octets */}
-          {network.interfaces.length > 0 && (
-            <>
-              <div className="editor-section-divider" />
-              <div className="editor-section-label">
-                <Tooltip text="Set the last octet (1-254) for each interface's IP address">Per-Interface Octets</Tooltip>
-              </div>
-              {network.interfaces.map((iface) => {
-                const h = hints[iface.name];
-                const assigned = assignments[iface.name];
-                return (
-                  <div key={iface.name} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: '0.82em' }}>
-                    <span style={{ minWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={iface.name}>
-                      {iface.name}
-                    </span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={254}
-                      value={h?.last_octet ?? ''}
-                      onChange={(e) => setOctet(iface.name, e.target.value)}
-                      style={{ width: 56, fontSize: '0.95em' }}
-                      placeholder="1-254"
-                      disabled={loading}
-                    />
-                    {assigned && (
-                      <span style={{ color: 'var(--fabric-teal, #008e7a)', fontWeight: 600 }}>{assigned}</span>
-                    )}
-                    {!assigned && iface.ip_addr && (
-                      <span style={{ color: 'var(--fabric-text-muted)' }}>{iface.ip_addr}</span>
-                    )}
-                  </div>
-                );
-              })}
-            </>
-          )}
+          {/* Section 3: Interface Config */}
+          {network.interfaces.length > 0 && (() => {
+            const suggested = suggestIps();
+            return (
+              <>
+                <div className="editor-section-divider" />
+                <div className="editor-section-label">
+                  <Tooltip text="Set IP address per interface (suggested from subnet)">Interface Config</Tooltip>
+                </div>
+                {network.interfaces.map((iface) => {
+                  const h = hints[iface.name];
+                  const assigned = assignments[iface.name];
+                  const suggestion = suggested[iface.name] || '';
+                  return (
+                    <div key={iface.name} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, fontSize: '0.82em' }}>
+                      <span style={{ minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={iface.name}>
+                        {iface.name}
+                      </span>
+                      <input
+                        type="text"
+                        value={h?.ip ?? ''}
+                        onChange={(e) => setIfaceIp(iface.name, e.target.value)}
+                        style={{ width: 120, fontSize: '0.95em', fontFamily: 'monospace' }}
+                        placeholder={suggestion || '10.x.x.x'}
+                        disabled={loading}
+                      />
+                      {assigned && (
+                        <span style={{ color: 'var(--fabric-teal, #008e7a)', fontWeight: 600 }}>{assigned}</span>
+                      )}
+                      {!assigned && iface.ip_addr && (
+                        <span style={{ color: 'var(--fabric-text-muted)' }}>{iface.ip_addr}</span>
+                      )}
+                    </div>
+                  );
+                })}
+                {network.subnet && (
+                  <button
+                    style={{ fontSize: '0.78em', background: 'none', border: '1px solid var(--fabric-border)', borderRadius: 3, padding: '2px 8px', cursor: 'pointer', marginTop: 2, color: 'var(--fabric-primary, #5798bc)' }}
+                    onClick={() => {
+                      const s = suggestIps();
+                      setHints(prev => {
+                        const next = { ...prev };
+                        for (const [iface, ip] of Object.entries(s)) {
+                          if (!next[iface]?.ip) next[iface] = { ...next[iface], ip };
+                        }
+                        return next;
+                      });
+                    }}
+                    disabled={loading}
+                  >
+                    Auto-fill suggested IPs
+                  </button>
+                )}
+              </>
+            );
+          })()}
         </>
       )}
 

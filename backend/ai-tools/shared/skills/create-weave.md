@@ -1,8 +1,17 @@
 name: create-weave
-description: Create a new weave artifact on the filesystem
+description: Create a new weave artifact with well-documented FABlib Python code
 ---
 Create a new weave artifact. Weaves are multi-node topologies with
-boot config, and optional deployment scripts.
+boot config, and deployment scripts that use the FABlib Python API.
+
+**The Python lifecycle script is the heart of every weave.** It must be:
+- **Well-documented**: Module docstring explaining what the weave does, how it works,
+  and what FABlib concepts it demonstrates. Inline comments explaining each FABlib
+  API call so users can learn by reading the code.
+- **Educational**: Users should be able to open the .py file and understand how FABlib
+  works — how to create slices, add nodes with specific hardware, configure networks,
+  execute commands via SSH, and clean up resources.
+- **Production-ready**: Proper error handling, progress messages, and clean shutdown.
 
 ## Steps
 
@@ -19,12 +28,19 @@ boot config, and optional deployment scripts.
    ```
    <DirName>/
    ├── weave.json              # Required: ALL weave metadata, args, topology
+   ├── weave.md                # Human-readable spec — edit to change the weave
    ├── weave.sh                # Orchestrator: calls Python lifecycle script
    ├── <name>.py               # Python lifecycle script (start/stop/monitor)
+   ├── <name>.ipynb            # Jupyter notebook (optional, for analysis/learning)
    └── tools/                  # Scripts uploaded to ~/tools/ on VMs
        ├── setup-server.sh
        └── setup-worker.sh
    ```
+
+   **weave.md** is the specification file. It describes the weave's topology, software,
+   and lifecycle in human-readable markdown. Users can edit it in JupyterLab or any
+   text editor and ask LoomAI to "update the weave based on weave.md". When modifying
+   an existing weave, ALWAYS read weave.md first — it is the authoritative specification.
 
 3. **Write weave.json** — the ONLY required file for a weave. It contains ALL metadata,
    run configuration, argument definitions, and topology:
@@ -95,81 +111,68 @@ Interface naming: `{node-name}-{component-name}-p{port-number}`.
 6. **Write the Python lifecycle script** — the core logic for slice management.
    Each weave has a Python script (e.g. `hello_fabric.py`, `k8s_cluster.py`) that
    uses FABlib directly. It takes a command (`start`, `stop`, or `monitor`) and a
-   slice name:
+   slice name.
 
-   **Hello FABRIC example** (`hello_fabric.py`):
-   ```python
-   #!/usr/bin/env python3
-   """Hello FABRIC — single-node slice lifecycle."""
-   import sys
+   **CRITICAL: The Python script must be well-documented and educational.**
+   Users will read these scripts to learn how FABlib works. Every script should have:
+   - A **module docstring** explaining what the weave does, what FABlib concepts it
+     demonstrates, and how to use it
+   - **Inline comments** on every FABlib API call explaining what it does and why
+   - **FABlib concept explanations** (slice lifecycle, node types, network types,
+     component models, SSH access patterns) where relevant
+   - **Step numbers** in progress messages (e.g., "Step 2/5 — Adding nodes...")
+   - A **READY!** message at the end with node IPs and SSH instructions
 
-   def start(slice_name):
-       from fabrictestbed_extensions.fablib.fablib import FablibManager
-       fablib = FablibManager()
-
-       print(f"### PROGRESS: Creating slice '{slice_name}'...")
-       slice_obj = fablib.new_slice(name=slice_name)
-       node = slice_obj.add_node(name="node1", site="random",
-                                  cores=2, ram=8, disk=10,
-                                  image="default_ubuntu_22")
-
-       print("### PROGRESS: Submitting slice...")
-       slice_obj.submit()
-
-       print("### PROGRESS: Waiting for SSH access...")
-       slice_obj.wait_ssh(progress=True)
-
-       print(f"### PROGRESS: Slice '{slice_name}' is ready!")
-       for n in slice_obj.get_nodes():
-           print(f"  {n.get_name()}: {n.get_management_ip()}")
-
-   def stop(slice_name):
-       from fabrictestbed_extensions.fablib.fablib import FablibManager
-       fablib = FablibManager()
-       try:
-           slice_obj = fablib.get_slice(name=slice_name)
-           print(f"### PROGRESS: Deleting slice '{slice_name}'...")
-           slice_obj.delete()
-           print(f"### PROGRESS: Slice '{slice_name}' deleted.")
-       except Exception as e:
-           print(f"### PROGRESS: Slice not found or already deleted: {e}")
-
-   def monitor(slice_name):
-       from fabrictestbed_extensions.fablib.fablib import FablibManager
-       fablib = FablibManager()
-       slice_obj = fablib.get_slice(name=slice_name)
-       state = str(slice_obj.get_state())
-
-       if "StableOK" not in state:
-           print(f"ERROR: Slice state is {state}")
-           sys.exit(1)
-
-       for node in slice_obj.get_nodes():
-           try:
-               stdout, stderr = node.execute("echo ok", quiet=True)
-               if "ok" not in stdout:
-                   raise Exception("unexpected output")
-           except Exception as e:
-               print(f"ERROR: Node {node.get_name()} health check failed: {e}")
-               sys.exit(1)
-
-       print(f"### PROGRESS: All nodes healthy — state: {state}")
-
-   if __name__ == "__main__":
-       if len(sys.argv) < 3:
-           print("Usage: hello_fabric.py {start|stop|monitor} SLICE_NAME")
-           sys.exit(1)
-       action, name = sys.argv[1], sys.argv[2]
-       {"start": start, "stop": stop, "monitor": monitor}[action](name)
-   ```
-
-   **Python script rules:**
-   - `start(name)` — create slice with FABlib, submit, `wait_ssh()`, print node IPs
+   **Python script structure:**
+   - `start(name)` — create slice with FABlib, submit, `wait_ssh()`, configure, print IPs
    - `stop(name)` — get slice by name, delete it; handle "not found" gracefully
-   - `monitor(name)` — check slice state is StableOK, execute test command on each node; exit 1 on failure
+   - `monitor(name)` — check slice state is StableOK, execute test on each node; exit 1 on failure
    - Use `### PROGRESS:` markers for WebUI status updates
    - Import FABlib inside each function (avoids startup cost when not needed)
-   - For multi-node weaves, add nodes/networks/components in `start()`
+
+   **Key FABlib API patterns to document in the script:**
+   ```python
+   # Initialize FABlib — reads credentials from FABRIC_CONFIG_DIR
+   from fabrictestbed_extensions.fablib.fablib import FablibManager
+   fablib = FablibManager()
+
+   # Create a slice (draft — no resources allocated yet)
+   slice_obj = fablib.new_slice(name="my-slice")
+
+   # Add a node (VM) with resources
+   node = slice_obj.add_node(name="node1", site="random",
+                              cores=4, ram=16, disk=100,
+                              image="default_ubuntu_22")
+
+   # Add hardware components to a node
+   node.add_component(model="NIC_Basic", name="nic1")      # 25G shared NIC
+   node.add_component(model="GPU_RTX6000", name="gpu1")     # NVIDIA GPU
+   node.add_component(model="NVME_P4510", name="nvme1")     # 1TB NVMe SSD
+
+   # Create networks and connect nodes
+   ifaces = [node.get_interfaces()[0] for node in nodes]
+   slice_obj.add_l2network(name="net1", interfaces=ifaces)  # Same-site L2
+
+   # Submit and wait for provisioning (3-10 min)
+   slice_obj.submit()
+   slice_obj.wait_ssh(progress=True)
+
+   # Execute commands on nodes via SSH
+   stdout, stderr = node.execute("hostname")
+
+   # Upload/download files
+   node.upload_file("local/path", "remote/path")
+   node.download_file("remote/path", "local/path")
+
+   # Get node info
+   node.get_management_ip()    # SSH-accessible IP (via bastion)
+   node.get_ssh_command()      # Full SSH command string
+   node.get_interfaces()       # Network interfaces
+
+   # Retrieve and delete
+   slice_obj = fablib.get_slice(name="my-slice")
+   slice_obj.delete()
+   ```
 
 7. **Write weave.sh** — thin orchestrator that calls the Python script:
    A weave with `weave.sh` becomes "runnable" — the WebUI shows a Run button.

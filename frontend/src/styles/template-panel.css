@@ -209,6 +209,25 @@
   50% { opacity: 0.5; }
 }
 
+/* Source marketplace badges */
+.source-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-bottom: 3px;
+}
+.source-trovi { background: rgba(57,181,74,0.15); color: #39B54A; }
+.source-artifact-manager { background: rgba(87,152,188,0.15); color: #5798bc; }
+.source-local { background: rgba(130,130,130,0.1); color: #888; }
+.source-experiment { background: rgba(156,39,176,0.15); color: #9c27b0; }
+[data-theme="dark"] .source-trovi { background: rgba(57,181,74,0.2); }
+[data-theme="dark"] .source-artifact-manager { background: rgba(87,152,188,0.2); }
+[data-theme="dark"] .source-experiment { background: rgba(156,39,176,0.2); }
+
 .template-card-desc {
   font-size: 11px;
   color: var(--fabric-text-muted);

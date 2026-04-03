@@ -42,6 +42,12 @@ _system_prompt_cache: str | None = None
 _agents_cache: dict[str, dict] | None = None
 
 
+def invalidate_agents_cache() -> None:
+    """Clear the agents cache so the next load picks up changes."""
+    global _agents_cache
+    _agents_cache = None
+
+
 def _load_system_prompt() -> str:
     global _system_prompt_cache
     if _system_prompt_cache is None:
@@ -53,39 +59,63 @@ def _load_system_prompt() -> str:
     return _system_prompt_cache
 
 
+def _parse_agent_file(fpath: str) -> dict[str, str] | None:
+    """Parse a single agent .md file into {name, description, prompt}."""
+    try:
+        with open(fpath, "r") as f:
+            content = f.read()
+        if not content.startswith("name:"):
+            return None
+        parts = content.split("---", 1)
+        header = parts[0]
+        body = parts[1].strip() if len(parts) > 1 else ""
+        name = desc = ""
+        for line in header.strip().splitlines():
+            if line.startswith("name:"):
+                name = line.split(":", 1)[1].strip()
+            elif line.startswith("description:"):
+                desc = line.split(":", 1)[1].strip()
+        return {"name": name, "description": desc, "prompt": body}
+    except Exception:
+        return None
+
+
 def _load_agents() -> dict[str, dict]:
+    """Load agents from built-in dir, then overlay user-custom agents on top."""
     global _agents_cache
     if _agents_cache is not None:
         return _agents_cache
 
     agents: dict[str, dict] = {}
-    if not os.path.isdir(_AGENTS_DIR):
-        _agents_cache = agents
-        return agents
 
-    for fname in sorted(os.listdir(_AGENTS_DIR)):
-        if not fname.endswith(".md"):
-            continue
-        agent_id = fname[:-3]
-        if agent_id in ("ai-tools-evaluator",):
-            continue
-        fpath = os.path.join(_AGENTS_DIR, fname)
-        try:
-            with open(fpath, "r") as f:
-                content = f.read()
-            if content.startswith("name:"):
-                parts = content.split("---", 1)
-                header = parts[0]
-                body = parts[1].strip() if len(parts) > 1 else ""
-                name = desc = ""
-                for line in header.strip().splitlines():
-                    if line.startswith("name:"):
-                        name = line.split(":", 1)[1].strip()
-                    elif line.startswith("description:"):
-                        desc = line.split(":", 1)[1].strip()
-                agents[agent_id] = {"name": name or agent_id, "description": desc, "prompt": body}
-        except Exception:
-            logger.warning("Failed to load agent %s", fname)
+    # 1. Load built-in agents
+    if os.path.isdir(_AGENTS_DIR):
+        for fname in sorted(os.listdir(_AGENTS_DIR)):
+            if not fname.endswith(".md"):
+                continue
+            agent_id = fname[:-3]
+            if agent_id in ("ai-tools-evaluator",):
+                continue
+            parsed = _parse_agent_file(os.path.join(_AGENTS_DIR, fname))
+            if parsed:
+                agents[agent_id] = {"name": parsed["name"] or agent_id, "description": parsed["description"], "prompt": parsed["prompt"]}
+
+    # 2. Overlay user-custom agents
+    try:
+        from app.settings_manager import get_storage_dir
+        custom_dir = os.path.join(get_storage_dir(), ".loomai", "agents")
+        if os.path.isdir(custom_dir):
+            for fname in sorted(os.listdir(custom_dir)):
+                if not fname.endswith(".md"):
+                    continue
+                agent_id = fname[:-3]
+                if agent_id in ("ai-tools-evaluator",):
+                    continue
+                parsed = _parse_agent_file(os.path.join(custom_dir, fname))
+                if parsed:
+                    agents[agent_id] = {"name": parsed["name"] or agent_id, "description": parsed["description"], "prompt": parsed["prompt"]}
+    except Exception:
+        logger.warning("Failed to load custom agents", exc_info=True)
 
     _agents_cache = agents
     return agents
@@ -622,6 +652,214 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_weave",
+            "description": "Create a new weave with all files (Python script, weave.sh, weave.json, weave.md, notebook) in one step. The server generates the Python script — you only need to provide the name and description. Set network_type to 'FABNetv4' for cross-site L3 connectivity or 'L2Bridge' for same-site L2.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Weave name (used as directory name)"},
+                    "description": {"type": "string", "description": "What this weave does (1-2 sentences)"},
+                    "num_nodes": {"type": "integer", "description": "Number of VMs (default: 2)", "default": 2},
+                    "site": {"type": "string", "description": "FABRIC site or 'auto' (default: 'auto')", "default": "auto"},
+                    "network_type": {"type": "string", "description": "Network type: 'L2Bridge' (same-site) or 'FABNetv4' (cross-site routed). Default: L2Bridge", "default": "L2Bridge"},
+                    "include_notebooks": {"type": "boolean", "description": "Include Jupyter notebook (default: true)", "default": True},
+                    "include_node_tools": {"type": "boolean", "description": "Include node setup scripts (default: false)", "default": False},
+                    "include_data_folder": {"type": "boolean", "description": "Include data/ folder (default: false)", "default": False},
+                    "node_tools_content": {"type": "string", "description": "Shell script content for node setup (e.g. 'sudo apt install iperf3')"},
+                    "notebook_description": {"type": "string", "description": "What the notebook should cover"},
+                    "script_content": {"type": "string", "description": "Custom Python script (advanced — leave empty to auto-generate)"},
+                    "weave_md": {"type": "string", "description": "Custom weave.md spec content (leave empty to auto-generate)"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    # --- Chameleon Cloud tools ---
+    {
+        "type": "function",
+        "function": {
+            "name": "list_chameleon_leases",
+            "description": "List Chameleon Cloud leases (reservations) with status, site, and dates. Optionally filter by site.",
+            "parameters": {
+                "type": "object",
+                "properties": {"site": {"type": "string", "description": "Chameleon site (e.g. CHI@TACC, CHI@UC). Omit to list all."}},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_chameleon_instances",
+            "description": "List running Chameleon Cloud instances (servers) with status, IP, and site.",
+            "parameters": {
+                "type": "object",
+                "properties": {"site": {"type": "string", "description": "Chameleon site to query. Omit for all sites."}},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_chameleon_sites",
+            "description": "List Chameleon Cloud sites (CHI@TACC, CHI@UC, etc.) with configuration status and location.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "chameleon_site_images",
+            "description": "List available OS images at a Chameleon site.",
+            "parameters": {
+                "type": "object",
+                "properties": {"site": {"type": "string", "description": "Chameleon site (e.g. CHI@TACC)"}},
+                "required": ["site"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_chameleon_lease",
+            "description": "Create a new Chameleon lease (reservation) for bare-metal nodes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "site": {"type": "string", "description": "Chameleon site (e.g. CHI@TACC)"},
+                    "name": {"type": "string", "description": "Lease name"},
+                    "node_type": {"type": "string", "description": "Node type (e.g. compute_haswell, gpu_p100)"},
+                    "node_count": {"type": "integer", "description": "Number of nodes", "default": 1},
+                    "duration_hours": {"type": "integer", "description": "Duration in hours", "default": 4},
+                },
+                "required": ["site", "name", "node_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_chameleon_lease",
+            "description": "Delete a Chameleon lease.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "lease_id": {"type": "string", "description": "Lease ID to delete"},
+                    "site": {"type": "string", "description": "Chameleon site"},
+                },
+                "required": ["lease_id", "site"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_chameleon_instance",
+            "description": "Launch a Chameleon instance (server) on an existing lease.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "site": {"type": "string", "description": "Chameleon site"},
+                    "name": {"type": "string", "description": "Instance name"},
+                    "lease_id": {"type": "string", "description": "Lease ID to use"},
+                    "reservation_id": {"type": "string", "description": "Reservation ID from the lease"},
+                    "image_id": {"type": "string", "description": "OS image ID or name (e.g. CC-Ubuntu22.04)"},
+                },
+                "required": ["site", "name", "image_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_chameleon_instance",
+            "description": "Terminate a Chameleon instance.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instance_id": {"type": "string", "description": "Instance ID to terminate"},
+                    "site": {"type": "string", "description": "Chameleon site"},
+                },
+                "required": ["instance_id", "site"],
+            },
+        },
+    },
+    # --- Chameleon Slice tools (LoomAI abstraction) ---
+    {
+        "type": "function",
+        "function": {
+            "name": "list_chameleon_slices",
+            "description": "List Chameleon slices (LoomAI's grouping of Chameleon servers). Each slice groups bare-metal instances into a logical experiment unit.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "deploy_chameleon_slice",
+            "description": "Deploy a Chameleon slice draft — creates leases, launches instances, configures networking.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "draft_id": {"type": "string", "description": "Draft ID to deploy"},
+                    "hours": {"type": "integer", "description": "Lease duration in hours", "default": 4},
+                },
+                "required": ["draft_id"],
+            },
+        },
+    },
+    # --- Composite slice tools (cross-testbed) ---
+    {
+        "type": "function",
+        "function": {
+            "name": "list_composite_slices",
+            "description": "List composite slices — cross-testbed meta-slices that group FABRIC and Chameleon slices together.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_composite_slice",
+            "description": "Get details of a composite slice including its FABRIC and Chameleon member slices.",
+            "parameters": {
+                "type": "object",
+                "properties": {"slice_id": {"type": "string", "description": "Composite slice ID"}},
+                "required": ["slice_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_composite_slice",
+            "description": "Create a new composite slice (cross-testbed meta-slice) to group FABRIC and Chameleon slices together.",
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": "Name for the composite slice"}},
+                "required": ["name"],
+            },
+        },
+    },
+    # --- FABlib examples RAG ---
+    {
+        "type": "function",
+        "function": {
+            "name": "search_examples",
+            "description": "Search FABlib code examples by keyword. Returns matching example filenames, titles, and descriptions. Use read_file to load the full example code. Examples: 'fabnetv4', 'gpu', 'l2 network', 'ssh execute', 'storage'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search keywords (e.g. 'fabnetv4 cross-site', 'gpu rtx6000', 'l2 bridge network')"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -634,12 +872,518 @@ def _run_sync(func, *args, **kwargs) -> Any:
     return func(*args, **kwargs)
 
 
+# FABlib examples index (loaded once, cached)
+_examples_index: list[dict] | None = None
+
+def _load_examples_index() -> list[dict]:
+    """Load the FABlib examples index from disk."""
+    global _examples_index
+    if _examples_index is not None:
+        return _examples_index
+    index_path = os.path.join(_APP_ROOT, "ai-tools", "fablib-examples", "INDEX.json")
+    if not os.path.isfile(index_path):
+        _examples_index = []
+        return _examples_index
+    with open(index_path) as f:
+        _examples_index = json.load(f)
+    return _examples_index
+
+
+async def _search_examples(query: str) -> str:
+    """Search FABlib examples by keyword matching on title, tags, and description."""
+    index = _load_examples_index()
+    if not index:
+        return json.dumps({"results": [], "note": "No examples index found"})
+
+    keywords = query.lower().split()
+    scored: list[tuple[int, dict]] = []
+
+    for entry in index:
+        score = 0
+        searchable = f"{entry.get('title', '')} {' '.join(entry.get('tags', []))} {entry.get('description', '')}".lower()
+        for kw in keywords:
+            if kw in searchable:
+                score += 1
+            # Bonus for tag match (more specific)
+            if kw in [t.lower() for t in entry.get('tags', [])]:
+                score += 1
+        if score > 0:
+            scored.append((score, entry))
+
+    scored.sort(key=lambda x: -x[0])
+    top = scored[:8]  # Return top 8 matches
+
+    results = []
+    for score, entry in top:
+        results.append({
+            "file": f"ai-tools/fablib-examples/{entry['file']}",
+            "title": entry["title"],
+            "description": entry["description"],
+            "tags": entry.get("tags", []),
+        })
+
+    return json.dumps({"query": query, "results": results, "total_matches": len(scored)})
+
+
+async def _create_weave_tool(args: dict) -> str:
+    """Create a complete weave directory with all required files."""
+    from app.user_context import get_user_storage
+    import re
+
+    name = args["name"]
+    description = args.get("description", "") or f"FABRIC experiment: {name}"
+    script_content = args.get("script_content", "")
+    num_nodes = args.get("num_nodes", 2)
+    site = args.get("site", "auto")
+    network_type = args.get("network_type", "L2Bridge")
+
+    # Sanitize name for directory
+    dir_name = re.sub(r'[^\w\-]', '_', name).strip('_')
+    if not dir_name:
+        return json.dumps({"error": "Invalid weave name"})
+
+    base = get_user_storage()
+    weave_dir = os.path.join(base, "my_artifacts", dir_name)
+    if os.path.exists(weave_dir):
+        return json.dumps({"error": f"Weave '{dir_name}' already exists"})
+
+    os.makedirs(weave_dir, exist_ok=True)
+    created_files = []
+
+    # weave.json
+    py_name = re.sub(r'[^\w]', '_', name.lower()).strip('_')
+    weave_config = {
+        "run_script": "weave.sh",
+        "log_file": "weave.log",
+        "name": name,
+        "description": description,
+        "category": "weave",
+        "args": [
+            {"name": "SLICE_NAME", "label": "Slice Name", "type": "string",
+             "required": True, "default": dir_name.lower().replace('_', '-'),
+             "description": "Name for the FABRIC slice"},
+        ],
+    }
+    with open(os.path.join(weave_dir, "weave.json"), "w") as f:
+        json.dump(weave_config, f, indent=2)
+    created_files.append("weave.json")
+
+    # weave.sh — standard orchestrator
+    weave_sh = f'''#!/bin/bash
+set -e
+
+SLICE_NAME="${{SLICE_NAME:-{dir_name.lower().replace('_', '-')}}}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+cleanup() {{
+    echo "### PROGRESS: Stopping experiment..."
+    python3 "$SCRIPT_DIR/{py_name}.py" stop "$SLICE_NAME"
+    echo "### PROGRESS: Cleanup complete"
+    exit 0
+}}
+trap cleanup SIGTERM SIGINT
+
+echo "### PROGRESS: Starting experiment '$SLICE_NAME'..."
+python3 "$SCRIPT_DIR/{py_name}.py" start "$SLICE_NAME"
+
+echo "### PROGRESS: Experiment running. Monitoring..."
+while true; do
+    python3 "$SCRIPT_DIR/{py_name}.py" monitor "$SLICE_NAME"
+    if [ $? -ne 0 ]; then
+        echo "### PROGRESS: Monitor detected an issue, stopping..."
+        cleanup
+    fi
+    sleep 30 &
+    wait $!
+done
+'''
+    with open(os.path.join(weave_dir, "weave.sh"), "w") as f:
+        f.write(weave_sh)
+    os.chmod(os.path.join(weave_dir, "weave.sh"), 0o755)
+    created_files.append("weave.sh")
+
+    # Python experiment script — simple single-node "Hello FABRIC" stub
+    if not script_content:
+        slice_default = dir_name.lower().replace('_', '-')
+        script_content = f'''#!/usr/bin/env python3
+"""
+{name} — FABRIC Experiment Lifecycle Script
+
+A single-node FABRIC slice managed with the FABlib Python API.
+Edit this file to customize the topology, add nodes, networks, and software.
+
+Usage:
+  python3 {py_name}.py start <slice-name>   # Create and provision
+  python3 {py_name}.py stop  <slice-name>   # Tear down
+  python3 {py_name}.py monitor <slice-name> # Health check
+
+FABlib docs: https://fabric-testbed.github.io/fabrictestbed-extensions/
+"""
+
+import sys
+
+
+def start(slice_name: str):
+    """Create and provision a single-node FABRIC slice."""
+    from fabrictestbed_extensions.fablib.fablib import FablibManager
+    fablib = FablibManager()
+
+    # Step 1: Create a new slice (local draft — no resources allocated yet)
+    print(f"### PROGRESS: Step 1/3 — Creating slice '{{slice_name}}'...")
+    slice_obj = fablib.new_slice(name=slice_name)
+
+    # Step 2: Add a single node
+    #   site=None lets FABRIC automatically pick a site with available resources
+    #   Customize cores, ram, disk, image as needed
+    node = slice_obj.add_node(
+        name="node1",
+        site=None,
+        cores=2,
+        ram=8,
+        disk=10,
+        image="default_ubuntu_22",
+    )
+
+    # Step 3: Submit and wait for SSH
+    print("### PROGRESS: Step 2/3 — Submitting slice (3-5 minutes)...")
+    slice_obj.submit()
+    print("### PROGRESS: Step 3/3 — Waiting for SSH access...")
+    slice_obj.wait_ssh(progress=True)
+
+    # Done!
+    print()
+    print(f"### PROGRESS: READY! Slice '{{slice_name}}' is provisioned.")
+    for n in slice_obj.get_nodes():
+        print(f"  {{n.get_name()}}: {{n.get_management_ip()}} ({{n.get_site()}})")
+    print()
+    print("  SSH: ssh -F /home/fabric/work/fabric_config/ssh_config <management_ip>")
+
+
+def stop(slice_name: str):
+    """Delete the slice and free all FABRIC resources."""
+    from fabrictestbed_extensions.fablib.fablib import FablibManager
+    fablib = FablibManager()
+    print(f"### PROGRESS: Deleting slice '{{slice_name}}'...")
+    try:
+        slice_obj = fablib.get_slice(name=slice_name)
+        slice_obj.delete()
+        print("### PROGRESS: Slice deleted.")
+    except Exception as e:
+        print(f"### PROGRESS: Could not delete (may already be gone): {{e}}")
+
+
+def monitor(slice_name: str):
+    """Check slice health. Exit 1 on failure (triggers cleanup in weave.sh)."""
+    from fabrictestbed_extensions.fablib.fablib import FablibManager
+    fablib = FablibManager()
+    try:
+        slice_obj = fablib.get_slice(name=slice_name)
+        state = str(slice_obj.get_state())
+        if "StableOK" not in state:
+            print(f"WARNING: Slice state is {{state}}")
+            sys.exit(1)
+        for node in slice_obj.get_nodes():
+            stdout, _ = node.execute("echo ok", quiet=True)
+            if "ok" not in stdout:
+                raise Exception(f"Node {{node.get_name()}} not responding")
+        print(f"### PROGRESS: Healthy — {{state}}")
+    except Exception as e:
+        print(f"ERROR: {{e}}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print(f"Usage: {py_name}.py {{start|stop|monitor}} SLICE_NAME")
+        sys.exit(1)
+    action, name = sys.argv[1], sys.argv[2]
+    {{"start": start, "stop": stop, "monitor": monitor}}[action](name)
+'''
+    with open(os.path.join(weave_dir, f"{py_name}.py"), "w") as f:
+        f.write(script_content)
+    created_files.append(f"{py_name}.py")
+
+    # .weaveignore
+    with open(os.path.join(weave_dir, ".weaveignore"), "w") as f:
+        f.write("# Files excluded from publishing\ndata/\nresults/\n*.csv\n*.key\nsecrets/\n.ipynb_checkpoints/\nweave.log\n")
+    created_files.append(".weaveignore")
+
+    # weave.log — empty log file (populated when the weave runs)
+    with open(os.path.join(weave_dir, "weave.log"), "w") as f:
+        f.write("")
+    created_files.append("weave.log")
+
+    # weave.md — human-readable specification and description of the weave.
+    # Users can edit this file and ask LoomAI to update the weave accordingly.
+    # LoomAI reads this file as the baseline specification when modifying the weave.
+    weave_md_content = args.get("weave_md", "")
+    if not weave_md_content:
+        weave_md_content = f"""# {name}
+
+{description}
+
+## Overview
+
+A single-node FABRIC slice. Edit this file to customize, then ask LoomAI
+to "update the weave called {dir_name} based on weave.md".
+
+## Files
+
+| File | Description |
+|------|-------------|
+| `{py_name}.py` | Python lifecycle script (start/stop/monitor) using FABlib |
+| `{py_name}.ipynb` | Jupyter notebook for interacting with the slice |
+| `weave.sh` | Shell orchestrator — runs the Python script, handles Stop button |
+| `weave.json` | Metadata, run config, and argument definitions |
+| `weave.md` | This file — weave specification (edit to update the weave) |
+
+## Specification
+
+Edit this section to describe what you want. Then ask LoomAI to update.
+
+### Nodes
+- 1 node: 2 cores, 8GB RAM, 10GB disk, site=auto (FABRIC picks)
+- Image: default_ubuntu_22
+
+### Network
+- (none — add networks here if needed, e.g. "L2Bridge between 2 nodes" or "FABNetv4 for cross-site")
+
+### Software
+- (none — add packages here, e.g. "install iperf3 and htop on all nodes")
+
+### Lifecycle
+- **start**: Create slice with 1 node, submit, wait for SSH
+- **stop**: Delete slice
+- **monitor**: Check slice state is StableOK, verify SSH
+"""
+    with open(os.path.join(weave_dir, "weave.md"), "w") as f:
+        f.write(weave_md_content)
+    created_files.append("weave.md")
+
+    # --- Optional extras ---
+
+    # data/ folder for results collection
+    if args.get("include_data_folder"):
+        data_dir = os.path.join(weave_dir, "data")
+        os.makedirs(data_dir, exist_ok=True)
+        with open(os.path.join(data_dir, ".gitkeep"), "w") as f:
+            f.write("")
+        with open(os.path.join(data_dir, "README.md"), "w") as f:
+            f.write(f"# Data\n\nExperiment results for {name}.\n\nThis folder is excluded from publishing via `.weaveignore`.\n")
+        created_files.append("data/README.md")
+
+    # node_tools/ folder for scripts copied to VMs
+    if args.get("include_node_tools"):
+        tools_dir = os.path.join(weave_dir, "node_tools")
+        os.makedirs(tools_dir, exist_ok=True)
+        setup_content = args.get("node_tools_content", "")
+        if not setup_content:
+            setup_content = f"""#!/bin/bash
+# Setup script for {name} — copied to each VM and executed
+set -e
+
+echo "Updating packages..."
+sudo apt-get update -qq
+
+echo "Installing tools..."
+# Add your package installations here:
+# sudo apt-get install -y -qq iperf3 htop
+
+echo "Setup complete."
+"""
+        with open(os.path.join(tools_dir, "setup.sh"), "w") as f:
+            f.write(setup_content)
+        os.chmod(os.path.join(tools_dir, "setup.sh"), 0o755)
+        created_files.append("node_tools/setup.sh")
+
+    # Jupyter notebook — simple single-node FABlib starter at weave root
+    if args.get("include_notebooks", True):  # Always include notebook by default
+        nb_desc = args.get("notebook_description", f"Interact with the {name} slice")
+        slice_default = dir_name.lower().replace('_', '-')
+        notebook = {
+            "cells": [
+                {"cell_type": "markdown", "metadata": {}, "source": [
+                    f"# {name}\n",
+                    f"\n",
+                    f"{nb_desc}\n",
+                    f"\n",
+                    f"Run the weave first (`weave.sh`) to provision the slice, then use this notebook.\n",
+                ]},
+                {"cell_type": "markdown", "metadata": {}, "source": [
+                    "## 1. Load the Slice\n",
+                ]},
+                {"cell_type": "code", "metadata": {}, "source": [
+                    "from fabrictestbed_extensions.fablib.fablib import FablibManager\n",
+                    "\n",
+                    "fablib = FablibManager()\n",
+                    f"SLICE_NAME = '{slice_default}'\n",
+                    "\n",
+                    "slice_obj = fablib.get_slice(name=SLICE_NAME)\n",
+                    "print(f'Slice: {slice_obj.get_name()} — {slice_obj.get_state()}')\n",
+                ], "outputs": [], "execution_count": None},
+                {"cell_type": "markdown", "metadata": {}, "source": [
+                    "## 2. Node Details\n",
+                ]},
+                {"cell_type": "code", "metadata": {}, "source": [
+                    "for node in slice_obj.get_nodes():\n",
+                    "    print(f'{node.get_name()}: {node.get_management_ip()} ({node.get_site()})')\n",
+                    "    print(f'  SSH: {node.get_ssh_command()}')\n",
+                ], "outputs": [], "execution_count": None},
+                {"cell_type": "markdown", "metadata": {}, "source": [
+                    "## 3. Run a Command\n",
+                ]},
+                {"cell_type": "code", "metadata": {}, "source": [
+                    "node = slice_obj.get_nodes()[0]\n",
+                    "stdout, stderr = node.execute('hostname && uname -a')\n",
+                    "print(stdout)\n",
+                ], "outputs": [], "execution_count": None},
+                {"cell_type": "markdown", "metadata": {}, "source": [
+                    "## 4. Clean Up\n",
+                ]},
+                {"cell_type": "code", "metadata": {}, "source": [
+                    "# Uncomment to delete the slice:\n",
+                    "# slice_obj.delete()\n",
+                    "# print('Slice deleted.')\n",
+                ], "outputs": [], "execution_count": None},
+            ],
+            "metadata": {
+                "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+                "language_info": {"name": "python", "version": "3.11.0"},
+            },
+            "nbformat": 4,
+            "nbformat_minor": 5,
+        }
+        nb_filename = f"{py_name}.ipynb"
+        with open(os.path.join(weave_dir, nb_filename), "w") as f:
+            json.dump(notebook, f, indent=1)
+        created_files.append(nb_filename)
+
+    return json.dumps({
+        "status": "created",
+        "dir_name": dir_name,
+        "path": f"my_artifacts/{dir_name}/",
+        "files": created_files,
+    })
+
+
+def _tool_summary(name: str, args: dict, result: str) -> str:
+    """Generate a concise one-line summary of a tool execution result."""
+    try:
+        data = json.loads(result) if result else None
+    except (json.JSONDecodeError, TypeError):
+        data = None
+
+    if name == "list_slices" and isinstance(data, list):
+        from collections import Counter
+        states = Counter(s.get("state", "?") for s in data)
+        parts = [f"{v} {k}" for k, v in states.most_common()]
+        return f"Found {len(data)} slice{'s' if len(data) != 1 else ''}" + (f" ({', '.join(parts)})" if parts else "")
+
+    if name == "query_sites" and isinstance(data, list):
+        available = [s for s in data if s.get("cores_available", 0) > 0]
+        return f"{len(data)} sites ({len(available)} with available cores)"
+
+    if name == "create_slice" and isinstance(data, dict):
+        return f"Created draft '{data.get('name', '?')}'"
+
+    if name == "submit_slice":
+        sname = args.get("slice_name", "?")
+        return f"Submitted '{sname}' for provisioning"
+
+    if name == "delete_slice":
+        sname = args.get("slice_name", "?")
+        return f"Deleted '{sname}'"
+
+    if name == "renew_slice":
+        sname = args.get("slice_name", "?")
+        return f"Renewed '{sname}'"
+
+    if name == "add_node" and isinstance(data, dict):
+        return f"Added node '{data.get('name', '?')}' at {args.get('site', '?')}"
+
+    if name == "add_network":
+        return f"Added network '{args.get('network_name', '?')}'"
+
+    if name == "ssh_execute":
+        node = args.get("node_name", "?")
+        if isinstance(data, dict):
+            exit_code = data.get("exit_code", "?")
+            return f"Ran on {node} (exit {exit_code})"
+        return f"Ran on {node}"
+
+    if name == "get_slice" and isinstance(data, dict):
+        state = data.get("state", "?")
+        nodes = len(data.get("nodes", []))
+        return f"'{data.get('name', '?')}' — {state}, {nodes} node{'s' if nodes != 1 else ''}"
+
+    if name == "load_template":
+        tname = args.get("template_name", "?")
+        return f"Loaded template '{tname}'"
+
+    # Chameleon tools
+    if name == "list_chameleon_leases" and isinstance(data, list):
+        active = sum(1 for l in data if l.get("status") == "ACTIVE")
+        return f"Found {len(data)} leases ({active} active)"
+
+    if name == "list_chameleon_instances" and isinstance(data, list):
+        return f"Found {len(data)} instances"
+
+    if name == "list_chameleon_sites" and isinstance(data, list):
+        configured = sum(1 for s in data if s.get("configured"))
+        return f"{len(data)} sites ({configured} configured)"
+
+    if name == "chameleon_site_images" and isinstance(data, list):
+        return f"{len(data)} images available"
+
+    if name == "create_chameleon_lease" and isinstance(data, dict):
+        return f"Created lease '{data.get('name', '?')}'"
+
+    if name == "create_chameleon_instance" and isinstance(data, dict):
+        return f"Launched instance '{data.get('name', '?')}'"
+
+    if name in ("delete_chameleon_lease", "delete_chameleon_instance"):
+        return "Deleted"
+
+    if name == "list_chameleon_slices" and isinstance(data, list):
+        active = sum(1 for s in data if s.get("state") in ("Active", "Deployed"))
+        return f"Found {len(data)} Chameleon slices ({active} active)"
+
+    if name == "deploy_chameleon_slice" and isinstance(data, dict):
+        leases = len(data.get("leases", []))
+        return f"Deployed draft — {leases} lease{'s' if leases != 1 else ''} created"
+
+    if name == "list_composite_slices" and isinstance(data, list):
+        return f"Found {len(data)} composite slices"
+
+    if name == "get_composite_slice" and isinstance(data, dict):
+        name_val = data.get("name", "?")
+        fab = len(data.get("fabric_slices", []))
+        chi = len(data.get("chameleon_slices", []))
+        return f"'{name_val}' — {fab} FABRIC + {chi} Chameleon members"
+
+    if name == "create_composite_slice" and isinstance(data, dict):
+        return f"Created composite '{data.get('name', '?')}'"
+
+    if name == "search_examples" and isinstance(data, dict):
+        results = data.get("results", [])
+        total = data.get("total_matches", 0)
+        return f"Found {total} examples, showing top {len(results)}"
+
+    # Default: truncate result
+    if result:
+        clean = result.strip()[:80]
+        if len(result) > 80:
+            clean += "..."
+        return clean
+    return "Done"
+
+
 async def execute_tool(name: str, arguments: dict) -> str:
     """Execute a tool and return the result as a JSON string."""
     try:
         if name == "list_slices":
             from app.routes.slices import list_slices
-            result = await list_slices()
+            result = await list_slices(max_age=0)
             # Trim to essential fields
             return json.dumps([{
                 "name": s.get("name"), "state": s.get("state"),
@@ -649,12 +1393,12 @@ async def execute_tool(name: str, arguments: dict) -> str:
 
         elif name == "get_slice":
             from app.routes.slices import get_slice
-            result = await get_slice(arguments["slice_name"])
+            result = await get_slice(arguments["slice_name"], max_age=0)
             return json.dumps(result, default=str)
 
         elif name == "query_sites":
             from app.routes.resources import list_sites
-            sites = await list_sites()
+            sites = await list_sites(max_age=0)
             # Return compact summary
             summary = []
             for s in sites:
@@ -966,6 +1710,9 @@ async def execute_tool(name: str, arguments: dict) -> str:
             result = stop_background_run(arguments["run_id"])
             return json.dumps(result, default=str)
 
+        elif name == "create_weave":
+            return await _create_weave_tool(arguments)
+
         # --- Web Search & Fetch ---
         elif name == "web_search":
             result = await _execute_web_search(
@@ -980,6 +1727,95 @@ async def execute_tool(name: str, arguments: dict) -> str:
                 arguments.get("max_length", 4000),
             )
             return result
+
+        # --- Chameleon Cloud tools ---
+
+        elif name == "list_chameleon_leases":
+            from app.routes.chameleon import list_leases
+            site = arguments.get("site")
+            result = await list_leases(site)
+            return json.dumps([{
+                "name": l.get("name"), "status": l.get("status"),
+                "site": l.get("_site"), "id": l.get("id"),
+                "start": l.get("start_date", "")[:16],
+                "end": l.get("end_date", "")[:16],
+            } for l in result], default=str)
+
+        elif name == "list_chameleon_instances":
+            from app.routes.chameleon import list_instances
+            site = arguments.get("site")
+            result = await list_instances(site)
+            return json.dumps(result, default=str)
+
+        elif name == "list_chameleon_sites":
+            from app.routes.chameleon import list_chameleon_sites
+            result = await list_chameleon_sites()
+            return json.dumps(result, default=str)
+
+        elif name == "chameleon_site_images":
+            from app.routes.chameleon import site_images
+            result = await site_images(arguments["site"])
+            return json.dumps(result[:20], default=str)  # Limit to 20
+
+        elif name == "create_chameleon_lease":
+            from app.routes.chameleon import create_lease
+            from starlette.requests import Request as _Req
+            from starlette.datastructures import Headers
+            # Build a mock request with the arguments as JSON body
+            scope = {"type": "http", "method": "POST", "headers": []}
+            mock_req = _Req(scope)
+            mock_req._body = json.dumps(arguments).encode()
+            result = await create_lease(mock_req)
+            return json.dumps(result, default=str)
+
+        elif name == "delete_chameleon_lease":
+            from app.routes.chameleon import delete_lease
+            result = await delete_lease(arguments["lease_id"], arguments.get("site", "CHI@TACC"))
+            return json.dumps(result, default=str)
+
+        elif name == "create_chameleon_instance":
+            from app.routes.chameleon import create_instance
+            from starlette.requests import Request as _Req
+            scope = {"type": "http", "method": "POST", "headers": []}
+            mock_req = _Req(scope)
+            mock_req._body = json.dumps(arguments).encode()
+            result = await create_instance(mock_req)
+            return json.dumps(result, default=str)
+
+        elif name == "delete_chameleon_instance":
+            from app.routes.chameleon import delete_instance
+            result = await delete_instance(arguments["instance_id"], arguments.get("site", "CHI@TACC"))
+            return json.dumps(result, default=str)
+
+        elif name == "list_chameleon_slices":
+            from app.routes.chameleon import list_chameleon_slices
+            result = await list_chameleon_slices()
+            return json.dumps(result, default=str)
+
+        elif name == "deploy_chameleon_slice":
+            from app.routes.chameleon import deploy_draft
+            body = {"duration_hours": arguments.get("hours", 4)}
+            result = await deploy_draft(arguments["draft_id"], body)
+            return json.dumps(result, default=str)
+
+        elif name == "list_composite_slices":
+            from app.routes.composite import list_composite_slices
+            result = await list_composite_slices()
+            return json.dumps(result, default=str)
+
+        elif name == "get_composite_slice":
+            from app.routes.composite import get_composite_slice
+            result = await get_composite_slice(arguments["slice_id"])
+            return json.dumps(result, default=str)
+
+        elif name == "create_composite_slice":
+            from app.routes.composite import create_composite_slice
+            body = {"name": arguments["name"]}
+            result = await create_composite_slice(body)
+            return json.dumps(result, default=str)
+
+        elif name == "search_examples":
+            return await _search_examples(arguments.get("query", ""))
 
         else:
             return json.dumps({"error": f"Unknown tool: {name}"})
@@ -1084,7 +1920,10 @@ async def chat_stream(request: Request):
 
     body = await request.json()
     messages = body.get("messages", [])
-    model = body.get("model", "qwen3-coder-30b")
+    model = body.get("model") or ""
+    if not model:
+        from app.settings_manager import get_default_model
+        model = get_default_model() or "qwen3-coder-30b"
     agent_id = body.get("agent")
     slice_context = body.get("slice_context")
     request_id = body.get("request_id", "")
@@ -1104,29 +1943,130 @@ async def chat_stream(request: Request):
         server_url = _ai_server_url()
         api_key = _get_ai_api_key()
 
-    # Build system prompt
-    system_parts = [_load_system_prompt()]
-
-    # Tool-use instructions
-    system_parts.append(
-        "\n\n## Tool Use\n\n"
-        "You have access to FABRIC tools that let you:\n"
-        "- Query sites and manage slices (create, submit, refresh, validate, delete, renew)\n"
-        "- Build topologies (add/remove/update nodes, components, networks)\n"
-        "- Work with templates (list, load, save as template)\n"
-        "- Read/write files on the container filesystem (create artifacts, scripts, configs)\n"
-        "- Manage artifacts (list local, publish to FABRIC marketplace)\n"
-        "- Execute commands on VMs via SSH and read/write files on VMs via SFTP\n"
-        "- List and manage recipes for VM configuration\n"
-        "- Control JupyterLab (start, stop, status)\n"
-        "- Search the web for documentation, tutorials, and troubleshooting info\n"
-        "- Fetch and read webpage content from URLs\n"
-        "- Start, monitor, and stop background weave runs (weave scripts that survive browser disconnects)\n\n"
-        "Use tools when the user asks to perform operations. After using tools, summarize what you did clearly.\n"
-        "For creating artifacts, write files under 'my_artifacts/<artifact_name>/' in the container filesystem.\n"
-        "When users ask questions you don't know the answer to, use web_search to find relevant information.\n"
-        "For running weave scripts, prefer start_background_run — it runs detached so the user can disconnect and reconnect."
+    # Build system prompt with model-aware context management
+    from app.chat_context import (
+        get_model_profile, get_system_prompt, trim_conversation,
+        filter_tool_schemas, estimate_tokens, estimate_conversation_tokens,
     )
+    from app.chat_intent import detect_intent, detect_multi_step, is_destructive
+    from app.chat_prompt import LOOMAI_MODE_PROMPT, LOOMAI_MODE_EXTENDED
+
+    profile = get_model_profile(model)
+    logger.info("Chat model=%s tier=%s context=%d", model, profile["tier"], profile["context_window"])
+
+    # --- LoomAI-side intent detection (pre-processing) ---
+    # Extract the user's last message for intent matching
+    user_message = ""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            user_message = msg.get("content") or ""
+            break
+
+    intent_tool, intent_args, intent_confidence = detect_intent(user_message)
+    template = detect_multi_step(user_message)
+
+    # Pre-fetch data for high-confidence intents
+    prefetched_data = ""
+    prefetched_tools: list[tuple[str, str]] = []  # (tool_name, result)
+
+    confirm_needed = False  # C2: dry run for destructive ops
+
+    if intent_confidence in ("high", "medium") and intent_tool:
+        if is_destructive(intent_tool):
+            # C2: Don't execute destructive ops — ask LLM to confirm with user
+            confirm_needed = True
+            logger.info("Destructive intent %s — will ask for confirmation", intent_tool)
+        else:
+            try:
+                result = await execute_tool(intent_tool, intent_args)
+                prefetched_data = result
+                prefetched_tools.append((intent_tool, result[:profile["tool_result_max"]]))
+                logger.info("Pre-fetched %s (%s confidence)", intent_tool, intent_confidence)
+            except Exception as e:
+                logger.warning("Pre-fetch failed for %s: %s", intent_tool, e)
+
+    elif template and not template.get("confirm"):
+        # Non-destructive template — execute first step
+        if template["steps"]:
+            step_tool, step_args = template["steps"][0]
+            try:
+                result = await execute_tool(step_tool, step_args)
+                prefetched_data = result
+                prefetched_tools.append((step_tool, result[:profile["tool_result_max"]]))
+            except Exception:
+                pass
+
+    # Always pre-fetch slice summary (lightweight, ~200 tokens)
+    if not any(t == "list_slices" for t, _ in prefetched_tools):
+        try:
+            slice_summary = await execute_tool("list_slices", {})
+            prefetched_tools.append(("list_slices", slice_summary[:300]))
+        except Exception:
+            pass
+
+    # --- Build system prompt ---
+    # For low-confidence / complex requests: use the full system prompt with tool-calling
+    # so the LLM can call write_file, create_slice, etc. directly.
+    # For high-confidence: use compact LoomAI-mode prompt (LoomAI already executed the tool).
+    use_full_llm_mode = (intent_confidence == "low")
+
+    if use_full_llm_mode:
+        # Full mode — LLM needs tool descriptions and the ability to call tools
+        # But for compact models, use compact prompt even in full mode to avoid overflow
+        if profile["tier"] == "compact":
+            system_parts = [LOOMAI_MODE_PROMPT]
+        else:
+            system_parts = [get_system_prompt(profile["system_prompt"])]
+        # Add tool-use instructions
+        system_parts.append(
+            "\n\n## Tool Use\n"
+            "You have tools to: create/manage slices and nodes, write/read files, "
+            "SSH to VMs, list sites/templates/artifacts, run weave scripts.\n"
+            "Use tools proactively. Summarize after each tool call.\n\n"
+            "**Creating weaves**: Use `create_weave` with ALL options in ONE call.\n"
+            "**Writing FABlib code**: ALWAYS call `search_examples(query)` first to find\n"
+            "proven code patterns, then `read_file` to load the example. Adapt it.\n"
+            "Never write FABlib code from scratch — use the example library.\n"
+            "When updating a weave, read `weave.md` first — it is the authoritative spec.\n"
+        )
+    elif profile["tier"] == "compact":
+        system_parts = [LOOMAI_MODE_PROMPT]
+    else:
+        system_parts = [LOOMAI_MODE_EXTENDED]
+
+    # Inject pre-fetched data
+    if prefetched_tools:
+        data_section = "\n\n## Current Data\n\n"
+        for tool_name, result in prefetched_tools:
+            data_section += f"**{tool_name}**:\n```json\n{result}\n```\n\n"
+        system_parts.append(data_section)
+
+    # C2: If destructive action detected, tell LLM to confirm
+    if confirm_needed:
+        system_parts.append(
+            f"\n\n## Action Requires Confirmation\n"
+            f"The user wants to execute: **{intent_tool}**({json.dumps(intent_args)})\n"
+            f"This is a destructive operation. Ask the user to confirm before proceeding.\n"
+            f"If they confirm, tell them to say 'yes, {intent_tool}' to execute."
+        )
+
+    # If template matched and needs confirmation, tell the LLM
+    if template and template.get("confirm"):
+        steps_desc = ", ".join(f"{s[0]}({s[1]})" for s in template["steps"][:5])
+        system_parts.append(
+            f"\n\n## Planned Action\n"
+            f"The user wants to: {template['description']}\n"
+            f"Steps: {steps_desc}\n"
+            f"Ask the user to confirm before executing."
+        )
+
+    # Auto-activate agents based on intent when no agent is explicitly selected
+    if not agent_id and use_full_llm_mode:
+        import re as _re
+        msg_lower = user_message.lower()
+        if (_re.search(r"write|create|update|modify|build|edit.*\.py|fablib|weave|script|code|slice.*node", msg_lower)
+                and intent_tool in ("create_weave", "read_file", "")):
+            agent_id = "fablib-coder"
 
     if agent_id:
         agents = _load_agents()
@@ -1144,8 +2084,27 @@ async def chat_stream(request: Request):
 
     system_message = {"role": "system", "content": "\n".join(system_parts)}
 
+    # Filter tools based on model capacity (full set for low-confidence/complex requests)
+    max_tools = len(TOOL_SCHEMAS) if use_full_llm_mode else profile["max_tools"]
+    tools_for_model = filter_tool_schemas(TOOL_SCHEMAS, max_tools)
+    system_token_estimate = estimate_tokens(system_message["content"])
+
+    tools_disabled = False  # Set True if model can't do tool calling
+
     async def generate():
+        nonlocal tools_disabled, model
+        import time as _time
+        _start_time = _time.time()
+        _tool_call_count = len(prefetched_tools)
+
         try:
+            # Emit pre-fetched tool results to frontend
+            for tool_name, result in prefetched_tools:
+                if tool_name != "list_slices":  # Don't show background pre-fetch
+                    yield f"data: {json.dumps({'tool_call': {'name': tool_name, 'arguments': intent_args}})}\n\n"
+                    yield f"data: {json.dumps({'tool_result': {'name': tool_name, 'result': result[:2000]}})}\n\n"
+                    yield f"data: {json.dumps({'execution_progress': f'Executed {tool_name}'})}\n\n"
+
             conversation = [system_message] + messages
             tool_round = 0
 
@@ -1155,14 +2114,24 @@ async def chat_stream(request: Request):
                 if request_id and request_id in _cancelled_requests:
                     break
 
+                # Trim conversation to fit model's context window
+                trim_result = trim_conversation(conversation, system_token_estimate, profile)
+                conversation = trim_result.messages
+
+                # Warn user if context is nearly full (but not on the first message)
+                if trim_result.near_full and tool_round > 0:
+                    yield f"data: {json.dumps({'warning': 'Context window is nearly full. The conversation will be automatically compacted to continue.'})}\n\n"
+
                 # Make LLM call (non-streaming for tool rounds, streaming for final)
                 llm_body: dict[str, Any] = {
                     "model": model,
                     "messages": conversation,
-                    "tools": TOOL_SCHEMAS,
-                    "temperature": 0.7,
-                    "max_tokens": 4096,
+                    "temperature": profile["temperature"],
+                    "max_tokens": profile["max_output"],
                 }
+                # Only include tools if model supports them and they haven't been disabled
+                if not tools_disabled and profile.get("supports_tools", True):
+                    llm_body["tools"] = tools_for_model
 
                 # Try non-streaming first to detect tool calls
                 resp = await ai_client.post(
@@ -1172,31 +2141,64 @@ async def chat_stream(request: Request):
                         "Content-Type": "application/json",
                     },
                     json={**llm_body, "stream": False},
-                    timeout=120.0,
+                    timeout=60.0,
                 )
 
-                # On 5xx from primary server, auto-fallback to NRP
-                if resp.status_code >= 500 and not use_nrp:
-                    nrp_key = _get_nrp_api_key()
-                    if nrp_key:
-                        logger.info("Primary AI server returned %s, falling back to NRP", resp.status_code)
-                        yield f"data: {json.dumps({'content': '[Falling back to NRP server...] '})}\n\n"
-                        resp = await ai_client.post(
-                            f"{_nrp_server_url()}/v1/chat/completions",
-                            headers={
-                                "Authorization": f"Bearer {nrp_key}",
-                                "Content-Type": "application/json",
-                            },
-                            json={**llm_body, "stream": False},
-                            timeout=120.0,
-                        )
+                # On server error or model-not-found, try fallbacks
+                if resp.status_code >= 400 and resp.status_code != 200:
+                    # On 404 (model not found), retry with default model
+                    if resp.status_code == 404 and not use_nrp:
+                        from app.settings_manager import get_default_model as _settings_default
+                        fallback_model = _settings_default()
+                        if fallback_model and fallback_model != model:
+                            logger.info("Model %s returned 404, retrying with default %s", model, fallback_model)
+                            yield f"data: {json.dumps({'content': f'[Model {model} unavailable, switching to {fallback_model}...] '})}\n\n"
+                            llm_body["model"] = fallback_model
+                            model = fallback_model
+                            resp = await ai_client.post(
+                                f"{server_url}/v1/chat/completions",
+                                headers={
+                                    "Authorization": f"Bearer {api_key}",
+                                    "Content-Type": "application/json",
+                                },
+                                json={**llm_body, "stream": False},
+                                timeout=60.0,
+                            )
+
+                    # On 5xx, fallback to NRP
+                    if resp.status_code >= 500 and not use_nrp:
+                        nrp_key = _get_nrp_api_key()
+                        if nrp_key:
+                            logger.info("Primary AI server returned %s, falling back to NRP", resp.status_code)
+                            yield f"data: {json.dumps({'content': '[Falling back to NRP server...] '})}\n\n"
+                            resp = await ai_client.post(
+                                f"{_nrp_server_url()}/v1/chat/completions",
+                                headers={
+                                    "Authorization": f"Bearer {nrp_key}",
+                                    "Content-Type": "application/json",
+                                },
+                                json={**llm_body, "stream": False},
+                                timeout=60.0,
+                            )
 
                 if resp.status_code != 200:
-                    yield f"data: {json.dumps({'error': f'LLM error {resp.status_code}: {resp.text[:200]}'})}\n\n"
+                    error_text = resp.text[:300]
+                    # Check if error is due to tools not being supported
+                    if "tool" in error_text.lower() and not tools_disabled and "tools" in llm_body:
+                        logger.info("Model %s may not support tools, retrying without", model)
+                        tools_disabled = True
+                        del llm_body["tools"]
+                        no_tools_msg = '[This model does not support tool calling. I will suggest loomai CLI commands instead.]\n\n'
+                        yield f"data: {json.dumps({'content': no_tools_msg})}\n\n"
+                        continue  # Retry without tools
+                    yield f"data: {json.dumps({'error': f'LLM error {resp.status_code}: {error_text}'})}\n\n"
                     return
 
                 result = resp.json()
-                choice = result.get("choices", [{}])[0]
+                choices = result.get("choices") or [{}]
+                if not choices:
+                    choices = [{}]
+                choice = choices[0]
                 msg = choice.get("message", {})
                 finish = choice.get("finish_reason", "")
 
@@ -1220,18 +2222,23 @@ async def chat_stream(request: Request):
 
                         # Execute the tool
                         tool_result = await execute_tool(tc_name, tc_args)
+                        summary = _tool_summary(tc_name, tc_args, tool_result)
 
-                        # Notify frontend about tool result
-                        yield f"data: {json.dumps({'tool_result': {'name': tc_name, 'result': tool_result[:2000]}})}\n\n"
+                        # Notify frontend about tool result with summary
+                        yield f"data: {json.dumps({'tool_result': {'name': tc_name, 'result': tool_result[:2000], 'summary': summary}})}\n\n"
 
-                        # Add tool result to conversation
+                        # Add tool result to conversation (truncated per model profile)
+                        tool_max = profile["tool_result_max"]
+                        tool_result = tool_result or ""
+                        trimmed_result = tool_result[:tool_max] if len(tool_result) > tool_max else tool_result
                         conversation.append({
                             "role": "tool",
                             "tool_call_id": tc_id,
-                            "content": tool_result,
+                            "content": trimmed_result,
                         })
 
                     tool_round += 1
+                    _tool_call_count += len(tool_calls)
                     continue
 
                 # No tool calls — stream the final text response
@@ -1264,7 +2271,8 @@ async def chat_stream(request: Request):
                             break
                         try:
                             chunk = json.loads(data)
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            chunk_choices = chunk.get("choices") or [{}]
+                            delta = (chunk_choices[0] if chunk_choices else {}).get("delta", {})
 
                             # Check for tool calls in streaming response too
                             if delta.get("tool_calls"):
@@ -1279,12 +2287,58 @@ async def chat_stream(request: Request):
                         except json.JSONDecodeError:
                             continue
 
+                # C5: Emit usage stats
+                elapsed_ms = int((_time.time() - _start_time) * 1000)
+                conv_tokens = estimate_conversation_tokens(conversation)
+                usage_data = {"tokens": conv_tokens, "tool_calls": _tool_call_count, "duration_ms": elapsed_ms}
+                yield f"data: {json.dumps({'usage': usage_data})}\n\n"
                 yield "data: [DONE]\n\n"
                 return
 
-            # Exhausted tool rounds
-            limit_msg = json.dumps({"content": "\n\n*[Reached maximum tool call limit]*"})
-            yield f"data: {limit_msg}\n\n"
+            # Exhausted tool rounds — ask LLM to summarize progress for continuity
+            # Append a system nudge so the LLM wraps up gracefully
+            conversation.append({
+                "role": "user",
+                "content": (
+                    "[System: Tool call limit reached. Please summarize what you've accomplished so far "
+                    "and what steps remain. The user can click 'Continue' to resume.]"
+                ),
+            })
+            # Make one final LLM call (without tools) to get a summary
+            try:
+                summary_body = {
+                    "model": model,
+                    "messages": conversation,
+                    "temperature": profile["temperature"],
+                    "max_tokens": min(profile["max_output"], 1024),
+                    "stream": True,
+                }
+                async with ai_client.stream(
+                    "POST",
+                    f"{server_url}/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=summary_body,
+                ) as summary_resp:
+                    if summary_resp.status_code == 200:
+                        async for line in summary_resp.aiter_lines():
+                            if not line.startswith("data: "):
+                                continue
+                            data = line[6:]
+                            if data == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                delta = (chunk.get("choices") or [{}])[0].get("delta", {})
+                                content = delta.get("content")
+                                if content:
+                                    yield f"data: {json.dumps({'content': content})}\n\n"
+                            except json.JSONDecodeError:
+                                continue
+            except Exception:
+                pass
+
+            # Emit tool_limit_reached so frontend can show Continue button
+            yield f"data: {json.dumps({'tool_limit_reached': True, 'tool_rounds_used': tool_round})}\n\n"
             yield "data: [DONE]\n\n"
 
         except httpx.ReadError:

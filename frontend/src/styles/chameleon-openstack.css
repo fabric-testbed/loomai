@@ -1,0 +1,237 @@
+/* Chameleon OpenStack sub-view */
+.chi-os-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Sub-tab bar — matches .chi-resource-category-bar */
+.chi-os-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--fabric-border);
+  flex-shrink: 0;
+  background: var(--fabric-bg-tint);
+}
+
+.chi-os-tab {
+  flex: 1;
+  padding: 7px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chi-os-tab:hover { color: var(--fabric-text); background: var(--fabric-white); }
+.chi-os-tab.active { color: #39B54A; border-bottom-color: #39B54A; }
+
+/* Action bar — filter + buttons */
+.chi-os-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--fabric-border);
+  background: var(--fabric-bg);
+  flex-shrink: 0;
+}
+
+.chi-os-filter {
+  flex: 1;
+  min-width: 120px;
+  max-width: 320px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+}
+.chi-os-filter::placeholder { color: var(--fabric-text-muted); }
+
+.chi-os-site-select {
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+}
+
+.chi-os-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chi-os-btn:hover { background: var(--fabric-bg-tint); }
+.chi-os-btn:disabled { opacity: 0.5; cursor: default; }
+.chi-os-btn-primary {
+  background: #39B54A;
+  color: #fff;
+  border-color: #2e9a3c;
+}
+.chi-os-btn-primary:hover { background: #2e9a3c; }
+.chi-os-btn-danger {
+  border-color: #b00020;
+  color: #b00020;
+}
+.chi-os-btn-danger:hover { background: #ffeef0; }
+
+/* Scrollable content area */
+.chi-os-content {
+  flex: 1;
+  overflow: auto;
+  padding: 0;
+}
+
+/* Table */
+.chi-os-table-wrap {
+  overflow: auto;
+  height: 100%;
+}
+
+.chi-os-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.chi-os-table th {
+  position: sticky;
+  top: 0;
+  background: var(--fabric-bg-tint);
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fabric-text-muted);
+  border-bottom: 1px solid var(--fabric-border);
+  white-space: nowrap;
+}
+.chi-os-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--fabric-border);
+  color: var(--fabric-text);
+  vertical-align: middle;
+}
+.chi-os-table tr:hover td {
+  background: var(--fabric-bg-tint);
+}
+.chi-os-table tr.chi-os-row-selected td {
+  background: var(--fabric-bg-tint);
+}
+.chi-os-empty {
+  text-align: center;
+  color: var(--fabric-text-muted);
+  padding: 24px !important;
+}
+
+/* Status badges */
+.chi-os-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.chi-os-badge-active { background: #d9f5dd; color: #1a7a2a; }
+.chi-os-badge-pending, .chi-os-badge-build { background: #fff3cd; color: #856404; }
+.chi-os-badge-error { background: #fdd; color: #b00020; }
+.chi-os-badge-down, .chi-os-badge-shutoff, .chi-os-badge-terminated, .chi-os-badge-deleted { background: #eee; color: #666; }
+
+.chi-os-mono {
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+}
+
+/* Create key pair inline form */
+.chi-os-create-kp {
+  padding: 10px;
+  border-bottom: 1px solid var(--fabric-border);
+  background: var(--fabric-bg-tint);
+  flex-shrink: 0;
+}
+.chi-os-create-kp-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.chi-os-create-kp-row label {
+  width: 130px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fabric-text);
+  padding-top: 4px;
+  flex-shrink: 0;
+}
+.chi-os-create-kp-row input,
+.chi-os-create-kp-row select,
+.chi-os-create-kp-row textarea {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  font-family: inherit;
+}
+.chi-os-create-kp-row textarea {
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  resize: vertical;
+}
+.chi-os-create-kp-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Row action buttons */
+.chi-os-row-actions {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.chi-os-btn-sm {
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid var(--fabric-border);
+  border-radius: 3px;
+  background: var(--fabric-white);
+  color: var(--fabric-text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chi-os-btn-sm:hover { background: var(--fabric-bg-tint); }
+.chi-os-btn-sm.chi-os-btn-danger {
+  border-color: #b00020;
+  color: #b00020;
+}
+.chi-os-btn-sm.chi-os-btn-danger:hover { background: #ffeef0; }
+
+/* Dark mode overrides */
+:root[data-theme="dark"] .chi-os-badge-active { background: #1a3a1f; color: #6fd97a; }
+:root[data-theme="dark"] .chi-os-badge-pending,
+:root[data-theme="dark"] .chi-os-badge-build { background: #3a3520; color: #ffc107; }
+:root[data-theme="dark"] .chi-os-badge-error { background: #3a1a1a; color: #ff6b6b; }
+:root[data-theme="dark"] .chi-os-badge-down,
+:root[data-theme="dark"] .chi-os-badge-shutoff,
+:root[data-theme="dark"] .chi-os-badge-terminated,
+:root[data-theme="dark"] .chi-os-badge-deleted { background: #2a2a2a; color: #999; }
+:root[data-theme="dark"] .chi-os-btn-danger:hover { background: #3a1a1a; }
+:root[data-theme="dark"] .chi-os-btn-sm.chi-os-btn-danger:hover { background: #3a1a1a; }

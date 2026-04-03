@@ -29,11 +29,25 @@
 }
 
 .landing-brand {
-  background: linear-gradient(135deg, var(--fabric-primary), #008e7a);
+  background: linear-gradient(135deg, #27aae1, #0e7ab5);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
+
+.landing-logo-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+.landing-logo {
+  height: 180px;
+  display: block;
+  margin: 0 auto;
+}
+.landing-logo-dark { display: none; }
+[data-theme="dark"] .landing-logo-light { display: none; }
+[data-theme="dark"] .landing-logo-dark { display: block; }
 
 .landing-hero-subtitle {
   font-size: 16px;
@@ -70,7 +84,7 @@
 
 .landing-tour-btn-primary {
   color: white;
-  background: linear-gradient(135deg, var(--fabric-primary), #008e7a);
+  background: linear-gradient(135deg, #27aae1, #0e7ab5);
   border: none;
   padding: 12px 32px;
   font-size: 15px;
@@ -82,7 +96,7 @@
 
 .landing-tour-btn-secondary {
   color: white;
-  background: linear-gradient(135deg, var(--fabric-primary), #008e7a);
+  background: linear-gradient(135deg, #27aae1, #0e7ab5);
   border: none;
   box-shadow: 0 2px 12px rgba(87, 152, 188, 0.3);
 }
@@ -103,11 +117,11 @@
   border: 1px solid var(--fabric-border-solid);
   border-radius: 12px;
   padding: 20px 24px;
-  border-top: 3px solid var(--fabric-primary);
+  border-top: 3px solid #27aae1;
 }
 
 .landing-card-loom {
-  border-top-color: #008e7a;
+  border-top-color: #0e7ab5;
 }
 
 [data-theme="dark"] .landing-card {
@@ -130,7 +144,7 @@
 }
 
 .landing-card a {
-  color: var(--fabric-primary);
+  color: #27aae1;
   text-decoration: none;
   font-weight: 600;
 }
@@ -184,8 +198,8 @@
 }
 
 .landing-ai-tool-tag.free {
-  background: rgba(0, 142, 122, 0.12);
-  color: #008e7a;
+  background: rgba(39, 170, 225, 0.12);
+  color: #0e7ab5;
 }
 
 .landing-ai-tool-tag.paid {
@@ -265,7 +279,7 @@
 }
 
 .landing-tile:hover {
-  border-color: var(--fabric-primary);
+  border-color: #27aae1;
   box-shadow: 0 2px 12px rgba(87, 152, 188, 0.15);
   transform: translateY(-1px);
 }
@@ -275,14 +289,14 @@
   border-color: #2a3a5a;
 }
 [data-theme="dark"] .landing-tile:hover {
-  border-color: var(--fabric-primary);
+  border-color: #27aae1;
   box-shadow: 0 2px 12px rgba(87, 152, 188, 0.25);
 }
 
 .landing-tile-icon {
   font-size: 22px;
   line-height: 1;
-  color: var(--fabric-primary);
+  color: #27aae1;
 }
 
 .landing-tile-label {
@@ -326,7 +340,7 @@
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--fabric-primary), #008e7a);
+  background: linear-gradient(135deg, #27aae1, #0e7ab5);
   color: white;
   font-size: 13px;
   font-weight: 700;
@@ -349,7 +363,7 @@
 }
 
 .landing-step a {
-  color: var(--fabric-primary);
+  color: #27aae1;
   text-decoration: none;
   font-weight: 500;
 }
@@ -360,7 +374,7 @@
 .landing-inline-link {
   background: none;
   border: none;
-  color: var(--fabric-primary);
+  color: #27aae1;
   font-weight: 600;
   cursor: pointer;
   padding: 0;
@@ -388,7 +402,7 @@
   border: 1px solid var(--fabric-border-solid);
   border-radius: 8px;
   background: var(--fabric-white);
-  color: var(--fabric-primary);
+  color: #27aae1;
   font-size: 13px;
   font-weight: 500;
   text-decoration: none;
@@ -396,7 +410,7 @@
 }
 
 .landing-ext-link:hover {
-  border-color: var(--fabric-primary);
+  border-color: #27aae1;
   background: rgba(87, 152, 188, 0.05);
 }
 
@@ -405,13 +419,42 @@
   border-color: #2a3a5a;
 }
 [data-theme="dark"] .landing-ext-link:hover {
-  border-color: var(--fabric-primary);
+  border-color: #27aae1;
   background: rgba(87, 152, 188, 0.1);
 }
 
 .landing-ext-arrow {
   font-size: 11px;
   opacity: 0.6;
+}
+
+/* ── Login card ── */
+.landing-card-login {
+  border-top-color: var(--fabric-orange, #ff8542);
+}
+
+.landing-login-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 28px;
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: 8px;
+  cursor: pointer;
+  border: none;
+  color: white;
+  background: var(--fabric-orange, #ff8542);
+  transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+  box-shadow: 0 2px 12px rgba(255, 133, 66, 0.3);
+}
+.landing-login-btn:hover {
+  background: #e0723a;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 18px rgba(255, 133, 66, 0.4);
+}
+.landing-login-btn:active {
+  transform: translateY(0);
 }
 
 /* ── Responsive ── */

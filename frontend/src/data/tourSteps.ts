@@ -1,4 +1,4 @@
-export type TourRequiredView = 'main' | 'settings' | 'map' | 'files' | 'slivers' | 'ai' | 'libraries' | 'client' | 'jupyter' | 'landing';
+export type TourRequiredView = 'main' | 'settings' | 'map' | 'files' | 'slivers' | 'ai' | 'libraries' | 'client' | 'jupyter' | 'landing' | 'fabric' | 'chameleon';
 
 export interface TourStep {
   id: string;
@@ -111,7 +111,7 @@ const gettingStarted: TourDef = {
       id: 'configure-ai-key',
       title: 'Step 6: Set Up AI Tools',
       content:
-        'Enter your FABRIC AI API key to unlock the built-in AI coding assistants (Aider, OpenCode, Crush, and the LoomAI chat). These are free to use with your FABRIC account.\n\nGet your API key from the FABRIC portal at https://portal.fabric-testbed.net \u2014 look for "AI Services" or "API Keys" in your account settings.\n\nOptionally, add an NRP API key from https://nrp.ai for access to additional models.',
+        'Enter your FABRIC AI API key to unlock the built-in AI coding assistants (LoomAI chat, Aider, OpenCode, Crush, and Deep Agents). These are free to use with your FABRIC account.\n\nGet your API key from the FABRIC portal at https://portal.fabric-testbed.net \u2014 look for "AI Services" or "API Keys" in your account settings.\n\nOptionally, add an NRP API key from https://nrp.ai for access to additional models.',
       targetSelector: '[data-tour-id="ai-api-key"]',
       requiredView: 'settings',
       tooltipPosition: 'right',
@@ -279,7 +279,7 @@ const aiTools: TourDef = {
       id: 'ai-launcher',
       title: 'AI Tools Launcher',
       content:
-        'The AI Tools view shows available assistants as cards. Each has different strengths:\n\n\u2022 LoomAI \u2014 Chat-based FABRIC assistant with tool calling\n\u2022 Aider \u2014 AI pair programmer for editing files\n\u2022 OpenCode \u2014 Coding assistant with FABRIC skills\n\u2022 Crush \u2014 Terminal AI from Charm\n\u2022 Claude Code \u2014 Anthropic\'s advanced CLI (paid)\n\nTry it now: click on one of the tool cards to launch it.',
+        'The AI Tools view shows available assistants as cards. Each has different strengths:\n\n\u2022 LoomAI \u2014 Chat-based FABRIC assistant with tool calling and multi-conversation support\n\u2022 Aider \u2014 AI pair programmer for editing files\n\u2022 OpenCode \u2014 Coding assistant with FABRIC skills and agents\n\u2022 Crush \u2014 Terminal AI from Charm\n\u2022 Deep Agents \u2014 LangChain coding agent with planning and memory\n\u2022 Claude Code \u2014 Anthropic\'s advanced CLI (paid)\n\nTry it now: click on one of the tool cards to launch it.',
       targetSelector: '.ai-companion-view',
       requiredView: 'ai',
       tooltipPosition: 'bottom',
@@ -297,6 +297,15 @@ const aiTools: TourDef = {
       tooltipPosition: 'bottom',
     },
     {
+      id: 'ai-conversations',
+      title: 'Multi-Conversation Support',
+      content:
+        'LoomAI supports multiple simultaneous conversations. Each conversation maintains its own message history and context.\n\n\u2022 Click "+" to create a new conversation\n\u2022 Click conversation tabs to switch between them\n\u2022 Click "\u2715" to delete a conversation\n\nConversations persist in your browser across page refreshes. Use separate conversations for different topics or experiments.',
+      targetSelector: '.ai-companion-view',
+      requiredView: 'ai',
+      tooltipPosition: 'bottom',
+    },
+    {
       id: 'ai-model-agent',
       title: 'Models & Agent Personas',
       content:
@@ -309,7 +318,7 @@ const aiTools: TourDef = {
       id: 'ai-coding-tools',
       title: 'AI Coding Assistants',
       content:
-        'Aider, OpenCode, Crush, and Claude Code run in a split-pane view with the tool on the left and a container file browser on the right.\n\nUse them to:\n\u2022 Write deployment scripts and boot configs\n\u2022 Create weave artifacts (weave.json defines the topology, weave.sh runs it, output goes to weave.log)\n\u2022 Debug networking and configuration issues\n\u2022 Generate FABlib Python code for custom experiments\n\nAll tools have access to your workspace files and FABRIC domain knowledge.',
+        'Aider, OpenCode, Crush, Deep Agents, and Claude Code run in a split-pane view with the tool on the left and a container file browser on the right.\n\nUse them to:\n\u2022 Write deployment scripts and boot configs\n\u2022 Create weave artifacts (weave.json defines the topology, weave.sh runs it, output goes to weave.log)\n\u2022 Debug networking and configuration issues\n\u2022 Generate FABlib Python code for custom experiments\n\nAll tools have access to your workspace files and FABRIC domain knowledge. Additionally, Jupyter AI is integrated into the embedded JupyterLab for AI-assisted notebook development.',
       targetSelector: '.ai-companion-view',
       requiredView: 'ai',
       tooltipPosition: 'bottom',
@@ -972,13 +981,13 @@ const discoverLoomai: TourDef = {
   description: 'A visual tour of LoomAI\u2019s capabilities \u2014 see how AI-powered tools, visual editors, and automated workflows come together to build experiments on FABRIC.',
   icon: '\u2728',
   autoStart: false,
-  helpSections: ['overview'],
+  helpSections: ['overview', 'fabric-view', 'chameleon-view', 'cli'],
   steps: [
     {
       id: 'dl-welcome',
       title: 'Welcome to LoomAI',
       content:
-        'LoomAI is FABRIC\u2019s AI-powered loom for weaving custom network fabrics.\n\nFABRIC is a global research infrastructure with 35 sites offering programmable networking, bare-metal VMs, GPUs, FPGAs, SmartNICs, and high-speed optical links. LoomAI gives you a visual, browser-based sandbox to design, deploy, and manage experiments \u2014 aided by embedded AI coding assistants.\n\nLet\u2019s take a quick look at what LoomAI can do.',
+        'LoomAI is FABRIC\u2019s AI-powered loom for weaving custom network fabrics.\n\nFABRIC is a global research infrastructure with 35 sites offering programmable networking, bare-metal VMs, GPUs, FPGAs, SmartNICs, and high-speed optical links. LoomAI gives you a visual, browser-based sandbox to design, deploy, and manage experiments \u2014 aided by embedded AI coding assistants.\n\nLoomAI provides dedicated views for FABRIC and Chameleon Cloud testbeds, a powerful `loomai` CLI with 65+ commands, and six AI tools for natural language experiment management.\n\nLet\u2019s take a quick look at what LoomAI can do.',
       targetSelector: '_fullscreen',
       requiredView: 'landing',
       tooltipPosition: 'bottom',
@@ -1009,7 +1018,7 @@ const discoverLoomai: TourDef = {
       id: 'dl-ai-tools',
       title: 'AI-Powered Development',
       content:
-        'Four AI coding assistants are embedded directly into LoomAI, each pre-configured with FABRIC domain knowledge and direct access to testbed operations:\n\n\u2022 Aider \u2014 AI pair programming for editing deployment scripts\n\u2022 OpenCode \u2014 Full-featured coding assistant with FABRIC-specific skills and agents\n\u2022 Crush \u2014 Elegant terminal AI from Charm with FABRIC and NRP model support\n\u2022 Claude Code \u2014 Anthropic\u2019s CLI with deep FABRIC MCP integration\n\nFree tools use FABRIC AI (ai.fabric-testbed.net). Use natural language to create topologies, generate scripts, debug networking, and automate experiment workflows.',
+        'Six AI coding assistants are embedded directly into LoomAI, each pre-configured with FABRIC domain knowledge and direct access to testbed operations:\n\n\u2022 LoomAI \u2014 Chat-based FABRIC assistant with tool calling and multi-conversation support\n\u2022 Aider \u2014 AI pair programming for editing deployment scripts\n\u2022 OpenCode \u2014 Full-featured coding assistant with FABRIC-specific skills and agents\n\u2022 Crush \u2014 Elegant terminal AI from Charm with FABRIC and NRP model support\n\u2022 Deep Agents \u2014 LangChain coding agent with planning, memory, and skills\n\u2022 Claude Code \u2014 Anthropic\u2019s CLI with deep FABRIC MCP integration\n\nPlus Jupyter AI integrated into JupyterLab for notebook-based AI assistance.\n\nFree tools use FABRIC AI (ai.fabric-testbed.net). Use natural language to create topologies, generate scripts, debug networking, and automate experiment workflows.',
       targetSelector: '_fullscreen',
       requiredView: 'landing',
       tooltipPosition: 'bottom',
@@ -1050,6 +1059,24 @@ const discoverLoomai: TourDef = {
       imageAlt: 'JupyterLab embedded view with notebook and terminal access',
     },
     {
+      id: 'dl-fabric-view',
+      title: 'Dedicated Testbed Views',
+      content:
+        'LoomAI provides dedicated, branded views for each testbed:\n\n\u2022 **FABRIC View** \u2014 A complete FABRIC-only slice editor with sub-tabs: Topology, Table, Map, Storage, Apps, Slices, Browse, and Facility Ports. Everything you need to manage FABRIC experiments in one place.\n\n\u2022 **Chameleon View** \u2014 Manage Chameleon Cloud leases and bare-metal instances. Configure Chameleon credentials in Settings to enable this view.\n\n\u2022 **Composite Slice** \u2014 Build experiments that may span multiple testbeds with a unified editor.',
+      targetSelector: '_fullscreen',
+      requiredView: 'landing',
+      tooltipPosition: 'bottom',
+    },
+    {
+      id: 'dl-cli',
+      title: 'Command-Line Interface',
+      content:
+        'The `loomai` CLI provides full FABRIC management from the terminal with 20 command groups and 65+ subcommands.\n\n\u2022 Interactive shell with tab completion, context selection, and AI assistant\n\u2022 One-shot commands for scripting and automation\n\u2022 JSON/YAML output for piping and processing\n\u2022 SSH, exec, and file transfer to slice VMs\n\u2022 Weave management, artifact publishing, and more\n\nAccess it from the Local Terminal tab or any terminal in the container.',
+      targetSelector: '_fullscreen',
+      requiredView: 'landing',
+      tooltipPosition: 'bottom',
+    },
+    {
       id: 'dl-get-started',
       title: 'Ready to Build?',
       content:
@@ -1057,6 +1084,111 @@ const discoverLoomai: TourDef = {
       targetSelector: '_fullscreen',
       requiredView: 'landing',
       tooltipPosition: 'bottom',
+    },
+  ],
+};
+
+// ════════════════════════════════════════════════════════════════════
+// 14. CLI & TERMINAL — Command-line interface guide
+// ════════════════════════════════════════════════════════════════════
+
+const cliTerminal: TourDef = {
+  id: 'cli-terminal',
+  title: 'CLI & Terminal',
+  description: 'Master the loomai command-line interface: interactive shell, tab completion, AI assistant, and common workflows.',
+  icon: '\u{2328}',
+  autoStart: false,
+  helpSections: ['cli', 'bottom'],
+  steps: [
+    {
+      id: 'cli-intro',
+      title: 'The loomai CLI',
+      content:
+        'LoomAI includes a full command-line interface called `loomai`. It provides the same FABRIC management capabilities as the web GUI but from a terminal.\n\nYou can access it from the Local Terminal tab in the console below, or from any terminal connected to the container.\n\nThe CLI is great for scripting, automation, batch operations, and quick lookups.',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'cli-open-terminal',
+      title: 'Open the Local Terminal',
+      content:
+        'Click the **Local** tab in the console below to open a terminal session. This gives you a shell on the backend container where the `loomai` command is available.\n\nTry typing `loomai --help` to see all available command groups.',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'cli-interactive-shell',
+      title: 'Interactive Shell',
+      content:
+        'Type `loomai` (no arguments) to enter the interactive shell. You\'ll see a prompt like:\n\n```\nloomai > \n```\n\nThe shell has **tab completion** (press Tab), **command history** (up/down arrows), and **shortcuts** like `ls` for `slices list`.\n\nType `exit` or press Ctrl+D to leave the shell.',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'cli-list-slices',
+      title: 'List Your Slices',
+      content:
+        'In the shell, type `ls` or `slices list` to see all your FABRIC slices with their current state.\n\nFor more detail, try:\n\u2022 `slices show <name>` \u2014 detailed info\n\u2022 `slices slivers <name>` \u2014 per-node provisioning states\n\u2022 `sites list` \u2014 available FABRIC sites',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'cli-context',
+      title: 'Context Selection',
+      content:
+        'Set a context so you don\'t repeat slice/node names:\n\n```\nuse slice my-experiment\nuse node node1\n```\n\nThe prompt changes to `loomai [my-experiment/node1] >`. Now commands like `ssh`, `slivers`, and `exec` automatically use these defaults.\n\nType `show context` to see what\'s set, or `clear` to reset.',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'cli-tab-complete',
+      title: 'Tab Completion',
+      content:
+        'Press **Tab** at any time for smart completion:\n\n\u2022 After `slices ` \u2192 subcommands (list, show, create, delete...)\n\u2022 After `slices show ` \u2192 your slice names (fetched live)\n\u2022 After `sites show ` \u2192 FABRIC site names\n\u2022 After `weaves run ` \u2192 local weave names\n\nCompletion data is cached for 5 seconds to stay responsive.',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'cli-ai',
+      title: 'AI Assistant',
+      content:
+        'Ask the AI assistant directly from the shell:\n\n```\n? what sites have GPUs\n/ask create a 2-node slice at RENC\n? delete my dead slices\n```\n\nThe AI knows your current context (selected slice, node, site) and responds with actionable answers. You can also use `loomai /ask "..."` as a one-liner from the terminal.',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'cli-model',
+      title: 'Model Selection',
+      content:
+        'Type `/model` to see available LLM models and pick one:\n\n```\nAvailable models:\n  1. qwen3-coder-30b [32K, fast, tools] \u2605\n  2. gpt-oss-20b [8K]\n  ...\nSelect model (number or name):\n```\n\nYour choice persists across sessions and shows in the prompt: `loomai (qwen3-coder-30b) >`',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'cli-oneshot',
+      title: 'One-Shot Commands',
+      content:
+        'You don\'t need the interactive shell for quick tasks. Run commands directly:\n\n```\nloomai slices list\nloomai ssh my-slice node1\nloomai --format json sites list | jq .\nloomai /ask "what is my slice state"\n```\n\nThis works from any terminal \u2014 the Local Terminal, an SSH session, or a script.',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
+    },
+    {
+      id: 'cli-output',
+      title: 'Output Formats',
+      content:
+        'Control output with `--format`:\n\n\u2022 `--format table` \u2014 Human-readable table (default)\n\u2022 `--format json` \u2014 JSON for scripting and piping\n\u2022 `--format yaml` \u2014 YAML for configuration\n\nExample:\n```\nloomai --format json slices list | jq \'.[].name\'\n```\n\nStatus messages go to stderr, data to stdout \u2014 so piping only captures the data.',
+      targetSelector: '.bottom-panel',
+      requiredView: 'main',
+      tooltipPosition: 'top',
     },
   ],
 };
@@ -1079,6 +1211,7 @@ export const tours: Record<string, TourDef> = {
   'jupyter-lab': jupyterLab,
   'console-terminals': consoleTerminals,
   'file-manager': fileManager,
+  'cli-terminal': cliTerminal,
 };
 
 export const tourList: TourDef[] = [
@@ -1095,6 +1228,7 @@ export const tourList: TourDef[] = [
   jupyterLab,
   consoleTerminals,
   fileManager,
+  cliTerminal,
 ];
 
 /** Reverse lookup: help section id → tours that cover that section */

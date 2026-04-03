@@ -4,15 +4,15 @@ description: Add or remove nodes, networks, and components on a running FABRIC s
 Modify a running FABRIC slice. Always get the current topology first.
 
 1. **Get current state**:
-   - `fabric_get_slice(slice_name)` — verify state is StableOK or ModifyOK
+   - `get_slice(slice_name)` — verify state is StableOK or ModifyOK
    - If not StableOK, warn the user and explain the current state
 
 2. **Plan modifications** based on user request:
-   - **Add node**: `fabric_modify_slice(slice_name, add_nodes=[{name, site, cores, ram, disk, image, components}])`
-   - **Remove node**: `fabric_modify_slice(slice_name, remove_nodes=["node-name"])`
-   - **Add network**: `fabric_modify_slice(slice_name, add_networks=[{name, type, interfaces}])`
-   - **Remove network**: `fabric_modify_slice(slice_name, remove_networks=["net-name"])`
-   - **Add component**: Use `fabric_modify_slice` with node updates
+   - **Add node**: `submit_slice(slice_name, add_nodes=[{name, site, cores, ram, disk, image, components}])`
+   - **Remove node**: `submit_slice(slice_name, remove_nodes=["node-name"])`
+   - **Add network**: `submit_slice(slice_name, add_networks=[{name, type, interfaces}])`
+   - **Remove network**: `submit_slice(slice_name, remove_networks=["net-name"])`
+   - **Add component**: Use `submit_slice` with node updates
 
 3. **Confirm with user** before submitting:
    - Show what will be added/removed
@@ -20,7 +20,7 @@ Modify a running FABRIC slice. Always get the current topology first.
 
 4. **Submit and verify**:
    - After modify, state transitions: StableOK → ModifyOK → Configuring → StableOK
-   - `fabric_get_slice(slice_name)` — check new nodes are up, networks connected
+   - `get_slice(slice_name)` — check new nodes are up, networks connected
    - If new nodes added, they may need boot config / software installation
 
 **Common patterns:**
@@ -30,5 +30,5 @@ Modify a running FABRIC slice. Always get the current topology first.
 
 **Errors:**
 - "No resources available" → try a different site, or reduce resource request
-- ModifyError → check `fabric_get_slice` for which slivers failed
+- ModifyError → check `get_slice` for which slivers failed
 - Can't modify a slice in Configuring state — wait for it to stabilize first

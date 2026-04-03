@@ -50,7 +50,7 @@ const TOOLS: ToolDef[] = [
     id: 'loomai',
     name: 'LoomAI',
     desc: 'Chat-based AI assistant with FABRIC tools — create slices, query resources, and manage experiments through natural conversation.',
-    icon: '\u2728',
+    icon: '__loomai_icon__',
     iconClass: 'loomai',
     needsKey: true,
   },
@@ -228,7 +228,9 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
             return (
               <div className="ai-card" key={tool.id} onClick={() => onToolChange?.(tool.id)}>
                 <div className="ai-card-header">
-                  <div className={`ai-card-icon ${tool.iconClass}`}>{tool.icon}</div>
+                  <div className={`ai-card-icon ${tool.iconClass}`}>
+                    {tool.icon === '__loomai_icon__' ? <img src="/loomai-icon-transparent.svg" alt="" style={{ height: 24 }} /> : tool.icon}
+                  </div>
                   <div className="ai-card-name">{tool.name}</div>
                 </div>
                 <div className="ai-card-desc">{tool.desc}</div>

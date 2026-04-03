@@ -14,7 +14,7 @@ remote web services accessible through the WebUI's "Web Apps" panel.
 1. **Ensure the service is running** on the FABRIC VM:
    ```bash
    # Example: check if Grafana is running on port 3000
-   fabric_slice_ssh(slice_name, node_name, "curl -s http://localhost:3000/api/health")
+   ssh_execute(slice_name, node_name, "curl -s http://localhost:3000/api/health")
    ```
 
 2. **Create the tunnel via REST API**:

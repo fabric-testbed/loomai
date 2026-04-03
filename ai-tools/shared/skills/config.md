@@ -5,27 +5,27 @@ Help the user view and manage their FABRIC configuration.
 
 ## Available Tools
 
-- `fabric_get_config` — Show all current settings from fabric_rc
-- `fabric_set_config(key, value)` — Set a single config value
-- `fabric_load_rc(path)` — Load all settings from a fabric_rc file
-- `fabric_list_projects` — List projects from the user's token
-- `fabric_set_project(project)` — Set the active project (by name or UUID)
+- `get_config` — Show all current settings from fabric_rc
+- `update_settings(key, value)` — Set a single config value
+- `get_config(path)` — Load all settings from a fabric_rc file
+- `list_projects` — List projects from the user's token
+- `switch_project(project)` — Set the active project (by name or UUID)
 
 ## Common Operations
 
 ### View current config
-Call `fabric_get_config` to show all settings.
+Call `get_config` to show all settings.
 
 ### Change project
-1. Call `fabric_list_projects` to see available projects
+1. Call `list_projects` to see available projects
 2. If multiple projects, ask the user which one to use
-3. Call `fabric_set_project` with the project name or UUID
+3. Call `switch_project` with the project name or UUID
 
 ### Set token path
-Call `fabric_set_config("FABRIC_TOKEN_LOCATION", "/path/to/id_token.json")`
+Call `update_settings("FABRIC_TOKEN_LOCATION", "/path/to/id_token.json")`
 
 ### Load from fabric_rc file
-Call `fabric_load_rc("/path/to/fabric_rc")` to import all settings.
+Call `get_config("/path/to/fabric_rc")` to import all settings.
 
 ### Common settings
 | Key | Description |

@@ -4,12 +4,17 @@ import pytest
 
 from app.graph_builder import (
     build_graph,
+    build_chameleon_elements,
+    build_chameleon_draft_graph,
+    build_chameleon_slice_node_elements,
     _strip_node_prefix,
     _component_summary,
     STATE_COLORS,
     STATE_COLORS_DARK,
     COMPONENT_ABBREV,
     COMPONENT_CATEGORY,
+    CHAMELEON_DRAFT_STATE,
+    CHAMELEON_DRAFT_CONTAINER_COLOR,
 )
 from tests.fixtures.slice_data import (
     empty_slice,
@@ -356,3 +361,334 @@ class TestBuildGraphEdges:
                     if e["data"].get("element_type") == "interface"]
         for edge in l3_edges:
             assert edge["classes"] == "edge-l3"
+
+
+# ---------------------------------------------------------------------------
+# build_graph: edge cases
+# ---------------------------------------------------------------------------
+
+class TestBuildGraphEdgeCases:
+    def test_empty_slice_no_nodes_no_networks(self):
+        """Empty slice should have only the container node and no edges."""
+        data = {"name": "empty", "id": "e-uuid", "state": "Draft",
+                "nodes": [], "networks": [], "facility_ports": []}
+        result = build_graph(data)
+        assert len(result["nodes"]) == 1
+        assert result["nodes"][0]["classes"] == "slice"
+        assert len(result["edges"]) == 0
+
+    def test_slice_with_port_mirrors(self):
+        """Port mirror nodes should be created with correct data."""
+        data = l2_bridge_slice()
+        data["port_mirrors"] = [{
+            "name": "pm1",
+            "mirror_interface_name": "node1-nic1-p1",
+            "receive_interface_name": "node2-nic1-p1",
+            "mirror_direction": "both",
+        }]
+        result = build_graph(data)
+        pm_nodes = [n for n in result["nodes"]
+                    if n["data"].get("element_type") == "port-mirror"]
+        assert len(pm_nodes) == 1
+        assert pm_nodes[0]["data"]["name"] == "pm1"
+        assert pm_nodes[0]["data"]["mirror_direction"] == "both"
+        # Should have mirror edges
+        pm_edges = [e for e in result["edges"]
+                    if e["data"].get("element_type") == "port-mirror-edge"]
+        assert len(pm_edges) == 2  # one source, one receive
+
+    def test_chameleon_nodes_merged(self):
+        """When chameleon_nodes key is present, Chameleon elements are merged."""
+        data = single_node_slice()
+        data["chameleon_nodes"] = [
+            {"name": "chi-node1", "site": "CHI@TACC",
+             "node_type": "compute_haswell", "status": "draft",
+             "connection_type": "fabnet_v4"}
+        ]
+        result = build_graph(data)
+        chi_nodes = [n for n in result["nodes"]
+                     if n["data"].get("element_type") == "chameleon_instance"]
+        assert len(chi_nodes) >= 1
+        # Should also have a cluster container
+        clusters = [n for n in result["nodes"]
+                    if n["data"].get("element_type") == "chameleon_cluster"]
+        assert len(clusters) == 1
+
+    def test_chameleon_nodes_empty_list(self):
+        """Empty chameleon_nodes list should not add any elements."""
+        data = single_node_slice()
+        data["chameleon_nodes"] = []
+        result = build_graph(data)
+        chi_nodes = [n for n in result["nodes"]
+                     if n["data"].get("element_type") in ("chameleon_instance", "chameleon_cluster")]
+        assert len(chi_nodes) == 0
+
+    def test_missing_optional_keys(self):
+        """Slice data with minimal keys should not crash."""
+        data = {"name": "minimal", "id": "min-uuid", "state": "Draft"}
+        result = build_graph(data)
+        assert len(result["nodes"]) == 1  # just slice container
+        assert len(result["edges"]) == 0
+
+    def test_public_internet_ext_networks(self):
+        """IPv4Ext networks should get the l3-ext class and internet node."""
+        data = single_node_slice()
+        data["nodes"][0]["components"] = [
+            {"name": "nic1", "model": "NIC_Basic", "interfaces": [
+                {"name": "node1-nic1-p1", "node_name": "node1"}
+            ]}
+        ]
+        data["networks"] = [{
+            "name": "public-net",
+            "type": "IPv4Ext",
+            "layer": "L3",
+            "interfaces": [
+                {"name": "node1-nic1-p1", "node_name": "node1"}
+            ],
+        }]
+        result = build_graph(data)
+        net_nodes = [n for n in result["nodes"] if "network" in n.get("classes", "")]
+        assert len(net_nodes) == 1
+        assert "network-l3-ext" in net_nodes[0]["classes"]
+        # Should also create the internet node
+        internet = [n for n in result["nodes"]
+                    if n["data"].get("element_type") == "fabnet-internet"]
+        assert len(internet) == 1
+
+
+# ---------------------------------------------------------------------------
+# build_chameleon_elements
+# ---------------------------------------------------------------------------
+
+class TestBuildChameleonElements:
+    def test_empty_instances(self):
+        """Empty instances list returns empty nodes and edges."""
+        result = build_chameleon_elements([])
+        assert result["nodes"] == []
+        assert result["edges"] == []
+
+    def test_single_instance(self):
+        """Single instance should create cluster + instance nodes."""
+        instances = [
+            {"id": "inst-1", "name": "my-server", "site": "CHI@TACC",
+             "status": "ACTIVE", "floating_ip": "129.114.1.1"}
+        ]
+        result = build_chameleon_elements(instances)
+        assert len(result["nodes"]) == 2  # cluster + instance
+        cluster = [n for n in result["nodes"]
+                   if n["data"]["element_type"] == "chameleon_cluster"]
+        assert len(cluster) == 1
+        inst = [n for n in result["nodes"]
+                if n["data"]["element_type"] == "chameleon_instance"]
+        assert len(inst) == 1
+        assert inst[0]["data"]["name"] == "my-server"
+        assert inst[0]["data"]["ip"] == "129.114.1.1"
+
+    def test_instance_state_colors(self):
+        """Instance status should map to correct state colors."""
+        for status in ["ACTIVE", "BUILD", "SHUTOFF", "ERROR"]:
+            instances = [{"id": f"i-{status}", "name": "n", "site": "CHI@TACC", "status": status}]
+            result = build_chameleon_elements(instances)
+            inst = [n for n in result["nodes"]
+                    if n["data"]["element_type"] == "chameleon_instance"][0]
+            assert "bg_color" in inst["data"]
+            assert "border_color" in inst["data"]
+
+    def test_cross_testbed_connections(self):
+        """Connections between Chameleon and FABRIC nodes create edges."""
+        instances = [
+            {"id": "inst-1", "name": "chi-node", "site": "CHI@TACC", "status": "ACTIVE"}
+        ]
+        connections = [
+            {"chameleon_instance_id": "inst-1", "fabric_node": "node:uuid:fab-node", "type": "l2_stitch"}
+        ]
+        result = build_chameleon_elements(instances, connections)
+        assert len(result["edges"]) == 1
+        edge = result["edges"][0]
+        assert edge["data"]["element_type"] == "cross_testbed"
+        assert edge["data"]["connection_type"] == "l2_stitch"
+        assert "L2 Stitch" in edge["data"]["label"]
+
+    def test_fabnet_v4_connection_label(self):
+        instances = [{"id": "i1", "name": "n", "site": "s", "status": "ACTIVE"}]
+        connections = [{"chameleon_instance_id": "i1", "fabric_node": "fn", "type": "fabnet_v4"}]
+        result = build_chameleon_elements(instances, connections)
+        assert "FABnet v4" in result["edges"][0]["data"]["label"]
+
+    def test_empty_connections(self):
+        """No connections should produce no edges."""
+        instances = [{"id": "i1", "name": "n", "site": "s", "status": "ACTIVE"}]
+        result = build_chameleon_elements(instances, connections=None)
+        assert result["edges"] == []
+
+    def test_multiple_instances(self):
+        """Multiple instances should all be children of the cluster node."""
+        instances = [
+            {"id": f"i{i}", "name": f"n{i}", "site": "CHI@TACC", "status": "ACTIVE"}
+            for i in range(3)
+        ]
+        result = build_chameleon_elements(instances)
+        inst_nodes = [n for n in result["nodes"]
+                      if n["data"]["element_type"] == "chameleon_instance"]
+        assert len(inst_nodes) == 3
+        for inst in inst_nodes:
+            assert inst["data"]["parent"] == "chameleon:cluster"
+
+
+# ---------------------------------------------------------------------------
+# build_chameleon_draft_graph
+# ---------------------------------------------------------------------------
+
+class TestBuildChameleonDraftGraph:
+    def test_empty_draft(self):
+        """Draft with no nodes or networks."""
+        draft = {"id": "d1", "name": "empty-draft", "site": "CHI@TACC",
+                 "nodes": [], "networks": [], "floating_ips": []}
+        result = build_chameleon_draft_graph(draft)
+        assert len(result["nodes"]) == 1  # just the container
+        assert result["nodes"][0]["data"]["element_type"] == "chameleon_draft"
+        assert len(result["edges"]) == 0
+
+    def test_draft_with_nodes(self):
+        """Draft with nodes creates instance elements."""
+        draft = {
+            "id": "d2", "name": "my-draft", "site": "CHI@TACC",
+            "nodes": [
+                {"id": "n1", "name": "server-1", "node_type": "compute_haswell",
+                 "image": "CC-Ubuntu22.04", "count": 1},
+            ],
+            "networks": [],
+            "floating_ips": [],
+        }
+        result = build_chameleon_draft_graph(draft)
+        inst_nodes = [n for n in result["nodes"]
+                      if n["data"]["element_type"] == "chameleon_instance"]
+        assert len(inst_nodes) == 1
+        assert inst_nodes[0]["data"]["status"] == "DRAFT"
+        assert inst_nodes[0]["data"]["bg_color"] == CHAMELEON_DRAFT_STATE["bg"]
+
+    def test_draft_with_networks(self):
+        """Draft with per-node interface network assignments produces NIC + edges."""
+        draft = {
+            "id": "d3", "name": "net-draft", "site": "CHI@TACC",
+            "nodes": [
+                {"id": "n1", "name": "s1", "node_type": "compute_haswell",
+                 "image": "CC-Ubuntu22.04", "count": 1,
+                 "interfaces": [{"nic": 0, "network": {"id": "net1", "name": "my-net"}}]},
+                {"id": "n2", "name": "s2", "node_type": "compute_haswell",
+                 "image": "CC-Ubuntu22.04", "count": 1,
+                 "interfaces": [{"nic": 0, "network": {"id": "net1", "name": "my-net"}}]},
+            ],
+            "networks": [],
+            "floating_ips": [],
+        }
+        result = build_chameleon_draft_graph(draft)
+        net_nodes = [n for n in result["nodes"]
+                     if n["data"]["element_type"] == "network"]
+        assert len(net_nodes) == 1
+        assert "network" in net_nodes[0]["data"]["label"].lower()
+        # Should have 2 NIC→network edges (one per node interface)
+        nic_edges = [e for e in result["edges"]
+                     if e["data"]["element_type"] == "interface"]
+        assert len(nic_edges) == 2
+
+    def test_draft_with_floating_ips(self):
+        """Floating IPs are tracked in node data for post-deploy assignment."""
+        draft = {
+            "id": "d4", "name": "fip-draft", "site": "CHI@TACC",
+            "nodes": [
+                {"id": "n1", "name": "fip-server", "node_type": "compute_haswell",
+                 "image": "CC-Ubuntu22.04", "count": 1},
+            ],
+            "networks": [],
+            "floating_ips": ["n1"],
+        }
+        result = build_chameleon_draft_graph(draft)
+        # Floating IPs are now shown in node label/data rather than as separate badges
+        inst_nodes = [n for n in result["nodes"]
+                      if n["data"]["element_type"] == "chameleon_instance"]
+        assert len(inst_nodes) == 1
+        assert inst_nodes[0]["data"]["name"] == "fip-server"
+
+    def test_draft_container_has_green_color(self):
+        """Draft container should use the green Chameleon brand color."""
+        draft = {"id": "d5", "name": "green", "site": "CHI@TACC",
+                 "nodes": [], "networks": [], "floating_ips": []}
+        result = build_chameleon_draft_graph(draft)
+        container = result["nodes"][0]
+        assert container["data"]["bg_color"] == CHAMELEON_DRAFT_CONTAINER_COLOR
+
+    def test_draft_node_count_in_label(self):
+        """When node count > 1, it should appear in the label."""
+        draft = {
+            "id": "d6", "name": "multi", "site": "CHI@TACC",
+            "nodes": [
+                {"id": "n1", "name": "worker", "node_type": "compute_haswell",
+                 "image": "CC-Ubuntu22.04", "count": 5},
+            ],
+            "networks": [],
+            "floating_ips": [],
+        }
+        result = build_chameleon_draft_graph(draft)
+        inst = [n for n in result["nodes"]
+                if n["data"]["element_type"] == "chameleon_instance"][0]
+        assert "x5" in inst["data"]["label"]
+
+
+# ---------------------------------------------------------------------------
+# build_chameleon_slice_node_elements
+# ---------------------------------------------------------------------------
+
+class TestBuildChameleonSliceNodeElements:
+    def test_empty_nodes(self):
+        result = build_chameleon_slice_node_elements([])
+        assert result["nodes"] == []
+        assert result["edges"] == []
+
+    def test_draft_status_uses_gray_colors(self):
+        chi_nodes = [
+            {"name": "chi-1", "site": "CHI@TACC", "node_type": "compute_haswell",
+             "status": "draft", "connection_type": "fabnet_v4"}
+        ]
+        result = build_chameleon_slice_node_elements(chi_nodes, "slice-123")
+        inst = [n for n in result["nodes"]
+                if n["data"]["element_type"] == "chameleon_instance"][0]
+        assert inst["data"]["bg_color"] == "#f5f5f5"
+        assert inst["data"]["border_color"] == "#999"
+        assert "chameleon-draft-node" in inst["classes"]
+
+    def test_deployed_status_uses_green_colors(self):
+        chi_nodes = [
+            {"name": "chi-2", "site": "CHI@UC", "node_type": "compute_skylake",
+             "status": "ACTIVE", "connection_type": "l2_stitch"}
+        ]
+        result = build_chameleon_slice_node_elements(chi_nodes, "slice-456")
+        inst = [n for n in result["nodes"]
+                if n["data"]["element_type"] == "chameleon_instance"][0]
+        assert inst["data"]["bg_color"] == "#e8f5e9"
+        assert inst["data"]["border_color"] == "#39B54A"
+        assert "chameleon-draft-node" not in inst["classes"]
+
+    def test_cluster_container_always_created(self):
+        chi_nodes = [
+            {"name": "c1", "site": "CHI@TACC", "node_type": "t",
+             "status": "draft", "connection_type": "fabnet_v4"}
+        ]
+        result = build_chameleon_slice_node_elements(chi_nodes)
+        clusters = [n for n in result["nodes"]
+                    if n["data"]["element_type"] == "chameleon_cluster"]
+        assert len(clusters) == 1
+        assert clusters[0]["data"]["label"] == "Chameleon Cloud"
+
+    def test_multiple_nodes_all_parented(self):
+        chi_nodes = [
+            {"name": f"n{i}", "site": "CHI@TACC", "node_type": "compute",
+             "status": "draft", "connection_type": "fabnet_v4"}
+            for i in range(3)
+        ]
+        result = build_chameleon_slice_node_elements(chi_nodes, "s-id")
+        instances = [n for n in result["nodes"]
+                     if n["data"]["element_type"] == "chameleon_instance"]
+        assert len(instances) == 3
+        for inst in instances:
+            assert inst["data"]["parent"] == "chameleon:slice-cluster"

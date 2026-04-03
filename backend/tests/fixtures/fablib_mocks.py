@@ -321,7 +321,9 @@ class MockSlice:
         self._state = "Configuring"
 
     def save(self, filename: str = ""):
-        pass
+        if filename:
+            with open(filename, "w") as f:
+                f.write("<graphml></graphml>")
 
     def load(self, filename: str = ""):
         pass

@@ -1,6 +1,6 @@
 /* Title bar */
 .title-bar {
-  background: linear-gradient(135deg, var(--fabric-primary-dark), var(--fabric-primary));
+  background: linear-gradient(135deg, #1c2e4a, #27aae1);
   color: white;
   padding: 8px 16px;
   display: flex;
@@ -12,7 +12,7 @@
 }
 
 [data-theme="dark"] .title-bar {
-  background: linear-gradient(135deg, #0d1b2a, #1b3a5c);
+  background: linear-gradient(135deg, #0d1520, #1c2e4a);
 }
 
 .title-bar .title-left {
@@ -35,6 +35,15 @@
   letter-spacing: 0.5px;
   white-space: nowrap;
 }
+
+.loomai-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.loomai-header-icon { height: 22px; }
+.loomai-header-wordmark { height: 16px; }
 
 .title-bar .title-version {
   font-size: 11px;
@@ -446,6 +455,63 @@
   font-size: 10px;
   font-weight: 700;
   flex-shrink: 0;
+}
+
+/* ── Login button ── */
+.title-login-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--fabric-orange, #ff8542);
+  color: white;
+  border: none;
+  padding: 5px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  box-shadow: none;
+  white-space: nowrap;
+  letter-spacing: 0.3px;
+}
+.title-login-btn:hover {
+  background: #e0723a;
+  transform: translateY(-1px);
+  box-shadow: none;
+}
+
+/* ── User pill ── */
+.title-user-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 3px 10px 3px 4px;
+  border-radius: 20px;
+  color: white;
+  font-size: 11px;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+}
+.title-user-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--fabric-primary, #5798bc);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.title-user-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Responsive ── */

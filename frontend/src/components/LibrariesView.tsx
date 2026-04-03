@@ -21,7 +21,7 @@ interface LibrariesViewProps {
   onNavigateToSlicesView?: (dirName: string) => void;
 }
 
-type TabId = 'my-artifacts' | 'published' | 'community';
+type TabId = 'my-artifacts' | 'published' | 'community' | 'chameleon';
 type CategoryFilter = 'all' | 'weave' | 'vm-template' | 'recipe' | 'notebook';
 type ViewMode = 'grid' | 'table' | 'preview';
 
@@ -69,6 +69,13 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   const [mpExpanded, setMpExpanded] = useState<string | null>(null);
   // Version picker for get/download
   const [versionPickerArt, setVersionPickerArt] = useState<RemoteArtifact | null>(null);
+
+  // ---- Chameleon / Trovi marketplace tab ----
+  const [troviArtifacts, setTroviArtifacts] = useState<Array<{ uuid: string; title: string; short_description: string; tags: string[]; authors: string[]; updated_at: string; versions: number }>>([]);
+  const [troviLoading, setTroviLoading] = useState(false);
+  const [troviLoaded, setTroviLoaded] = useState(false);
+  const [troviSearch, setTroviSearch] = useState('');
+  const [troviDownloading, setTroviDownloading] = useState<string | null>(null);
 
   // Inline edit state for authored marketplace artifacts
   const [mpEditing, setMpEditing] = useState<string | null>(null); // uuid
@@ -243,6 +250,20 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       setMpLoading(false);
     }
   }, [mpLoaded]);
+
+  const fetchTrovi = useCallback(async () => {
+    if (troviLoaded) return;
+    setTroviLoading(true);
+    try {
+      const data = await api.listTroviArtifacts();
+      setTroviArtifacts(data.artifacts);
+      setTroviLoaded(true);
+    } catch {
+      // ignore
+    } finally {
+      setTroviLoading(false);
+    }
+  }, [troviLoaded]);
 
   useEffect(() => {
     fetchMyArtifacts();
@@ -1280,6 +1301,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       'vm-template': 'VM Template',
       'recipe': 'Recipe',
       'notebook': 'Notebook',
+      'experiment': 'Experiment',
     };
     return labels[c] || c;
   };
@@ -1359,6 +1381,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           <span className={`tv-badge tv-badge-cat tv-badge-cat-${art.category}`}>
             {categoryLabel(art.category)}
           </span>
+          {art.is_experiment && <span className="tv-badge tv-badge-cat tv-badge-cat-experiment">Experiment</span>}
           {art.is_author && <span className="tv-badge tv-badge-source-author">Author</span>}
           {art.is_from_marketplace && !art.is_author && <span className="tv-badge tv-badge-source-downloaded">Installed</span>}
           {!art.is_from_marketplace && !art.is_author && <span className="tv-badge tv-badge-source-local">Local</span>}
@@ -2249,7 +2272,10 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           Published {mpLoaded ? `(${allAuthoredArtifacts.length})` : ''}
         </button>
         <button className={`tv-tab ${tab === 'community' ? 'active' : ''}`} onClick={() => { setTab('community'); if (!mpLoaded) fetchMarketplace(); }} data-help-id="libraries.marketplace">
-          Community Marketplace {mpLoaded ? `(${mpAllArtifacts.length})` : ''}
+          FABRIC Marketplace {mpLoaded ? `(${mpAllArtifacts.length})` : ''}
+        </button>
+        <button className={`tv-tab ${tab === 'chameleon' ? 'active' : ''}`} onClick={() => { setTab('chameleon'); if (!troviLoaded) fetchTrovi(); }}>
+          Chameleon Marketplace {troviLoaded ? `(${troviArtifacts.length})` : ''}
         </button>
       </div>
 
@@ -2797,6 +2823,70 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
               <button className="tv-btn" onClick={() => setDeleteConfirmUuid(null)}>Cancel</button>
             </div>
           </div>
+        </div>
+      )}
+      {/* ================================================================= */}
+      {/* CHAMELEON MARKETPLACE TAB (Trovi)                                 */}
+      {/* ================================================================= */}
+      {tab === 'chameleon' && (
+        <div className="tv-content" style={{ padding: 16 }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+            <input
+              className="tv-search"
+              placeholder="Search Trovi artifacts..."
+              value={troviSearch}
+              onChange={e => setTroviSearch(e.target.value)}
+              style={{ flex: 1, maxWidth: 400 }}
+            />
+            <span style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>
+              {troviArtifacts.length} artifacts
+            </span>
+          </div>
+          {troviLoading ? (
+            <div style={{ textAlign: 'center', padding: 40, color: 'var(--fabric-text-muted)' }}>Loading Trovi artifacts...</div>
+          ) : (
+            <div className="tv-grid">
+              {troviArtifacts
+                .filter(a => {
+                  if (!troviSearch) return true;
+                  const q = troviSearch.toLowerCase();
+                  return a.title.toLowerCase().includes(q) || a.short_description.toLowerCase().includes(q) || a.tags.some(t => t.toLowerCase().includes(q));
+                })
+                .map(a => (
+                  <div key={a.uuid} className="tv-card">
+                    <div className="tv-card-header">
+                      <span className="tv-card-name">{a.title}</span>
+                    </div>
+                    <span className="source-badge source-trovi">Trovi</span>
+                    {a.short_description && <div className="tv-card-desc">{a.short_description}</div>}
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+                      {a.tags.map(t => (
+                        <span key={t} style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: 'var(--fabric-bg-secondary, #f0f0f0)', color: 'var(--fabric-text-muted)' }}>{t}</span>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--fabric-text-muted)', marginTop: 4 }}>
+                      {a.authors.join(', ')} {a.versions > 0 && `· ${a.versions} version${a.versions > 1 ? 's' : ''}`}
+                    </div>
+                    <div style={{ marginTop: 6 }}>
+                      <button
+                        className="tv-btn tv-btn-primary"
+                        style={{ fontSize: 11, padding: '3px 10px' }}
+                        disabled={troviDownloading === a.uuid}
+                        onClick={async () => {
+                          setTroviDownloading(a.uuid);
+                          try {
+                            await api.downloadTroviArtifact(a.uuid);
+                          } catch { /* ignore */ }
+                          setTroviDownloading(null);
+                        }}
+                      >
+                        {troviDownloading === a.uuid ? 'Getting...' : 'Get'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
         </div>
       )}
     </div>

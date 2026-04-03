@@ -26,11 +26,15 @@ interface ToolbarProps {
   infraLoaded: boolean;
   statusMessage?: string;
   onSaveSliceTemplate?: () => void;
+  onSaveExperiment?: () => void;
+  canSaveExperiment?: boolean;
   onArchiveSlice?: () => void;
   onArchiveAllTerminal?: () => void;
   hasErrors?: boolean;
   autoRefresh?: boolean;
   onToggleAutoRefresh?: () => void;
+  onRunBootConfig?: () => void;
+  bootConfigRunning?: boolean;
 }
 
 export default React.memo(function Toolbar(props: ToolbarProps) {
@@ -243,6 +247,18 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
           </button>
         </Tooltip>
 
+        {props.onRunBootConfig && (
+          <Tooltip text="Run post-boot configuration on all nodes">
+            <button
+              className="toolbar-btn toolbar-btn-boot-config"
+              onClick={props.onRunBootConfig}
+              disabled={!props.selectedSlice || props.bootConfigRunning}
+            >
+              {props.bootConfigRunning ? '↻ Running...' : '↻ Boot Config'}
+            </button>
+          </Tooltip>
+        )}
+
         <Tooltip text={isDraft ? "Discard this draft" : "Delete this slice from FABRIC"}>
           <button
             className="toolbar-btn toolbar-btn-delete danger"
@@ -307,6 +323,31 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
           {props.autoRefresh ? '\u21BB Auto' : '\u21BB Auto'}
         </button>
       </Tooltip>
+
+      {hasSlice && props.onSaveSliceTemplate && (
+        <Tooltip text="Save current topology as a reusable weave artifact">
+          <button
+            className="toolbar-btn toolbar-btn-save"
+            onClick={props.onSaveSliceTemplate}
+            disabled={props.loading}
+            data-help-id="toolbar.save-template"
+          >
+            Save Weave
+          </button>
+        </Tooltip>
+      )}
+
+      {hasSlice && props.canSaveExperiment && props.onSaveExperiment && (
+        <Tooltip text="Save as a cross-testbed experiment template (FABRIC + Chameleon)">
+          <button
+            className="toolbar-btn toolbar-btn-experiment"
+            onClick={props.onSaveExperiment}
+            disabled={props.loading}
+          >
+            Save Experiment
+          </button>
+        </Tooltip>
+      )}
 
       <div className="toolbar-spacer" />
 

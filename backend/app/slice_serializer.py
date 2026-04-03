@@ -288,6 +288,7 @@ def slice_summary(slice_obj) -> dict[str, Any]:
         "name": _safe(slice_obj.get_name),
         "id": _safe(slice_obj.get_slice_id),
         "state": _safe(lambda: str(slice_obj.get_state())),
+        "lease_end": _safe(lambda: str(slice_obj.get_lease_end()) if slice_obj.get_lease_end() else ""),
     }
 
 

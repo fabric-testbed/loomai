@@ -900,12 +900,23 @@ async def execute_boot_config(slice_name: str, node_name: str):
                 if mode == "auto":
                     cmd = f"sudo dhclient {iface}"
                 else:
-                    ip_addr = net.get("ip", "")
+                    ip_raw = net.get("ip", "")
                     subnet = net.get("subnet", "24")
+                    if "/" in ip_raw:
+                        ip_addr, subnet = ip_raw.rsplit("/", 1)
+                    else:
+                        ip_addr = ip_raw
                     cmd = f"sudo ip addr add {ip_addr}/{subnet} dev {iface} && sudo ip link set {iface} up"
                     gw = net.get("gateway")
-                    if gw:
-                        cmd += f" && sudo ip route add default via {gw} dev {iface}"
+                    for route in net.get("routes", []):
+                        if isinstance(route, dict):
+                            route_dest = route.get("subnet", "")
+                            route_gw = route.get("gateway", gw)
+                        else:
+                            route_dest = route
+                            route_gw = gw
+                        if route_dest and route_gw:
+                            cmd += f" && sudo ip route add {route_dest} via {route_gw} dev {iface}"
                 stdout, stderr = node_obj.execute(cmd, quiet=True)
                 if stderr and stderr.strip():
                     results.append({"type": "network", "id": nid, "status": "error",
@@ -943,6 +954,21 @@ async def execute_all_boot_configs(slice_name: str):
     from app.routes.slices import _get_slice_obj
 
     def _do():
+        slice_obj = _get_slice_obj(slice_name)
+
+        # Wait for slice to be ready before executing boot config
+        import time as _t
+        for state_attempt in range(60):  # 60 × 10s = 10 min max
+            try:
+                state = str(slice_obj.get_state()) if slice_obj.get_state() else ""
+            except Exception:
+                state = ""
+            if state in ("StableOK", "Active"):
+                break
+            if state_attempt >= 59:
+                return {"__error__": f"Slice not ready after 10 min (state: {state})"}
+            _t.sleep(10)
+
         slice_obj = _get_slice_obj(slice_name)
         nodes = slice_obj.get_nodes()
         all_results = {}
@@ -1026,21 +1052,23 @@ async def execute_all_boot_configs(slice_name: str):
                     if mode == "auto":
                         cmd = f"sudo dhclient {iface}"
                     else:
-                        ip_addr = net.get("ip", "")
+                        ip_raw = net.get("ip", "")
                         subnet = net.get("subnet", "24")
+                        if "/" in ip_raw:
+                            ip_addr, subnet = ip_raw.rsplit("/", 1)
+                        else:
+                            ip_addr = ip_raw
                         cmd = f"sudo ip addr add {ip_addr}/{subnet} dev {iface} && sudo ip link set {iface} up"
                         gw = net.get("gateway")
-                        if gw:
-                            cmd += f" && sudo ip route add default via {gw} dev {iface}"
-                        # Add subnet routes from L3 config
                         for route in net.get("routes", []):
-                            import ipaddress as _ipmod
-                            try:
-                                iface_net = _ipmod.IPv4Interface(f"{ip_addr}/{subnet}")
-                                route_gw = str(iface_net.network.network_address + 1)
-                                cmd += f" && sudo ip route add {route} via {route_gw} dev {iface}"
-                            except Exception:
-                                pass
+                            if isinstance(route, dict):
+                                route_dest = route.get("subnet", "")
+                                route_gw = route.get("gateway", gw)
+                            else:
+                                route_dest = route
+                                route_gw = gw
+                            if route_dest and route_gw:
+                                cmd += f" && sudo ip route add {route_dest} via {route_gw} dev {iface}"
                     stdout, stderr = node_obj.execute(cmd, quiet=True)
                     if stderr and stderr.strip():
                         node_results.append({"type": "network", "id": nid, "status": "error",
@@ -1178,6 +1206,32 @@ async def execute_all_boot_configs_stream(slice_name: str):
 
     def _do_inner():
         slice_obj = _get_slice_obj(slice_name)
+
+        # Wait for slice to be ready (StableOK or Active) before executing boot config
+        _emit("step", {"node": "__slice__", "type": "readiness", "id": "slice_state",
+                       "message": "Checking slice readiness..."})
+        import time as _t
+        max_state_checks = 60  # 60 × 10s = 10 min max
+        for state_attempt in range(1, max_state_checks + 1):
+            try:
+                state = str(slice_obj.get_state()) if slice_obj.get_state() else ""
+            except Exception:
+                state = ""
+            if state in ("StableOK", "Active"):
+                _emit("output", {"node": "__slice__", "type": "readiness", "id": "slice_state",
+                                 "message": f"Slice ready ({state})", "status": "ok"})
+                break
+            _emit("output", {"node": "__slice__", "type": "readiness", "id": "slice_state",
+                             "message": f"Slice state: {state} (attempt {state_attempt}/{max_state_checks}), waiting 10s..."})
+            if state_attempt >= max_state_checks:
+                _emit("error", {"node": "__slice__", "type": "readiness", "id": "slice_state",
+                               "message": f"Slice not ready after {max_state_checks} attempts (last state: {state})"})
+                queue.put_nowait(None)
+                return
+            _t.sleep(10)
+
+        # Re-fetch slice object after readiness wait (state may have changed)
+        slice_obj = _get_slice_obj(slice_name)
         nodes = slice_obj.get_nodes()
         base = _storage_dir()
 
@@ -1310,21 +1364,23 @@ async def execute_all_boot_configs_stream(slice_name: str):
                     if mode == "auto":
                         cmd = f"sudo dhclient {iface}"
                     else:
-                        ip_addr = net.get("ip", "")
+                        ip_raw = net.get("ip", "")
                         subnet = net.get("subnet", "24")
+                        if "/" in ip_raw:
+                            ip_addr, subnet = ip_raw.rsplit("/", 1)
+                        else:
+                            ip_addr = ip_raw
                         cmd = f"sudo ip addr add {ip_addr}/{subnet} dev {iface} && sudo ip link set {iface} up"
                         gw = net.get("gateway")
-                        if gw:
-                            cmd += f" && sudo ip route add default via {gw} dev {iface}"
-                        # Add subnet routes from L3 config
                         for route in net.get("routes", []):
-                            import ipaddress as _ipmod
-                            try:
-                                iface_net = _ipmod.IPv4Interface(f"{ip_addr}/{subnet}")
-                                route_gw = str(iface_net.network.network_address + 1)
-                                cmd += f" && sudo ip route add {route} via {route_gw} dev {iface}"
-                            except Exception:
-                                pass
+                            if isinstance(route, dict):
+                                route_dest = route.get("subnet", "")
+                                route_gw = route.get("gateway", gw)
+                            else:
+                                route_dest = route
+                                route_gw = gw
+                            if route_dest and route_gw:
+                                cmd += f" && sudo ip route add {route_dest} via {route_gw} dev {iface}"
                     stdout, stderr = node_obj.execute(cmd, quiet=True)
                     if stderr and stderr.strip():
                         _emit("error", {"node": node_name, "type": "network", "id": nid,

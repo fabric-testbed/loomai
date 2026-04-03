@@ -52,7 +52,7 @@ networks=[{name: "tunnel", type: "L2STS", interfaces: ["n1", "n2"], subnet: "10.
 
 ## Interface Wiring
 
-When using `fabric_create_slice`, just pass node names in `interfaces` — NICs are
+When using `create_slice`, just pass node names in `interfaces` — NICs are
 auto-created. When writing weave topology directly, you must:
 1. Add NIC components to each node's `components` array
 2. Reference them in networks as `{node}-{nic-name}-p{port}` (e.g., `node1-nic1-p1`)
@@ -64,5 +64,5 @@ See AGENTS.md "Wiring Nodes to Networks" for full details and examples.
 
 - FABNetv4 is the simplest cross-site option — use it unless you need raw L2
 - L2PTP is strictly 2 endpoints; use L2STS for more
-- Check availability first: `fabric_find_sites(component="NIC_ConnectX_6")`
+- Check availability first: `query_sites(component="NIC_ConnectX_6")`
 - Co-locate nodes needing low latency at the same site

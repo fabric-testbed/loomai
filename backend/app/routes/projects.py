@@ -1,4 +1,8 @@
-"""Project details API route — fetches project info from UIS API."""
+"""Project details API route — fetches project info from UIS API.
+
+UIS queries for people and project details are cached via FabricCallManager
+with a 10-minute TTL to reduce redundant API calls.
+"""
 
 from __future__ import annotations
 
@@ -9,8 +13,7 @@ import os
 import httpx
 from fastapi import APIRouter, HTTPException, Query
 
-from app.http_pool import fabric_client
-
+from app.fabric_call_manager import get_call_manager
 from app.slice_registry import get_all_entries
 
 logger = logging.getLogger(__name__)
@@ -18,6 +21,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["projects"])
 
 UIS_BASE = "https://uis.fabric-testbed.net"
+
+# Cache TTL for UIS queries (10 minutes)
+_UIS_CACHE_TTL = 600
 
 
 def _config_dir() -> str:
@@ -37,6 +43,28 @@ def _read_id_token() -> str | None:
         return None
 
 
+def _fetch_people_search(token: str, query: str) -> dict:
+    """Synchronous UIS people search for use with FabricCallManager."""
+    resp = httpx.get(
+        f"{UIS_BASE}/people?search={query}&limit=10",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _fetch_project_details(token: str, uuid: str) -> dict:
+    """Synchronous UIS project details fetch for use with FabricCallManager."""
+    resp = httpx.get(
+        f"{UIS_BASE}/projects/{uuid}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 @router.get("/api/people/search")
 async def search_people(q: str = Query(..., min_length=3)):
     """Search FABRIC users by name, email, or UUID."""
@@ -45,13 +73,12 @@ async def search_people(q: str = Query(..., min_length=3)):
         raise HTTPException(status_code=400, detail="No token available")
 
     try:
-        resp = await fabric_client.get(
-            f"{UIS_BASE}/people?search={q}&limit=10",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=15,
+        cm = get_call_manager()
+        data = await cm.get(
+            f"uis:people:search:{q}",
+            fetcher=lambda: _fetch_people_search(token, q),
+            max_age=_UIS_CACHE_TTL,
         )
-        resp.raise_for_status()
-        data = resp.json()
     except httpx.HTTPError as exc:
         logger.warning("UIS people search failed: %s", exc)
         raise HTTPException(status_code=502, detail=f"UIS API error: {exc}")
@@ -75,13 +102,12 @@ async def get_project_details(uuid: str):
         raise HTTPException(status_code=400, detail="No token available")
 
     try:
-        resp = await fabric_client.get(
-            f"{UIS_BASE}/projects/{uuid}",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=15,
+        cm = get_call_manager()
+        data = await cm.get(
+            f"uis:projects:{uuid}",
+            fetcher=lambda: _fetch_project_details(token, uuid),
+            max_age=_UIS_CACHE_TTL,
         )
-        resp.raise_for_status()
-        data = resp.json()
     except httpx.HTTPError as exc:
         logger.warning("UIS project query failed: %s", exc)
         raise HTTPException(status_code=502, detail=f"UIS API error: {exc}")

@@ -1,8 +1,12 @@
-"""Runnable weave management API routes.
+"""Runnable weave and cross-testbed experiment management API routes.
 
 Runnable weaves are weave artifacts that have a run script for automatic execution.
 A runnable weave is detected by having weave.json (with run_script field) and a
 topology file.
+
+Cross-testbed experiment templates use the ``loomai-experiment-v1`` format to
+capture both FABRIC and Chameleon resources in a single ``experiment.json`` file,
+enabling variable substitution and one-click deployment across testbeds.
 
 Storage: FABRIC_STORAGE_DIR/my_artifacts/{name}/
 """
@@ -16,7 +20,7 @@ import shutil
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 
 from app.user_context import get_user_storage
@@ -409,5 +413,345 @@ def load_experiment(name: str, body: dict[str, Any] | None = None) -> dict[str, 
                 result = _serialize(draft, dirty=True)
         except Exception:
             pass
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Cross-testbed experiment template helpers
+# ---------------------------------------------------------------------------
+
+_EXPERIMENT_FORMAT = "loomai-experiment-v1"
+
+
+def _substitute_variables(data: Any, variables: dict[str, str]) -> Any:
+    """Recursively substitute ``${VAR}`` placeholders in strings.
+
+    Walks dicts, lists, and strings. Non-string leaves are returned as-is.
+    """
+    if isinstance(data, str):
+        for key, val in variables.items():
+            data = data.replace(f"${{{key}}}", str(val))
+        return data
+    elif isinstance(data, dict):
+        return {k: _substitute_variables(v, variables) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [_substitute_variables(item, variables) for item in data]
+    return data
+
+
+def _build_cross_testbed_connections(
+    fabric_nodes: list[dict],
+    chameleon_nodes: list[dict],
+) -> list[dict]:
+    """Infer cross-testbed connections from Chameleon node connection types.
+
+    A Chameleon node with ``connection_type`` of ``fabnet_v4`` or ``fabnet_v6``
+    is assumed to connect to a FABRIC node through the FABRIC overlay network.
+    """
+    connections: list[dict] = []
+    fab_names = [n["name"] for n in fabric_nodes]
+    for chi_node in chameleon_nodes:
+        conn_type = chi_node.get("connection_type", "")
+        if conn_type.startswith("fabnet") and fab_names:
+            connections.append({
+                "fabric_node": fab_names[0],
+                "chameleon_node": chi_node["name"],
+                "type": conn_type,
+            })
+    return connections
+
+
+# ---------------------------------------------------------------------------
+# Cross-testbed experiment template endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.post("/save")
+def save_experiment_template(body: dict = Body(...)) -> dict[str, Any]:
+    """Save the current composite slice as a cross-testbed experiment template.
+
+    Captures both FABRIC topology (via ``build_slice_model``) and Chameleon
+    nodes (from in-memory ``_chameleon_slice_nodes``) into a single
+    ``experiment.json`` file using the ``loomai-experiment-v1`` format.
+    """
+    from app.routes.templates import (
+        _invalidate_templates_cache,
+        _WEAVE_CONFIG_DEFAULTS,
+    )
+
+    name: str = body.get("name", "").strip()
+    description: str = body.get("description", "")
+    slice_name: str = body.get("slice_name", "").strip()
+    variables: list[dict] = body.get("variables", [])
+    author: str = body.get("author", "")
+    tags: list[str] = body.get("tags", ["cross-testbed"])
+
+    if not name:
+        raise HTTPException(status_code=400, detail="Experiment name is required")
+
+    _invalidate_templates_cache()
+    _ensure_dir()
+    safe_name = _sanitize_name(name)
+    edir = _experiments_dir()
+    os.makedirs(edir, exist_ok=True)
+    exp_dir = _validate_path(edir, safe_name)
+
+    if os.path.isdir(exp_dir):
+        raise HTTPException(status_code=409, detail=f"Experiment '{name}' already exists")
+
+    # --- Build FABRIC portion ---
+    fabric_section: dict[str, Any] = {
+        "nodes": [],
+        "networks": [],
+        "facility_ports": [],
+        "port_mirrors": [],
+    }
+    if slice_name:
+        try:
+            from app.routes.slices import build_slice_model
+            model = build_slice_model(slice_name)
+            fabric_section["nodes"] = model.get("nodes", [])
+            fabric_section["networks"] = model.get("networks", [])
+            fabric_section["facility_ports"] = model.get("facility_ports", [])
+            fabric_section["port_mirrors"] = model.get("port_mirrors", [])
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to export FABRIC slice: {e}")
+
+    # --- Build Chameleon portion ---
+    from app.routes.chameleon import _chameleon_slice_nodes
+    chi_nodes_raw = _chameleon_slice_nodes.get(slice_name, []) if slice_name else []
+    chameleon_section: dict[str, Any] = {
+        "nodes": [
+            {
+                "name": n.get("name", ""),
+                "site": n.get("site", "CHI@TACC"),
+                "node_type": n.get("node_type", "compute_haswell"),
+                "image": n.get("image_id", ""),
+                "connection_type": n.get("connection_type", "fabnet_v4"),
+            }
+            for n in chi_nodes_raw
+        ],
+        "networks": [],
+        "floating_ips": [],
+    }
+
+    # --- Cross-testbed connections ---
+    cross_section: dict[str, Any] = {
+        "connections": _build_cross_testbed_connections(
+            fabric_section["nodes"], chameleon_section["nodes"]
+        ),
+    }
+
+    # --- Default variables ---
+    if not variables:
+        default_slug = _sanitize_name(name).lower().replace("_", "-")
+        variables = [
+            {
+                "name": "SLICE_NAME",
+                "label": "Experiment Name",
+                "type": "string",
+                "default": default_slug,
+                "required": True,
+            }
+        ]
+
+    now = datetime.now(timezone.utc).isoformat()
+    experiment_data: dict[str, Any] = {
+        "format": _EXPERIMENT_FORMAT,
+        "name": name,
+        "description": description,
+        "author": author,
+        "tags": tags,
+        "created": now,
+        "variables": variables,
+        "fabric": fabric_section,
+        "chameleon": chameleon_section,
+        "cross_testbed": cross_section,
+    }
+
+    # --- Write to disk ---
+    os.makedirs(exp_dir, exist_ok=True)
+    os.makedirs(os.path.join(exp_dir, "scripts"), exist_ok=True)
+
+    with open(os.path.join(exp_dir, "experiment.json"), "w") as f:
+        json.dump(experiment_data, f, indent=2)
+
+    # Also write slice.json for backward compat with existing template loader
+    if fabric_section["nodes"] or fabric_section["networks"]:
+        slice_model = {
+            "format": "fabric-webgui-v1",
+            "name": name,
+            "nodes": fabric_section["nodes"],
+            "networks": fabric_section["networks"],
+            "facility_ports": fabric_section.get("facility_ports", []),
+            "port_mirrors": fabric_section.get("port_mirrors", []),
+        }
+        with open(os.path.join(exp_dir, "slice.json"), "w") as f:
+            json.dump(slice_model, f, indent=2)
+
+    # Write weave.json with is_experiment flag for backward compat
+    weave_data = {
+        **_WEAVE_CONFIG_DEFAULTS,
+        "name": name,
+        "description": description,
+        "is_experiment": True,
+        "created": now,
+    }
+    with open(os.path.join(exp_dir, "weave.json"), "w") as f:
+        json.dump(weave_data, f, indent=2)
+
+    # Seed .weaveignore
+    weaveignore_path = os.path.join(exp_dir, ".weaveignore")
+    if not os.path.isfile(weaveignore_path):
+        with open(weaveignore_path, "w") as f:
+            f.write(
+                "# .weaveignore — files excluded from publishing\n"
+                "data/\nresults/\noutput/\n*.csv\n*.key\n*.pem\nsecrets/\n"
+            )
+
+    experiment_data["dir_name"] = safe_name
+    return experiment_data
+
+
+@router.get("/{name}/template")
+def get_experiment_template(name: str) -> dict[str, Any]:
+    """Get the experiment.json for a cross-testbed experiment template."""
+    _ensure_dir()
+    safe = _sanitize_name(name)
+    edir = _experiments_dir()
+    exp_dir = _validate_path(edir, safe)
+    exp_path = os.path.join(exp_dir, "experiment.json")
+    if not os.path.isfile(exp_path):
+        raise HTTPException(status_code=404, detail=f"Experiment template '{name}' not found")
+
+    with open(exp_path) as f:
+        data = json.load(f)
+    data["dir_name"] = safe
+    return data
+
+
+@router.post("/{name}/load-experiment")
+def load_experiment_template(name: str, body: dict = Body(default={})) -> dict[str, Any]:
+    """Load a cross-testbed experiment template, applying variable substitutions.
+
+    Creates a new FABRIC draft slice and populates Chameleon nodes in-memory.
+    """
+    _ensure_dir()
+    safe = _sanitize_name(name)
+    edir = _experiments_dir()
+    exp_dir = _validate_path(edir, safe)
+    exp_path = os.path.join(exp_dir, "experiment.json")
+    if not os.path.isfile(exp_path):
+        raise HTTPException(status_code=404, detail=f"Experiment template '{name}' not found")
+
+    with open(exp_path) as f:
+        experiment_data = json.load(f)
+
+    # Apply variable substitutions
+    user_vars: dict[str, str] = body.get("variables", {})
+    # Merge user-provided values with defaults from the template
+    merged_vars: dict[str, str] = {}
+    for var_def in experiment_data.get("variables", []):
+        var_name = var_def["name"]
+        if var_name in user_vars:
+            merged_vars[var_name] = str(user_vars[var_name])
+        elif "default" in var_def:
+            merged_vars[var_name] = str(var_def["default"])
+
+    resolved = _substitute_variables(experiment_data, merged_vars)
+
+    # Determine new slice name
+    slice_name = merged_vars.get("SLICE_NAME", "").strip()
+    if not slice_name:
+        slice_name = resolved.get("name", name)
+
+    # --- Import FABRIC portion ---
+    fabric = resolved.get("fabric", {})
+    fabric_nodes = fabric.get("nodes", [])
+    fabric_networks = fabric.get("networks", [])
+    fabric_fp = fabric.get("facility_ports", [])
+    fabric_pm = fabric.get("port_mirrors", [])
+
+    result: dict[str, Any] = {"name": slice_name}
+
+    if fabric_nodes or fabric_networks:
+        from app.routes.slices import import_slice, SliceModelImport
+
+        model_data = {
+            "format": "fabric-webgui-v1",
+            "name": slice_name,
+            "nodes": fabric_nodes,
+            "networks": fabric_networks,
+            "facility_ports": fabric_fp,
+            "port_mirrors": fabric_pm,
+        }
+        model = SliceModelImport(**model_data)
+        result = import_slice(model)
+
+        # Store boot info
+        from app.routes.templates import _store_boot_info
+        _store_boot_info(slice_name, exp_dir)
+
+        # Auto-resolve site groups
+        from app.routes.slices import _get_site_groups, _get_draft, _store_site_groups, _serialize
+        site_groups = _get_site_groups(slice_name)
+        if site_groups:
+            try:
+                from app.site_resolver import resolve_sites
+                from app.routes.resources import get_cached_sites
+                from app.routes.slices import slice_to_dict
+
+                draft = _get_draft(slice_name)
+                if draft is not None:
+                    data_dict = slice_to_dict(draft)
+                    node_defs = []
+                    for node in data_dict.get("nodes", []):
+                        grp = site_groups.get(node["name"])
+                        site = grp if grp else (node.get("site", "") or "auto")
+                        node_defs.append({
+                            "name": node["name"],
+                            "site": site,
+                            "cores": node.get("cores", 2),
+                            "ram": node.get("ram", 8),
+                            "disk": node.get("disk", 10),
+                            "components": node.get("components", []),
+                        })
+                    sites = get_cached_sites()
+                    resolved_defs, new_groups = resolve_sites(node_defs, sites)
+                    for nd in resolved_defs:
+                        try:
+                            fab_node = draft.get_node(name=nd["name"])
+                            fab_node.set_site(site=nd["site"])
+                        except Exception:
+                            pass
+                    merged_site_groups = dict(site_groups)
+                    merged_site_groups.update(new_groups)
+                    _store_site_groups(slice_name, merged_site_groups)
+                    result = _serialize(draft, dirty=True)
+            except Exception:
+                pass
+
+    # --- Import Chameleon portion ---
+    chameleon = resolved.get("chameleon", {})
+    chi_nodes = chameleon.get("nodes", [])
+    if chi_nodes:
+        from app.routes.chameleon import _chameleon_slice_nodes
+        chi_list = _chameleon_slice_nodes.setdefault(slice_name, [])
+        for cn in chi_nodes:
+            chi_list.append({
+                "name": cn.get("name", ""),
+                "site": cn.get("site", "CHI@TACC"),
+                "node_type": cn.get("node_type", "compute_haswell"),
+                "image_id": cn.get("image", ""),
+                "connection_type": cn.get("connection_type", "fabnet_v4"),
+                "status": "draft",
+            })
+
+    # Include metadata about loaded experiment in the result
+    result["experiment_loaded"] = True
+    result["experiment_name"] = resolved.get("name", name)
+    result["chameleon_nodes"] = chi_nodes
+    result["cross_testbed"] = resolved.get("cross_testbed", {})
 
     return result

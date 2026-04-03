@@ -1,0 +1,20 @@
+<svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- LoomAI Marketplace — Price Tag Icon · Transparent Background -->
+  <rect x="4" y="4" width="92" height="92" rx="16" fill="#1c2e4a"/>
+  <!-- Tag body -->
+  <path d="M 50 11 L 70 27 L 70 84 Q 70 90 64 90 L 36 90 Q 30 90 30 84 L 30 27 Z" fill="#27aae1" opacity="0.88"/>
+  <path d="M 50 11 L 70 27 L 70 84 Q 70 90 64 90 L 36 90 Q 30 90 30 84 L 30 27 Z" fill="none" stroke="#4cc4f0" stroke-width="1.5" opacity="0.3"/>
+  <!-- Hole -->
+  <circle cx="50" cy="21" r="5.5" fill="#1c2e4a"/>
+  <circle cx="50" cy="21" r="5.5" fill="none" stroke="#4cc4f0" stroke-width="1.5" opacity="0.5"/>
+  <!-- Content lines -->
+  <rect x="38" y="36" width="24" height="5" rx="2.5" fill="#e8f0f8" opacity="0.5"/>
+  <rect x="38" y="46" width="16" height="4" rx="2" fill="#e8f0f8" opacity="0.32"/>
+  <!-- Mini woven cross -->
+  <rect x="36" y="58" width="28" height="6" rx="3" fill="#4cc4f0" opacity="0.6"/>
+  <rect x="40" y="50" width="6" height="18" rx="3" fill="#4cc4f0" opacity="0.4"/>
+  <rect x="54" y="50" width="6" height="18" rx="3" fill="#4cc4f0" opacity="0.4"/>
+  <!-- Price badge -->
+  <rect x="36" y="70" width="28" height="10" rx="5" fill="#e8f0f8" opacity="0.18"/>
+  <rect x="36" y="70" width="16" height="10" rx="5" fill="#4cc4f0" opacity="0.5"/>
+</svg>

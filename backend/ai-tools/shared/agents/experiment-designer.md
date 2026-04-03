@@ -11,18 +11,18 @@ Always use built-in FABlib tools — never the MCP fabric-api server.
 You have comprehensive FABlib tools to query resources and manage slices:
 
 ### Resource Discovery
-- `fabric_list_sites` — All sites with resource availability
-- `fabric_list_hosts(site_name)` — Per-host resources at a site
-- `fabric_find_sites(min_cores, min_ram, component)` — Find sites with specific hardware
-- `fabric_list_images` — Available VM images (Ubuntu, Rocky, CentOS, Debian, Docker, etc.)
-- `fabric_list_components` — All NIC, GPU, FPGA, NVMe models available
+- `query_sites` — All sites with resource availability
+- `get_site_hosts(site_name)` — Per-host resources at a site
+- `query_sites(min_cores, min_ram, component)` — Find sites with specific hardware
+- `list_images` — Available VM images (Ubuntu, Rocky, CentOS, Debian, Docker, etc.)
+- `list_component_models` — All NIC, GPU, FPGA, NVMe models available
 
 ### Slice Operations
-- `fabric_create_slice` / `fabric_submit_slice` — Create and provision slices
-- `fabric_modify_slice` — Add/remove nodes on running slices
-- `fabric_get_slice` / `fabric_node_info` — Inspect slices and nodes
-- `fabric_slice_ssh` — Run commands on nodes
-- `fabric_upload_file` / `fabric_download_file` — Transfer files to/from nodes
+- `create_slice` / `submit_slice` — Create and provision slices
+- `submit_slice` — Add/remove nodes on running slices
+- `get_slice` / `get_slice` — Inspect slices and nodes
+- `ssh_execute` — Run commands on nodes
+- `write_vm_file` / `read_vm_file` — Transfer files to/from nodes
 
 ## Component Reference
 
@@ -51,11 +51,11 @@ You have comprehensive FABlib tools to query resources and manage slices:
 ## Design Process
 
 1. **Understand** the research question and goals
-2. **Check hardware**: Use `fabric_find_sites` for GPUs/FPGAs/SmartNICs
+2. **Check hardware**: Use `query_sites` for GPUs/FPGAs/SmartNICs
 3. **Design topology**: Choose network types, plan IP addressing
 4. **Size resources**: Cores, RAM, disk per node; number of nodes per experiment
 5. **Plan data collection**: What to measure, how to export
-6. **Create the slice**: Use `fabric_create_slice` with full specs
+6. **Create the slice**: Use `create_slice` with full specs
 7. **Setup software**: Post-boot commands or upload scripts
 8. **Document** for reproducibility
 
@@ -63,7 +63,7 @@ You have comprehensive FABlib tools to query resources and manage slices:
 
 - Use `fabnet: "v4"` for easy cross-site L3 networking (auto-configured)
 - Use `docker_ubuntu_22` image for containerized workloads
-- For GPU experiments, check `fabric_find_sites(component="GPU_A40")` first
+- For GPU experiments, check `query_sites(component="GPU_A40")` first
 - NVME_P4510 provides 1TB local SSD — much faster than default disk
 - NIC_ConnectX_6 gives dedicated 100Gbps — needed for high-throughput experiments
 - Use `post_boot_commands` to automate software installation

@@ -1,0 +1,1297 @@
+[
+  {
+    "file": "networking/accessing_ipv4_services_from_ipv6_nodes.py",
+    "title": "Accessing IPv4 Services from IPv6 FABRIC Nodes",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "ipv4",
+      "ipv6",
+      "network",
+      "node",
+      "query",
+      "ssh",
+      "submit",
+      "upload"
+    ],
+    "description": "Most FABRIC sites use IPv6 for their management network \u2014 the channel through which you SSH into your VMs. This is fine for communicating between FABRIC nodes, but it means your VMs cannot natively..."
+  },
+  {
+    "file": "storage/basic_nvme_devices.py",
+    "title": "Using NVMe Storage Devices on FABRIC",
+    "tags": [
+      "config",
+      "create",
+      "filter",
+      "node",
+      "nvme",
+      "query",
+      "random-site",
+      "show",
+      "storage",
+      "submit"
+    ],
+    "description": "FABRIC nodes can be equipped with dedicated **NVMe PCIe storage devices** \u2014 enterprise-grade solid-state drives that are passed through directly to your VM as a raw PCI block device. Unlike the loc..."
+  },
+  {
+    "file": "storage/benchmarking_storage.py",
+    "title": "Benchmarking FABRIC Storage: Local Disk vs. NVMe",
+    "tags": [
+      "benchmark",
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "node",
+      "nvme",
+      "performance",
+      "query",
+      "random-site",
+      "ssh",
+      "storage",
+      "submit"
+    ],
+    "description": "FABRIC offers two types of node-attached storage, and their performance characteristics differ significantly. This notebook benchmarks both using `dd` \u2014 a standard Unix utility for raw block I/O me..."
+  },
+  {
+    "file": "hardware/bluefield_dpus_l2_network_basic_auto.py",
+    "title": "BlueField-3 DPU L3 Network with Automatic Configuration",
+    "tags": [
+      "auto",
+      "bluefield",
+      "config",
+      "create",
+      "delete",
+      "dpu",
+      "execute",
+      "hardware",
+      "interface",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "l3",
+      "network",
+      "nic",
+      "node",
+      "query",
+      "random-site",
+      "same-site",
+      "smartnic",
+      "ssh",
+      "submit"
+    ],
+    "description": "**DPUs (Data Processing Units)** are a new category of programmable hardware that combines a high-performance network interface card with an embedded multi-core ARM processor, cryptographic acceler..."
+  },
+  {
+    "file": "storage/cephfs_storage.py",
+    "title": "Distributed Shared Storage on FABRIC \u2014 Advanced Demos",
+    "tags": [
+      "cephfs",
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "node",
+      "query",
+      "random-site",
+      "ssh",
+      "storage",
+      "submit"
+    ],
+    "description": "This notebook demonstrates three real-world use cases for **CephFS distributed shared storage** on FABRIC. With a single `storage=True` flag, FABlib provisions a POSIX-compliant shared filesystem a..."
+  },
+  {
+    "file": "storage/cephfs_storage_basic.py",
+    "title": "Distributed Shared Storage \u2014 Quick Start",
+    "tags": [
+      "cephfs",
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "node",
+      "query",
+      "random-site",
+      "ssh",
+      "storage",
+      "submit"
+    ],
+    "description": "The fastest way to give your FABRIC nodes a **shared distributed filesystem**. Pass `storage=True` when creating your slice and every node automatically gets access to the same CephFS volume \u2014 no S..."
+  },
+  {
+    "file": "networking/create_l2network_basic_auto.py",
+    "title": "Create a Local Ethernet (Layer 2) Network: Automatic IP Configuration",
+    "tags": [
+      "auto",
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "network",
+      "node",
+      "query",
+      "random-site",
+      "same-site",
+      "ssh",
+      "submit"
+    ],
+    "description": "This notebook demonstrates how to create an isolated Layer 2 Ethernet network connecting two virtual machines at the same FABRIC site, using FABlib's automatic IP configuration to assign addresses ..."
+  },
+  {
+    "file": "networking/create_l2network_basic_config.py",
+    "title": "Create a Local Ethernet (Layer 2) Network: User-Defined IP Configuration",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "network",
+      "node",
+      "query",
+      "random-site",
+      "same-site",
+      "ssh",
+      "submit"
+    ],
+    "description": "This notebook demonstrates how to create an isolated Layer 2 Ethernet network connecting two virtual machines at the same FABRIC site, using FABlib's user-defined (`config`) IP mode. With this appr..."
+  },
+  {
+    "file": "networking/create_l2network_basic_manual.py",
+    "title": "Create a Local Ethernet (Layer 2) Network: Manual IP Configuration",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "manual",
+      "network",
+      "node",
+      "query",
+      "random-site",
+      "same-site",
+      "ssh",
+      "submit"
+    ],
+    "description": "This notebook demonstrates how to create an isolated Layer 2 Ethernet network connecting two virtual machines at the same FABRIC site, then manually assign IP addresses and verify connectivity with..."
+  },
+  {
+    "file": "networking/create_l2network_wide_area_auto.py",
+    "title": "Create a Wide-Area Ethernet (Layer 2) Network: Automatic IP Configuration",
+    "tags": [
+      "auto",
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "multi-site",
+      "network",
+      "node",
+      "query",
+      "random-site",
+      "ssh",
+      "submit",
+      "wide-area"
+    ],
+    "description": "This notebook demonstrates how to create an isolated Layer 2 Ethernet network that **spans two different FABRIC sites**, using FABlib's automatic IP configuration. FABRIC provisions a dedicated Eth..."
+  },
+  {
+    "file": "networking/create_l2network_wide_area_config.py",
+    "title": "Create a Wide-Area Ethernet (Layer 2) Network: User-Defined IP Configuration",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "multi-site",
+      "network",
+      "node",
+      "query",
+      "random-site",
+      "ssh",
+      "submit",
+      "wide-area"
+    ],
+    "description": "This notebook demonstrates how to create an isolated Layer 2 Ethernet network that **spans two different FABRIC sites**, using FABlib's user-defined (`config`) IP mode. You pre-assign specific IP a..."
+  },
+  {
+    "file": "networking/create_l2network_wide_area_ero_auto.py",
+    "title": "Wide-Area L2 Network with Explicit Route Options (ERO) and Bandwidth Reservation",
+    "tags": [
+      "auto",
+      "config",
+      "create",
+      "delete",
+      "ero",
+      "execute",
+      "explicit-route",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "multi-site",
+      "network",
+      "node",
+      "query",
+      "ssh",
+      "submit",
+      "wide-area"
+    ],
+    "description": "This notebook demonstrates how to provision two **wide-area Layer 2 Ethernet circuits** between the same pair of FABRIC sites, each following a **different explicitly specified path** through the F..."
+  },
+  {
+    "file": "networking/create_l2network_wide_area_manual.py",
+    "title": "Create a Wide-Area Ethernet (Layer 2) Network: Manual IP Configuration",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "interface",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "list",
+      "manual",
+      "multi-site",
+      "network",
+      "node",
+      "query",
+      "random-site",
+      "show",
+      "ssh",
+      "submit",
+      "wide-area"
+    ],
+    "description": "This notebook demonstrates how to create an isolated Layer 2 Ethernet network that **spans two different FABRIC sites**, then manually assign IP addresses and verify end-to-end connectivity with pi..."
+  },
+  {
+    "file": "networking/create_l3network_fabnet_ipv4_auto.py",
+    "title": "FABnet IPv4: Automatic IP Configuration",
+    "tags": [
+      "auto",
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "fabnet",
+      "interface",
+      "ipv4",
+      "ipv6",
+      "l3",
+      "network",
+      "nic",
+      "node",
+      "query",
+      "random-site",
+      "ssh",
+      "submit"
+    ],
+    "description": "FABRIC provides **FABnetv4**, a private IPv4 overlay network that spans every FABRIC site \u2014 a dedicated research internet connecting nodes across geographically distributed data centers over FABRIC..."
+  },
+  {
+    "file": "networking/create_l3network_fabnet_ipv4_full_auto.py",
+    "title": "FABnet IPv4: Fully Automatic Configuration",
+    "tags": [
+      "auto",
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "fabnet",
+      "ipv4",
+      "l3",
+      "network",
+      "node",
+      "query",
+      "random-site",
+      "ssh",
+      "submit"
+    ],
+    "description": "FABRIC provides **FABnetv4**, a private IPv4 overlay network that spans every FABRIC site \u2014 a dedicated research internet connecting nodes across geographically distributed sites over FABRIC's high..."
+  },
+  {
+    "file": "networking/create_l3network_fabnet_ipv4_manual.py",
+    "title": "FABnet IPv4: Manual IP Configuration",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "fabnet",
+      "interface",
+      "ipv4",
+      "l3",
+      "manual",
+      "network",
+      "nic",
+      "node",
+      "query",
+      "random-site",
+      "show",
+      "ssh",
+      "submit"
+    ],
+    "description": "FABRIC provides **FABnetv4**, a private IPv4 overlay network that spans every FABRIC site. Think of it as a dedicated research internet: nodes at different geographic sites can route packets to eac..."
+  },
+  {
+    "file": "networking/create_l3network_fabnet_ipv4ext_manual.py",
+    "title": "FABnet IPv4Ext: External Access with Manual Configuration",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "fabnet",
+      "interface",
+      "ipv4",
+      "l3",
+      "manual",
+      "network",
+      "nic",
+      "node",
+      "query",
+      "random-site",
+      "show",
+      "ssh",
+      "submit"
+    ],
+    "description": "FABRIC provides **FABnetv4Ext**, a routed IPv4 service that spans every FABRIC site and additionally provides **publicly routable IP addresses** \u2014 enabling your experiment nodes to send and receive..."
+  },
+  {
+    "file": "networking/create_l3network_fabnet_ipv6_auto.py",
+    "title": "FABnet IPv6: Automatic IP Configuration",
+    "tags": [
+      "auto",
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "fabnet",
+      "interface",
+      "ipv4",
+      "ipv6",
+      "l3",
+      "network",
+      "nic",
+      "node",
+      "query",
+      "random-site",
+      "ssh",
+      "submit"
+    ],
+    "description": "FABRIC provides **FABnetv6**, a private IPv6 overlay network spanning every FABRIC site. Nodes at different geographic locations can route IPv6 packets to each other over FABRIC's high-performance ..."
+  },
+  {
+    "file": "networking/create_l3network_fabnet_ipv6_full_auto.py",
+    "title": "FABnet IPv6: Fully Automatic Configuration",
+    "tags": [
+      "auto",
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "fabnet",
+      "ipv6",
+      "l3",
+      "network",
+      "node",
+      "query",
+      "random-site",
+      "ssh",
+      "submit"
+    ],
+    "description": "FABRIC provides **FABnetv6**, a private IPv6 overlay network spanning every FABRIC site. This notebook demonstrates the **fully automatic** approach using `node.add_fabnet(net_type='IPv6')` \u2014 a sin..."
+  },
+  {
+    "file": "networking/create_l3network_fabnet_ipv6_manual.py",
+    "title": "FABnet IPv6: Manual IP Configuration",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "fabnet",
+      "interface",
+      "ipv6",
+      "l3",
+      "manual",
+      "network",
+      "nic",
+      "node",
+      "query",
+      "random-site",
+      "show",
+      "ssh",
+      "submit"
+    ],
+    "description": "FABRIC provides **FABnetv6**, a private IPv6 overlay network that spans every FABRIC site \u2014 analogous to FABnetv4 but using IPv6 addressing. Nodes at different geographic sites can route IPv6 packe..."
+  },
+  {
+    "file": "networking/create_l3network_fabnet_ipv6ext_manual.py",
+    "title": "FABnet IPv6Ext: External Access with Manual Configuration",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "fabnet",
+      "interface",
+      "ipv6",
+      "l3",
+      "manual",
+      "network",
+      "nic",
+      "node",
+      "query",
+      "random-site",
+      "show",
+      "ssh",
+      "submit"
+    ],
+    "description": "FABRIC provides **FABnetv6Ext**, a routed IPv6 service that spans every FABRIC site and additionally provides **publicly routable IPv6 addresses** \u2014 enabling your experiment nodes to communicate wi..."
+  },
+  {
+    "file": "advanced_networking/port_mirror.py",
+    "title": "PortMirror: Passive Traffic Capture Across Two Slices",
+    "tags": [
+      "config",
+      "create",
+      "execute",
+      "fabnet",
+      "filter",
+      "interface",
+      "ipv4",
+      "ipv6",
+      "l3",
+      "list",
+      "network",
+      "nic",
+      "node",
+      "port-mirror",
+      "query",
+      "random-site",
+      "smartnic",
+      "ssh",
+      "submit"
+    ],
+    "description": "**Port mirroring** (also called SPAN \u2014 Switched Port ANalyzer) is a network monitoring technique where the dataplane switch copies all traffic flowing through a specific physical port and sends a d..."
+  },
+  {
+    "file": "advanced_networking/port_mirror_basic.py",
+    "title": "PortMirror: Intra-Slice Traffic Capture with Basic NICs",
+    "tags": [
+      "config",
+      "create",
+      "execute",
+      "fabnet",
+      "filter",
+      "interface",
+      "ipv4",
+      "ipv6",
+      "l3",
+      "nic",
+      "node",
+      "port-mirror",
+      "query",
+      "random-site",
+      "smartnic",
+      "ssh",
+      "submit"
+    ],
+    "description": "This notebook demonstrates port mirroring within a **single slice** \u2014 no separate listener slice is needed. Rather than monitoring traffic from another user's slice, this pattern is useful for **de..."
+  },
+  {
+    "file": "slice_lifecycle/advanced_scheduling_slice.py",
+    "title": "Advanced Scheduling of Slices",
+    "tags": [
+      "advanced",
+      "config",
+      "create",
+      "delete",
+      "display",
+      "execute",
+      "interface",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "list",
+      "nic",
+      "node",
+      "query",
+      "scheduling",
+      "sites",
+      "smartnic",
+      "ssh",
+      "submit"
+    ],
+    "description": "FABRIC supports **advance reservations** \u2014 you can request scarce resources (SmartNICs, GPUs, FPGAs) for a future time window, even when they are currently unavailable. This notebook demonstrates t..."
+  },
+  {
+    "file": "slice_lifecycle/create_slice.py",
+    "title": "Create and Submit a Slice",
+    "tags": [
+      "config",
+      "create",
+      "display",
+      "gpu",
+      "list",
+      "nic",
+      "node",
+      "query",
+      "sites",
+      "smartnic",
+      "submit"
+    ],
+    "description": "A **slice** is the fundamental unit of an experiment on FABRIC \u2014 an isolated, named collection of resources (VMs, networks, storage) that belongs to a single project. Every experiment starts by cre..."
+  },
+  {
+    "file": "slice_lifecycle/customizing_nodes.py",
+    "title": "Customizing Nodes",
+    "tags": [
+      "config",
+      "create",
+      "node",
+      "random-site",
+      "submit"
+    ],
+    "description": "The [Hello, FABRIC](../hello_fabric/hello_fabric.ipynb) notebook creates a node on a randomly selected site with default resource sizes. Most real experiments require more control: you may need a s..."
+  },
+  {
+    "file": "slice_lifecycle/delete_slice.py",
+    "title": "Delete a Slice",
+    "tags": [
+      "config",
+      "delete",
+      "query"
+    ],
+    "description": "Deleting a slice releases all its resources \u2014 VMs, network interfaces, storage, and hardware components \u2014 back to the FABRIC testbed for other researchers to use. FABRIC is a shared infrastructure,..."
+  },
+  {
+    "file": "networking/dhcp.py",
+    "title": "DHCP Server on a FABRIC L2 Network",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "dhcp",
+      "execute",
+      "interface",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "network",
+      "nic",
+      "node",
+      "query",
+      "random-site",
+      "ssh",
+      "submit"
+    ],
+    "description": "This notebook demonstrates how to deploy an **ISC DHCP server** on one node of a FABRIC L2 network and have two client nodes obtain IP addresses dynamically via the DHCP protocol. This is a realist..."
+  },
+  {
+    "file": "applications/docker_containers.py",
+    "title": "Deploy Docker Containers on FABRIC",
+    "tags": [
+      "config",
+      "container",
+      "create",
+      "delete",
+      "docker",
+      "execute",
+      "node",
+      "query",
+      "ssh",
+      "submit"
+    ],
+    "description": "Docker is the most widely-used containerization platform in research computing. Running containers on FABRIC nodes lets you package your entire experiment environment \u2014 software, dependencies, conf..."
+  },
+  {
+    "file": "resources/fablib_common.py",
+    "title": "Common FABRIC Tools and Features",
+    "tags": [
+      "display",
+      "filter",
+      "list",
+      "logging",
+      "query",
+      "random-site",
+      "show",
+      "sites"
+    ],
+    "description": "Quick reference for FABlib utility features: random site selection, logging control, list/show methods, field selection, and filtering by resource availability."
+  },
+  {
+    "file": "resources/fields.py",
+    "title": "Specify Fields to be Included in FABRIC Lists",
+    "tags": [
+      "display",
+      "list",
+      "sites"
+    ],
+    "description": "Many FABlib objects have `list` and `show` methods that display and return tables of other object and their properties. This notebook shows how you can choose to display specific fields when displa..."
+  },
+  {
+    "file": "resources/filters.py",
+    "title": "Specify Fields to be Included in FABRIC Lists",
+    "tags": [
+      "display",
+      "filter",
+      "list",
+      "sites"
+    ],
+    "description": "Many FABlib objects have `list` and `show` methods that display and return tables of other object and their properties. This notebook shows how you can choose to display specific fields when displa..."
+  },
+  {
+    "file": "resources/list.py",
+    "title": "FABlib List Methods: Querying FABRIC Resources",
+    "tags": [
+      "display",
+      "filter",
+      "list",
+      "random-site",
+      "sites"
+    ],
+    "description": "Nearly every FABlib object \u2014 sites, slices, nodes, networks, interfaces, components \u2014 exposes a `list_*()` method that displays a tabular summary of that object type. These methods are your primary..."
+  },
+  {
+    "file": "resources/logging.py",
+    "title": "FABlib Logging: Controlling Diagnostic Output",
+    "tags": [
+      "display",
+      "filter",
+      "list",
+      "random-site",
+      "sites"
+    ],
+    "description": "FABlib uses Python's standard `logging` module under the hood. By default, FABlib suppresses most debug output to keep notebook cells readable."
+  },
+  {
+    "file": "resources/random_sites.py",
+    "title": "Random Site Selection: Writing Portable Experiments",
+    "tags": [
+      "display",
+      "filter",
+      "list",
+      "random-site",
+      "sites"
+    ],
+    "description": "Hardcoding a specific FABRIC site name in your notebook creates a fragile experiment \u2014 if that site is down, at capacity, or undergoing maintenance, your notebook will fail with no clear explanatio..."
+  },
+  {
+    "file": "resources/show.py",
+    "title": "FABlib Show Methods: Inspecting Individual Objects",
+    "tags": [
+      "display",
+      "filter",
+      "list",
+      "random-site",
+      "sites"
+    ],
+    "description": "While `list_*()` methods give you a broad table view across many objects, `show_*()` methods give a deep vertical view of a single object's complete properties. Every FABlib resource type that has ..."
+  },
+  {
+    "file": "resources/table_styles.py",
+    "title": "FABlib Table Styles: Customizing Output Display",
+    "tags": [
+      "display",
+      "filter",
+      "list",
+      "random-site",
+      "sites"
+    ],
+    "description": "FABlib's `list_*()` and `show_*()` methods return data that can be rendered in multiple ways. This notebook explores how to control the visual presentation of FABlib output tables \u2014 useful when you..."
+  },
+  {
+    "file": "hardware/fabric_gpu.py",
+    "title": "GPU-Accelerated Computing on FABRIC",
+    "tags": [
+      "config",
+      "create",
+      "download",
+      "execute",
+      "filter",
+      "gpu",
+      "hardware",
+      "node",
+      "query",
+      "random-site",
+      "show",
+      "ssh",
+      "submit",
+      "upload"
+    ],
+    "description": "FABRIC sites host dedicated GPU hardware that researchers can attach to experiment VMs as **components** \u2014 the same mechanism used for FPGAs, SmartNICs, and NVMe storage. Once provisioned, the GPU ..."
+  },
+  {
+    "file": "hardware/fpga_simple_p4.py",
+    "title": "Running a P4 Application on a Xilinx U280 FPGA",
+    "tags": [
+      "bridge",
+      "config",
+      "create",
+      "delete",
+      "download",
+      "execute",
+      "filter",
+      "fpga",
+      "hardware",
+      "interface",
+      "l2",
+      "list",
+      "logging",
+      "network",
+      "nic",
+      "node",
+      "p4",
+      "query",
+      "show",
+      "sites",
+      "smartnic",
+      "ssh",
+      "submit",
+      "switch",
+      "tofino",
+      "upload"
+    ],
+    "description": "This notebook demonstrates how to deploy a **P4 data plane application** on a FABRIC Xilinx Alveo U280 FPGA using the [ESnet SmartNIC firmware framework](https://github.com/esnet/esnet-smartnic-fw)..."
+  },
+  {
+    "file": "hardware/fpga_tools_storage.py",
+    "title": "Persistent Storage for FPGA tools",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "download",
+      "execute",
+      "fabnet",
+      "fpga",
+      "hardware",
+      "ipv4",
+      "list",
+      "network",
+      "node",
+      "query",
+      "show",
+      "ssh",
+      "submit",
+      "upload"
+    ],
+    "description": "This notebook shows how to create, re-create, renew and use a slice with a VM connected to FABNetv4 network on EDC on which you can store FPGA tool packages - the transfer of Xilinx tools into VMs ..."
+  },
+  {
+    "file": "hardware/fpga_u280_simple.py",
+    "title": "Provisioning a Xilinx U280 FPGA on FABRIC",
+    "tags": [
+      "config",
+      "create",
+      "execute",
+      "filter",
+      "fpga",
+      "hardware",
+      "list",
+      "node",
+      "query",
+      "show",
+      "sites",
+      "ssh",
+      "submit"
+    ],
+    "description": "FPGAs (Field-Programmable Gate Arrays) are reconfigurable hardware devices that can implement custom digital logic at very high speed and low latency. Unlike CPUs or GPUs, FPGAs execute computation..."
+  },
+  {
+    "file": "hardware/fabric_p4_tofino_l2_network.py",
+    "title": "L2 Networking with a P4 Tofino Hardware Switch",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "filter",
+      "hardware",
+      "interface",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "network",
+      "nic",
+      "node",
+      "p4",
+      "query",
+      "random-site",
+      "smartnic",
+      "ssh",
+      "submit",
+      "switch",
+      "tofino"
+    ],
+    "description": "Select FABRIC sites include a dedicated **Intel Tofino ASIC** \u2014 a high-speed programmable switch chip running at up to 6.5 Tbps. Unlike general-purpose CPUs or FPGAs, the Tofino is a purpose-built ..."
+  },
+  {
+    "file": "advanced_networking/facility_port.py",
+    "title": "Create a FABRIC Facility Port",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "facility-port",
+      "interface",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "list",
+      "network",
+      "nic",
+      "node",
+      "query",
+      "show",
+      "smartnic",
+      "ssh",
+      "submit"
+    ],
+    "description": "FABRIC does not exist in isolation \u2014 it connects to external research facilities, campus networks, and other testbeds through **facility ports**. A facility port is a pre-provisioned, physical conn..."
+  },
+  {
+    "file": "slice_lifecycle/get_nodes.py",
+    "title": "Get Nodes from an Existing Slice",
+    "tags": [
+      "config",
+      "node",
+      "query"
+    ],
+    "description": "Once a slice has been submitted and is running, you will often need to reconnect to it from a new notebook session \u2014 for example to run additional experiments, check node status, or retrieve result..."
+  },
+  {
+    "file": "basics/hello_fabric.py",
+    "title": "Hello, FABRIC: Create Your First Experiment",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "list",
+      "node",
+      "query",
+      "show",
+      "sites",
+      "ssh",
+      "submit"
+    ],
+    "description": "FABRIC is a nationwide programmable network testbed \u2014 a distributed research infrastructure spanning universities and research institutions across the United States. It gives researchers dedicated ..."
+  },
+  {
+    "file": "storage/local_disk.py",
+    "title": "Customizing Local Disk Size",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "local-disk",
+      "node",
+      "query",
+      "ssh",
+      "storage",
+      "submit"
+    ],
+    "description": "Every FABRIC node is backed by a **local virtual disk** \u2014 the block device that holds the operating system and provides scratch space for your experiment. By default, FABlib assigns a modest disk a..."
+  },
+  {
+    "file": "resources/manage_artifacts.py",
+    "title": "FABRIC Artifact Manager",
+    "tags": [
+      "artifact",
+      "config",
+      "filter",
+      "upload"
+    ],
+    "description": "Reproducibility is a core principle of scientific research \u2014 your experiment should produce the same results when run by a collaborator on a different day. The [FABRIC Artifacts Manager](https://ar..."
+  },
+  {
+    "file": "slice_lifecycle/modify-add-node-network.py",
+    "title": "Modify a Slice: Add and Remove Nodes and Networks",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "interface",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "modify",
+      "nic",
+      "node",
+      "query",
+      "random-site",
+      "ssh",
+      "submit"
+    ],
+    "description": "FABRIC supports **live slice modification** \u2014 you can add or remove nodes, components, and networks from a running slice without tearing it down and starting over. This is powerful for iterative ex..."
+  },
+  {
+    "file": "ssh_and_config/add_keys_into_slice.py",
+    "title": "Adding Extra SSH Keys to a Slice",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "node",
+      "query",
+      "show",
+      "ssh",
+      "submit"
+    ],
+    "description": "By default, FABRIC installs only your own slice public key in the `~/.ssh/authorized_keys` file of each VM you create. This is fine for single-user experiments, but collaborative research often req..."
+  },
+  {
+    "file": "ssh_and_config/parallel_config.py",
+    "title": "Parallel Node Configuration",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "interface",
+      "list",
+      "network",
+      "node",
+      "parallel",
+      "query",
+      "show",
+      "sites",
+      "ssh",
+      "submit"
+    ],
+    "description": "Many FABRIC experiments involve multiple nodes that all need the same software installed or the same configuration applied. Configuring them one at a time \u2014 `node.execute()` on Node0, wait, then No..."
+  },
+  {
+    "file": "storage/persistent_storage.py",
+    "title": "Persistent Storage on FABRIC",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "list",
+      "node",
+      "persistent-storage",
+      "query",
+      "random-site",
+      "show",
+      "ssh",
+      "storage",
+      "submit"
+    ],
+    "description": "Every FABRIC slice is ephemeral \u2014 when you delete it, all data on the nodes' local disks disappears. **Persistent storage** is a project-level block volume that lives independently of any individua..."
+  },
+  {
+    "file": "ssh_and_config/post_boot_task_templates.py",
+    "title": "Post Boot Task Templates",
+    "tags": [
+      "configuration",
+      "create",
+      "delete",
+      "execute",
+      "ipv4",
+      "node",
+      "post-boot",
+      "query",
+      "random-site",
+      "ssh",
+      "submit"
+    ],
+    "description": "The [Post Boot Tasks](../post_boot_tasks/post_boot_tasks.ipynb) notebook shows how to run the same script on all nodes automatically at boot. But what if each node needs slightly different argument..."
+  },
+  {
+    "file": "ssh_and_config/post_boot_tasks.py",
+    "title": "Automated Node Configuration with Post Boot Tasks",
+    "tags": [
+      "configuration",
+      "create",
+      "delete",
+      "execute",
+      "node",
+      "post-boot",
+      "query",
+      "random-site",
+      "ssh",
+      "submit"
+    ],
+    "description": "When you submit a FABRIC slice, the orchestrator allocates hardware and boots your VMs. Normally, you then wait for `submit()` to return and run additional cells to configure the nodes."
+  },
+  {
+    "file": "slice_lifecycle/renew_slice.py",
+    "title": "Renew a Slice Reservation",
+    "tags": [
+      "config",
+      "query",
+      "renew"
+    ],
+    "description": "Every FABRIC slice has a **lease** \u2014 a time period during which your resources are reserved. When the lease expires, your slice is automatically terminated and all data on the VMs is permanently lost."
+  },
+  {
+    "file": "slice_lifecycle/save_and_load.py",
+    "title": "Save and Load Experiment Topologies",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "list",
+      "load",
+      "node",
+      "query",
+      "save",
+      "show",
+      "submit",
+      "topology"
+    ],
+    "description": "FABRIC slice topologies can be serialized to a **GraphML file** \u2014 a standard XML-based graph format. This lets you save a topology design to disk and reload it later, enabling several useful workfl..."
+  },
+  {
+    "file": "slice_lifecycle/list_project_slices.py",
+    "title": "Sharing slices within a Project",
+    "tags": [
+      "config",
+      "delete",
+      "execute",
+      "list",
+      "network",
+      "node",
+      "query",
+      "show",
+      "ssh"
+    ],
+    "description": "This guide outlines the procedure for a user to view or access a project slice owned by another user. In collaborative projects, situations often arise where it is necessary to access Virtual Machi..."
+  },
+  {
+    "file": "slice_lifecycle/share_slices.py",
+    "title": "Collaborating and Sharing Slices Within a Project",
+    "tags": [
+      "collaboration",
+      "share"
+    ],
+    "description": "FABRIC is designed for collaborative research. All users in the same **project** can share slice resources, enabling multi-person experiments where one researcher creates a slice and others can SSH..."
+  },
+  {
+    "file": "slice_lifecycle/ssh_keys.py",
+    "title": "Add and Remove SSH Keys on Running Slice Nodes",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "interface",
+      "ipv4",
+      "l2",
+      "nic",
+      "node",
+      "query",
+      "random-site",
+      "ssh",
+      "submit"
+    ],
+    "description": "SSH access to FABRIC VMs is controlled by the `~/.ssh/authorized_keys` file on each node. FABRIC's **Perform Operational Actions (POA)** mechanism allows you to add or remove SSH keys on VMs that a..."
+  },
+  {
+    "file": "resources/filter_sites_by_available_resources.py",
+    "title": "Filter Sites by Available Resources",
+    "tags": [
+      "config",
+      "display",
+      "filter",
+      "list",
+      "random-site",
+      "resources",
+      "sites"
+    ],
+    "description": "Many FABRIC experiments require hardware that is not universally available \u2014 GPUs, high-speed NICs, or Precision Time Protocol (PTP) support exist only at certain sites, and supply fluctuates as ot..."
+  },
+  {
+    "file": "resources/list_all_resources.py",
+    "title": "List All FABRIC Resources",
+    "tags": [
+      "config",
+      "display",
+      "list",
+      "resources",
+      "sites"
+    ],
+    "description": "FABRIC is a nationwide, distributed research infrastructure with dozens of sites, each offering compute nodes, network hardware, GPUs, FPGAs, and SmartNICs. Before you design an experiment, you nee..."
+  },
+  {
+    "file": "resources/list_selected_resources.py",
+    "title": "Specify Fields to be Included in FABRIC Lists",
+    "tags": [
+      "config",
+      "display",
+      "list",
+      "resources",
+      "sites"
+    ],
+    "description": "Many FABlib objects have `list` and `show` methods that display and return tables of other objects and their properties. This notebook shows how you can choose to display specific fields when displ..."
+  },
+  {
+    "file": "slice_lifecycle/list_node_and_networks.py",
+    "title": "List Slice Nodes, Networks, Interfaces, and Components",
+    "tags": [
+      "config",
+      "interface",
+      "list",
+      "network",
+      "node",
+      "query",
+      "show"
+    ],
+    "description": "Once a slice is running, you need ways to inspect its internal topology \u2014 which nodes exist, which networks connect them, which interfaces attach to which networks, and which hardware components (N..."
+  },
+  {
+    "file": "slice_lifecycle/list_slices.py",
+    "title": "List Slices",
+    "tags": [
+      "config",
+      "display",
+      "filter",
+      "list",
+      "query"
+    ],
+    "description": "This notebook demonstrates how to query and display all your FABRIC slices. `fablib.list_slices()` is your primary tool for getting an overview of what experiments you have running, checking their ..."
+  },
+  {
+    "file": "slice_lifecycle/show_slice.py",
+    "title": "Show Individual Slice Details",
+    "tags": [
+      "config",
+      "display",
+      "list",
+      "network",
+      "node",
+      "query",
+      "show"
+    ],
+    "description": "While `fablib.list_slices()` gives you a table of all your slices, `slice.show()` gives you a detailed view of a **single slice** \u2014 its current state, lease dates, all nodes, networks, and other at..."
+  },
+  {
+    "file": "ssh_and_config/execute_commands.py",
+    "title": "Execute Commands on FABRIC Nodes",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "node",
+      "query",
+      "show",
+      "ssh",
+      "submit"
+    ],
+    "description": "Once your slice is running, you need to interact with its VMs \u2014 installing software, running experiments, collecting measurements. FABRIC provides two mechanisms for this: direct SSH from a termina..."
+  },
+  {
+    "file": "ssh_and_config/create_ssh_tunnels.py",
+    "title": "Accessing Services on FABRIC Nodes via SSH Tunnels",
+    "tags": [
+      "create",
+      "delete",
+      "execute",
+      "node",
+      "port-forwarding",
+      "query",
+      "ssh",
+      "submit",
+      "tunnel"
+    ],
+    "description": "FABRIC VMs are not directly reachable from the public Internet. Access to the management interface is always routed through a **bastion host** \u2014 a hardened SSH jump server \u2014 which provides a securi..."
+  },
+  {
+    "file": "advanced_networking/sub_interfaces.py",
+    "title": "VLAN Sub-Interfaces on Dedicated NIC Cards",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "fabnet",
+      "filter",
+      "interface",
+      "ipv4",
+      "ipv6",
+      "l2",
+      "l3",
+      "nic",
+      "node",
+      "query",
+      "random-site",
+      "smartnic",
+      "ssh",
+      "sub-interface",
+      "submit",
+      "vlan"
+    ],
+    "description": "**Sub-interfaces** (also called VLAN sub-interfaces or virtual interfaces) allow a single physical network port to carry multiple independent logical networks simultaneously by tagging each frame w..."
+  },
+  {
+    "file": "ssh_and_config/upload_and_execute.py",
+    "title": "Upload and Execute a Script on a FABRIC Node",
+    "tags": [
+      "config",
+      "create",
+      "delete",
+      "download",
+      "execute",
+      "list",
+      "load",
+      "node",
+      "query",
+      "save",
+      "show",
+      "ssh",
+      "submit",
+      "topology",
+      "upload"
+    ],
+    "description": "Running inline shell commands with `node.execute()` works well for short operations. For more complex configuration \u2014 installing packages, tuning OS settings, configuring networking \u2014 it's cleaner ..."
+  },
+  {
+    "file": "ssh_and_config/userdata.py",
+    "title": "FABRIC Userdata: Attaching Custom Metadata to Slice Objects",
+    "tags": [
+      "cloud-init",
+      "config",
+      "create",
+      "delete",
+      "execute",
+      "fabnet",
+      "interface",
+      "ipv4",
+      "l3",
+      "nic",
+      "node",
+      "query",
+      "random-site",
+      "ssh",
+      "submit",
+      "userdata"
+    ],
+    "description": "FABRIC allows you to store a small amount of arbitrary JSON data on any FABlib object \u2014 slices, nodes, networks, and interfaces. This **userdata** is persisted in the FABRIC slice model, which mean..."
+  }
+]

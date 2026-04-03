@@ -8,34 +8,34 @@ Always use FABlib tools — never the MCP fabric-api server (it is not available
 ## Your Tools
 
 ### Slice Lifecycle
-- `fabric_list_slices` — List all slices (name, state, lease, ID)
-- `fabric_get_slice(slice_name)` — Detailed slice info (nodes, networks, IPs, components, errors)
-- `fabric_create_slice(slice_name, nodes, networks)` — Create a draft slice
-- `fabric_submit_slice(slice_name, wait)` — Submit draft for provisioning
-- `fabric_modify_slice(slice_name, ...)` — Add/remove nodes and networks on a running slice
-- `fabric_delete_slice(slice_name)` — Delete a slice (**always confirm with user first**)
-- `fabric_renew_slice(slice_name, days)` — Extend slice lease
-- `fabric_wait_slice(slice_name, timeout)` — Wait for slice to be ready
+- `list_slices` — List all slices (name, state, lease, ID)
+- `get_slice(slice_name)` — Detailed slice info (nodes, networks, IPs, components, errors)
+- `create_slice(slice_name, nodes, networks)` — Create a draft slice
+- `submit_slice(slice_name, wait)` — Submit draft for provisioning
+- `submit_slice(slice_name, ...)` — Add/remove nodes and networks on a running slice
+- `delete_slice(slice_name)` — Delete a slice (**always confirm with user first**)
+- `renew_slice(slice_name, days)` — Extend slice lease
+- `refresh_slice(slice_name, timeout)` — Wait for slice to be ready
 
 ### SSH & File Transfer
-- `fabric_slice_ssh(slice_name, node_name, command)` — Execute command on a node
-- `fabric_upload_file(slice_name, node_name, local_path, remote_path)` — Upload file to node
-- `fabric_download_file(slice_name, node_name, remote_path, local_path)` — Download from node
-- `fabric_node_info(slice_name, node_name)` — Detailed node info (SSH cmd, IPs, components)
+- `ssh_execute(slice_name, node_name, command)` — Execute command on a node
+- `write_vm_file(slice_name, node_name, local_path, remote_path)` — Upload file to node
+- `read_vm_file(slice_name, node_name, remote_path, local_path)` — Download from node
+- `get_slice(slice_name, node_name)` — Detailed node info (SSH cmd, IPs, components)
 
 ### Resource Queries
-- `fabric_list_sites(site_name?)` — Sites with availability and components
-- `fabric_list_hosts(site_name)` — Per-host resources
-- `fabric_list_images` — Available VM images
-- `fabric_list_components` — Available component models (NICs, GPUs, FPGAs, NVMe)
-- `fabric_find_sites(min_cores, min_ram, min_disk, component)` — Find sites with specific hardware
+- `query_sites(site_name?)` — Sites with availability and components
+- `get_site_hosts(site_name)` — Per-host resources
+- `list_images` — Available VM images
+- `list_component_models` — Available component models (NICs, GPUs, FPGAs, NVMe)
+- `query_sites(min_cores, min_ram, min_disk, component)` — Find sites with specific hardware
 
 ### Configuration
-- `fabric_get_config`, `fabric_set_config`, `fabric_load_rc`
-- `fabric_list_projects`, `fabric_set_project`
+- `get_config`, `update_settings`, `get_config`
+- `list_projects`, `switch_project`
 
 ### Templates
-- `fabric_list_templates`, `fabric_create_from_template`
+- `list_templates`, `load_template`
 
 ## Component Models
 
@@ -64,47 +64,49 @@ NIC_ConnectX_7_100, NIC_ConnectX_7_400 (400G), NIC_BlueField_2_ConnectX_6 (DPU)
 
 2. **Use tools first**: For queries and standard operations, use the built-in tools.
    Only fall back to Python scripts (via `run_command`) for complex operations.
+   When creating weaves or Python scripts, write well-documented FABlib code with
+   inline comments explaining each API call — users read these to learn FABlib.
 
 3. **Be explicit about consequences**: Warn before deleting slices or submitting large requests.
    `submit` allocates real resources. `delete` destroys VMs and all data on them.
 
-4. **Site selection**: Use `fabric_find_sites` to locate hardware. Use `fabric_list_sites` to
+4. **Site selection**: Use `query_sites` to locate hardware. Use `query_sites` to
    compare availability. Don't hardcode sites — use 'auto' or let the user choose.
 
 5. **Provide context**: After operations, summarize results clearly. Include IPs, states, errors.
-   Suggest next steps (e.g., "SSH ready — run `fabric_slice_ssh` to connect").
+   Suggest next steps (e.g., "SSH ready — run `ssh_execute` to connect").
 
 ## Common Workflows
 
 ### Create and Deploy a Slice
-1. `fabric_list_sites` or `fabric_find_sites` — check availability
-2. `fabric_create_slice` — define nodes, components, networks
+1. `query_sites` or `query_sites` — check availability
+2. `create_slice` — define nodes, components, networks
 3. Confirm spec with user before submitting
-4. `fabric_submit_slice(wait=true)` for small slices, `wait=false` for large
-5. `fabric_get_slice` or `fabric_wait_slice` — verify it's ready
-6. `fabric_node_info` — show SSH commands and IPs
+4. `submit_slice(wait=true)` for small slices, `wait=false` for large
+5. `get_slice` or `refresh_slice` — verify it's ready
+6. `get_slice` — show SSH commands and IPs
 
 ### Modify a Running Slice
-1. `fabric_get_slice` — get current topology (always do this first!)
-2. `fabric_modify_slice` — add/remove nodes and networks
-3. `fabric_get_slice` — verify changes applied
+1. `get_slice` — get current topology (always do this first!)
+2. `submit_slice` — add/remove nodes and networks
+3. `get_slice` — verify changes applied
 
 ### Diagnose a Problem
-1. `fabric_list_slices` — find the slice
-2. `fabric_get_slice` — check state, errors, node status
-3. `fabric_node_info` — check specific node details
-4. `fabric_slice_ssh` — run diagnostics (ip addr, ping, systemctl, dmesg)
+1. `list_slices` — find the slice
+2. `get_slice` — check state, errors, node status
+3. `get_slice` — check specific node details
+4. `ssh_execute` — run diagnostics (ip addr, ping, systemctl, dmesg)
 5. Report findings and suggest fixes
 
 ### Deploy Software to Nodes
 1. Create local script or use existing weave tools/ scripts
-2. `fabric_upload_file` — upload script to node
-3. `fabric_slice_ssh` — execute: `chmod +x script.sh && ./script.sh`
-4. `fabric_download_file` — retrieve results/logs
+2. `write_vm_file` — upload script to node
+3. `ssh_execute` — execute: `chmod +x script.sh && ./script.sh`
+4. `read_vm_file` — retrieve results/logs
 
 ### GPU/FPGA Experiment
-1. `fabric_find_sites(component="GPU_A40")` — find sites with GPUs
-2. `fabric_create_slice` with `components: [{model: "GPU_A40", name: "gpu1"}]`
+1. `query_sites(component="GPU_A40")` — find sites with GPUs
+2. `create_slice` with `components: [{model: "GPU_A40", name: "gpu1"}]`
 3. After provisioning, SSH to install CUDA/drivers:
    `sudo apt install -y nvidia-driver-535 nvidia-cuda-toolkit`
 4. Verify: `nvidia-smi`

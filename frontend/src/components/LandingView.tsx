@@ -9,6 +9,9 @@ interface LandingViewProps {
   listLoaded: boolean;
   onLoadSlices: () => void;
   onStartTour: (tourId: string) => void;
+  hasToken?: boolean;
+  tokenExpired?: boolean;
+  onLogin?: () => void;
 }
 
 const QUICK_LINKS: Array<{ view: TopView; icon: string; label: string; desc: string }> = [
@@ -18,19 +21,17 @@ const QUICK_LINKS: Array<{ view: TopView; icon: string; label: string; desc: str
   { view: 'jupyter', icon: '\uD83D\uDCD3', label: 'JupyterLab', desc: 'Interactive notebooks' },
 ];
 
-export default function LandingView({ onNavigate, onOpenSettings, listLoaded, onLoadSlices, onStartTour }: LandingViewProps) {
+export default function LandingView({ onNavigate, onOpenSettings, listLoaded, onLoadSlices, onStartTour, hasToken, tokenExpired, onLogin }: LandingViewProps) {
   return (
     <div className="landing-root">
       <div className="landing-scroll">
 
         {/* Hero */}
         <section className="landing-hero">
-          <h1 className="landing-hero-title">
-            Welcome to <span className="landing-brand">LoomAI</span>
-          </h1>
-          <p className="landing-hero-subtitle">
-            FABRIC's loom for weaving custom network fabrics &mdash; aided by AI
-          </p>
+          <div className="landing-logo-wrap">
+            <img src="/loomai-horizontal-transparent-light-ink-trimmed.svg" alt="LoomAI" className="landing-logo landing-logo-light" />
+            <img src="/loomai-horizontal-transparent-dark-ink-trimmed.svg" alt="LoomAI" className="landing-logo landing-logo-dark" />
+          </div>
           <div className="landing-tour-buttons">
             <button className="landing-tour-btn landing-tour-btn-primary" onClick={() => onStartTour('discover-loomai')}>
               Discover LoomAI
@@ -40,6 +41,33 @@ export default function LandingView({ onNavigate, onOpenSettings, listLoaded, on
             </button>
           </div>
         </section>
+
+        {/* Login card — shown when not authenticated or token expired */}
+        {(hasToken === false || tokenExpired) && onLogin && (
+          <section className="landing-section">
+            <div className="landing-card landing-card-login">
+              <h2 className="landing-card-title">{tokenExpired ? 'Session Expired' : 'Connect to FABRIC'}</h2>
+              <p>
+                {tokenExpired
+                  ? 'Your FABRIC token has expired. Log in again to continue using LoomAI. Your configuration and keys are preserved.'
+                  : 'Log in with your FABRIC account to start building experiments. LoomAI will automatically configure your environment, generate SSH keys, and set up your project.'}
+              </p>
+              <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <button className="landing-login-btn" onClick={onLogin}>
+                  {tokenExpired ? 'Re-login to FABRIC' : 'Login to FABRIC'}
+                </button>
+                {!tokenExpired && (
+                  <span style={{ fontSize: 12, color: 'var(--fabric-text-muted)' }}>
+                    New to FABRIC?{' '}
+                    <a href="https://portal.fabric-testbed.net" target="_blank" rel="noopener noreferrer" style={{ color: '#27aae1', fontWeight: 600, textDecoration: 'none' }}>
+                      Create an account
+                    </a>
+                  </span>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
 
         {/* About cards */}
         <section className="landing-about">

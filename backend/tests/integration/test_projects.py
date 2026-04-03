@@ -1,17 +1,17 @@
 """Tests for project detail endpoints."""
 
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch
 
 import httpx
+
+from app.fabric_call_manager import reset_call_manager
 
 
 class TestProjectDetails:
     def test_get_project_details_success(self, client):
         """GET /api/projects/{uuid}/details with mocked UIS API."""
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {
+        reset_call_manager()  # Ensure no stale cache from other tests
+        mock_uis_response = {
             "results": [{
                 "uuid": "proj-uuid-123",
                 "name": "Test Project",
@@ -29,9 +29,7 @@ class TestProjectDetails:
             }]
         }
 
-        mock_get = AsyncMock(return_value=mock_resp)
-        with patch("app.routes.projects.fabric_client") as mock_client:
-            mock_client.get = mock_get
+        with patch("app.routes.projects._fetch_project_details", return_value=mock_uis_response):
             resp = client.get("/api/projects/proj-uuid-123/details")
 
         assert resp.status_code == 200
@@ -55,10 +53,11 @@ class TestProjectDetails:
 
     def test_get_project_details_uis_error(self, client):
         """UIS API failure should return 502."""
-        mock_get = AsyncMock(side_effect=httpx.HTTPError("502 Bad Gateway"))
-
-        with patch("app.routes.projects.fabric_client") as mock_client:
-            mock_client.get = mock_get
+        reset_call_manager()
+        with patch(
+            "app.routes.projects._fetch_project_details",
+            side_effect=httpx.HTTPError("502 Bad Gateway"),
+        ):
             resp = client.get("/api/projects/bad-uuid/details")
 
         assert resp.status_code == 502

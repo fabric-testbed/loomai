@@ -21,6 +21,8 @@ export interface TerminalTab {
   sliceName: string;
   nodeName: string;
   managementIp: string;
+  chameleonInstanceId?: string;
+  chameleonSite?: string;
 }
 
 export interface BootConfigError {
@@ -719,7 +721,7 @@ export default React.memo(function BottomPanel({ terminals, onCloseTerminal, val
         if (term) {
           return (
             <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-              <React.Suspense fallback={null}><TerminalHost sessionId={tabId} type="ssh" sliceName={term.sliceName} nodeName={term.nodeName} managementIp={term.managementIp} /></React.Suspense>
+              <React.Suspense fallback={null}><TerminalHost sessionId={tabId} type={term.chameleonInstanceId ? 'chameleon' : 'ssh'} sliceName={term.sliceName} nodeName={term.nodeName} managementIp={term.managementIp} chameleonInstanceId={term.chameleonInstanceId} chameleonSite={term.chameleonSite} chameleonName={term.label} /></React.Suspense>
             </div>
           );
         }
