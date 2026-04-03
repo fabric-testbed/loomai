@@ -1,0 +1,2 @@
+[console_scripts]
+loomai = loomai_cli.__main__:main

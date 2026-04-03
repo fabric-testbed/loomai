@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: loomai-cli
+Version: 0.1.0
+Summary: Command-line interface for the FABRIC LoomAI testbed manager
+Requires-Python: >=3.9
+Requires-Dist: click>=8.0
+Requires-Dist: httpx>=0.24
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: tabulate>=0.9
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-httpx>=0.30; extra == "dev"

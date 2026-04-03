@@ -49,7 +49,7 @@ services:
       - "8889:8889"        # JupyterLab
       - "9100-9199:9100-9199"  # SSH tunnels for My Web Apps
     volumes:
-      - ./fabric_work:/home/fabric/work
+      - fabric_work:/home/fabric/work
     environment:
       - FABRIC_CONFIG_DIR=/home/fabric/work/fabric_config
       - FABRIC_STORAGE_DIR=/home/fabric/work
@@ -64,6 +64,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+
+volumes:
+  fabric_work:
 ```
 
 ### Option 2: Local Development
