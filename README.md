@@ -44,14 +44,26 @@ services:
   loomai:
     image: fabrictestbed/loomai:latest
     ports:
-      - "3000:3000"
-      - "8000:8000"
+      - "3000:3000"        # Web UI (nginx)
+      - "8000:8000"        # Backend API (direct access)
+      - "8889:8889"        # JupyterLab
+      - "9100-9199:9100-9199"  # SSH tunnels for My Web Apps
     volumes:
       - ./fabric_work:/home/fabric/work
     environment:
       - FABRIC_CONFIG_DIR=/home/fabric/work/fabric_config
       - FABRIC_STORAGE_DIR=/home/fabric/work
+      - DOCKER_REPO=fabrictestbed/loomai
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 ```
 
 ### Option 2: Local Development
