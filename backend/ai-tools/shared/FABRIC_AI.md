@@ -69,7 +69,7 @@ You have these tools available:
 - `run_command` — Execute shell commands
 
 ### FABRIC Tools (LoomAI tool-calling)
-These tools interact directly with the FABRIC testbed. In LoomAI chat, use these
+These tools interact directly with the FABRIC testbed. In the LoomAI assistant, use these
 exact tool names (no `fabric_` prefix). Other AI tools should use the equivalent
 `curl` or `loomai` CLI commands shown in the "Backend REST API" section below.
 
@@ -716,7 +716,7 @@ Access tours from the Landing page button or the Help page.
 - **Map** — Leaflet world map with FABRIC sites, backbone links, and live metrics
 - **Storage** — Dual-panel file manager (container ↔ VM SFTP)
 - **Artifacts** — Artifact manager (Local, Authored, Marketplace) for weaves, VM templates, recipes, notebooks
-- **AI Tools** — Launcher for AI coding assistants (LoomAI chat, Aider, OpenCode, Crush, Claude Code)
+- **AI Tools** — Launcher for AI coding assistants (LoomAI assistant, Aider, OpenCode, Crush, Claude Code)
 - **Web Apps** — Tunnel to web services on slice VMs (Grafana, Jupyter, etc.)
 - **JupyterLab** — Embedded JupyterLab for notebooks and artifact editing
 

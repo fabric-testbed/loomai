@@ -13,6 +13,10 @@ example library.
 4. **Each NIC_Basic has 1 port.** A node connecting to N networks needs N NICs.
 5. **For FABNetv4, use `node.add_fabnet()`** — it auto-adds NIC, auto-assigns IP, auto-adds route. This is the easiest and most reliable approach.
 6. **L2Bridge needs manual IPs** — use `iface.ip_addr_add(addr, subnet)` after provisioning.
+7. **`add_node()` valid parameters: `name`, `site`, `cores`, `ram`, `disk`, `image`.** NO `tags` parameter. Site groups (`@cluster`) are weave.json features, not Python API parameters.
+8. **After `submit()` + `wait_ssh()`, ALWAYS re-fetch**: `slice = fablib.get_slice(name=...)` then `node = slice.get_node(name=...)`. Original node objects go stale after submit.
+9. **No `get_fabnet_name()` method.** Get IPs by iterating `node.get_interfaces()` and calling `str(iface.get_ip_addr())`.
+10. **No `node.write_file()`.** Use `node.upload_file(local, remote)` or `node.execute("echo ... > file")`.
 
 ## How to Write FABlib Code
 

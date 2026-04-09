@@ -31,12 +31,14 @@ def serialize_interface(iface) -> dict[str, Any]:
     except Exception:
         pass
 
-    # get_mac() can also trigger SSH, read from FIM directly
+    # get_mac() can also trigger SSH, read from FIM label_allocations directly
     mac = ""
     try:
         fim_iface = iface.get_fim()
-        if hasattr(fim_iface, 'label_allocations') and fim_iface.label_allocations:
-            mac = str(fim_iface.label_allocations.mac) if hasattr(fim_iface.label_allocations, 'mac') and fim_iface.label_allocations.mac else ""
+        if fim_iface:
+            label_alloc = fim_iface.get_property(pname="label_allocations") if hasattr(fim_iface, 'get_property') else None
+            if label_alloc and hasattr(label_alloc, 'mac') and label_alloc.mac:
+                mac = str(label_alloc.mac)
     except Exception:
         pass
 

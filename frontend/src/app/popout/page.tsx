@@ -8,7 +8,7 @@ import '../../styles/ai-chat-panel.css';
 const TOOL_TITLES: Record<string, string> = {
   claude: 'Claude Code',
   crush: 'Crush',
-  loomai: 'LoomAI Chat',
+  loomai: 'LoomAI Assistant',
 };
 
 function PopoutContent() {

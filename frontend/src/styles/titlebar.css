@@ -513,6 +513,19 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.title-logout-btn {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.title-logout-btn:hover {
+  color: #e25241;
+}
 
 /* ── Responsive ── */
 @media (max-width: 800px) {

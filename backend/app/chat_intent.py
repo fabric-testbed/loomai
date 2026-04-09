@@ -86,21 +86,22 @@ _RAW_PATTERNS: list[tuple[str, str, Optional[Callable], str]] = [
     # Images — HIGH
     (r"(?:list|show|what)\s+(?:available\s+)?(?:vm\s+)?images?", "_list_images", None, "high"),
 
-    # Create weave — MEDIUM/LOW (create_weave tool, LLM fills in details)
-    # Named weave with extras detectable from the message
+    # Create weave — LOW (LLM needs full tool-calling to write complex scripts)
     (r"create\s+(?:a\s+)?(?:new\s+)?weave\s+(?:called\s+|named\s+)?['\"]?(\S+)['\"]?",
      "create_weave", lambda m: {
          "name": m.group(1),
          "include_data_folder": bool(re.search(r"data\s+(?:folder|dir)", m.string, re.IGNORECASE)),
          "include_node_tools": bool(re.search(r"node.?tools?|setup\s+script|install", m.string, re.IGNORECASE)),
-         "include_notebooks": True,  # Always include a Jupyter notebook
-     }, "medium"),
+         "include_notebooks": True,
+     }, "low"),
     (r"create\s+(?:a\s+)?(?:new\s+)?weave",
      "create_weave", lambda m: {"include_notebooks": True}, "low"),
+    (r"(?:build|make|design)\s+(?:a\s+|an\s+)?(?:experiment|weave|topology)",
+     "create_weave", lambda m: {"include_notebooks": True}, "low"),
 
-    # Update/customize existing weave — MEDIUM (pre-fetch weave.md for context)
+    # Update/customize existing weave — LOW (needs tool-calling for write_file)
     (r"(?:consider|update|customize|modify|change|edit)\s+(?:the\s+)?(?:new\s+)?weave\s+(?:called\s+|named\s+)['\"]?([a-zA-Z0-9_-]+)['\"]?",
-     "read_file", lambda m: {"path": f"my_artifacts/{m.group(1)}/weave.md"}, "medium"),
+     "read_file", lambda m: {"path": f"my_artifacts/{m.group(1)}/weave.md"}, "low"),
 
     # Complex file creation — LOW (need full tool calling for write_file)
     (r"(?:write|build|make)\s+(?:a\s+)?(?:script|file|template|artifact)", "", None, "low"),

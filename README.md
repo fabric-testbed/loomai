@@ -20,10 +20,31 @@ AI-assisted browser-based sandbox for designing, deploying, and managing experim
 **Prerequisites:** Docker with Compose v2
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fabric-testbed/loomai/main/docker-compose.yml -o docker-compose.yml && docker compose up -d
+curl -fsSL https://raw.githubusercontent.com/fabric-testbed/loomai/main/install.sh | bash
 ```
 
+This will download the compose file, pull the image, start the container, and verify it's healthy.
+
 Open **http://localhost:3000** in your browser.
+
+### Manual Install
+
+```bash
+# Download the install script
+curl -fsSL https://raw.githubusercontent.com/fabric-testbed/loomai/main/install.sh -o install.sh
+
+# Install (or upgrade an existing installation)
+bash install.sh
+
+# Check status
+bash install.sh --status
+
+# Clean install (remove everything and start fresh)
+bash install.sh --clean
+
+# Uninstall
+bash install.sh --uninstall
+```
 
 ### Option 1: Docker (recommended)
 
@@ -102,9 +123,15 @@ On first launch, the Getting Started tour will guide you through:
 ## Updating
 
 ```bash
+# Using the install script (recommended — handles cleanup)
+bash install.sh
+
+# Or manually
 docker compose pull
 docker compose up -d
 ```
+
+Running `bash install.sh` on an existing installation will prompt you to choose between an upgrade (keep your data) or a clean install (start fresh). Your credentials, slices, and artifacts are preserved by default.
 
 ## Architecture
 

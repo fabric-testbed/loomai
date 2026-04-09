@@ -178,6 +178,46 @@ E2E_FULL=1 npx playwright test fabric-provision fabric-hardware chameleon-provis
 6. Executes `ping` from FABRIC node to Chameleon node IP
 7. Asserts 0% packet loss
 
+## Assistant E2E Tests
+
+Tests the LoomAI assistant end-to-end against real FABRIC-hosted LLMs. Tests go through the full backend stack (`POST /api/ai/chat/stream`): intent detection, system prompt, tool dispatch, SSE streaming.
+
+### Test Files
+
+| File | Coverage | Markers | Timeout |
+|------|----------|---------|---------|
+| `tests/assistant/test_assistant_knowledge.py` | FABRIC facts, tool triggering, response quality (14 tests) | `llm` | 120s |
+| `tests/assistant/test_assistant_slices.py` | Slice creation via chat, software install, SSH commands (5 tests) | `fabric` | 900s |
+| `tests/assistant/test_assistant_weaves.py` | Weave creation, file verification, deploy (4 tests) | `llm`, `fabric` | 900s |
+
+### Running Assistant Tests
+
+```bash
+# LLM-only knowledge tests (fast, ~8 min)
+pytest tests/assistant/test_assistant_knowledge.py -v -s -m llm --timeout=120
+
+# Weave creation only (fast, ~3 min, no FABRIC provisioning)
+pytest tests/assistant/test_assistant_weaves.py -v -s -m llm -k "not deploy" --timeout=120
+
+# Slice creation + engagement (slow, ~35 min, real FABRIC provisioning)
+pytest tests/assistant/test_assistant_slices.py -v -s -m fabric --timeout=900
+
+# Weave deploy (slow, ~15 min, real FABRIC provisioning)
+pytest tests/assistant/test_assistant_weaves.py -v -s -m fabric -k deploy --timeout=900
+
+# All assistant tests
+pytest tests/assistant/ -v -s -m "llm or fabric" --timeout=900
+
+# Single test
+pytest tests/assistant/test_assistant_knowledge.py -v -s -m llm -k test_fabric_network_types
+```
+
+### Design Notes
+
+- **Fuzzy keyword matching**: LLM output is non-deterministic. Tests verify presence of factual keywords, not exact strings.
+- **Engagement tests use direct-API slices**: The `running_slice` fixture creates slices via REST API (not assistant) to isolate engagement failures from LLM non-determinism.
+- **`e2e-assist-*` naming prefix**: All test slices use this prefix for identification and manual cleanup.
+
 ## CLI Tests
 
 **Framework**: pytest with Click's `CliRunner`

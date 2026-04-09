@@ -2,10 +2,12 @@
 
 Provides calendar views, next-available lookups, and alternative
 resource suggestions by combining slice lease data with site availability.
+Uses FABlib's ``find_resource_slot()`` for future availability projections.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -14,22 +16,12 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.fablib_manager import get_fablib, is_configured
 from app.fablib_executor import run_in_fablib_pool
-from app.fabric_call_manager import get_call_manager
 from app.routes.resources import get_cached_sites
-from app.site_resolver import (
-    _build_availability,
-    _site_can_host,
-    COMPONENT_RESOURCE_MAP,
-)
+from app.site_resolver import COMPONENT_RESOURCE_MAP
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["schedule"])
-
-# States that indicate an active (resource-consuming) slice
-_ACTIVE_STATES = {"StableOK", "StableError", "ModifyOK", "ModifyError",
-                  "Configuring", "Nascent", "AllocatedOK"}
-_TERMINAL_STATES = {"Dead", "Closing"}
 
 
 # ---------------------------------------------------------------------------
@@ -47,77 +39,6 @@ def _parse_iso(val: str) -> Optional[datetime]:
         return dt
     except (ValueError, TypeError):
         return None
-
-
-def _get_slice_nodes(slice_obj) -> list[dict[str, Any]]:
-    """Extract node resource info from a FABlib slice object."""
-    nodes = []
-    try:
-        for node in slice_obj.get_nodes():
-            nodes.append({
-                "name": node.get_name(),
-                "site": node.get_site(),
-                "cores": node.get_cores(),
-                "ram": node.get_ram(),
-                "disk": node.get_disk(),
-            })
-    except Exception:
-        logger.debug("Failed to extract nodes from slice", exc_info=True)
-    return nodes
-
-
-def _list_active_slices_sync() -> list[dict[str, Any]]:
-    """Fetch all active slices with per-node resource details.
-
-    Returns list of dicts with keys: name, id, state, lease_end, nodes.
-    Each node has: name, site, cores, ram, disk.
-    """
-    if not is_configured():
-        return []
-
-    fablib = get_fablib()
-    slices = fablib.get_slices()
-    result = []
-    for s in slices:
-        try:
-            state = str(s.get_state())
-        except Exception:
-            continue
-
-        if state in _TERMINAL_STATES:
-            continue
-
-        # Only include active slices (consuming resources)
-        if state not in _ACTIVE_STATES:
-            continue
-
-        try:
-            lease_end_raw = s.get_lease_end()
-            lease_end = str(lease_end_raw) if lease_end_raw else ""
-        except Exception:
-            lease_end = ""
-
-        nodes = _get_slice_nodes(s)
-
-        result.append({
-            "name": s.get_name(),
-            "id": s.get_slice_id(),
-            "state": state,
-            "lease_end": lease_end,
-            "nodes": nodes,
-        })
-    return result
-
-
-async def _get_active_slices(max_age: float = 60) -> list[dict[str, Any]]:
-    """Get active slices with caching via the call manager."""
-    mgr = get_call_manager()
-    return await mgr.get(
-        "schedule:active_slices",
-        fetcher=_list_active_slices_sync,
-        max_age=max_age,
-        stale_while_revalidate=True,
-    )
 
 
 def _site_capacity(site: dict[str, Any]) -> dict[str, int]:
@@ -187,78 +108,126 @@ def _meets_requirements(avail: dict[str, int], cores: int, ram: int,
     return True
 
 
+def _build_resource_list(cores: int, ram: int, disk: int,
+                         gpu: str = "", site: str = "") -> list[dict[str, Any]]:
+    """Build a resource requirements list for ``find_resource_slot``."""
+    resource: dict[str, Any] = {"type": "compute"}
+    if site:
+        resource["site"] = site
+    if cores > 0:
+        resource["cores"] = cores
+    if ram > 0:
+        resource["ram"] = ram
+    if disk > 0:
+        resource["disk"] = disk
+    if gpu:
+        resource["components"] = {gpu: 1}
+    return [resource]
+
+
+async def _find_slot_for_site(site_name: str, cores: int, ram: int,
+                              disk: int, gpu: str) -> Optional[dict[str, Any]]:
+    """Call ``find_resource_slot`` for a single site.
+
+    Returns a dict with ``site`` and ``earliest_time`` if a slot is found,
+    or ``None`` if no slot exists in the next 7 days.
+    """
+    now = datetime.now(timezone.utc)
+    search_end = now + timedelta(days=7)
+    resources = _build_resource_list(cores, ram, disk, gpu, site_name)
+
+    req_desc = f"cores={cores} ram={ram} disk={disk}"
+    if gpu:
+        req_desc += f" gpu={gpu}"
+    logger.info("find_resource_slot: searching %s (%s) over next 7 days",
+                site_name, req_desc)
+
+    def _call():
+        return get_fablib().find_resource_slot(
+            start=now, end=search_end, duration=24,
+            resources=resources, max_results=1,
+        )
+
+    try:
+        result = await run_in_fablib_pool(_call)
+        slots = result.get("slots", [])
+        if slots:
+            slot = slots[0]
+            earliest = slot.get("start", "")
+            logger.info("find_resource_slot: %s — slot available at %s",
+                        site_name, earliest)
+            return {
+                "site": site_name,
+                "earliest_time": earliest,
+            }
+        else:
+            logger.info("find_resource_slot: %s — no slots in next 7 days",
+                        site_name)
+    except Exception as exc:
+        logger.warning("find_resource_slot: %s — failed: %s",
+                       site_name, exc, exc_info=True)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # GET /api/schedule/calendar
 # ---------------------------------------------------------------------------
 
 @router.get("/schedule/calendar")
-async def get_calendar(days: int = Query(14, ge=1, le=90)):
-    """Combine slice lease data with site availability to produce a calendar.
+async def get_calendar(
+    days: int = Query(14, ge=1, le=30),
+    interval: str = Query("day", description="Granularity: hour, day, or week"),
+    site: Optional[str] = Query(None, description="Comma-separated site names to include"),
+    exclude_site: Optional[str] = Query(None, description="Comma-separated site names to exclude"),
+    show: str = Query("sites", description="Resource level: sites, hosts, or all"),
+):
+    """Produce a resource availability calendar using FABlib's
+    ``resources_calendar()`` API.
 
-    Returns per-site resource usage including which slices are running and
-    when their leases expire.
+    Returns per-time-slot resource availability for sites (and optionally
+    hosts), with configurable interval granularity (hour/day/week).
     """
+    if interval not in ("hour", "day", "week"):
+        raise HTTPException(status_code=400, detail="interval must be hour, day, or week")
+    if show not in ("sites", "hosts", "all"):
+        raise HTTPException(status_code=400, detail="show must be sites, hosts, or all")
+
     now = datetime.now(timezone.utc)
     end_time = now + timedelta(days=days)
 
-    # Fetch site data and active slices in parallel
-    sites = get_cached_sites()
+    site_list = [s.strip() for s in site.split(",") if s.strip()] if site else None
+    exclude_list = [s.strip() for s in exclude_site.split(",") if s.strip()] if exclude_site else None
+
+    def _fetch():
+        fablib = get_fablib()
+        # Use the raw manager API to get structured calendar data
+        # (fablib.resources_calendar() flattens into display rows)
+        return fablib.get_manager().resources_calendar(
+            start=now,
+            end=end_time,
+            interval=interval,
+            site=site_list,
+            exclude_site=exclude_list,
+        )
+
     try:
-        active_slices = await _get_active_slices()
+        calendar_data = await run_in_fablib_pool(_fetch)
     except Exception:
-        logger.warning("Failed to fetch active slices for calendar", exc_info=True)
-        active_slices = []
+        logger.warning("resources_calendar failed", exc_info=True)
+        calendar_data = {"data": [], "interval": interval,
+                         "query_start": now.isoformat(),
+                         "query_end": end_time.isoformat(), "total": 0}
 
-    # Index slices by site via their nodes
-    site_slices: dict[str, list[dict[str, Any]]] = {}
-    for sl in active_slices:
-        # Group this slice's nodes by site
-        nodes_by_site: dict[str, list[dict]] = {}
-        for node in sl.get("nodes", []):
-            site_name = node.get("site", "")
-            if site_name:
-                nodes_by_site.setdefault(site_name, []).append({
-                    "name": node.get("name", ""),
-                    "cores": node.get("cores", 0),
-                    "ram": node.get("ram", 0),
-                    "disk": node.get("disk", 0),
-                })
-        for site_name, site_nodes in nodes_by_site.items():
-            site_slices.setdefault(site_name, []).append({
-                "name": sl.get("name", ""),
-                "id": sl.get("id", ""),
-                "state": sl.get("state", ""),
-                "lease_end": sl.get("lease_end", ""),
-                "nodes": site_nodes,
-            })
+    # Filter to requested show level (sites/hosts/all)
+    include_sites = show in ("all", "sites")
+    include_hosts = show in ("all", "hosts")
+    for slot in calendar_data.get("data", []):
+        if not include_sites:
+            slot.pop("sites", None)
+        if not include_hosts:
+            slot.pop("hosts", None)
 
-    # Build the response
-    result_sites = []
-    for site in sites:
-        name = site.get("name", "")
-        state = site.get("state", "")
-        if state != "Active":
-            continue
-
-        cap = _site_capacity(site)
-        avail = _site_available(site)
-
-        result_sites.append({
-            "name": name,
-            "cores_capacity": cap["cores"],
-            "cores_available": avail["cores"],
-            "ram_capacity": cap["ram"],
-            "ram_available": avail["ram"],
-            "slices": site_slices.get(name, []),
-        })
-
-    return {
-        "time_range": {
-            "start": now.isoformat(),
-            "end": end_time.isoformat(),
-        },
-        "sites": result_sites,
-    }
+    return calendar_data
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +244,10 @@ async def get_next_available(
 ):
     """Find when and where the requested resources will be available.
 
+    Uses cached site data for an instant "available now" check, then
+    delegates to FABlib's ``find_resource_slot()`` (via the Reports API)
+    for future availability projections.
+
     At least one resource constraint must be provided.
     """
     if cores == 0 and ram == 0 and disk == 0 and not gpu:
@@ -284,11 +257,6 @@ async def get_next_available(
         )
 
     sites_data = get_cached_sites()
-    try:
-        active_slices = await _get_active_slices()
-    except Exception:
-        logger.warning("Failed to fetch active slices", exc_info=True)
-        active_slices = []
 
     # Filter to requested site if specified
     target_sites = sites_data
@@ -298,7 +266,7 @@ async def get_next_available(
             raise HTTPException(status_code=404, detail=f"Site not found: {site}")
 
     available_now: list[dict[str, Any]] = []
-    available_soon: list[dict[str, Any]] = []
+    needs_slot_check: list[dict[str, Any]] = []
     not_available: list[dict[str, Any]] = []
 
     for s in target_sites:
@@ -347,72 +315,33 @@ async def get_next_available(
             })
             continue
 
-        # Simulate freeing resources by processing lease expirations
-        # Collect slices at this site
-        site_slice_nodes: list[dict[str, Any]] = []
-        for sl in active_slices:
-            lease_end_str = sl.get("lease_end", "")
-            lease_end_dt = _parse_iso(lease_end_str)
-            if not lease_end_dt:
-                continue
-            for node in sl.get("nodes", []):
-                if node.get("site") == site_name:
-                    site_slice_nodes.append({
-                        "slice_name": sl.get("name", ""),
-                        "lease_end": lease_end_str,
-                        "lease_end_dt": lease_end_dt,
-                        "cores": node.get("cores", 0),
-                        "ram": node.get("ram", 0),
-                        "disk": node.get("disk", 0),
-                    })
+        needs_slot_check.append(s)
 
-        # Sort by lease_end ascending
-        site_slice_nodes.sort(key=lambda x: x["lease_end_dt"])
-
-        # Simulate freeing resources
-        projected = dict(avail)
-        found_time = None
-        freeing_slices = []
-
-        # Group by unique lease_end to process all nodes expiring at the same time
-        seen_times: dict[str, list[dict]] = {}
-        for sn in site_slice_nodes:
-            seen_times.setdefault(sn["lease_end"], []).append(sn)
-
-        for le_str in sorted(seen_times.keys()):
-            group = seen_times[le_str]
-            batch_slices = set()
-            for sn in group:
-                projected["cores"] = projected.get("cores", 0) + sn["cores"]
-                projected["ram"] = projected.get("ram", 0) + sn["ram"]
-                projected["disk"] = projected.get("disk", 0) + sn["disk"]
-                batch_slices.add(sn["slice_name"])
-
-            freeing_slices.extend([
-                {"name": sn, "lease_end": le_str} for sn in batch_slices
-            ])
-
-            # Check if we now meet the requirement (ignoring GPU for projection)
-            gpu_ok = gpu == "" or _site_has_component(s, gpu)
-            if (projected.get("cores", 0) >= cores and
-                    projected.get("ram", 0) >= ram and
-                    projected.get("disk", 0) >= disk and
-                    gpu_ok):
-                found_time = le_str
-                break
-
-        if found_time:
-            available_soon.append({
-                "site": site_name,
-                "earliest_time": found_time,
-                "freeing_slices": freeing_slices,
-                "projected_cores": projected.get("cores", 0),
-                "projected_ram": projected.get("ram", 0),
-            })
-        else:
+    # Use find_resource_slot for sites that have capacity but not enough now
+    available_soon: list[dict[str, Any]] = []
+    if needs_slot_check and is_configured():
+        results = await asyncio.gather(
+            *(_find_slot_for_site(s.get("name", ""), cores, ram, disk, gpu)
+              for s in needs_slot_check),
+            return_exceptions=True,
+        )
+        found_sites: set[str] = set()
+        for r in results:
+            if isinstance(r, dict) and r is not None:
+                available_soon.append(r)
+                found_sites.add(r["site"])
+        for s in needs_slot_check:
+            sn = s.get("name", "")
+            if sn not in found_sites:
+                not_available.append({
+                    "site": sn,
+                    "reason": "No available slot found in the next 7 days",
+                })
+    elif needs_slot_check:
+        for s in needs_slot_check:
             not_available.append({
-                "site": site_name,
-                "reason": "Cannot project sufficient resources from known lease expirations",
+                "site": s.get("name", ""),
+                "reason": "Cannot check future availability",
             })
 
     return {
@@ -445,11 +374,6 @@ async def get_alternatives(
         )
 
     sites_data = get_cached_sites()
-    try:
-        active_slices = await _get_active_slices()
-    except Exception:
-        logger.warning("Failed to fetch active slices", exc_info=True)
-        active_slices = []
 
     requested = {"cores": cores, "ram": ram, "disk": disk}
     if gpu:
@@ -551,64 +475,16 @@ async def get_alternatives(
                         "ram_available": avail["ram"],
                     })
 
-    # 3. Compute wait time at preferred site (reuse next-available logic)
-    if preferred_site_data and not preferred_available:
-        site_name = preferred_site
-        avail = _site_available(preferred_site_data)
-
-        # Collect slices at this site with lease_end
-        site_slice_nodes: list[dict[str, Any]] = []
-        for sl in active_slices:
-            lease_end_str = sl.get("lease_end", "")
-            lease_end_dt = _parse_iso(lease_end_str)
-            if not lease_end_dt:
-                continue
-            for node in sl.get("nodes", []):
-                if node.get("site") == site_name:
-                    site_slice_nodes.append({
-                        "slice_name": sl.get("name", ""),
-                        "lease_end": lease_end_str,
-                        "lease_end_dt": lease_end_dt,
-                        "cores": node.get("cores", 0),
-                        "ram": node.get("ram", 0),
-                        "disk": node.get("disk", 0),
-                    })
-
-        site_slice_nodes.sort(key=lambda x: x["lease_end_dt"])
-
-        projected = dict(avail)
-        found_time = None
-        freeing_names: list[str] = []
-
-        seen_times: dict[str, list[dict]] = {}
-        for sn in site_slice_nodes:
-            seen_times.setdefault(sn["lease_end"], []).append(sn)
-
-        for le_str in sorted(seen_times.keys()):
-            group = seen_times[le_str]
-            batch_slices = set()
-            for sn in group:
-                projected["cores"] = projected.get("cores", 0) + sn["cores"]
-                projected["ram"] = projected.get("ram", 0) + sn["ram"]
-                projected["disk"] = projected.get("disk", 0) + sn["disk"]
-                batch_slices.add(sn["slice_name"])
-
-            freeing_names.extend(batch_slices)
-
-            gpu_ok = gpu == "" or _site_has_component(preferred_site_data, gpu)
-            if (projected.get("cores", 0) >= cores and
-                    projected.get("ram", 0) >= ram and
-                    projected.get("disk", 0) >= disk and
-                    gpu_ok):
-                found_time = le_str
-                break
-
-        if found_time:
+    # 3. Compute wait time at preferred site using find_resource_slot
+    if preferred_site_data and not preferred_available and is_configured():
+        slot_result = await _find_slot_for_site(
+            preferred_site, cores, ram, disk, gpu,
+        )
+        if slot_result:
             alternatives.append({
                 "type": "wait",
                 "site": preferred_site,
-                "earliest_time": found_time,
-                "freeing_slices": freeing_names,
+                "earliest_time": slot_result["earliest_time"],
             })
 
     # Sort: available_now first (different_site, reduced_config), then wait

@@ -68,7 +68,7 @@ loomai chameleon ips allocate --site CHI@TACC
 loomai chameleon slices list
 ```
 
-## AI Chat
+## AI Assistant
 ```bash
 loomai ai chat "create a 2-node slice at RENC"        # One-shot
 loomai ai chat                                        # Interactive

@@ -326,11 +326,11 @@ The Chameleon integration is controlled by a single `chameleon.enabled` boolean 
 - Chameleon section in ConfigureView — collapsed to just the enable toggle
 - ChameleonView component — not loaded
 - Chameleon options in topology editor (cross-testbed nodes) — hidden
-- Chameleon commands in AI chat tool list — excluded
+- Chameleon commands in AI assistant tool list — excluded
 
 **Hidden from CLI:**
 - `loomai chameleon` command group — prints "Chameleon integration is disabled. Enable it in Settings."
-- AI chat does not suggest or execute Chameleon tools
+- AI assistant does not suggest or execute Chameleon tools
 
 **Backend behavior when disabled:**
 - Chameleon routes return 404 or `{"error": "Chameleon integration is disabled"}`
@@ -354,7 +354,7 @@ The Chameleon integration is controlled by a single `chameleon.enabled` boolean 
 5. **Map integration** — Chameleon sites on the shared map
 6. **ChameleonView** — lease/instance management UI
 7. **Settings UI** — Chameleon credentials in ConfigureView
-8. **AI chat tools** — Chameleon skills for LoomAI
+8. **AI assistant tools** — Chameleon skills for LoomAI
 9. **SSH/terminal** — WebSocket terminal to Chameleon instances
 10. **Cross-testbed topology** — mixed graphs, stitching
 

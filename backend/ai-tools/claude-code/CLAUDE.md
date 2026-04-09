@@ -38,17 +38,15 @@ available in this container.** FABlib tools are faster, more reliable, and
 provide full access to all FABRIC operations without network overhead.
 
 **Slice lifecycle:** `list_slices`, `get_slice`, `create_slice`,
-`submit_slice`, `submit_slice`, `delete_slice`,
-`renew_slice`, `refresh_slice`
+`submit_slice`, `delete_slice`, `renew_slice`, `refresh_slice`
 
-**SSH & files:** `ssh_execute`, `write_vm_file`, `read_vm_file`,
-`get_slice`
+**SSH & files:** `ssh_execute`, `write_vm_file`, `read_vm_file`
 
 **Resources:** `query_sites`, `get_site_hosts`, `list_images`,
-`list_component_models`, `query_sites`
+`list_component_models`
 
-**Config:** `get_config`, `update_settings`, `get_config`,
-`list_projects`, `switch_project`
+**Config:** `get_config`, `update_settings`, `list_projects`,
+`switch_project`
 
 **Templates:** `list_templates`, `load_template`
 

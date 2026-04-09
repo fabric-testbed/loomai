@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import secrets
 import stat
 import time
 from typing import Optional
@@ -460,18 +461,22 @@ def paste_token(req: TokenPasteRequest):
 
 
 # ---------------------------------------------------------------------------
-# GET /api/config/callback — OAuth callback from CM
+# GET/POST /api/config/callback — OAuth callback from CM
 # ---------------------------------------------------------------------------
 
-@router.get("/api/config/callback")
-def oauth_callback(id_token: str, refresh_token: str = ""):
+def _process_oauth_callback(id_token: str, refresh_token: str = "") -> RedirectResponse:
+    """Shared logic for GET/POST callback — writes token, generates keys, and redirects."""
+    logger.info("oauth_callback: received token delivery (id_token len=%d)", len(id_token))
     token_data = {
         "id_token": id_token,
         "refresh_token": refresh_token,
     }
 
     # Auto-register user and handle multi-user migration
-    _handle_token_write(token_data)
+    try:
+        _handle_token_write(token_data)
+    except Exception as e:
+        logger.warning("oauth_callback: _handle_token_write error (continuing): %s", e)
 
     d = _ensure_config_dir()
     # Dual-write: ~/.tokens.json (JupyterHub convention) + config_dir/id_token.json (FABlib)
@@ -481,14 +486,172 @@ def oauth_callback(id_token: str, refresh_token: str = ""):
         with open(tp, "w") as f:
             json.dump(token_data, f, indent=2)
         os.chmod(tp, stat.S_IRUSR | stat.S_IWUSR)
+        logger.info("oauth_callback: wrote token to %s", tp)
 
     # Reset FABlib and notify caches so all views use the new account
     reset_fablib()
     notify_user_changed()
 
+    # --- Inline key generation + project setup ---
+    # The frontend auto-setup flow may not trigger reliably (popup/polling race).
+    # Generate bastion key + set project here so config is ready on redirect.
+    try:
+        payload = _decode_jwt_payload(id_token)
+        jwt_projects = payload.get("projects", [])
+        user_email = payload.get("email", "")
+        user_uuid = payload.get("uuid", "")
+
+        # Pick the first non-service project
+        provisionable = [p for p in jwt_projects
+                         if not re.match(r'^SERVICE\s*[-–—]', p.get("name", ""), re.IGNORECASE)]
+        project_id = ""
+        if provisionable:
+            project_id = provisionable[0].get("uuid", "")
+        elif jwt_projects:
+            project_id = jwt_projects[0].get("uuid", "")
+
+        if project_id:
+            logger.info("oauth_callback: setting project_id=%s for %s", project_id, user_email)
+            from app import settings_manager
+            settings = settings_manager.load_settings()
+            settings["fabric"]["project_id"] = project_id
+
+            # Resolve bastion_username
+            bastion_login = ""
+            try:
+                email = payload.get("email", "")
+                sub = payload.get("sub", "")
+                if email and sub:
+                    username = email.split("@")[0].replace(".", "_")
+                    cilogon_id = sub.rstrip("/").rsplit("/", 1)[-1]
+                    if cilogon_id.isdigit():
+                        bastion_login = f"{username}_{cilogon_id.zfill(10)}"
+            except Exception:
+                pass
+            if bastion_login:
+                settings["fabric"]["bastion_username"] = bastion_login
+
+            settings_manager.save_settings(settings)
+            settings_manager.apply_env_vars(settings)
+
+            config_dir = d
+            core_api_host = settings.get("fabric", {}).get("hosts", {}).get("core_api", "uis.fabric-testbed.net")
+
+            # Generate bastion key via Core API
+            bastion_priv_path = os.path.join(config_dir, "fabric_bastion_key")
+            if not os.path.isfile(bastion_priv_path):
+                logger.info("oauth_callback: generating bastion key via Core API (%s)", core_api_host)
+                try:
+                    resp = httpx.post(
+                        f"https://{core_api_host}/sshkeys",
+                        headers={"Authorization": f"Bearer {id_token}", "Content-Type": "application/json"},
+                        json={"keytype": "bastion", "comment": f"loomai-bastion-{secrets.token_hex(4)}",
+                              "description": "bastion-key-via-loomai", "store_pubkey": True},
+                        timeout=15,
+                    )
+                    logger.info("oauth_callback: Core API /sshkeys responded %d", resp.status_code)
+                    if resp.status_code >= 400:
+                        logger.warning("oauth_callback: Core API /sshkeys error: %s", resp.text[:500])
+                    resp.raise_for_status()
+                    results = resp.json().get("results", [])
+                    if results:
+                        priv = results[0].get("private_openssh", "")
+                        pub = results[0].get("public_openssh", "")
+                        if priv:
+                            with open(bastion_priv_path, "w") as f:
+                                f.write(priv)
+                            os.chmod(bastion_priv_path, stat.S_IRUSR | stat.S_IWUSR)
+                            logger.info("oauth_callback: bastion key written to %s", bastion_priv_path)
+                        if pub:
+                            pub_path = os.path.join(config_dir, "fabric_bastion_key.pub")
+                            with open(pub_path, "w") as f:
+                                f.write(pub)
+                            os.chmod(pub_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+                    else:
+                        logger.warning("oauth_callback: Core API /sshkeys returned empty results")
+                except Exception as e:
+                    logger.warning("oauth_callback: bastion key generation failed: %s", e, exc_info=True)
+            else:
+                logger.info("oauth_callback: bastion key already exists at %s", bastion_priv_path)
+
+            # Generate slice keys if missing
+            from app.fablib_manager import get_default_slice_key_path
+            priv_path, pub_path = get_default_slice_key_path(config_dir)
+            if not os.path.isfile(priv_path):
+                logger.info("oauth_callback: generating slice keys")
+                try:
+                    import subprocess
+                    os.makedirs(os.path.dirname(priv_path), exist_ok=True)
+                    subprocess.run(["ssh-keygen", "-t", "rsa", "-b", "3072", "-f", priv_path, "-N", "", "-q"],
+                                   check=True, timeout=10)
+                    logger.info("oauth_callback: slice keys written to %s", priv_path)
+                except Exception as e:
+                    logger.warning("oauth_callback: slice key generation failed: %s", e)
+
+            # Create FABRIC LLM API key
+            existing_ai_key = settings_manager.get_fabric_api_key()
+            if not existing_ai_key:
+                try:
+                    cm_host = settings.get("fabric", {}).get("hosts", {}).get("credmgr", "cm.fabric-testbed.net")
+                    auth_headers = {"Authorization": f"Bearer {id_token}"}
+                    # Check for existing keys first
+                    api_key = ""
+                    try:
+                        keys_resp = httpx.get(f"https://{cm_host}/credmgr/tokens/llm_keys",
+                                              headers=auth_headers, timeout=15)
+                        if keys_resp.status_code == 200:
+                            for k in keys_resp.json().get("data", []):
+                                key_val = k.get("details", {}).get("api_key", "")
+                                if key_val:
+                                    api_key = key_val
+                                    logger.info("oauth_callback: reusing existing LLM key")
+                                    break
+                    except Exception:
+                        pass
+                    if not api_key:
+                        import uuid as _uuid
+                        resp = httpx.post(
+                            f"https://{cm_host}/credmgr/tokens/create_llm",
+                            params={"key_name": f"loomai-{_uuid.uuid4().hex[:8]}",
+                                    "comment": "Auto-created by LoomAI", "duration": 30},
+                            headers=auth_headers, timeout=15,
+                        )
+                        resp.raise_for_status()
+                        llm_data = resp.json().get("data", [{}])
+                        if llm_data:
+                            api_key = llm_data[0].get("details", {}).get("api_key", "")
+                    if api_key:
+                        settings = settings_manager.load_settings()
+                        settings["ai"]["fabric_api_key"] = api_key
+                        settings_manager.save_settings(settings)
+                        settings_manager.apply_env_vars(settings)
+                        logger.info("oauth_callback: LLM API key saved")
+                except Exception as e:
+                    logger.warning("oauth_callback: LLM key creation failed: %s", e)
+
+            # Re-reset FABlib so it picks up the project + keys
+            reset_fablib()
+            notify_user_changed()
+
+    except Exception as e:
+        logger.warning("oauth_callback: inline setup error (non-fatal): %s", e, exc_info=True)
+
     # Redirect back to frontend with success indicator
     base_url = os.environ.get("WEBGUI_BASE_URL", "http://localhost:3000")
     return RedirectResponse(url=f"{base_url}/?configLogin=success")
+
+
+@router.get("/api/config/callback")
+def oauth_callback_get(id_token: str, refresh_token: str = ""):
+    return _process_oauth_callback(id_token, refresh_token)
+
+
+@router.post("/api/config/callback")
+def oauth_callback_post(id_token: str = "", refresh_token: str = ""):
+    """Accept token via POST (some CM flows use form submission)."""
+    if not id_token:
+        raise HTTPException(status_code=400, detail="Missing id_token")
+    return _process_oauth_callback(id_token, refresh_token)
 
 
 # ---------------------------------------------------------------------------
@@ -618,9 +781,12 @@ async def auto_setup(req: AutoSetupRequest):
 
     # Generate bastion key via Core API if none exist locally
     bastion_key_generated = False
+    bastion_key_error = ""
     bastion_priv_path = os.path.join(config_dir, "fabric_bastion_key")
     bastion_pub_path = os.path.join(config_dir, "fabric_bastion_key.pub")
     if not os.path.isfile(bastion_priv_path):
+        logger.info("auto-setup: bastion key not found at %s, requesting from Core API (%s)",
+                     bastion_priv_path, core_api_host)
         try:
             resp = httpx.post(
                 f"https://{core_api_host}/sshkeys",
@@ -630,12 +796,17 @@ async def auto_setup(req: AutoSetupRequest):
                 },
                 json={
                     "keytype": "bastion",
-                    "comment": "fabric-bastion-key",
+                    "comment": f"loomai-bastion-{secrets.token_hex(4)}",
                     "description": "bastion-key-via-loomai",
                     "store_pubkey": True,
                 },
                 timeout=15,
             )
+            logger.info("auto-setup: Core API /sshkeys responded %d", resp.status_code)
+            if resp.status_code >= 400:
+                body = resp.text[:500]
+                logger.warning("auto-setup: Core API /sshkeys error body: %s", body)
+                bastion_key_error = f"Core API returned {resp.status_code}: {body}"
             resp.raise_for_status()
             results = resp.json().get("results", [])
             if results:
@@ -647,12 +818,25 @@ async def auto_setup(req: AutoSetupRequest):
                         f.write(priv_content)
                     os.chmod(bastion_priv_path, stat.S_IRUSR | stat.S_IWUSR)
                     bastion_key_generated = True
+                    logger.info("auto-setup: bastion private key written to %s", bastion_priv_path)
+                else:
+                    logger.warning("auto-setup: Core API returned result but no private_openssh key. Keys in response: %s",
+                                   list(key_data.keys()))
+                    bastion_key_error = "Core API response missing private_openssh"
                 if pub_content:
                     with open(bastion_pub_path, "w") as f:
                         f.write(pub_content)
                     os.chmod(bastion_pub_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+            else:
+                logger.warning("auto-setup: Core API /sshkeys returned empty results array. Full response: %s",
+                               resp.text[:500])
+                bastion_key_error = "Core API returned empty results"
         except Exception as e:
-            logger.warning("auto-setup: bastion key generation failed: %s", e)
+            logger.warning("auto-setup: bastion key generation failed: %s", e, exc_info=True)
+            if not bastion_key_error:
+                bastion_key_error = str(e)
+    else:
+        logger.info("auto-setup: bastion key already exists at %s", bastion_priv_path)
 
     # Generate slice keys if none exist
     slice_keys_generated = False
@@ -738,6 +922,19 @@ async def auto_setup(req: AutoSetupRequest):
 
     reset_fablib()
 
+    # Refresh the token so it is scoped to the selected project.
+    # The OAuth callback token may be scoped to a different project.
+    try:
+        fablib = get_fablib()
+        mgr = fablib.get_manager()
+        mgr.project_id = req.project_id
+        refresh_token = mgr.get_refresh_token()
+        if refresh_token:
+            mgr.refresh_tokens(refresh_token=refresh_token)
+            logger.info("auto-setup: token refreshed for project %s", req.project_id)
+    except Exception as e:
+        logger.warning("auto-setup: token refresh for project failed (non-fatal): %s", e)
+
     return {
         "status": "ok",
         "email": user_email,
@@ -746,10 +943,192 @@ async def auto_setup(req: AutoSetupRequest):
         "project_id": req.project_id,
         "bastion_username": bastion_login,
         "bastion_key_generated": bastion_key_generated,
+        "bastion_key_error": bastion_key_error,
         "slice_keys_generated": slice_keys_generated,
         "llm_key_created": llm_key_created,
         "llm_key_error": llm_key_error,
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /api/config/llm-key — standalone LLM key creation
+# ---------------------------------------------------------------------------
+
+@router.post("/api/config/llm-key")
+async def create_llm_key():
+    """Create or retrieve a FABRIC LLM API key via Credential Manager."""
+    token_data = _read_token()
+    if not token_data or "id_token" not in token_data:
+        raise HTTPException(status_code=401, detail="Not authenticated. Login first.")
+
+    id_token = token_data["id_token"]
+    try:
+        payload = _decode_jwt_payload(id_token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Could not decode token")
+
+    # Check token expiry
+    exp = payload.get("exp")
+    if exp and time.time() > exp:
+        raise HTTPException(status_code=401, detail="Token expired. Please re-login.")
+
+    from app import settings_manager
+    settings = settings_manager.load_settings()
+    cm_host = settings.get("fabric", {}).get("hosts", {}).get("credmgr", "cm.fabric-testbed.net")
+    auth_headers = {"Authorization": f"Bearer {id_token}"}
+
+    try:
+        # Check for existing LLM keys first
+        api_key = ""
+        try:
+            keys_resp = httpx.get(
+                f"https://{cm_host}/credmgr/tokens/llm_keys",
+                headers=auth_headers,
+                timeout=15,
+            )
+            if keys_resp.status_code == 200:
+                existing_keys = keys_resp.json().get("data", [])
+                for k in existing_keys:
+                    details = k.get("details", {})
+                    key_val = details.get("api_key", "")
+                    if key_val:
+                        api_key = key_val
+                        logger.info("llm-key: reusing existing FABRIC LLM key '%s'", details.get("key_name", ""))
+                        break
+        except Exception:
+            pass
+
+        created = False
+        if not api_key:
+            import uuid as _uuid
+            key_name = f"loomai-{_uuid.uuid4().hex[:8]}"
+            resp = httpx.post(
+                f"https://{cm_host}/credmgr/tokens/create_llm",
+                params={
+                    "key_name": key_name,
+                    "comment": "Created by LoomAI settings",
+                    "duration": 30,
+                },
+                headers=auth_headers,
+                timeout=15,
+            )
+            resp.raise_for_status()
+            llm_data = resp.json().get("data", [{}])
+            if llm_data:
+                api_key = llm_data[0].get("details", {}).get("api_key", "")
+            created = True
+
+        if api_key:
+            settings = settings_manager.load_settings()
+            settings["ai"]["fabric_api_key"] = api_key
+            settings_manager.save_settings(settings)
+            settings_manager.apply_env_vars(settings)
+            return {"status": "ok", "created": created, "message": "FABRIC LLM key saved"}
+
+        return {"status": "error", "created": False, "message": "No API key returned from Credential Manager"}
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=500, detail=f"Credential Manager error: {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM key creation failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# POST /api/config/logout — clear session
+# ---------------------------------------------------------------------------
+
+@router.post("/api/config/logout")
+def logout():
+    """Clear authentication tokens and reset session state."""
+    config_dir = _config_dir()
+
+    # Delete token files from all known locations
+    token_paths = [
+        os.path.join(config_dir, "id_token.json"),
+        os.path.join(os.path.expanduser("~"), ".tokens.json"),
+    ]
+    # Also check settings-based token path (may differ in multi-user setups)
+    try:
+        from app.settings_manager import get_token_path as _get_tp
+        settings_tp = _get_tp()
+        if settings_tp not in token_paths:
+            token_paths.append(settings_tp)
+    except Exception:
+        pass
+
+    for tp in token_paths:
+        try:
+            if os.path.isfile(tp) or os.path.islink(tp):
+                os.unlink(tp)
+                logger.info("logout: removed %s", tp)
+        except OSError as e:
+            logger.warning("logout: failed to remove %s: %s", tp, e)
+
+    # Reset FABlib singleton FIRST (this reloads fabric_rc and restores env vars)
+    reset_fablib()
+
+    # Clear stale env vars AFTER reset_fablib so they stay cleared
+    # (reset_fablib reloads fabric_rc which restores them)
+    for var in ("FABRIC_PROJECT_ID", "FABRIC_BASTION_USERNAME"):
+        os.environ.pop(var, None)
+
+    # Notify caches
+    notify_user_changed()
+
+    return {"status": "ok"}
+
+
+@router.post("/api/config/keys/bastion/generate")
+async def generate_bastion_key(force: bool = Query(False)):
+    """Generate a new bastion SSH key pair via the FABRIC Core API."""
+    token_data = _read_token()
+    if not token_data or "id_token" not in token_data:
+        raise HTTPException(status_code=401, detail="No token available. Login first.")
+
+    id_token = token_data["id_token"]
+    config_dir = _ensure_config_dir()
+    bastion_priv_path = os.path.join(config_dir, "fabric_bastion_key")
+
+    if not force and os.path.isfile(bastion_priv_path):
+        return {"status": "exists", "generated": False}
+
+    from app import settings_manager
+    s = settings_manager.load_settings()
+    core_api_host = s.get("fabric", {}).get("hosts", {}).get("core_api", "uis.fabric-testbed.net")
+
+    try:
+        resp = httpx.post(
+            f"https://{core_api_host}/sshkeys",
+            headers={"Authorization": f"Bearer {id_token}", "Content-Type": "application/json"},
+            json={"keytype": "bastion", "comment": f"loomai-bastion-{secrets.token_hex(4)}",
+                  "description": "bastion-key-via-loomai", "store_pubkey": True},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        if not results:
+            raise HTTPException(status_code=502, detail="Core API returned empty results")
+        priv = results[0].get("private_openssh", "")
+        pub = results[0].get("public_openssh", "")
+        if not priv:
+            raise HTTPException(status_code=502, detail="Core API did not return a private key")
+        with open(bastion_priv_path, "w") as f:
+            f.write(priv)
+        os.chmod(bastion_priv_path, stat.S_IRUSR | stat.S_IWUSR)
+        if pub:
+            pub_path = os.path.join(config_dir, "fabric_bastion_key.pub")
+            with open(pub_path, "w") as f:
+                f.write(pub)
+            os.chmod(pub_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        reset_fablib()
+        return {"status": "ok", "generated": True}
+    except httpx.HTTPStatusError as e:
+        logger.warning("generate_bastion_key: Core API error: %s", e.response.text[:500])
+        raise HTTPException(status_code=e.response.status_code, detail=f"Core API error: {e.response.text[:300]}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("generate_bastion_key: failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Key generation failed: {e}")
 
 
 @router.post("/api/config/keys/bastion")
@@ -1020,50 +1399,45 @@ class ProjectSwitchRequest(BaseModel):
 
 @router.post("/api/projects/switch")
 def switch_project(req: ProjectSwitchRequest):
-    """Switch the active project in-memory and persist to fabric_rc."""
+    """Switch the active project: update settings, refresh token, reset FABlib."""
     try:
         fablib = get_fablib()
     except RuntimeError:
         raise HTTPException(status_code=400, detail="FABRIC is not configured yet.")
 
-    # Update in-memory via FABlib
-    fablib.set_project_id(req.project_id)
-    os.environ["FABRIC_PROJECT_ID"] = req.project_id
-
-    # Update the SliceManager's project_id so token refresh uses the new project
-    mgr = fablib.get_manager()
-    mgr.project_id = req.project_id
-
-    # Force token refresh scoped to the new project
-    token_refreshed = False
-    try:
-        refresh_token = mgr.get_refresh_token()
-        if refresh_token:
-            mgr.refresh_tokens(refresh_token=refresh_token)
-            token_refreshed = True
-    except Exception:
-        pass  # Token refresh is best-effort
-
-    # Persist to settings.json (which also regenerates fabric_rc)
+    # 1. Persist project_id to settings.json → regenerates fabric_rc with new PROJECT_ID
     from app import settings_manager
     settings = settings_manager.load_settings()
     settings["fabric"]["project_id"] = req.project_id
     settings_manager.save_settings(settings)
+    settings_manager.apply_env_vars(settings)
+
+    # 2. Attempt token refresh scoped to the new project
+    token_refreshed = False
+    try:
+        mgr = fablib.get_manager()
+        mgr.project_id = req.project_id
+        refresh_token = mgr.get_refresh_token()
+        if refresh_token:
+            mgr.refresh_tokens(refresh_token=refresh_token)
+            token_refreshed = True
+            logger.info("switch_project: token refreshed for project %s", req.project_id)
+    except Exception as e:
+        logger.warning("switch_project: token refresh failed: %s", e)
+
+    # 3. Reset FABlib singleton so it recreates with new project/token/env
+    reset_fablib()
+    notify_user_changed()
 
     result: dict = {"status": "ok", "project_id": req.project_id, "token_refreshed": token_refreshed}
     if not token_refreshed:
-        # Provide a CM login URL scoped to the new project so the frontend
-        # can redirect the user to re-authenticate with a project-scoped token.
-        login_url = "https://cm.fabric-testbed.net/credmgr/tokens/create_cli?" + urlencode({
-            "scope": "all",
-            "lifetime": "4",
-            "project_id": req.project_id,
-        })
+        # Token refresh failed — frontend should trigger OAuth re-login
+        # scoped to the new project
         result["warning"] = (
-            "Your token does not have a refresh capability. "
-            "Click 'Re-authenticate' in Settings to get a token for this project."
+            "Token could not be refreshed for the new project. "
+            "Please re-login to get a project-scoped token."
         )
-        result["login_url"] = login_url
+        result["needs_relogin"] = True
     return result
 
 

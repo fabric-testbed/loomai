@@ -130,6 +130,12 @@ Interface naming: `{node-name}-{component-name}-p{port-number}`.
    - Use `### PROGRESS:` markers for WebUI status updates
    - Import FABlib inside each function (avoids startup cost when not needed)
 
+   **FABlib script pitfalls — avoid these common errors:**
+   - `add_node(..., tags=["@cluster"])` — `tags` is NOT a valid parameter. Use `site="STAR"` or `site=None`.
+   - After `submit()`, re-fetch the slice: `slice = fablib.get_slice(name=slice_name)` before accessing nodes.
+   - No `get_fabnet_name()`. Get IPs via: `for iface in node.get_interfaces(): str(iface.get_ip_addr())`
+   - No `node.write_file()`. Use `node.upload_file()` or `node.execute("echo ... > file")`.
+
    **Key FABlib API patterns to document in the script:**
    ```python
    # Initialize FABlib — reads credentials from FABRIC_CONFIG_DIR
@@ -140,7 +146,7 @@ Interface naming: `{node-name}-{component-name}-p{port-number}`.
    slice_obj = fablib.new_slice(name="my-slice")
 
    # Add a node (VM) with resources
-   node = slice_obj.add_node(name="node1", site="random",
+   node = slice_obj.add_node(name="node1", site=None,  # auto-placement
                               cores=4, ram=16, disk=100,
                               image="default_ubuntu_22")
 
@@ -157,7 +163,11 @@ Interface naming: `{node-name}-{component-name}-p{port-number}`.
    slice_obj.submit()
    slice_obj.wait_ssh(progress=True)
 
+   # IMPORTANT: Re-fetch slice after submit — original node objects go stale
+   slice_obj = fablib.get_slice(name="my-slice")
+
    # Execute commands on nodes via SSH
+   node = slice_obj.get_node(name="node1")
    stdout, stderr = node.execute("hostname")
 
    # Upload/download files

@@ -1,4 +1,4 @@
-"""AI chat and model commands."""
+"""AI assistant and model commands."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from loomai_cli.output import output, output_message
 
 @click.group()
 def ai():
-    """AI chat assistant and model management."""
+    """AI assistant and model management."""
 
 
 @ai.command("models")
@@ -63,7 +63,7 @@ def list_models(ctx):
 @ai.command("agents")
 @click.pass_context
 def list_agents(ctx):
-    """List available AI chat agents.
+    """List available AI assistant agents.
 
     Examples:
 
@@ -104,7 +104,7 @@ def chat(ctx, message, model, agent):
         _send_chat(client, [{"role": "user", "content": message}], model, agent)
     else:
         # Interactive mode
-        click.echo("LoomAI AI Chat (type 'exit' or Ctrl+D to quit)")
+        click.echo("LoomAI AI Assistant (type 'exit' or Ctrl+D to quit)")
         messages = []
         while True:
             try:

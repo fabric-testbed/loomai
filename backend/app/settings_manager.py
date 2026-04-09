@@ -161,6 +161,7 @@ def get_default_settings() -> dict:
             "custom_providers": [],  # List of {"name": str, "base_url": str, "api_key": str}
             "default_model": "",        # Auto-discovered or user-set default LLM
             "default_model_source": "", # "fabric", "nrp", "custom:<name>", or ""
+            "discovered_models": {},    # Persisted model list from last discovery
             "tools": {
                 "aider": True,
                 "opencode": True,

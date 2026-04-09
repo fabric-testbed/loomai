@@ -69,7 +69,7 @@ You have these tools available:
 - `run_command` — Execute shell commands
 
 ### FABRIC Tools (LoomAI tool-calling)
-These tools interact directly with the FABRIC testbed. In LoomAI chat, use these
+These tools interact directly with the FABRIC testbed. In the LoomAI assistant, use these
 exact tool names (no `fabric_` prefix). Other AI tools should use the equivalent
 `curl` or `loomai` CLI commands shown in the "Backend REST API" section below.
 
@@ -716,7 +716,7 @@ Access tours from the Landing page button or the Help page.
 - **Map** — Leaflet world map with FABRIC sites, backbone links, and live metrics
 - **Storage** — Dual-panel file manager (container ↔ VM SFTP)
 - **Artifacts** — Artifact manager (Local, Authored, Marketplace) for weaves, VM templates, recipes, notebooks
-- **AI Tools** — Launcher for AI coding assistants (LoomAI chat, Aider, OpenCode, Crush, Claude Code)
+- **AI Tools** — Launcher for AI coding assistants (LoomAI assistant, Aider, OpenCode, Crush, Claude Code)
 - **Web Apps** — Tunnel to web services on slice VMs (Grafana, Jupyter, etc.)
 - **JupyterLab** — Embedded JupyterLab for notebooks and artifact editing
 
@@ -1685,9 +1685,28 @@ node2 = slice.add_node(name="n2", site="TACC")
 node2.add_fabnet(net_type="IPv4")
 
 slice.submit()
+slice.wait_ssh(progress=True)
 
-# After submit, get IPs:
-n2_ip = node2.get_interface(network_name=f"FABNET_IPv4_{node2.get_site()}").get_ip_addr()
+# IMPORTANT: Re-fetch slice after submit — original node objects go stale
+slice = fablib.get_slice(name=slice_name)
+node1 = slice.get_node(name="n1")
+node2 = slice.get_node(name="n2")
+
+# Get FABNetv4 IPs (iterate interfaces, convert to str)
+for node in slice.get_nodes():
+    for iface in node.get_interfaces():
+        addr = str(iface.get_ip_addr())
+        if addr and not addr.startswith("127."):
+            print(f"{node.get_name()}: {addr}")
+            break
+
+# Ping between nodes
+n2_ip = None
+for iface in node2.get_interfaces():
+    addr = str(iface.get_ip_addr())
+    if addr and not addr.startswith("127."):
+        n2_ip = addr
+        break
 node1.execute(f"ping -c 3 {n2_ip}")
 ```
 
@@ -1944,6 +1963,49 @@ for net in slice.get_networks():
 - URL: `https://uis.fabric-testbed.net`
 - User profiles, project membership, authorization
 - SSH key management
+
+---
+
+# Common FABlib Mistakes
+
+These are frequent errors. Follow the WRONG/RIGHT patterns exactly.
+
+## 1. `add_node()` does NOT accept `tags`
+Site groups (`@cluster`, `@wan-a`) are a **weave.json topology feature**, not a FABlib parameter.
+- **WRONG**: `slice.add_node(name="n1", tags=["@cluster"])`
+- **RIGHT**: `slice.add_node(name="n1", site="STAR")` or `site=None` for auto-placement
+- Valid `add_node()` parameters: `name`, `site`, `cores`, `ram`, `disk`, `image`
+
+## 2. Re-fetch after `submit()` — node objects go stale
+After `submit()` + `wait_ssh()`, the original node objects from `add_node()` lose their state. You MUST re-fetch before executing commands or reading IPs.
+- **WRONG**: Using pre-submit node references after provisioning
+- **RIGHT**:
+```python
+slice_obj.submit()
+slice_obj.wait_ssh(progress=True)
+# Re-fetch — REQUIRED
+slice_obj = fablib.get_slice(name=slice_name)
+node1 = slice_obj.get_node(name="node1")
+node1.execute("hostname")  # Now works
+```
+
+## 3. Getting FABNetv4 IP addresses
+There is NO `node.get_fabnet_name()` method. Iterate interfaces instead.
+- **WRONG**: `node.get_interface(node.get_fabnet_name()).get_ip_addr()`
+- **RIGHT**:
+```python
+for iface in node.get_interfaces():
+    addr = str(iface.get_ip_addr())
+    if addr and not addr.startswith("127."):
+        print(f"{node.get_name()}: {addr}")
+        break
+```
+
+## 4. Writing files to VMs
+FABlib nodes have `upload_file()` and `download_file()`, not `write_file()`.
+- **WRONG**: `node.write_file("/tmp/data.csv", content)`
+- **RIGHT**: Write to a local temp file, then `node.upload_file(local_path, remote_path)`
+- **Alternative**: `node.execute(f"echo '{content}' > /tmp/data.csv")`
 
 ---
 

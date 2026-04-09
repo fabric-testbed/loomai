@@ -158,6 +158,15 @@ def reset_fablib() -> None:
     priv_path, pub_path = get_default_slice_key_path(config_dir)
     os.environ["FABRIC_SLICE_PRIVATE_KEY_FILE"] = priv_path
     os.environ["FABRIC_SLICE_PUBLIC_KEY_FILE"] = pub_path
+    # Invalidate all cached API call results — the token/project may have
+    # changed, so stale data (e.g. empty slice list) must not be served.
+    try:
+        from app.fabric_call_manager import get_call_manager
+        mgr = get_call_manager()
+        for key in list(mgr._cache.keys()):
+            mgr.invalidate(key)
+    except Exception:
+        pass
 
 
 def get_fablib() -> FablibManager:
@@ -224,4 +233,63 @@ def get_fablib() -> FablibManager:
                 os.environ["FABRIC_SLICE_PRIVATE_KEY_FILE"] = priv_path
                 os.environ["FABRIC_SLICE_PUBLIC_KEY_FILE"] = pub_path
                 _fablib = FablibManager()
+                # Ensure the token is scoped to the configured project.
+                # The token on disk may be stale (from a previous session or
+                # different project).  If the configured FABRIC_PROJECT_ID
+                # differs from what the token contains, refresh the token
+                # and recreate the singleton so it uses the new token.
+                if _sync_token_project(_fablib):
+                    _fablib = FablibManager()
     return _fablib
+
+
+def _sync_token_project(fablib: FablibManager) -> bool:
+    """If the token's project doesn't match FABRIC_PROJECT_ID, refresh it.
+
+    Returns True if the token was refreshed (caller should recreate the
+    FablibManager so it picks up the new token).
+    """
+    import json
+    import base64
+    import logging
+    log = logging.getLogger(__name__)
+    configured_pid = os.environ.get("FABRIC_PROJECT_ID", "")
+    if not configured_pid:
+        return False
+    try:
+        # Read the actual project UUID from the JWT on disk
+        token_path = os.environ.get("FABRIC_TOKEN_LOCATION", "")
+        if not token_path or not os.path.isfile(token_path):
+            return False
+        with open(token_path) as f:
+            token_data = json.load(f)
+        id_token = token_data.get("id_token", "")
+        if not id_token:
+            return False
+        # Decode JWT payload (no verification — we just need the claims)
+        parts = id_token.split(".")
+        if len(parts) < 2:
+            return False
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=="))
+        token_projects = payload.get("projects", [])
+        token_pids = {p.get("uuid", "") for p in token_projects}
+
+        if configured_pid in token_pids:
+            return False  # Token already scoped to the right project
+
+        log.info("Token scoped to project(s) %s, but configured project is %s — refreshing...",
+                 token_pids, configured_pid)
+        mgr = fablib.get_manager()
+        mgr.project_id = configured_pid
+        refresh_token = mgr.get_refresh_token()
+        if refresh_token:
+            mgr.refresh_tokens(refresh_token=refresh_token)
+            log.info("Token refreshed for project %s", configured_pid)
+            return True
+        else:
+            log.warning("No refresh token available — cannot auto-refresh for project %s",
+                        configured_pid)
+            return False
+    except Exception as e:
+        log.warning("Failed to sync token project: %s", e)
+        return False

@@ -194,7 +194,7 @@
   - Chameleon endpoints: 67 integration tests (85% coverage)
   - Reservation manager: 15 tests (96%), monitoring: 27 tests (60%), run manager: 23 tests (76%)
   - Settings manager: 44 unit tests, graph builder: 25 edge case tests
-  - Slices advanced: 79 tests, config: 26 tests, AI chat: 36 tests, Trovi: 16 tests
+  - Slices advanced: 79 tests, config: 26 tests, AI assistant: 36 tests, Trovi: 16 tests
   - Files: 40 tests, templates: 28 tests, experiments: 30 tests, VM templates: 20 tests
   - Tunnel manager: 17 tests, tool installer: 22 tests, main startup: 26 tests
 
@@ -207,7 +207,7 @@
   - **CI/CD pipeline**: `.github/workflows/test.yml` — backend pytest + coverage, frontend build + unit tests. Triggers on push/PR to main/chameleon. Coverage uploaded as artifact.
   - **Coverage reporting**: `pytest-cov` added. 33% overall coverage (site_resolver 94%, slice_registry 93%, call_manager 86%).
   - **Frontend unit tests**: Vitest + @testing-library/react. 20 tests across 3 files (AddSliverMenu, SliverComboBox, TestbedViewShell). CSS mocked, next/dynamic mocked.
-  - **WebSocket/SSE tests**: 12 new tests — container terminal (connect + cleanup), slice terminal (no-IP error, SSH failure), AI tool WS (unknown tool, no key, claude accepted, status endpoint), AI chat SSE (content-type, events, tool calls, empty messages).
+  - **WebSocket/SSE tests**: 12 new tests — container terminal (connect + cleanup), slice terminal (no-IP error, SSH failure), AI tool WS (unknown tool, no key, claude accepted, status endpoint), AI assistant SSE (content-type, events, tool calls, empty messages).
   - **LLM E2E tests**: 4 new tests (model list, round-trip completion, system message, multi-turn) gated behind `@pytest.mark.llm`.
   - **Total**: 439 backend tests (up from 427), 20 frontend unit tests, 6 Playwright E2E tests.
 
@@ -282,7 +282,7 @@
   - **Settings view redesign**: Two-panel sectioned layout (sidebar + content). 9 sections: User Profile, SSH Keys, FABlib, Projects, LLMs, AI Tools, Chameleon, Appearance, Storage. Responsive (dropdown at < 768px). Removed "Advanced Settings" toggle — all settings directly accessible.
   - **Settings validation — live Test buttons**: `POST /api/settings/test/{setting_name}` endpoint (token, bastion_ssh, fablib, ai_server, nrp_server, project). `POST /api/settings/test-all` runs all tests concurrently. Frontend: per-section Test buttons with spinner/green-check/red-X results, "Test All" in sidebar.
   - **Cache UIS project/user queries**: `FabricCallManager` with 10-min TTL for `uis:people:{uuid}` and `uis:projects:{uuid}` lookups via sync httpx fetchers.
-  - **Help documentation update**: Added 21 entries for FABRIC view (8 sub-tabs), Chameleon view, AI chat (conversations, health), Deep Agents, Jupyter AI, CLI. Updated overview (7 AI tools), titlebar, settings entries.
+  - **Help documentation update**: Added 21 entries for FABRIC view (8 sub-tabs), Chameleon view, AI assistant (conversations, health), Deep Agents, Jupyter AI, CLI. Updated overview (7 AI tools), titlebar, settings entries.
   - **Guided tours update**: Updated discoverLoomai (FABRIC/Chameleon views, CLI, 6 AI tools), gettingStarted (6 tools), aiTools (6 tools, multi-conversation). Added `TourRequiredView` types for 'fabric' and 'chameleon'.
   - **README update**: Features section expanded from 12 to 17 items (7 AI tools, CLI, caching, polling, monitoring, tours, performance, dark mode).
   - **CONTRIBUTING.md**: New 153-line guide covering setup, structure, workflow, style, testing, PRs, architecture refs, Claude Code agents.
@@ -387,7 +387,7 @@
   - Template/recipe/VM-template listing caches (10s TTL)
   - Async file I/O wrapping (asyncio.to_thread)
   - useCallback extraction for 14 inline callbacks in App.tsx
-  - useMemo for JSON.stringify(sliceData) in AI chat
+  - useMemo for JSON.stringify(sliceData) in AI assistant
 
 - **Performance optimization Round 1 (all 6 phases):**
   - Phase 1 (Quick Wins): Remove duplicate refreshSlice in boot-config path; tune polling intervals (per-run 2s→5s, active runs 10s→30s); visibility-aware polling (pause when tab hidden); Artifacts panel only polls when visible

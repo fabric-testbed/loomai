@@ -1,0 +1,33 @@
+services:
+  fabric-webui-ts:
+    image: tailscale/tailscale:latest
+    hostname: fabric-webui
+    environment:
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=true
+    volumes:
+      - ${PWD}/tailscale/ts-config:/config
+      - ${PWD}/tailscale/ts-state:/var/lib/tailscale
+    dns:
+      - 100.100.100.100
+      - 8.8.8.8
+    restart: unless-stopped
+
+  fabric-webui-app:
+    image: ${DOCKER_REPO:-fabrictestbed/loomai-dev}:latest
+    network_mode: service:fabric-webui-ts
+    volumes:
+      - fabric_work:/home/fabric/work
+    environment:
+      - FABRIC_CONFIG_DIR=/home/fabric/work/fabric_config
+      - FABRIC_STORAGE_DIR=/home/fabric/work
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  fabric_work:

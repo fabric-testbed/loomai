@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { getAiModels, getDefaultModel, setDefaultModel as apiSetDefaultModel, getChatAgents, streamChat, stopChatStream, getConfig } from '../api/client';
+import { getAiModels, getDefaultModel, setDefaultModel as apiSetDefaultModel, refreshAiModels, getChatAgents, streamChat, stopChatStream, getConfig } from '../api/client';
 import type { ChatAgent } from '../api/client';
 import '../styles/ai-chat-panel.css';
 
@@ -460,6 +460,8 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
   const [hasProviderKey, setHasProviderKey] = useState<{fabric: boolean; nrp: boolean}>({fabric: false, nrp: false});
   const [customModels, setCustomModels] = useState<Record<string, Array<{id: string; healthy?: boolean}>>>({});
   const [showKeyModal, setShowKeyModal] = useState<'fabric' | 'nrp' | null>(null);
+  const [refreshingModels, setRefreshingModels] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState('');
   const [selectedModel, setSelectedModel] = useState(store?.selectedModel || '');
   const selectedModelRef = useRef(selectedModel);
   useEffect(() => { selectedModelRef.current = selectedModel; }, [selectedModel]);
@@ -765,14 +767,15 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
         <div className="ai-chat-header" {...(fullScreen ? {} : dragHandleProps)}>
           {panelIcon && !fullScreen && <span style={{ cursor: 'grab' }}>{panelIcon === '__loomai_icon__' ? <img src="/loomai-icon-transparent.svg" alt="" style={{ height: 14 }} /> : panelIcon}</span>}
           <img src="/loomai-icon-transparent.svg" alt="" className="ai-chat-header-icon-img" />
-          <img src="/loomai-wordmark-transparent-dark-ink-trimmed.svg" alt="LoomAI" className="ai-chat-header-wordmark" />
+          <img src="/loomai-wordmark-transparent-light-ink-trimmed.svg" alt="LoomAI" className="ai-chat-header-wordmark ai-chat-wordmark-light" />
+          <img src="/loomai-wordmark-transparent-dark-ink-trimmed.svg" alt="LoomAI" className="ai-chat-header-wordmark ai-chat-wordmark-dark" />
           {showPopout && <button className="ai-chat-popout-btn" onClick={() => window.open('/popout?tool=loomai', '_blank')} title="Open in new tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg></button>}
           {!fullScreen && <button className="ai-chat-collapse-btn" onClick={onCollapse} title="Collapse">{'\u2715'}</button>}
         </div>
         <div className="ai-chat-no-key">
           <span style={{ fontSize: 24 }}>{'\u26A0'}</span>
           <span>FABRIC API key required</span>
-          <span style={{ fontSize: 11, opacity: 0.7 }}>Configure your API key in Settings to use AI chat</span>
+          <span style={{ fontSize: 11, opacity: 0.7 }}>Configure your API key in Settings to use LoomAI assistant</span>
         </div>
       </div>
     );
@@ -782,7 +785,8 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
     <div className={`ai-chat-panel${fullScreen ? ' ai-chat-fullscreen' : ''}`} data-help-id="ai-chat.panel">
       <div className="ai-chat-header" data-help-id="ai-chat.panel" {...(fullScreen ? {} : dragHandleProps)}>
         {panelIcon && !fullScreen && <span style={{ cursor: 'grab' }}>{panelIcon === '__loomai_icon__' ? <img src="/loomai-icon-transparent.svg" alt="" style={{ height: 14 }} /> : panelIcon}</span>}
-        <img src="/loomai-wordmark-transparent-dark-ink-trimmed.svg" alt="LoomAI" className="ai-chat-header-wordmark" />
+        <img src="/loomai-wordmark-transparent-light-ink-trimmed.svg" alt="LoomAI" className="ai-chat-header-wordmark ai-chat-wordmark-light" />
+        <img src="/loomai-wordmark-transparent-dark-ink-trimmed.svg" alt="LoomAI" className="ai-chat-header-wordmark ai-chat-wordmark-dark" />
         <button className="ai-chat-new-btn" onClick={handleClear} title="Clear current chat">{'\u21BA'}</button>
         {showPopout && <button className="ai-chat-popout-btn" onClick={() => window.open('/popout?tool=loomai', '_blank')} title="Open in new tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg></button>}
         {!fullScreen && <button className="ai-chat-collapse-btn" onClick={onCollapse} title="Collapse">{'\u2715'}</button>}
@@ -853,6 +857,35 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
             </optgroup>
           ))}
         </select>
+        <button
+          className="ai-chat-refresh-models-btn"
+          onClick={async () => {
+            setRefreshingModels(true);
+            setRefreshMsg('');
+            try {
+              const result = await refreshAiModels();
+              setRefreshMsg(result.message || 'Models up to date');
+              // Reload model list
+              const data = await getAiModels();
+              setFabricModels(data.fabric || []);
+              setNrpModels(data.nrp || []);
+              setCustomModels(data.custom || {});
+              setHasProviderKey(data.has_key || { fabric: false, nrp: false });
+              if (data.default) setDefaultModel(data.default);
+            } catch (e: any) {
+              setRefreshMsg(`Refresh failed: ${e.message}`);
+            } finally {
+              setRefreshingModels(false);
+              setTimeout(() => setRefreshMsg(''), 5000);
+            }
+          }}
+          disabled={refreshingModels || streaming}
+          title="Refresh model list from FABRIC AI and NRP"
+          style={{ marginLeft: 4, padding: '2px 8px', fontSize: 11, cursor: refreshingModels ? 'wait' : 'pointer' }}
+        >
+          {refreshingModels ? '\u21BB...' : '\u21BB'}
+        </button>
+        {refreshMsg && <span style={{ fontSize: 10, color: 'var(--fabric-text-muted)', marginLeft: 6 }}>{refreshMsg}</span>}
       </div>
 
       <div className="ai-chat-messages">

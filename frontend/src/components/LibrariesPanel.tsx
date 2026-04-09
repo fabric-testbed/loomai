@@ -132,6 +132,7 @@ export default React.memo(function LibrariesPanel({
   onPublishArtifact, onNavigateToMarketplace, onEditArtifact, onLoadExperiment, onCollapse, dragHandleProps, panelIcon,
 }: LibrariesPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('weaves');
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
   const [overflowOpen, setOverflowOpen] = useState<string | null>(null);
 
   // ─── Unified artifacts (authoritative category source) ───
@@ -141,8 +142,10 @@ export default React.memo(function LibrariesPanel({
     try {
       const data = await api.getMyArtifacts();
       setAllArtifacts(data.local_artifacts);
+      setInitialLoadDone(true);
     } catch {
       // ignore — individual tabs still work, just without category gating
+      setInitialLoadDone(true);
     }
   }, []);
 
@@ -164,6 +167,25 @@ export default React.memo(function LibrariesPanel({
     }
     return { weaves, vms, recipes, notebooks };
   }, [allArtifacts]);
+
+  // Compute which tabs have artifacts (show all tabs while initial load is in progress)
+  const visibleTabs = React.useMemo<TabId[]>(() => {
+    if (!initialLoadDone) return ['weaves', 'vm', 'recipes', 'notebooks'];
+    const tabs: TabId[] = [];
+    if (categoryDirNames.weaves.size > 0) tabs.push('weaves');
+    if (categoryDirNames.vms.size > 0) tabs.push('vm');
+    if (categoryDirNames.recipes.size > 0) tabs.push('recipes');
+    if (categoryDirNames.notebooks.size > 0) tabs.push('notebooks');
+    // Always show at least weaves tab as fallback
+    return tabs.length > 0 ? tabs : ['weaves'];
+  }, [categoryDirNames, initialLoadDone]);
+
+  // Auto-select first visible tab if current tab is hidden
+  useEffect(() => {
+    if (!visibleTabs.includes(activeTab)) {
+      setActiveTab(visibleTabs[0]);
+    }
+  }, [visibleTabs, activeTab]);
 
   // Helper: gate a list through the authoritative category set.
   // When allArtifacts hasn't loaded yet (set is empty), pass everything through
@@ -469,7 +491,7 @@ export default React.memo(function LibrariesPanel({
       else if (activeTab === 'vm') refreshVmTemplates();
       else if (activeTab === 'recipes') refreshRecipes();
       else if (activeTab === 'notebooks') refreshNotebooks();
-    }, 15_000);
+    }, 60_000);
     return () => clearInterval(interval);
   }, [activeTab, refreshSliceTemplates, refreshVmTemplates, refreshRecipes, refreshNotebooks]);
 
@@ -586,32 +608,40 @@ export default React.memo(function LibrariesPanel({
         </button>
       </div>
 
-      {/* Tab bar */}
+      {/* Tab bar — only show tabs that have artifacts */}
       <div className="templates-tab-bar">
-        <button
-          className={`templates-tab${activeTab === 'weaves' ? ' active' : ''}`}
-          onClick={() => setActiveTab('weaves')}
-        >
-          Weaves
-        </button>
-        <button
-          className={`templates-tab${activeTab === 'vm' ? ' active' : ''}`}
-          onClick={() => setActiveTab('vm')}
-        >
-          VM
-        </button>
-        <button
-          className={`templates-tab${activeTab === 'recipes' ? ' active' : ''}`}
-          onClick={() => setActiveTab('recipes')}
-        >
-          Recipes
-        </button>
-        <button
-          className={`templates-tab${activeTab === 'notebooks' ? ' active' : ''}`}
-          onClick={() => setActiveTab('notebooks')}
-        >
-          Notebooks
-        </button>
+        {visibleTabs.includes('weaves') && (
+          <button
+            className={`templates-tab${activeTab === 'weaves' ? ' active' : ''}`}
+            onClick={() => setActiveTab('weaves')}
+          >
+            Weaves
+          </button>
+        )}
+        {visibleTabs.includes('vm') && (
+          <button
+            className={`templates-tab${activeTab === 'vm' ? ' active' : ''}`}
+            onClick={() => setActiveTab('vm')}
+          >
+            VM
+          </button>
+        )}
+        {visibleTabs.includes('recipes') && (
+          <button
+            className={`templates-tab${activeTab === 'recipes' ? ' active' : ''}`}
+            onClick={() => setActiveTab('recipes')}
+          >
+            Recipes
+          </button>
+        )}
+        {visibleTabs.includes('notebooks') && (
+          <button
+            className={`templates-tab${activeTab === 'notebooks' ? ' active' : ''}`}
+            onClick={() => setActiveTab('notebooks')}
+          >
+            Notebooks
+          </button>
+        )}
       </div>
 
       {/* ─── Weaves Tab ─── */}

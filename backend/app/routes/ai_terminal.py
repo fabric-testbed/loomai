@@ -60,6 +60,27 @@ _PREFERRED_SMALL = [
     "qwen3-coder-30b",
 ]
 
+# Default context sizes for NRP models (NRP doesn't report context via API)
+_NRP_CONTEXT_DEFAULTS: dict[str, int] = {
+    "gpt-oss": 131072,
+    "kimi": 131072,
+    "minimax-m2": 1048576,
+    "olmo": 32768,
+    "glm-4.7": 131072,
+    "qwen3": 131072,
+    "qwen3-small": 131072,
+    "qwen3-27b": 131072,
+    "gemma": 8192,
+    "gh200-test": 131072,
+}
+_NRP_EXCLUDE = {"qwen3-embedding"}  # Embedding models, not for chat
+
+# Fallback context sizes for FABRIC AI models (if /v1/model/info fails)
+_FABRIC_CONTEXT_DEFAULTS: dict[str, int] = {
+    "gpt-oss-20b": 131072,
+    "qwen3-coder-30b": 262144,
+}
+
 
 def _fetch_models(api_key: str) -> list[dict]:
     """Query the FABRIC AI server for available models with metadata."""
@@ -100,6 +121,42 @@ def _fetch_nrp_models(api_key: str) -> list[dict]:
         ]
     except Exception as e:
         logger.warning("Could not fetch models from %s: %s", url, e)
+        return []
+
+
+def _fetch_fabric_model_info(api_key: str) -> list[dict]:
+    """Fetch models from FABRIC AI /v1/model/info (includes context sizes).
+
+    Returns list of {"id": str, "context_length": int}.
+    Falls back to empty list on error.
+    """
+    import httpx
+
+    url = f"{_ai_server_url()}/v1/model/info"
+    try:
+        resp = httpx.get(
+            url,
+            headers={"x-litellm-api-key": api_key},
+            timeout=10.0,
+        )
+        if resp.status_code == 404:
+            logger.warning("FABRIC /v1/model/info not available (404) — will fall back to /v1/models")
+            return []
+        resp.raise_for_status()
+        body = resp.json()
+        results = []
+        for entry in body.get("data", []):
+            model_name = entry.get("model_name", "")
+            model_info = entry.get("model_info", {})
+            max_tokens = model_info.get("max_tokens")
+            if model_name:
+                results.append({
+                    "id": model_name,
+                    "context_length": max_tokens,
+                })
+        return results
+    except Exception as e:
+        logger.warning("Could not fetch model info from %s: %s", url, e)
         return []
 
 
@@ -1117,17 +1174,74 @@ async def aider_web_status():
     return {"port": _AIDER_WEB_PORT if running else None, "status": "running" if running else "stopped"}
 
 
+def _persist_model_list(models_data: dict) -> dict:
+    """Save discovered models to settings.json, return diff summary.
+
+    Compares the new model list against the previously persisted
+    ``ai.discovered_models`` in settings and returns counts of added,
+    removed, and updated (context_length changed) models.
+    """
+    from app.settings_manager import load_settings, save_settings
+
+    settings = load_settings()
+    old_discovered = settings.get("ai", {}).get("discovered_models", {})
+
+    # Build lookup of old models keyed by (provider, model_id)
+    old_lookup: dict[tuple[str, str], dict] = {}
+    for provider in ("fabric", "nrp"):
+        for m in old_discovered.get(provider, []):
+            old_lookup[(provider, m["id"])] = m
+    for cp_name, cp_models in old_discovered.get("custom", {}).items():
+        for m in cp_models:
+            old_lookup[(f"custom:{cp_name}", m["id"])] = m
+
+    # Build lookup of new models
+    new_lookup: dict[tuple[str, str], dict] = {}
+    for provider in ("fabric", "nrp"):
+        for m in models_data.get(provider, []):
+            new_lookup[(provider, m["id"])] = m
+    for cp_name, cp_models in models_data.get("custom", {}).items():
+        for m in cp_models:
+            new_lookup[(f"custom:{cp_name}", m["id"])] = m
+
+    added = len(set(new_lookup.keys()) - set(old_lookup.keys()))
+    removed = len(set(old_lookup.keys()) - set(new_lookup.keys()))
+    updated = 0
+    for key in set(new_lookup.keys()) & set(old_lookup.keys()):
+        if new_lookup[key].get("context_length") != old_lookup[key].get("context_length"):
+            updated += 1
+
+    # Persist the new model list
+    new_discovered = {
+        "fabric": models_data.get("fabric", []),
+        "nrp": models_data.get("nrp", []),
+        "custom": models_data.get("custom", {}),
+    }
+    settings.setdefault("ai", {})["discovered_models"] = new_discovered
+    save_settings(settings)
+
+    return {"added": added, "removed": removed, "updated": updated}
+
+
 def _fetch_all_models() -> dict:
     """Fetch models from both providers (sync, for call manager caching)."""
     api_key = _get_ai_api_key()
     nrp_key = _get_nrp_api_key()
 
-    # Try FABRIC models — even without key, some servers allow listing
+    # Try FABRIC models — prefer /v1/model/info (includes context sizes),
+    # fall back to /v1/models with _FABRIC_CONTEXT_DEFAULTS
     fabric_models_raw: list[dict] = []
     fabric_error = ""
     try:
         key = api_key or "anonymous"
-        fabric_models_raw = _fetch_models(key)
+        # Try the rich /v1/model/info endpoint first
+        fabric_models_raw = _fetch_fabric_model_info(key)
+        if not fabric_models_raw:
+            # Fall back to /v1/models and apply default context sizes
+            fabric_models_raw = _fetch_models(key)
+            for m in fabric_models_raw:
+                if not m.get("context_length"):
+                    m["context_length"] = _FABRIC_CONTEXT_DEFAULTS.get(m["id"])
     except Exception as e:
         fabric_error = str(e)
 
@@ -1141,6 +1255,12 @@ def _fetch_all_models() -> dict:
             nrp_models_raw = _fetch_nrp_models("anonymous")
     except Exception as e:
         nrp_error = str(e)
+
+    # Filter out NRP embedding/excluded models and apply context defaults
+    nrp_models_raw = [m for m in nrp_models_raw if m["id"] not in _NRP_EXCLUDE]
+    for m in nrp_models_raw:
+        if not m.get("context_length"):
+            m["context_length"] = _NRP_CONTEXT_DEFAULTS.get(m["id"])
 
     # Extract IDs for backward compat
     fabric_model_ids = [m["id"] for m in fabric_models_raw]
@@ -1169,17 +1289,18 @@ def _fetch_all_models() -> dict:
     fabric_entries = []
     for mid in ordered_fabric:
         healthy = _check_model_health(fabric_server, fabric_key, mid)
-        profile = get_model_profile(mid, context_length=ctx_map.get(mid))
+        ctx_val = ctx_map.get(mid) or _FABRIC_CONTEXT_DEFAULTS.get(mid) or 131072
+        profile = get_model_profile(mid, context_length=ctx_val)
         fabric_entries.append({
             "id": mid, "name": mid, "healthy": healthy,
-            "context_length": ctx_map.get(mid) or profile["context_window"],
+            "context_length": ctx_val,
             "tier": profile["tier"],
             "supports_tools": profile.get("supports_tools", True),
         })
         if healthy and not default:
             default = mid
         logger.info("Model health: FABRIC/%s (ctx=%s) → %s%s", mid,
-                     ctx_map.get(mid, "?"),
+                     ctx_val,
                      "ok" if healthy else "FAILED",
                      " (default)" if mid == default else "")
 
@@ -1188,18 +1309,18 @@ def _fetch_all_models() -> dict:
     nrp_entries = []
     for m in nrp_models_raw:
         mid = m["id"]
-        ctx = m.get("context_length")
+        ctx = m.get("context_length") or _NRP_CONTEXT_DEFAULTS.get(mid) or 131072
         healthy = _check_model_health(nrp_server, nrp_key or "anonymous", mid)
         profile = get_model_profile(mid, context_length=ctx)
         nrp_entries.append({
             "id": mid, "name": mid, "healthy": healthy,
-            "context_length": ctx or profile["context_window"],
+            "context_length": ctx,
             "tier": profile["tier"],
             "supports_tools": profile.get("supports_tools", True),
         })
         if healthy and not default:
             default = mid
-        logger.info("Model health: NRP/%s (ctx=%s) → %s", mid, ctx or "?", "ok" if healthy else "FAILED")
+        logger.info("Model health: NRP/%s (ctx=%s) → %s", mid, ctx, "ok" if healthy else "FAILED")
 
     # Check custom providers
     from app.settings_manager import _get_settings
@@ -1366,7 +1487,7 @@ async def set_default_model_endpoint(request: Request):
     """Set the default model in shared settings.
 
     Body: {"model": "model-id", "source": "fabric"|"nrp"|"custom:name"}
-    Both chat panel and CLI call this to sync their model selection.
+    Both assistant panel and CLI call this to sync their model selection.
     """
     from app import settings_manager
 
@@ -1444,7 +1565,11 @@ async def test_model_health(request: Request):
 
 @router.post("/api/ai/models/refresh")
 async def refresh_model_health():
-    """Force-refresh all model health checks (ignores cache)."""
+    """Force-refresh all model health checks (ignores cache).
+
+    Persists the discovered model list to settings and returns a diff
+    summary showing how many models were added, removed, or updated.
+    """
     from app.fabric_call_manager import get_call_manager
     mgr = get_call_manager()
     mgr.invalidate("ai:models")
@@ -1453,6 +1578,20 @@ async def refresh_model_health():
         fetcher=_fetch_all_models,
         max_age=0,
     )
+    # Persist and compute diff
+    diff = _persist_model_list(result)
+    parts = []
+    if diff["added"]:
+        parts.append(f"{diff['added']} added")
+    if diff["removed"]:
+        parts.append(f"{diff['removed']} removed")
+    if diff["updated"]:
+        parts.append(f"{diff['updated']} updated")
+    message = f"Updated models: {', '.join(parts)}" if parts else "No changes"
+    result["added"] = diff["added"]
+    result["removed"] = diff["removed"]
+    result["updated"] = diff["updated"]
+    result["message"] = message
     return result
 
 
@@ -1838,7 +1977,7 @@ def seed_ai_tool_defaults() -> None:
     ┌──────────────┬─────────┬──────┬────────┬────────┬───────────┐
     │ Tool         │ FABRIC  │ NRP  │ Skills │ Agents │ AGENTS.md │
     ├──────────────┼─────────┼──────┼────────┼────────┼───────────┤
-    │ LoomAI Chat  │ ✓       │ ✓    │ N/A    │ ✓      │ ✓         │
+    │ LoomAI Asst  │ ✓       │ ✓    │ N/A    │ ✓      │ ✓         │
     │ OpenCode     │ ✓       │ ✓*   │ ✓      │ ✓      │ ✓         │
     │ Aider        │ ✓ proxy │ ✓**  │ —†     │ —†     │ ✓         │
     │ Claude Code  │ —‡      │ —‡   │ ✓      │ —†     │ ✓         │

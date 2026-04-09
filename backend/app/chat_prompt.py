@@ -1,4 +1,4 @@
-"""System prompt variants for LoomAI chat.
+"""System prompt variants for LoomAI assistant.
 
 The "loomai_mode" prompt is ultra-compact (~1.5K tokens) because LoomAI
 handles tool execution directly — the LLM only needs to understand intent

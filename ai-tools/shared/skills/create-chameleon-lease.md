@@ -44,7 +44,7 @@ loomai chameleon instances create \
 
 Common images: `CC-Ubuntu22.04`, `CC-Ubuntu20.04`, `CC-CentOS8-Stream`
 
-## Tool Calls (LoomAI chat)
+## Tool Calls (LoomAI assistant)
 - `create_chameleon_lease` — create a lease with site, name, node_type, count, hours
 - `create_chameleon_instance` — launch an instance on a lease
 - `delete_chameleon_lease` — delete a lease

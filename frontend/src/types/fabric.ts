@@ -519,34 +519,43 @@ export interface UsersResponse {
 }
 
 // -- Resource Calendar types ------------------------------------------------
+// Matches the response from fablib.get_manager().resources_calendar()
 
-export interface CalendarSliceNode {
+export interface CalendarSiteSlot {
   name: string;
-  cores: number;
-  ram: number;
-  disk: number;
-}
-
-export interface CalendarSlice {
-  name: string;
-  id: string;
-  state: string;
-  lease_end: string;
-  nodes: CalendarSliceNode[];
-}
-
-export interface CalendarSite {
-  name: string;
-  cores_capacity: number;
   cores_available: number;
-  ram_capacity: number;
+  cores_capacity: number;
   ram_available: number;
-  slices: CalendarSlice[];
+  ram_capacity: number;
+  disk_available: number;
+  disk_capacity: number;
+  components: Record<string, { available: number; capacity: number }>;
+}
+
+export interface CalendarHostSlot {
+  name: string;
+  cores_available: number;
+  cores_capacity: number;
+  ram_available: number;
+  ram_capacity: number;
+  disk_available: number;
+  disk_capacity: number;
+  components: Record<string, { available: number; capacity: number }>;
+}
+
+export interface CalendarTimeSlot {
+  start: string;
+  end: string;
+  sites?: CalendarSiteSlot[];
+  hosts?: CalendarHostSlot[];
 }
 
 export interface CalendarData {
-  time_range: { start: string; end: string };
-  sites: CalendarSite[];
+  data: CalendarTimeSlot[];
+  interval: string;
+  query_start: string;
+  query_end: string;
+  total: number;
 }
 
 export interface NextAvailableResult {

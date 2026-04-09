@@ -161,7 +161,7 @@ ARTIFACTS_DIR="/home/fabric/work/my_artifacts"
 ## WebUI Workflow
 
 The LoomAI WebUI supports the full experiment lifecycle:
-1. **Design**: Use the Topology editor to build slices visually, or ask LoomAI chat
+1. **Design**: Use the Topology editor to build slices visually, or ask the LoomAI assistant
 2. **Deploy**: One-click Deploy from Artifacts panel (load + submit + boot config)
 3. **Monitor**: Map view shows site metrics; Table view lists all slices with state badges
 4. **Access**: Web Apps view tunnels to services (Grafana, Jupyter); SSH terminals in Console

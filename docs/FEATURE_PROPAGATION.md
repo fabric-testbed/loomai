@@ -19,7 +19,7 @@ How to update AI tool context when new LoomAI features are added.
 | Claude Code | AGENTS.md + CLAUDE.md + .claude/commands/ | — | Workspace seeding on launch |
 | Crush | AGENTS.md + .crush/skills/ + .crush/agents/ | .crush.json | Workspace seeding on launch |
 | Deep Agents | AGENTS.md + .deepagents/skills/ + .deepagents/agents/ | .deepagents/config.json | Workspace seeding on launch |
-| LoomAI Chat | In-memory (chat_prompt.py) | — | Always fresh per request |
+| LoomAI Assistant | In-memory (chat_prompt.py) | — | Always fresh per request |
 
 ### AGENTS.md Assembly
 `_write_agents_md(cwd, tool_name)` in `ai_terminal.py`:
@@ -64,7 +64,7 @@ When you add a feature that AI tools should know about:
 
 | Tool | Primary | Fallback | Tool Calling |
 |------|---------|----------|--------------|
-| LoomAI Chat | Function calls (list_slices, ssh_execute, etc.) | — | Yes (native) |
+| LoomAI Assistant | Function calls (list_slices, ssh_execute, etc.) | — | Yes (native) |
 | OpenCode | `loomai` CLI | curl, FABlib Python | Yes (MCP servers) |
 | Aider | `loomai` CLI | Python scripts | No |
 | Claude Code | `loomai` CLI | FABlib Python | No |

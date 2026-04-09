@@ -19,6 +19,7 @@ interface AllSliversViewProps {
   nodeActivity?: Record<string, string>;
   recipes?: RecipeSummary[];
   selectedSliceId?: string;
+  refreshKey?: number;
 }
 
 const TERMINAL_STATES = new Set(['Dead', 'Closing', 'StableError']);
@@ -84,6 +85,7 @@ export default React.memo(function AllSliversView({
   nodeActivity,
   recipes,
   selectedSliceId,
+  refreshKey,
 }: AllSliversViewProps) {
   // Expanded slices
   const [expandedSlices, setExpandedSlices] = useState<Set<string>>(new Set());
@@ -168,6 +170,16 @@ export default React.memo(function AllSliversView({
       prevSliceStatesRef.current[s.name] = s.state;
     }
   }, [slices, expandedSlices, sliceCache, refreshSliceCache]);
+
+  // Re-fetch all expanded slices when an external refresh happens (manual button click)
+  const prevRefreshKeyRef = useRef(refreshKey);
+  useEffect(() => {
+    if (refreshKey === prevRefreshKeyRef.current) return;
+    prevRefreshKeyRef.current = refreshKey;
+    for (const name of expandedSlices) {
+      refreshSliceCache(name);
+    }
+  }, [refreshKey, expandedSlices, refreshSliceCache]);
 
   // --- Selection helpers ---
 
@@ -435,7 +447,7 @@ export default React.memo(function AllSliversView({
           <button
             className="graph-context-menu-item"
             onClick={() => {
-              onContextAction({ type: 'terminal', elements: vmsWithIp });
+              onContextAction({ type: 'terminal', elements: vmsWithIp, sliceNames });
               setMenu(null);
             }}
           >

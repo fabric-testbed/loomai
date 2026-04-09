@@ -2426,6 +2426,7 @@ function NetworkForm({
     name: string; type: string; interfaces: string[];
     subnet?: string; gateway?: string; ip_mode?: string;
     interface_ips?: Record<string, string>;
+    vlan?: string;
   }) => void;
 }) {
   const defaultNetName = sliceData
@@ -2439,6 +2440,7 @@ function NetworkForm({
   const [gateway, setGateway] = useState('');
   const [ipMode, setIpMode] = useState<'none' | 'auto' | 'config'>('none');
   const [interfaceIps, setInterfaceIps] = useState<Record<string, string>>({});
+  const [vlan, setVlan] = useState('');
 
   const l2Types = ['L2Bridge', 'L2STS', 'L2PTP'];
   const l3Types = ['IPv4', 'IPv6', 'IPv4Ext', 'IPv6Ext', 'L3VPN'];
@@ -2482,7 +2484,19 @@ function NetworkForm({
       </div>
       <div className="form-group" data-help-id="editor.net.type">
         <label><Tooltip text="Specific network service type">Type</Tooltip></label>
-        <select value={netType} onChange={(e) => setNetType(e.target.value)}>
+        <select value={netType} onChange={(e) => {
+          const t = e.target.value;
+          setNetType(t);
+          setVlan(t === 'L2PTP' ? '100' : '');
+          if (t === 'L2PTP') {
+            setSubnet('192.168.1.0/24');
+            setGateway('');
+            setIpMode('auto');
+          } else {
+            setSubnet('');
+            setIpMode('none');
+          }
+        }}>
           {types.map((t) => <option key={t} value={t}>{typeLabels[t] || t}</option>)}
         </select>
       </div>
@@ -2515,16 +2529,22 @@ function NetworkForm({
 
       {layer === 'L2' && (
         <>
+          <div className="form-group">
+            <label><Tooltip text="VLAN tag for L2 interfaces. Leave blank for auto-assignment.">VLAN (optional)</Tooltip></label>
+            <input type="text" value={vlan} onChange={(e) => setVlan(e.target.value)} placeholder="Auto" />
+          </div>
           <div className="form-group" data-help-id="editor.net.subnet">
-            <label><Tooltip text="Optional CIDR subnet">Subnet (optional)</Tooltip></label>
+            <label><Tooltip text={netType === 'L2PTP' ? 'Subnet for the point-to-point link' : 'Optional CIDR subnet'}>Subnet{netType !== 'L2PTP' ? ' (optional)' : ''}</Tooltip></label>
             <input type="text" value={subnet} onChange={(e) => setSubnet(e.target.value)} placeholder="192.168.1.0/24" />
           </div>
           {subnet && (
             <>
-              <div className="form-group" data-help-id="editor.net.gateway">
-                <label><Tooltip text="Gateway IP within the subnet">Gateway (optional)</Tooltip></label>
-                <input type="text" value={gateway} onChange={(e) => setGateway(e.target.value)} placeholder="192.168.1.1" />
-              </div>
+              {netType !== 'L2PTP' && (
+                <div className="form-group" data-help-id="editor.net.gateway">
+                  <label><Tooltip text="Gateway IP within the subnet">Gateway (optional)</Tooltip></label>
+                  <input type="text" value={gateway} onChange={(e) => setGateway(e.target.value)} placeholder="192.168.1.1" />
+                </div>
+              )}
               <div className="form-group" data-help-id="editor.net.ip-mode">
                 <label><Tooltip text="How IPs are assigned">IP Assignment</Tooltip></label>
                 <select value={ipMode} onChange={(e) => setIpMode(e.target.value as 'none' | 'auto' | 'config')}>
@@ -2565,6 +2585,7 @@ function NetworkForm({
             interfaces: selectedIfaces,
             ...(layer === 'L2' && subnet ? { subnet, gateway: gateway || undefined, ip_mode: ipMode } : {}),
             ...(layer === 'L2' && ipMode === 'config' ? { interface_ips: interfaceIps } : {}),
+            ...(layer === 'L2' && vlan ? { vlan } : {}),
           })}
         >
           Add Network

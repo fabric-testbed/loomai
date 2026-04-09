@@ -342,6 +342,41 @@
   white-space: pre-line;
 }
 
+/* Legend */
+.rc-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 3px 12px;
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  border-bottom: 1px solid var(--fabric-border);
+  flex-shrink: 0;
+}
+.rc-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.rc-legend-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+/* Heatmap cells */
+.rc-heatmap-cell {
+  cursor: default;
+  border-radius: 1px;
+  transition: opacity 0.15s;
+}
+.rc-heatmap-cell:hover {
+  opacity: 1 !important;
+  outline: 1px solid var(--fabric-text-muted);
+  z-index: 1;
+}
+
 /* Empty state */
 .rc-empty {
   display: flex;
@@ -350,4 +385,185 @@
   flex: 1;
   color: var(--fabric-text-muted);
   font-size: 13px;
+}
+
+/* --- Sites / Hosts toggle --- */
+.rc-toggle-group {
+  display: inline-flex;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.rc-toggle-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+  border: none;
+  background: var(--fabric-white, #fff);
+  color: var(--fabric-text);
+  cursor: pointer;
+  font-weight: 500;
+}
+.rc-toggle-btn + .rc-toggle-btn {
+  border-left: 1px solid var(--fabric-border);
+}
+.rc-toggle-btn.active {
+  background: #5798bc;
+  color: #fff;
+  font-weight: 600;
+}
+[data-theme="dark"] .rc-toggle-btn {
+  background: #22223a;
+  color: #e0e0e0;
+  border-color: rgba(255,255,255,0.1);
+}
+[data-theme="dark"] .rc-toggle-btn.active {
+  background: #5798bc;
+  color: #fff;
+}
+
+/* --- Group header (host mode) --- */
+.rc-group-header {
+  background: var(--fabric-bg-tint, #f0f4f8) !important;
+  font-weight: 700 !important;
+  font-size: 11px !important;
+  border-bottom: 2px solid var(--fabric-border) !important;
+}
+.rc-group-header .rc-chevron {
+  font-size: 9px;
+  display: inline-block;
+  transition: transform 0.15s;
+}
+.rc-group-header .rc-chevron.open { transform: rotate(90deg); }
+[data-theme="dark"] .rc-group-header { background: #16213e !important; }
+
+.rc-group-header-cell {
+  background: var(--fabric-bg-tint, #f0f4f8);
+  border-bottom: 2px solid var(--fabric-border) !important;
+}
+[data-theme="dark"] .rc-group-header-cell { background: #16213e; }
+
+.rc-host-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: 600;
+  border-radius: 8px;
+  background: rgba(87, 152, 188, 0.15);
+  color: #5798bc;
+}
+
+.rc-host-label {
+  padding-left: 18px !important;
+  font-weight: 500 !important;
+  font-size: 9px !important;
+}
+
+/* --- Component badges on site/host labels --- */
+.rc-label-text {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+.rc-comp-badges {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+.rc-comp-badge {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  line-height: 14px;
+  text-align: center;
+  border-radius: 3px;
+  font-size: 8px;
+  font-weight: 700;
+  color: #fff;
+}
+.rc-comp-gpu { background: #8b5cf6; }
+.rc-comp-fpga { background: #0891b2; }
+.rc-comp-smartnic { background: #059669; }
+.rc-comp-storage { background: #d97706; }
+
+/* --- Legend label --- */
+.rc-legend-label {
+  font-weight: 600;
+  margin-right: 2px;
+}
+
+/* --- Filter toggle button --- */
+.rc-filter-toggle-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-white, #fff);
+  color: var(--fabric-text);
+  cursor: pointer;
+}
+.rc-filter-toggle-btn.active {
+  background: var(--fabric-bg-tint);
+  border-color: var(--fabric-primary);
+}
+.rc-filter-toggle-btn.has-filter {
+  color: var(--fabric-primary);
+  font-weight: 600;
+}
+[data-theme="dark"] .rc-filter-toggle-btn {
+  background: #22223a;
+  border-color: rgba(255,255,255,0.1);
+  color: #e0e0e0;
+}
+[data-theme="dark"] .rc-filter-toggle-btn.active {
+  background: #1a1a2e;
+  border-color: var(--fabric-primary);
+}
+
+.rc-filter-clear-btn {
+  padding: 3px 7px;
+  font-size: 11px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  line-height: 1;
+}
+.rc-filter-clear-btn:hover {
+  color: var(--fabric-danger);
+  border-color: var(--fabric-danger);
+}
+
+/* --- Filter bar (collapsible) --- */
+.rc-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 6px 12px 8px;
+  background: var(--fabric-bg-tint, #edf2f8);
+  border-bottom: 1px solid var(--fabric-border);
+}
+[data-theme="dark"] .rc-filter-bar { background: #0f1628; }
+
+/* --- Checkbox group for multi-select component types --- */
+.rc-checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.rc-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rc-checkbox-label input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
 }

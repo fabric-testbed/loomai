@@ -31,8 +31,6 @@ interface ToolbarProps {
   onArchiveSlice?: () => void;
   onArchiveAllTerminal?: () => void;
   hasErrors?: boolean;
-  autoRefresh?: boolean;
-  onToggleAutoRefresh?: () => void;
   onRunBootConfig?: () => void;
   bootConfigRunning?: boolean;
 }
@@ -313,16 +311,6 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
           {props.hasErrors && isTerminal ? 'Failed' : props.sliceState}{props.dirty ? ' *' : ''}
         </span>
       )}
-
-      <Tooltip text={props.autoRefresh ? 'Auto-refresh is on — slice list and state update automatically while provisioning' : 'Auto-refresh is off — click to enable automatic updates while provisioning'}>
-        <button
-          className={`toolbar-btn toolbar-btn-auto-refresh ${props.autoRefresh ? 'active' : ''}`}
-          onClick={props.onToggleAutoRefresh}
-          data-help-id="toolbar.auto-refresh"
-        >
-          {props.autoRefresh ? '\u21BB Auto' : '\u21BB Auto'}
-        </button>
-      </Tooltip>
 
       {hasSlice && props.onSaveSliceTemplate && (
         <Tooltip text="Save current topology as a reusable weave artifact">

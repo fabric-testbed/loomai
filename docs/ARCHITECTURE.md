@@ -312,7 +312,7 @@ viewable in the console via "View Log".
 |----------|------|-------------|
 | WS | `/ws/terminal/ai/{tool}` | AI tool terminal (aider, opencode, crush, claude, deep-agents) |
 
-#### AI Chat (`routes/ai_chat.py` → `/api`)
+#### AI Assistant (`routes/ai_chat.py` → `/api`)
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
@@ -355,7 +355,7 @@ App.tsx (root state orchestration)
 │   │   │   ├── AddSliverMenu    — Add node/network/facility-port
 │   │   │   └── ImageComboBox    — Image + VM template picker
 │   │   ├── TemplatesPanel  — Artifact browser (weaves, VM, recipes, notebooks)
-│   │   ├── AIChatPanel     — LoomAI chat with tool calling
+│   │   ├── AIChatPanel     — LoomAI assistant with tool calling
 │   │   └── SideConsolePanel — Side console for build logs
 │   └── CytoscapeGraph      — Main topology canvas
 ├── [table view]:    AllSliversView    — Expandable table with bulk ops
@@ -699,7 +699,7 @@ Running `loomai` with no arguments enters an interactive REPL with:
 - **Tab completion** — readline-based completer for commands, subcommands, and API-backed arguments (slice names, site names, etc.)
 - **Command history** — persisted to `~/.loomai/history`, navigable with up/down arrows
 - **Context selection** — `use slice my-exp` sets defaults for subsequent commands; prompt shows context
-- **AI assistant** — `/ask <question>` or `? <question>` streams responses from the LoomAI chat backend
+- **AI assistant** — `/ask <question>` or `? <question>` streams responses from the LoomAI assistant backend
 - **Model picker** — `/model` shows available models with health/context/tier badges
 - **Shortcuts** — `ls` → `slices list`, `sites` → `sites list`, `slivers` → `slices slivers <current>`
 

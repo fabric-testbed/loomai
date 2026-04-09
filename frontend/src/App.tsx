@@ -86,6 +86,8 @@ export default function App() {
   const [chiLeaseDeploying, setChiLeaseDeploying] = useState(false);
   const [chiAvailability, setChiAvailability] = useState<Record<string, {earliest_start: string | null; available_now: number; total: number; error: string; approximate?: boolean; warning?: string}>>({});
   const [chiAvailLoading, setChiAvailLoading] = useState(false);
+  const [checkingAvailability, setCheckingAvailability] = useState(false);
+  const [availabilityResult, setAvailabilityResult] = useState<import('./api/client').SliceAvailabilityResult | null>(null);
   const [chiDeployMode, setChiDeployMode] = useState<'lease-only' | 'auto-deploy' | 'existing-lease'>('auto-deploy');
   const [chiExistingLeaseId, setChiExistingLeaseId] = useState('');
   const [chiDeployStatus, setChiDeployStatus] = useState('');
@@ -101,6 +103,7 @@ export default function App() {
   const [resourceCategory, setResourceCategory] = useState<'sites' | 'facility-ports'>('sites');
   const [editingArtifactDirName, setEditingArtifactDirName] = useState('');
   const [jupyterPath, setJupyterPath] = useState<string | undefined>(undefined);
+  const [jupyterMounted, setJupyterMounted] = useState(false);
   const [selectedAiTool, setSelectedAiTool] = useState<string | null>(null);
   const [enabledAiTools, setEnabledAiTools] = useState<Record<string, boolean>>({});
   const [clientTarget, setClientTarget] = useState<ClientTarget | null>(null);
@@ -140,7 +143,7 @@ export default function App() {
 
   const defaultLayout: PanelLayoutMap = {
     editor: { side: 'left', collapsed: false, width: DEFAULT_PANEL_WIDTH, order: 0 },
-    template: { side: 'right', collapsed: false, width: DEFAULT_PANEL_WIDTH, order: 0 },
+    template: { side: 'right', collapsed: true, width: DEFAULT_PANEL_WIDTH, order: 0 },
     chat: { side: 'right', collapsed: true, width: 320, order: 1 },
     console: { side: 'right', collapsed: true, width: 380, order: 2 },
     details: { side: 'right', collapsed: true, width: 300, order: 3 },
@@ -267,11 +270,12 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [helpSection, setHelpSection] = useState<string | undefined>(undefined);
   const [statusMessage, setStatusMessage] = useState('');
-  const [autoRefresh, setAutoRefresh] = useState(() => localStorage.getItem('auto-refresh') !== 'off');
-  const autoRefreshRef = useRef(autoRefresh);
-  autoRefreshRef.current = autoRefresh;
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
+  const infraRequestedRef = useRef(false);
+  const sitesRequestedRef = useRef(false);
+  const currentViewRef = useRef(currentView);
+  currentViewRef.current = currentView;
   const [consoleFullWidth, setConsoleFullWidth] = useState(false);
   const [consoleExpanded, setConsoleExpanded] = useState(false);
   const [consoleHeight, setConsoleHeight] = useState(260);
@@ -308,6 +312,9 @@ export default function App() {
   selectedSliceRef.current = selectedSliceId;
   const sliceDataRef = useRef(sliceData);
   sliceDataRef.current = sliceData;
+  const slicesRef = useRef(slices);
+  slicesRef.current = slices;
+  const [sliceRefreshKey, setSliceRefreshKey] = useState(0);
 
   const projectNameRef = useRef(projectName);
   projectNameRef.current = projectName;
@@ -326,7 +333,7 @@ export default function App() {
     infraSites, infraLinks, infraFacilityPorts, infraLoading, infraLoaded,
     siteMetricsCache, linkMetricsCache,
     metricsRefreshRate, setMetricsRefreshRate, metricsLoading,
-    refreshInfrastructure, refreshMetrics, refreshInfrastructureAndMark,
+    refreshSites, refreshInfrastructure, refreshMetrics, refreshInfrastructureAndMark,
   } = useInfrastructure({ addError, setStatusMessage, selectedElement });
 
   // --- Global cache: static data (fetched once on mount) ---
@@ -482,20 +489,7 @@ export default function App() {
       appendLine({ type: 'error', message: `FABlib post-boot config failed: ${e.message}` });
     }
 
-    // Step 2: Auto-configure FABNetv4/v6 network interfaces
-    try {
-      appendLine({ type: 'step', message: 'Auto-configuring L3 network interfaces...' });
-      const netResult = await api.autoConfigureNetworks(target);
-      if (netResult.configured > 0) {
-        appendLine({ type: 'step', message: `Auto-configured ${netResult.configured} node(s) with L3 network entries` });
-      } else {
-        appendLine({ type: 'step', message: 'No L3 networks to auto-configure' });
-      }
-    } catch (e: any) {
-      appendLine({ type: 'error', message: `Network auto-configure failed: ${e.message}` });
-    }
-
-    // Step 3: Execute boot config scripts (uploads, network config, commands)
+    // Step 2: Execute boot config scripts (uploads, commands)
     await handleRunBootConfigStream(target, true);
     appendLine({ type: 'step', message: '\u2713 Boot config pipeline complete' });
     setSliceBootRunning(prev => ({ ...prev, [target]: false }));
@@ -526,9 +520,9 @@ export default function App() {
           setErrors(prev => [...prev, 'Your FABRIC token has expired. Please update it in Settings.']);
         }
       } else {
-        // Token is good — auto-load slices and resources
+        // Token is good — navigate to FABRIC view and load slices
+        setCurrentView('infrastructure');
         refreshSliceList();
-        refreshInfrastructureAndMark();
         // Fetch full project list from Core API (replaces JWT subset)
         api.listUserProjects().then((resp) => {
           setProjects(resp.projects);
@@ -542,11 +536,8 @@ export default function App() {
             const proj = resp.projects.find((p) => p.uuid === resp.active_project_id);
             if (proj) setProjectName(proj.name);
           }
-          // Reconcile all known slices with their projects in the background,
-          // then refresh the slice list so filtering is accurate
-          api.reconcileProjects().then(() => {
-            refreshSliceList();
-          }).catch(() => {});
+          // Refresh slice list after project info loads
+          refreshSliceList();
         }).catch(() => {
           // Core API unavailable — keep JWT projects as fallback
         });
@@ -612,57 +603,122 @@ export default function App() {
   const [postLoginBusy, setPostLoginBusy] = useState(false);
 
   const loginPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const loginTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loginStartExpRef = useRef<number | undefined>(undefined);
+
+  const handleLoginSuccess = useCallback(async (cfg: import('./types/fabric').ConfigStatus) => {
+    setConfigStatus(cfg);
+    // Run post-login setup
+    try {
+      const projResp = await api.getProjects();
+      const allProjs = projResp.projects || [];
+      // Filter out service projects — they can't provision slices
+      const provisionable = allProjs.filter(p => !/^SERVICE\s*[-–—]/i.test(p.name));
+      if (provisionable.length === 1) {
+        await runAutoSetup(provisionable[0].uuid);
+      } else if (provisionable.length > 1) {
+        setPostLoginProjects(provisionable);
+        setShowPostLoginProjectPicker(true);
+      } else {
+        setErrors(prev => [...prev, 'No FABRIC projects found. Visit the FABRIC Portal to join a project.']);
+        setSettingsOpen(true);
+      }
+    } catch (err: any) {
+      setErrors(prev => [...prev, `Post-login setup failed: ${err.message}. Please configure manually in Settings.`]);
+      setSettingsOpen(true);
+    }
+  }, []);
 
   const handleLogin = useCallback(async () => {
     try {
       const { login_url } = await api.getLoginUrl();
-      // Snapshot the current token expiry so we can detect when a new token arrives
-      loginStartExpRef.current = configStatus?.token_info?.exp;
-      // Open CM in popup — the CM's HTML page uses fetch() to deliver
-      // tokens to our /api/config/callback, then shows "close this window".
-      // We poll for token arrival and auto-run setup when detected.
+      // Snapshot the current config so we can detect when a new token arrives.
+      // We compare both `exp` and `email` to catch re-logins with the same lifetime.
+      const startExp = configStatus?.token_info?.exp;
+      const startEmail = configStatus?.token_info?.email || '';
+      const startHasToken = configStatus?.has_token || false;
+      console.log('[login] starting, has_token=%s exp=%s email=%s', startHasToken, startExp, startEmail);
+
       const popup = window.open(login_url, 'fabric-login', 'width=600,height=700');
-      // Poll for token arrival every 2 seconds
+      if (!popup) {
+        console.warn('[login] popup blocked — opening in new tab');
+        window.open(login_url, '_blank');
+      }
+      let popupClosedChecks = 0;
+      let loginHandled = false;
+
+      const handleTokenDetected = async (cfg: import('./types/fabric').ConfigStatus) => {
+        if (loginHandled) return;
+        loginHandled = true;
+        if (loginPollRef.current) { clearInterval(loginPollRef.current); loginPollRef.current = null; }
+        if (loginTimeoutRef.current) { clearTimeout(loginTimeoutRef.current); loginTimeoutRef.current = null; }
+        try { popup?.close(); } catch {}
+        console.log('[login] token detected — running post-login setup');
+        await handleLoginSuccess(cfg);
+      };
+
       if (loginPollRef.current) clearInterval(loginPollRef.current);
+      if (loginTimeoutRef.current) { clearTimeout(loginTimeoutRef.current); loginTimeoutRef.current = null; }
       loginPollRef.current = setInterval(async () => {
+        if (loginHandled) return;
         try {
           const cfg = await api.getConfig();
-          // Detect new token: either first token, or expiry changed (re-login)
           const newExp = cfg.token_info?.exp;
+          const newEmail = cfg.token_info?.email || '';
+
+          // Detect token change: new token appeared, exp changed, or email changed
           const tokenChanged = cfg.has_token && (
-            !loginStartExpRef.current || newExp !== loginStartExpRef.current
+            !startHasToken ||                    // first token
+            newExp !== startExp ||               // expiry changed
+            newEmail !== startEmail              // different user
           );
+          console.log('[login poll] has_token=%s exp=%s→%s email=%s→%s changed=%s',
+            cfg.has_token, startExp, newExp, startEmail, newEmail, tokenChanged);
+
           if (tokenChanged) {
-            // Token arrived or refreshed! Stop polling and run post-login flow
-            if (loginPollRef.current) { clearInterval(loginPollRef.current); loginPollRef.current = null; }
-            try { popup?.close(); } catch {}
-            setConfigStatus(cfg);
-            // Run post-login setup
-            const projResp = await api.getProjects();
-            const allProjs = projResp.projects || [];
-            // Filter out service projects — they can't provision slices
-            const provisionable = allProjs.filter(p => !/^SERVICE\s*[-–—]/i.test(p.name));
-            if (provisionable.length === 1) {
-              await runAutoSetup(provisionable[0].uuid);
-            } else if (provisionable.length > 1) {
-              setPostLoginProjects(provisionable);
-              setShowPostLoginProjectPicker(true);
-            } else {
-              setErrors(prev => [...prev, 'No FABRIC projects found. Visit the FABRIC Portal to join a project.']);
-              setSettingsOpen(true);
+            await handleTokenDetected(cfg);
+            return;
+          }
+
+          // Detect popup closure — give extra polls for token delivery
+          let popupClosed = false;
+          try { popupClosed = popup ? popup.closed : true; } catch { popupClosed = true; }
+          if (popupClosed) {
+            popupClosedChecks++;
+            console.log('[login] popup closed, check #%d', popupClosedChecks);
+            if (popupClosedChecks >= 5) {
+              // Final check: accept any valid token even if exp didn't change
+              // (handles re-login with same lifetime, or CM not delivering via callback)
+              if (loginPollRef.current) { clearInterval(loginPollRef.current); loginPollRef.current = null; }
+              if (loginTimeoutRef.current) { clearTimeout(loginTimeoutRef.current); loginTimeoutRef.current = null; }
+              const finalCfg = await api.getConfig();
+              if (finalCfg.has_token && finalCfg.configured) {
+                console.log('[login] final check: valid token found — running post-login setup');
+                await handleTokenDetected(finalCfg);
+              } else if (finalCfg.has_token) {
+                // Token exists but not fully configured — still run setup
+                console.log('[login] final check: token found (not configured) — running setup');
+                await handleTokenDetected(finalCfg);
+              } else {
+                setErrors(prev => [...prev,
+                  'Login popup closed but token was not received. ' +
+                  'Please try again, or copy your token from https://cm.fabric-testbed.net and paste it in Settings.'
+                ]);
+                setSettingsOpen(true);
+              }
             }
           }
-        } catch { /* ignore poll errors */ }
+        } catch (err) { console.warn('[login poll] error:', err); }
       }, 2000);
-      // Stop polling after 5 minutes (timeout)
-      setTimeout(() => {
+      // Stop polling after 5 minutes
+      loginTimeoutRef.current = setTimeout(() => {
         if (loginPollRef.current) { clearInterval(loginPollRef.current); loginPollRef.current = null; }
+        loginTimeoutRef.current = null;
       }, 300000);
     } catch (err: any) {
       setErrors(prev => [...prev, `Login failed: ${err.message}`]);
     }
-  }, [configStatus?.token_info?.exp, configStatus?.has_token]);
+  }, [configStatus?.token_info?.exp, configStatus?.token_info?.email, configStatus?.has_token, handleLoginSuccess]);
 
   const runAutoSetup = useCallback(async (chosenProjectId: string) => {
     setPostLoginBusy(true);
@@ -676,6 +732,10 @@ export default function App() {
       if (result.project_id) {
         setProjectId(result.project_id);
       }
+      // Notify if bastion key creation failed
+      if (!result.bastion_key_generated && result.bastion_key_error) {
+        addError(`Bastion SSH key could not be created: ${result.bastion_key_error}. Upload your bastion key manually in Settings > SSH Keys.`);
+      }
       // Notify if LLM key creation failed
       if (!result.llm_key_created && result.llm_key_error) {
         addError('FABRIC LLM API key could not be created automatically. Create one at https://cm.fabric-testbed.net and paste it in Settings > LLMs.');
@@ -686,9 +746,11 @@ export default function App() {
         if (proj) setProjectName(proj.name);
       }
       setShowPostLoginProjectPicker(false);
-      // Load slices and resources
+      setSettingsOpen(false);
+      // Navigate to FABRIC view and load slices
+      setCurrentView('infrastructure');
       refreshSliceList();
-      refreshInfrastructureAndMark();
+      infraRequestedRef.current = false; sitesRequestedRef.current = false;
       // Also refresh from Core API
       api.listUserProjects().then((resp) => {
         setProjects(resp.projects);
@@ -705,43 +767,99 @@ export default function App() {
     }
   }, []);
 
+  const handleLogout = useCallback(async () => {
+    // Clean up any active login polling/timeouts first
+    if (loginPollRef.current) { clearInterval(loginPollRef.current); loginPollRef.current = null; }
+    if (loginTimeoutRef.current) { clearTimeout(loginTimeoutRef.current); loginTimeoutRef.current = null; }
+    loginStartExpRef.current = undefined;
+    try {
+      await api.logout();
+    } catch (err: any) {
+      // Best-effort — clear local state regardless
+      console.warn('Logout API call failed:', err.message);
+    }
+    // Clear local state
+    setConfigStatus(null);
+    setIsConfigured(false);
+    setSlices([]);
+    setSliceData(null);
+    setSelectedSliceId('');
+    setProjects([]);
+    setProjectId('');
+    setProjectName('');
+    setUserUuid('');
+    setCurrentView('landing');
+  }, []);
+
   // --- (continued from mount effect) ---
   useEffect(() => {
-    // Handle OAuth callback redirect (fallback path — main flow uses popup + polling)
+    // Handle OAuth callback redirect (runs in the popup window after CM redirect)
     const params = new URLSearchParams(window.location.search);
     if (params.get('configLogin') === 'success') {
       window.history.replaceState({}, '', '/');
-      // Run post-login auto-setup flow
+      // Signal the main window that the token arrived
+      try {
+        localStorage.setItem('fabric-login-success', Date.now().toString());
+      } catch {}
+      // If this is a popup, try to close it — the main window handles setup
+      if (window.opener) {
+        try { window.close(); } catch {}
+        // window.close() may fail silently — fall through to run setup here too
+      }
+      // Run setup (works in both popup and main window)
       (async () => {
         try {
-          const projResp = await api.getProjects();
-          const projectsList = projResp.projects || [];
-          if (projectsList.length === 1) {
-            await runAutoSetup(projectsList[0].uuid);
-          } else if (projectsList.length > 1) {
-            setPostLoginProjects(projectsList);
-            setShowPostLoginProjectPicker(true);
-          } else {
-            setErrors(prev => [...prev, 'No FABRIC projects found. Visit the FABRIC Portal to join a project.']);
-            setSettingsOpen(true);
+          // The backend callback already did key generation; just refresh config
+          const cfg = await api.getConfig();
+          setConfigStatus(cfg);
+          setIsConfigured(cfg.configured);
+          if (cfg.configured) {
+            setCurrentView('infrastructure');
+            refreshSliceList();
+          }
+          // If not fully configured (multi-project), show project picker
+          if (!cfg.project_id) {
+            const projResp = await api.getProjects();
+            const projectsList = projResp.projects || [];
+            if (projectsList.length === 1) {
+              await runAutoSetup(projectsList[0].uuid);
+            } else if (projectsList.length > 1) {
+              setPostLoginProjects(projectsList);
+              setShowPostLoginProjectPicker(true);
+            }
           }
         } catch {
           setSettingsOpen(true);
         }
       })();
     }
-  }, []);
+
+    // Listen for login success from popup window (cross-window via localStorage)
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'fabric-login-success' && e.newValue) {
+        console.log('[login] detected token via localStorage event');
+        localStorage.removeItem('fabric-login-success');
+        // Stop any active polling
+        if (loginPollRef.current) { clearInterval(loginPollRef.current); loginPollRef.current = null; }
+        if (loginTimeoutRef.current) { clearTimeout(loginTimeoutRef.current); loginTimeoutRef.current = null; }
+        // Fetch fresh config and run post-login setup
+        api.getConfig().then(cfg => {
+          if (cfg.has_token) {
+            handleLoginSuccess(cfg);
+          }
+        }).catch(() => {});
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeTourSteps = activeTourId ? (tours[activeTourId]?.steps ?? []) : [];
 
   const dismissTour = useCallback(() => {
-    // Only set localStorage dismiss for getting-started tour
-    if (activeTourId === 'getting-started') {
-      localStorage.setItem('fabric-tour-dismissed', 'true');
-    }
     setActiveTourId(null);
     setTourStep(0);
-  }, [activeTourId]);
+  }, []);
 
   const closeTour = useCallback(() => {
     setActiveTourId(null);
@@ -749,9 +867,6 @@ export default function App() {
   }, []);
 
   const startTour = useCallback((tourId: string) => {
-    if (tourId === 'getting-started') {
-      localStorage.removeItem('fabric-tour-dismissed');
-    }
     setTourStep(0);
     setActiveTourId(tourId);
     setHelpOpen(false);
@@ -847,18 +962,22 @@ export default function App() {
   const POLL_STATES = new Set(['Configuring', 'Ticketed', 'Nascent', 'ModifyOK', 'ModifyError']);
   const STABLE_STATES = new Set(['StableOK', 'Active']);
   const TERMINAL_STATES_SET = new Set(['Dead', 'Closing', 'StableError']);
-  const POLL_INTERVAL = 15000; // 15 seconds
+  const [pollInterval, setPollInterval] = useState(() => parseInt(localStorage.getItem('poll-interval') || '300000', 10));
+  const pollIntervalRef = useRef(pollInterval);
+  pollIntervalRef.current = pollInterval;
 
-  // Adaptive freshness: STEADY vs ACTIVE mode
-  const STEADY_MAX_AGE = 300;   // 5 minutes — accept cached data when all settled
-  const ACTIVE_MAX_AGE = 30;    // 30 seconds — real API calls during transitions
-  const MUTATION_COOLDOWN = 180_000; // 3 minutes — stay ACTIVE after a mutation
+  // Adaptive polling: poll interval controls API call frequency (60s active, user-configured steady).
+  // Each poll always fetches fresh data (max_age=0) so FABRIC state changes are detected immediately.
+  const ACTIVE_POLL_INTERVAL = 60_000; // 60s when slices are provisioning
+  const MUTATION_COOLDOWN = 120_000; // 2 minutes — stay ACTIVE after a mutation
 
   // Track last mutation time for the 3-minute cooldown
   const lastMutationRef = useRef<number>(0);
 
   // Track which slices have already had boot configs auto-executed
   const bootConfigRanRef = useRef<Set<string>>(new Set());
+  // Track slices submitted through the GUI in this session — only these get auto-boot-config
+  const guiSubmittedRef = useRef<Set<string>>(new Set());
 
   // Track slices being deleted — prevent polling from overwriting their state
   // back to StableOK before FABRIC orchestrator processes the delete.
@@ -867,7 +986,7 @@ export default function App() {
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
-      clearInterval(pollingRef.current);
+      clearTimeout(pollingRef.current);
       pollingRef.current = null;
     }
     if (pollAbortRef.current) {
@@ -916,18 +1035,30 @@ export default function App() {
     return bootErrors;
   }, []);
 
-  const startPolling = useCallback(() => {
-    console.log(`[startPolling] called, autoRefresh=${autoRefreshRef.current}`);
-    stopPolling();
-    if (!autoRefreshRef.current) return;
+  // forceActive: when true, polls at ACTIVE_POLL_INTERVAL even if user chose "Never"
+  // (used after slice submit/deploy to track provisioning progress)
+  const forceActiveRef = useRef(false);
 
-    pollingRef.current = setInterval(async () => {
-      if (!autoRefreshRef.current) { stopPolling(); return; }
+  const startPolling = useCallback((forceActive = false) => {
+    forceActiveRef.current = forceActive;
+    const enabled = pollIntervalRef.current > 0 || forceActive;
+    console.log(`[startPolling] called, polling=${enabled ? (pollIntervalRef.current || 'forced-active') + 'ms' : 'off'}`);
+    stopPolling();
+    if (!enabled) return;
+
+    const scheduleTick = (delay: number) => {
+      pollingRef.current = setTimeout(pollTick, delay);
+    };
+
+    const pollTick = async () => {
+      if (pollIntervalRef.current <= 0 && !forceActiveRef.current) { stopPolling(); return; }
 
       // Abort any previous in-flight poll request before starting a new one
       if (pollAbortRef.current) pollAbortRef.current.abort();
       const controller = new AbortController();
       pollAbortRef.current = controller;
+
+      let nextDelay = pollIntervalRef.current; // default: user-chosen interval
 
       try {
         // Determine ACTIVE vs STEADY mode for adaptive freshness
@@ -936,12 +1067,17 @@ export default function App() {
         // Pre-check: use previous slice list to decide if transitional
         const hadTransitional = slices.some(s => POLL_STATES.has(s.state));
         const isActive = hadTransitional || withinCooldown;
-        const maxAge = isActive ? ACTIVE_MAX_AGE : STEADY_MAX_AGE;
 
-        // Refresh slice list with adaptive freshness
-        const list = await api.listSlices(maxAge);
+        // Always fetch fresh data — poll interval controls API call frequency
+        const list = await api.listSlices(0);
         protectDeletingSlices(list);
-        setSlices(list);
+        // Guard: don't overwrite non-empty slices with an empty poll result
+        // (backend may return empty during FABlib re-init or API hiccup)
+        if (list.length === 0 && slicesRef.current.length > 0) {
+          console.warn('[poll] API returned empty slice list but we had %d slices — skipping update', slicesRef.current.length);
+        } else {
+          setSlices(list);
+        }
         setListLoaded(true);
         syncStateFromList(list);
 
@@ -978,7 +1114,7 @@ export default function App() {
         if (currentId && currentEntry && !TERMINAL_STATES_SET.has(currentEntry.state)) {
           // Poll sliver states — lightweight check for state changes
           try {
-            const sliverData = await api.getSliverStates(currentId, ACTIVE_MAX_AGE);
+            const sliverData = await api.getSliverStates(currentId, 0);
             // Check if any state changed (slice-level or node-level)
             const prevData = sliceDataRef.current;
             const newSliceState = sliverData.slice_state || currentEntry.state;
@@ -1022,27 +1158,20 @@ export default function App() {
           });
         }
 
-        // Auto-run boot configs for slices that just reached StableOK
-        // Runs for any slice the webui sees transition to stable for the first time
+        // Auto-run boot configs for GUI-submitted slices that just reached StableOK
         for (const entry of list) {
-          console.log(`[poll] Slice "${entry.name}" state=${entry.state} bootConfigRan=${bootConfigRanRef.current.has(entry.name)}`);
-          if ((entry.state === 'StableOK' || entry.state === 'Active') && !bootConfigRanRef.current.has(entry.name)) {
-            console.log(`[poll] Auto-running boot config for "${entry.name}"`);
+          if ((entry.state === 'StableOK' || entry.state === 'Active')
+              && !bootConfigRanRef.current.has(entry.name)
+              && guiSubmittedRef.current.has(entry.name)) {
             bootConfigRanRef.current.add(entry.name);
             appendBuildLog(entry.name, { type: 'build', message: `Slice is ready (${entry.state})` });
-            // Fire and forget — each slice configures independently in parallel
-            // (The IIFE below already refreshes the slice data)
             const sliceName = entry.name;
             (async () => {
-              // Get node names for per-node progress tracking
-              let sliceNodeNames: string[] = [];
               try {
                 const sd = await api.refreshSlice(sliceName);
-                sliceNodeNames = sd.nodes.map((n: any) => n.name);
                 if (entry.id === currentId) setSliceData(sd);
               } catch { /* fallback */ }
 
-              // Run FABlib's native post_boot_config (assigns IPs/hostnames)
               appendBuildLog(sliceName, { type: 'build', message: 'Running FABlib post-boot config (networking, routes, hostnames)...' });
               try {
                 await api.runPostBootConfig(sliceName);
@@ -1052,39 +1181,45 @@ export default function App() {
                 addError(`FABlib post_boot_config failed for ${sliceName}: ${e.message}`);
               }
 
-              // Auto-configure FABNetv4/v6 network interfaces from assigned IPs
-              try {
-                appendBuildLog(sliceName, { type: 'step', message: 'Auto-configuring L3 network interfaces...' });
-                const netResult = await api.autoConfigureNetworks(sliceName);
-                if (netResult.configured > 0) {
-                  appendBuildLog(sliceName, { type: 'build', message: `Auto-configured ${netResult.configured} node(s) with L3 network entries` });
-                } else {
-                  appendBuildLog(sliceName, { type: 'step', message: 'No L3 networks to auto-configure' });
-                }
-              } catch (e: any) {
-                appendBuildLog(sliceName, { type: 'error', message: `Network auto-configure failed: ${e.message}` });
-              }
-
-              // Run boot configs via streaming endpoint (includes weave.sh + SSH readiness)
               await handleRunBootConfigStream(sliceName, true);
-
-              // Mark build complete
               appendBuildLog(sliceName, { type: 'build', message: '\u2713 Build complete' });
               setSliceBootRunning(prev => ({ ...prev, [sliceName]: false }));
             })();
           }
         }
 
-        // In STEADY mode, polling continues but with high max_age (near-zero cost).
-        // Log mode transitions for debugging.
+        // Adaptive poll interval: 20s when slices are provisioning, user-chosen otherwise
         const hasTransitional = list.some(s => POLL_STATES.has(s.state));
+        if (hasTransitional || withinCooldown) {
+          nextDelay = ACTIVE_POLL_INTERVAL;
+        }
         if (!hasTransitional && !withinCooldown && isActive) {
-          console.log(`[poll] All slices settled, switching to STEADY mode (max_age=${STEADY_MAX_AGE})`);
+          console.log(`[poll] All slices settled, switching to STEADY mode (interval=${pollIntervalRef.current}ms)`);
+          // If force-active polling was on (user chose "Never" but slice was provisioning),
+          // stop polling now that all slices have settled
+          if (forceActiveRef.current) {
+            forceActiveRef.current = false;
+            if (pollIntervalRef.current <= 0) {
+              console.log('[poll] Force-active complete, stopping polling (user interval=Never)');
+              stopPolling();
+              return;
+            }
+          }
         }
       } catch {
         // Silently ignore polling errors — next poll will retry
       }
-    }, POLL_INTERVAL);
+
+      // Schedule next tick
+      const shouldContinue = pollIntervalRef.current > 0 || forceActiveRef.current;
+      if (shouldContinue) scheduleTick(nextDelay);
+    };
+
+    // First tick after the user-chosen delay (or ACTIVE if transitional)
+    const hasTransitional = slices.some(s => POLL_STATES.has(s.state));
+    const initialDelay = hasTransitional || forceActive || (Date.now() - lastMutationRef.current) < MUTATION_COOLDOWN
+      ? ACTIVE_POLL_INTERVAL : (pollIntervalRef.current || ACTIVE_POLL_INTERVAL);
+    scheduleTick(initialDelay);
   }, [stopPolling, syncStateFromList, handleRunBootConfigStream, appendBuildLog]);
 
   // Clean up polling on unmount
@@ -1096,13 +1231,18 @@ export default function App() {
       if (document.visibilityState === 'hidden') {
         stopPolling();
       } else if (document.visibilityState === 'visible') {
+        const view = currentViewRef.current;
+        if (view !== 'slices' && view !== 'infrastructure') return;
         // On return, refresh slice list (force fresh) and restart polling if needed
         api.listSlices(0).then(list => {
           protectDeletingSlices(list);
-          setSlices(list);
+          if (list.length === 0 && slicesRef.current.length > 0) {
+            console.warn('[visibility] API returned empty slice list but we had %d slices — skipping update', slicesRef.current.length);
+          } else {
+            setSlices(list);
+          }
           syncStateFromList(list);
-          // Always restart polling (STEADY mode is near-free)
-          if (autoRefreshRef.current && !pollingRef.current) {
+          if (pollIntervalRef.current > 0 && !pollingRef.current) {
             startPolling();
           }
         }).catch(() => {});
@@ -1112,42 +1252,67 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [stopPolling, startPolling, syncStateFromList]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Refresh slice data when switching back to a slice-displaying view
-  // so the user sees current data even if state changed while on another view.
+  // Fetch lightweight sites list when first entering infrastructure view (for editor dropdowns)
+  useEffect(() => {
+    if (currentView === 'infrastructure' && !sitesRequestedRef.current && infraSites.length === 0) {
+      sitesRequestedRef.current = true;
+      refreshSites();
+    }
+  }, [currentView, infraSites.length, refreshSites]);
+
+  // Lazy-load full infrastructure data (sites + links + metrics) on first visit to sub-views that need it
+  useEffect(() => {
+    const infraNeedsData = currentView === 'infrastructure' &&
+      (infraSubView === 'map' || infraSubView === 'resources' || infraSubView === 'calendar');
+    const slicesNeedsData = currentView === 'slices' && slicesSubView === 'map';
+    if ((infraNeedsData || slicesNeedsData) && !infraRequestedRef.current) {
+      infraRequestedRef.current = true;
+      refreshInfrastructureAndMark();
+    }
+  }, [currentView, slicesSubView, infraSubView, refreshInfrastructureAndMark]);
+
+  // Fetch slice data whenever selectedSliceId changes (e.g. dropdown pick)
+  useEffect(() => {
+    if (!selectedSliceId) return;
+    const view = currentViewRef.current;
+    if (view !== 'slices' && view !== 'infrastructure') return;
+    api.getSlice(selectedSliceId).then(data => {
+      setSliceData(data);
+    }).catch(() => {});
+  }, [selectedSliceId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Start/stop slice polling based on active view; refresh selected slice on view switch
   useEffect(() => {
     if (currentView === 'slices' || currentView === 'infrastructure') {
+      // Refresh selected slice to show current state
       if (selectedSliceId) {
         api.refreshSlice(selectedSliceId).then(data => {
           setSliceData(data);
         }).catch(() => {});
       }
-      // Re-check slice list (force fresh on view switch) and restart polling
-      api.listSlices(0).then(list => {
-        protectDeletingSlices(list);
-        setSlices(list);
-        syncStateFromList(list);
-        if (autoRefreshRef.current && !pollingRef.current) {
-          startPolling();
-        }
-      }).catch(() => {});
-    }
-  }, [currentView, slicesSubView, infraSubView]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const toggleAutoRefresh = useCallback(() => {
-    setAutoRefresh(prev => {
-      const next = !prev;
-      localStorage.setItem('auto-refresh', next ? 'on' : 'off');
-      if (next) {
-        // Start polling immediately when toggled ON
-        autoRefreshRef.current = true;
+      // Restart polling (first tick fetches fresh data)
+      if (pollIntervalRef.current > 0 && !pollingRef.current) {
         startPolling();
-      } else {
-        autoRefreshRef.current = false;
-        stopPolling();
       }
-      return next;
-    });
-  }, [stopPolling, startPolling]);
+    } else {
+      // Stop polling when leaving slice-related views
+      stopPolling();
+    }
+  }, [currentView]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Restart or stop polling when poll interval changes
+  useEffect(() => {
+    if (pollInterval === 0) {
+      stopPolling();
+    } else if (pollingRef.current) {
+      // Interval changed while polling — restart with new timing
+      stopPolling();
+      startPolling();
+    } else if (currentViewRef.current === 'slices' || currentViewRef.current === 'infrastructure') {
+      // Switched from Never to an interval while on a slice view — start
+      startPolling();
+    }
+  }, [pollInterval]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load slice list on first interaction or mount
   const refreshSliceList = useCallback(async () => {
@@ -1157,7 +1322,12 @@ export default function App() {
     try {
       const list = await api.listSlices();
       protectDeletingSlices(list);
-      setSlices(list);
+      // Guard: don't overwrite non-empty slices with empty result (API hiccup)
+      if (list.length === 0 && slicesRef.current.length > 0) {
+        console.warn('[refreshSliceList] API returned empty but we had %d slices — keeping existing', slicesRef.current.length);
+      } else {
+        setSlices(list);
+      }
       setListLoaded(true);
 
       // Pre-seed bootConfigRanRef with already-stable slices so we only
@@ -1187,7 +1357,7 @@ export default function App() {
       }
 
       // Always start polling (STEADY mode is near-free with high max_age)
-      if (autoRefreshRef.current) {
+      if (pollIntervalRef.current > 0) {
         startPolling();
       }
     } catch (e: any) {
@@ -1206,32 +1376,36 @@ export default function App() {
       const result = await api.switchProject(uuid);
       setProjectId(uuid);
       setProjectName(proj.name);
-      // Reset slice state and refresh
+      // Reset slice state
       setSliceData(null);
       setSelectedSliceId('');
       setSelectedElement(null);
       setSlices([]);
       setListLoaded(false);
-      // If token couldn't be refreshed, open CM login in a new tab so the
-      // user can get a project-scoped token with a refresh_token
-      if (!result.token_refreshed && result.login_url) {
-        window.open(result.login_url, '_blank');
-        setErrors(prev => [...prev,
-          'Your token needs to be updated for the new project. ' +
-          'A login page has opened — copy the token and paste it in Settings.'
-        ]);
-        setSettingsOpen(true);
+      infraRequestedRef.current = false; sitesRequestedRef.current = false; // re-fetch infra on next tab visit
+      // If token couldn't be refreshed, trigger OAuth re-login scoped to the new project
+      if (result.needs_relogin) {
+        addError('Token needs to be refreshed for the new project. Please re-login.');
+        handleLogin();
+      } else {
+        // Token refreshed successfully — load slices for the new project
+        await refreshSliceList();
       }
-      // Auto-load slices for the new project
-      await refreshSliceList();
     } catch (e: any) {
       addError(e.message);
     } finally {
       setStatusMessage('');
     }
-  }, [projects, refreshSliceList]);
+  }, [projects, refreshSliceList, handleLogin]);
 
-  // No auto-load — user must click "Load Slices" first
+  // Debug: log when slices state changes from populated to empty
+  const prevSliceCountRef = useRef(0);
+  useEffect(() => {
+    if (slices.length === 0 && prevSliceCountRef.current > 0) {
+      console.warn('[slices] slices became empty! Previous count was %d. Stack:', prevSliceCountRef.current, new Error().stack);
+    }
+    prevSliceCountRef.current = slices.length;
+  }, [slices]);
 
   // When sliceData updates, push its state into the matching slices list entry
   // so the dropdown stays in sync with the loaded slice's current state.
@@ -1258,6 +1432,19 @@ export default function App() {
     }
   }, [runValidation]);
 
+
+  const handleCheckAvailability = useCallback(async () => {
+    if (!selectedSliceId) return;
+    setCheckingAvailability(true);
+    try {
+      const result = await api.checkSliceAvailability(selectedSliceId);
+      setAvailabilityResult(result);
+    } catch (e: any) {
+      setErrors(prev => [...prev, `Availability check failed: ${e.message}`]);
+    } finally {
+      setCheckingAvailability(false);
+    }
+  }, [selectedSliceId]);
 
   // Submit handles both new slice creation and modifications to existing slices
   // Uses composite submit when Chameleon nodes are present
@@ -1297,6 +1484,8 @@ export default function App() {
       setSliceData(data);
       setValidationIssues([]);
       setValidationValid(true);
+      // Mark this slice as GUI-submitted so polling auto-runs boot config for it
+      guiSubmittedRef.current.add(name);
       appendBuildLog(name, { type: 'build', message: `Slice submitted (state: ${data.state || 'unknown'})` });
       prevSliceStatesRef.current[name] = data.state || '';
       // Use submit response directly — no redundant refreshSlice() call.
@@ -1331,24 +1520,14 @@ export default function App() {
           appendBuildLog(name, { type: 'error', message: `FABlib post-boot config failed: ${e.message}` });
           addError(`FABlib post_boot_config failed: ${e.message}`);
         }
-        // Auto-configure FABNetv4/v6 network interfaces
-        try {
-          appendBuildLog(name, { type: 'step', message: 'Auto-configuring L3 network interfaces...' });
-          const netResult = await api.autoConfigureNetworks(sliceId);
-          if (netResult.configured > 0) {
-            appendBuildLog(name, { type: 'build', message: `Auto-configured ${netResult.configured} node(s) with L3 network entries` });
-          }
-        } catch (e: any) {
-          appendBuildLog(name, { type: 'error', message: `Network auto-configure failed: ${e.message}` });
-        }
         setStatusMessage('Running post-boot configuration (waiting for SSH)...');
         await handleRunBootConfigStream(name, true);
         appendBuildLog(name, { type: 'build', message: '\u2713 Build complete' });
         setSliceBootRunning(prev => ({ ...prev, [name]: false }));
       } else if (POLL_STATES.has(refreshedData.state || '')) {
-        // Slice is still provisioning — start auto-refresh polling
+        // Slice is still provisioning — force-start polling even if user chose "Never"
         appendBuildLog(name, { type: 'build', message: 'Waiting for slice to become ready...' });
-        startPolling();
+        startPolling(true);
       } else {
         // Not a poll state and not StableOK — mark build done
         setSliceBootRunning(prev => ({ ...prev, [name]: false }));
@@ -1373,6 +1552,7 @@ export default function App() {
       setSlices(list);
       setListLoaded(true);
       syncStateFromList(list);
+      setSliceRefreshKey(k => k + 1);
 
       // Also refresh the currently loaded slice if any
       const currentName = selectedSliceRef.current;
@@ -1412,7 +1592,7 @@ export default function App() {
   // --- Composite auto-refresh: poll member states every 30s ---
   const compositeStatesRef = useRef<string>('');
   useEffect(() => {
-    if (!selectedCompositeSliceId || !autoRefresh || currentView !== 'slices') return;
+    if (!selectedCompositeSliceId || pollInterval === 0 || currentView !== 'slices') return;
     // Immediate refresh on (re-)activation so the user sees fresh state
     // without waiting 30s after switching back to the composite view.
     const refreshComposite = async () => {
@@ -1430,7 +1610,7 @@ export default function App() {
     refreshComposite();
     const interval = setInterval(refreshComposite, 30000);
     return () => clearInterval(interval);
-  }, [selectedCompositeSliceId, autoRefresh, currentView]);
+  }, [selectedCompositeSliceId, pollInterval, currentView]);
 
   // Refresh composite graph when switching to topology tab
   useEffect(() => {
@@ -2061,9 +2241,10 @@ export default function App() {
     }
   }, [runValidation]);
 
-  const handleOpenTerminals = useCallback((elements: Record<string, string>[]) => {
+  const handleOpenTerminals = useCallback((elements: Record<string, string>[], sliceName?: string) => {
     let counter = terminalIdCounter;
     const newTabs: TerminalTab[] = [];
+    const resolvedSlice = sliceName || selectedSliceName;
     for (const el of elements) {
       if (el.element_type === 'node' && el.management_ip) {
         const id = `term-${counter}`;
@@ -2071,7 +2252,7 @@ export default function App() {
         newTabs.push({
           id,
           label: el.name,
-          sliceName: selectedSliceName,
+          sliceName: resolvedSlice,
           nodeName: el.name,
           managementIp: el.management_ip,
         });
@@ -2341,7 +2522,7 @@ export default function App() {
 
   const handleContextAction = useCallback((action: ContextMenuAction) => {
     if (action.type === 'terminal') {
-      handleOpenTerminals(action.elements);
+      handleOpenTerminals(action.elements, action.sliceNames?.[0]);
     } else if (action.type === 'delete') {
       handleDeleteElements(action.elements);
     } else if (action.type === 'delete-slice' && action.sliceNames) {
@@ -2530,6 +2711,8 @@ export default function App() {
 
     // Mark this weave as deploying (for LibrariesPanel button state)
     setDeployingWeaves(prev => new Set(prev).add(templateDirName));
+    // Mark as GUI-submitted so polling auto-runs boot config
+    guiSubmittedRef.current.add(sliceNameForDeploy);
 
     // Open build log
     setOpenBootLogSlices(prev => prev.includes(sliceNameForDeploy) ? prev : [...prev, sliceNameForDeploy]);
@@ -2608,16 +2791,6 @@ export default function App() {
           appendBuildLog(sliceNameForDeploy, { type: 'error', message: `FABlib post-boot config failed: ${e.message}` });
           addError(`FABlib post_boot_config failed: ${e.message}`);
         }
-        // Auto-configure FABNetv4/v6 network interfaces
-        try {
-          appendBuildLog(sliceNameForDeploy, { type: 'step', message: 'Auto-configuring L3 network interfaces...' });
-          const netResult = await api.autoConfigureNetworks(refreshedData.id || sliceId);
-          if (netResult.configured > 0) {
-            appendBuildLog(sliceNameForDeploy, { type: 'build', message: `Auto-configured ${netResult.configured} node(s) with L3 network entries` });
-          }
-        } catch (e: any) {
-          appendBuildLog(sliceNameForDeploy, { type: 'error', message: `Network auto-configure failed: ${e.message}` });
-        }
         setStatusMessage('Running post-boot configuration (waiting for SSH)...');
         await handleRunBootConfigStream(sliceNameForDeploy, true);
         appendBuildLog(sliceNameForDeploy, { type: 'build', message: '\u2713 Deploy complete' });
@@ -2625,7 +2798,7 @@ export default function App() {
         setDeployingWeaves(prev => { const next = new Set(prev); next.delete(templateDirName); return next; });
       } else if (POLL_STATES.has(refreshedData.state || '')) {
         appendBuildLog(sliceNameForDeploy, { type: 'build', message: 'Waiting for slice to become ready...' });
-        startPolling();
+        startPolling(true);
         // deployingWeaves stays set — will be cleared when polling detects completion
       } else {
         setSliceBootRunning(prev => ({ ...prev, [sliceNameForDeploy]: false }));
@@ -2832,6 +3005,7 @@ export default function App() {
 
   const handleLaunchNotebook = useCallback((path: string) => {
     setJupyterPath(path);
+    setJupyterMounted(true);
     setCurrentView('jupyter');
   }, []);
 
@@ -2869,7 +3043,7 @@ export default function App() {
   );
 
   const handleViewChange = useCallback((v: TopView) => {
-    if (v !== 'jupyter') setJupyterPath(undefined);
+    if (v === 'jupyter') setJupyterMounted(true);
     setCurrentView(v);
   }, []);
 
@@ -3315,6 +3489,7 @@ export default function App() {
         userEmail={configStatus?.token_info?.email}
         userName={configStatus?.token_info?.name}
         onLogin={handleLogin}
+        onLogout={handleLogout}
       />
 
       <HelpContextMenu onOpenHelp={handleOpenHelp} />
@@ -3339,9 +3514,8 @@ export default function App() {
             allProjects={projects}
             onConfigured={() => {
               setIsConfigured(true);
-              setSettingsOpen(false);
               setListLoaded(false);
-              refreshInfrastructureAndMark();
+              infraRequestedRef.current = false; sitesRequestedRef.current = false; // re-fetch infra on next tab visit
               // Check if user changed — clear all account-specific state
               api.getConfig().then((cfg) => {
                 setConfigStatus(cfg);
@@ -3372,15 +3546,15 @@ export default function App() {
                   const proj = resp.projects.find((p) => p.uuid === resp.active_project_id);
                   if (proj) setProjectName(proj.name);
                 }
-                // Reconcile slice→project mappings in background
-                api.reconcileProjects().catch(() => {});
+                // Slice list already refreshed above for the new project
               }).catch(() => {});
             }}
             onClose={() => {
               setSettingsOpen(false);
               setListLoaded(false);
-              refreshInfrastructureAndMark();
+              infraRequestedRef.current = false; sitesRequestedRef.current = false; // re-fetch infra on next tab visit
             }}
+            onLogin={handleLogin}
           />
         </div>
       )}
@@ -3419,60 +3593,76 @@ export default function App() {
               </button>
             ))}
           </div>
-          <select
-            className="fabric-bar-slice-select"
-            value={selectedSliceId}
-            onChange={(e) => {
-              const id = e.target.value;
-              setSelectedSliceId(id);
-              if (id && infraSubView === 'map') setInfraSubView('topology');
-            }}
-          >
-            <option value="">-- Select Slice --</option>
-            {slices.filter(s => !['Dead', 'Closing'].includes(s.state)).map(s => (
-              <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
-            ))}
-            {slices.filter(s => ['Dead', 'Closing'].includes(s.state)).length > 0 && (
-              <option disabled>── Past ──</option>
-            )}
-            {slices.filter(s => ['Dead', 'Closing'].includes(s.state)).slice(0, 10).map(s => (
-              <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
-            ))}
-          </select>
-          <button className="fabric-bar-action-btn" onClick={async () => {
-            const name = prompt('Slice name:');
-            if (!name) return;
-            try {
-              const data = await api.createSlice(name);
-              handleSliceUpdated(data);
-              setSelectedSliceId(data.id || '');
-              setInfraSubView('topology');
-              // Add to slice list
-              setSlices(prev => {
-                const newId = data.id || '';
-                if (prev.some(s => s.id === newId)) return prev;
-                return [...prev, { name, id: newId, state: 'Draft' }];
-              });
-            } catch (e: any) { setErrors(prev => [...prev, e.message]); }
-          }} title="Create new slice">+ New</button>
-          <button className="fabric-bar-action-btn" onClick={async () => {
-            if (!selectedSliceId) return;
-            handleSubmit();
-          }} disabled={!selectedSliceId} title="Submit selected slice">Submit</button>
-          <button className="fabric-bar-action-btn fabric-bar-action-danger" onClick={async () => {
-            if (!selectedSliceId || !selectedSliceName) return;
-            if (!window.confirm(`Delete slice "${selectedSliceName}"?`)) return;
-            handleDeleteSlice();
-          }} disabled={!selectedSliceId} title="Delete selected slice">Delete</button>
-          <button className="fabric-bar-action-btn" onClick={handleRefreshSlices} title="Refresh slices">&#x21BB; Slices</button>
-          <button className="fabric-bar-action-btn" onClick={() => refreshInfrastructure(0)} title="Refresh resources">&#x21BB; Resources</button>
-          <button
-            className={`fabric-bar-action-btn ${autoRefresh ? 'fabric-bar-action-active' : ''}`}
-            onClick={toggleAutoRefresh}
-            title={autoRefresh ? 'Disable auto-refresh' : 'Enable auto-refresh'}
-          >
-            {autoRefresh ? '\u25CF Auto: ON' : '\u25CB Auto: OFF'}
-          </button>
+          {(infraSubView === 'table' || infraSubView === 'topology' || infraSubView === 'map') && (<>
+            <select
+              className="fabric-bar-slice-select"
+              value={selectedSliceId}
+              onChange={(e) => {
+                const id = e.target.value;
+                setSelectedSliceId(id);
+              }}
+            >
+              <option value="">-- Select Slice --</option>
+              {slices.filter(s => !['Dead', 'Closing'].includes(s.state)).map(s => (
+                <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
+              ))}
+              {slices.filter(s => ['Dead', 'Closing'].includes(s.state)).length > 0 && (
+                <option disabled>── Past ──</option>
+              )}
+              {slices.filter(s => ['Dead', 'Closing'].includes(s.state)).slice(0, 10).map(s => (
+                <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
+              ))}
+            </select>
+            <button className="fabric-bar-action-btn" onClick={async () => {
+              const name = prompt('Slice name:');
+              if (!name) return;
+              try {
+                const data = await api.createSlice(name);
+                handleSliceUpdated(data);
+                setSelectedSliceId(data.id || '');
+                setInfraSubView('topology');
+                setSlices(prev => {
+                  const newId = data.id || '';
+                  if (prev.some(s => s.id === newId)) return prev;
+                  return [...prev, { name, id: newId, state: 'Draft' }];
+                });
+              } catch (e: any) { setErrors(prev => [...prev, e.message]); }
+            }} title="Create new slice">+ New</button>
+            <button className="fabric-bar-action-btn" onClick={async () => {
+              if (!selectedSliceId) return;
+              handleSubmit();
+            }} disabled={!selectedSliceId} title="Submit selected slice">Submit</button>
+            <button className="fabric-bar-action-btn" onClick={handleCheckAvailability}
+              disabled={!selectedSliceId || checkingAvailability} title="Check if resources are available for this slice">
+              {checkingAvailability ? '\u23F3 Checking...' : '\uD83D\uDD0D Availability'}</button>
+            <button className="fabric-bar-action-btn fabric-bar-action-danger" onClick={async () => {
+              if (!selectedSliceId || !selectedSliceName) return;
+              if (!window.confirm(`Delete slice "${selectedSliceName}"?`)) return;
+              handleDeleteSlice();
+            }} disabled={!selectedSliceId} title="Delete selected slice">Delete</button>
+            <button className="fabric-bar-action-btn" onClick={handleRefreshSlices} title="Refresh slices">&#x21BB; Slices</button>
+            <select
+              className="fabric-bar-action-btn"
+              value={pollInterval}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                setPollInterval(val);
+                localStorage.setItem('poll-interval', String(val));
+              }}
+              title="Auto-refresh interval for slice polling"
+              style={{ minWidth: 60, cursor: 'pointer' }}
+            >
+              <option value={0}>Never</option>
+              <option value={15000}>15s</option>
+              <option value={30000}>30s</option>
+              <option value={60000}>1m</option>
+              <option value={120000}>2m</option>
+              <option value={300000}>5m</option>
+            </select>
+          </>)}
+          {(infraSubView === 'map' || infraSubView === 'resources' || infraSubView === 'calendar') && (
+            <button className="fabric-bar-action-btn" onClick={() => refreshInfrastructure(0)} title="Refresh resources">&#x21BB; Resources</button>
+          )}
         </div>
       )}
 
@@ -3550,72 +3740,84 @@ export default function App() {
               </button>
             ))}
           </div>
-          <select
-            className="composite-bar-select"
-            value={selectedCompositeSliceId}
-            onChange={async (e) => {
-              const id = e.target.value;
-              setSelectedCompositeSliceId(id);
-              setCompositeGraph(null);
-              if (id) {
-                // Load composite slice with member summaries + merged graph
-                api.getCompositeSlice(id).then(data => {
-                  setCompositeSlices(prev => prev.map(s => s.id === data.id ? data : s));
-                }).catch(() => {});
-                api.getCompositeGraph(id).then(setCompositeGraph).catch(err => addError(err.message));
-              }
-            }}
-          >
-            <option value="">-- Select Composite Slice --</option>
-            {compositeSlices.map(s => (
-              <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
-            ))}
-          </select>
-          <button className="composite-bar-btn" onClick={async () => {
-            const name = prompt('Composite slice name:');
-            if (!name) return;
-            try {
-              // Create composite slice (meta-slice with no resources of its own)
-              const data = await api.createCompositeSlice(name);
-              setCompositeSlices(prev => [...prev, data]);
-              setSelectedCompositeSliceId(data.id);
-              setSlicesSubView('slices');
-            } catch (e: any) { addError(e.message); }
-          }} title="Create new composite slice">+ New</button>
-          <button className="composite-bar-btn" onClick={async () => {
-            if (!selectedCompositeSliceId) return;
-            setLoading(true);
-            try {
-              const result = await api.submitCompositeSliceById(selectedCompositeSliceId);
-              if (result.fabric_results) for (const r of result.fabric_results) { if (r.status === 'error') addError(`FABRIC: ${r.error}`); }
-              if (result.chameleon_results) for (const r of result.chameleon_results) { if (r.status === 'error') addError(`Chameleon: ${r.error}`); }
-              // Refresh composite graph immediately + retry after 5s for transitional slices
-              const compId = selectedCompositeSliceId;
-              api.getCompositeGraph(compId).then(setCompositeGraph).catch(() => {});
-              setTimeout(() => { api.getCompositeGraph(compId).then(setCompositeGraph).catch(() => {}); }, 5000);
-              setCompositeSlices(prev => prev.map(s => s.id === compId ? { ...s, state: 'Provisioning' } : s));
-            } catch (e: any) { addError(e.message); }
-            finally { setLoading(false); }
-          }} disabled={!selectedCompositeSliceId || loading} title="Submit composite slice">Submit</button>
-          <button className="composite-bar-btn composite-bar-btn-danger" onClick={() => {
-            if (!selectedCompositeSliceId) return;
-            const name = compositeSlices.find(s => s.id === selectedCompositeSliceId)?.name || '';
-            if (!window.confirm(`Delete composite slice "${name}"?`)) return;
-            api.deleteCompositeSlice(selectedCompositeSliceId).then(() => {
-              setCompositeSlices(prev => prev.filter(s => s.id !== selectedCompositeSliceId));
-              setSelectedCompositeSliceId('');
-              setCompositeGraph(null);
-            }).catch((e: any) => addError(e.message));
-          }} disabled={!selectedCompositeSliceId} title="Delete composite slice">Delete</button>
-          <button className="composite-bar-btn" onClick={handleRefreshSlices} title="Refresh slices">{'\u21BB'} Slices</button>
-          <button className="composite-bar-btn" onClick={() => refreshInfrastructure(0)} title="Refresh resources">{'\u21BB'} Resources</button>
-          <button
-            className={`composite-bar-btn ${autoRefresh ? 'composite-bar-btn-active' : ''}`}
-            onClick={toggleAutoRefresh}
-            title={autoRefresh ? 'Disable auto-refresh' : 'Enable auto-refresh'}
-          >
-            {autoRefresh ? '\u25CF Auto: ON' : '\u25CB Auto: OFF'}
-          </button>
+          {(slicesSubView === 'slices' || slicesSubView === 'topology' || slicesSubView === 'map') && (<>
+            <select
+              className="composite-bar-select"
+              value={selectedCompositeSliceId}
+              onChange={async (e) => {
+                const id = e.target.value;
+                setSelectedCompositeSliceId(id);
+                setCompositeGraph(null);
+                if (id) {
+                  api.getCompositeSlice(id).then(data => {
+                    setCompositeSlices(prev => prev.map(s => s.id === data.id ? data : s));
+                  }).catch(() => {});
+                  api.getCompositeGraph(id).then(setCompositeGraph).catch(err => addError(err.message));
+                }
+              }}
+            >
+              <option value="">-- Select Composite Slice --</option>
+              {compositeSlices.map(s => (
+                <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
+              ))}
+            </select>
+            <button className="composite-bar-btn" onClick={async () => {
+              const name = prompt('Composite slice name:');
+              if (!name) return;
+              try {
+                const data = await api.createCompositeSlice(name);
+                setCompositeSlices(prev => [...prev, data]);
+                setSelectedCompositeSliceId(data.id);
+                setSlicesSubView('slices');
+              } catch (e: any) { addError(e.message); }
+            }} title="Create new composite slice">+ New</button>
+            <button className="composite-bar-btn" onClick={async () => {
+              if (!selectedCompositeSliceId) return;
+              setLoading(true);
+              try {
+                const result = await api.submitCompositeSliceById(selectedCompositeSliceId);
+                if (result.fabric_results) for (const r of result.fabric_results) { if (r.status === 'error') addError(`FABRIC: ${r.error}`); }
+                if (result.chameleon_results) for (const r of result.chameleon_results) { if (r.status === 'error') addError(`Chameleon: ${r.error}`); }
+                const compId = selectedCompositeSliceId;
+                api.getCompositeGraph(compId).then(setCompositeGraph).catch(() => {});
+                setTimeout(() => { api.getCompositeGraph(compId).then(setCompositeGraph).catch(() => {}); }, 5000);
+                setCompositeSlices(prev => prev.map(s => s.id === compId ? { ...s, state: 'Provisioning' } : s));
+              } catch (e: any) { addError(e.message); }
+              finally { setLoading(false); }
+            }} disabled={!selectedCompositeSliceId || loading} title="Submit composite slice">Submit</button>
+            <button className="composite-bar-btn composite-bar-btn-danger" onClick={() => {
+              if (!selectedCompositeSliceId) return;
+              const name = compositeSlices.find(s => s.id === selectedCompositeSliceId)?.name || '';
+              if (!window.confirm(`Delete composite slice "${name}"?`)) return;
+              api.deleteCompositeSlice(selectedCompositeSliceId).then(() => {
+                setCompositeSlices(prev => prev.filter(s => s.id !== selectedCompositeSliceId));
+                setSelectedCompositeSliceId('');
+                setCompositeGraph(null);
+              }).catch((e: any) => addError(e.message));
+            }} disabled={!selectedCompositeSliceId} title="Delete composite slice">Delete</button>
+            <button className="composite-bar-btn" onClick={handleRefreshSlices} title="Refresh slices">{'\u21BB'} Slices</button>
+            <select
+              className="composite-bar-btn"
+              value={pollInterval}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                setPollInterval(val);
+                localStorage.setItem('poll-interval', String(val));
+              }}
+              title="Auto-refresh interval for slice polling"
+              style={{ minWidth: 60, cursor: 'pointer' }}
+            >
+              <option value={0}>Never</option>
+              <option value={15000}>15s</option>
+              <option value={30000}>30s</option>
+              <option value={60000}>1m</option>
+              <option value={120000}>2m</option>
+              <option value={300000}>5m</option>
+            </select>
+          </>)}
+          {(slicesSubView === 'map' || slicesSubView === 'calendar') && (
+            <button className="composite-bar-btn" onClick={() => refreshInfrastructure(0)} title="Refresh resources">{'\u21BB'} Resources</button>
+          )}
         </div>
       )}
 
@@ -3682,6 +3884,31 @@ export default function App() {
             <AICompanionView selectedTool={selectedAiTool} onToolChange={setSelectedAiTool} visible={currentView === 'ai'} />
           </div>
 
+          {/* JupyterLab — mounted once visited, hidden via visibility (not display:none)
+              to preserve iframe state and WebSocket connections across view switches */}
+          {jupyterMounted && (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              ...(currentView === 'jupyter' ? {
+                flex: 1,
+                minHeight: 0,
+              } : {
+                position: 'absolute' as const,
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                visibility: 'hidden' as const,
+                pointerEvents: 'none' as const,
+                zIndex: -1,
+              }),
+            }}>
+              <JupyterLabView initialPath={jupyterPath} dark={dark} />
+            </div>
+          )}
+
           {/* View content */}
           {currentView === 'ai' ? null : currentView === 'landing' ? (
             <LandingView
@@ -3695,7 +3922,7 @@ export default function App() {
               onLogin={handleLogin}
             />
           ) : currentView === 'jupyter' ? (
-            <JupyterLabView initialPath={jupyterPath} dark={dark} />
+            null /* JupyterLabView rendered persistently below */
           ) : currentView === 'artifacts' ? (
             editingArtifactDirName ? (
               <ArtifactEditorView
@@ -3718,6 +3945,7 @@ export default function App() {
                 onClearPublishArtifact={() => setPublishArtifactIntent(undefined)}
                 initialMarketplaceCategory={marketplaceCategory}
                 onClearMarketplaceCategory={() => setMarketplaceCategory(undefined)}
+                chameleonEnabled={chameleonEnabled}
                 onNavigateToSlicesView={(dirName) => {
                   setCurrentView('slices');
                   // Ensure side panel shows Weaves tab by uncollapsing the template panel
@@ -3764,6 +3992,7 @@ export default function App() {
                 onContextAction={handleContextAction}
                 nodeActivity={nodeActivity}
                 recipes={recipes}
+                refreshKey={sliceRefreshKey}
               />
             ) : infraSubView === 'storage' ? (
               <FileTransferView
@@ -4495,6 +4724,67 @@ export default function App() {
       />
 
       {/* Post-login project picker modal */}
+      {availabilityResult && createPortal(
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }}
+          onClick={() => setAvailabilityResult(null)}>
+          <div style={{ background: 'var(--fabric-white, #fff)', borderRadius: 12, padding: '24px 28px', maxWidth: 520, width: '90%', maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.3)' }}
+            onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 12px', fontSize: 16, fontWeight: 700, color: 'var(--fabric-text)' }}>Resource Availability</h3>
+            <div style={{
+              padding: '10px 14px', borderRadius: 8, marginBottom: 14, fontSize: 13, fontWeight: 600,
+              background: availabilityResult.feasible_now ? '#e6f9f0' : availabilityResult.next_slot ? '#fff8e6' : '#fde8e8',
+              color: availabilityResult.feasible_now ? '#1a7a4c' : availabilityResult.next_slot ? '#8a6d00' : '#c0392b',
+              border: `1px solid ${availabilityResult.feasible_now ? '#b7e4c7' : availabilityResult.next_slot ? '#f0d980' : '#f0b4b4'}`,
+            }}>
+              {availabilityResult.message}
+            </div>
+            {availabilityResult.slots.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fabric-text-muted)', marginBottom: 6 }}>Available Slots</div>
+                {availabilityResult.slots.map((slot, i) => (
+                  <div key={i} style={{ fontSize: 12, padding: '4px 0', color: 'var(--fabric-text)' }}>
+                    {new Date(slot.start).toLocaleString()}
+                  </div>
+                ))}
+              </div>
+            )}
+            {availabilityResult.node_requirements.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fabric-text-muted)', marginBottom: 6 }}>Node Requirements</div>
+                <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--fabric-border-solid, #dde)' }}>
+                      <th style={{ textAlign: 'left', padding: '4px 6px', fontWeight: 600 }}>Node</th>
+                      <th style={{ textAlign: 'right', padding: '4px 6px', fontWeight: 600 }}>Cores</th>
+                      <th style={{ textAlign: 'right', padding: '4px 6px', fontWeight: 600 }}>RAM</th>
+                      <th style={{ textAlign: 'right', padding: '4px 6px', fontWeight: 600 }}>Disk</th>
+                      <th style={{ textAlign: 'left', padding: '4px 6px', fontWeight: 600 }}>Site</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {availabilityResult.node_requirements.map((nr, i) => (
+                      <tr key={i} style={{ borderBottom: '1px solid var(--fabric-border-solid, #eef)' }}>
+                        <td style={{ padding: '4px 6px' }}>{nr.name}</td>
+                        <td style={{ textAlign: 'right', padding: '4px 6px' }}>{nr.cores}</td>
+                        <td style={{ textAlign: 'right', padding: '4px 6px' }}>{nr.ram} GB</td>
+                        <td style={{ textAlign: 'right', padding: '4px 6px' }}>{nr.disk} GB</td>
+                        <td style={{ padding: '4px 6px' }}>{nr.site || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div style={{ textAlign: 'right' }}>
+              <button onClick={() => setAvailabilityResult(null)}
+                style={{ padding: '6px 18px', borderRadius: 6, border: '1px solid var(--fabric-border-solid, #ccc)', background: 'var(--fabric-bg, #f8f9fa)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
       {showPostLoginProjectPicker && createPortal(
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }}>
           <div style={{ background: 'var(--fabric-white, #fff)', borderRadius: 12, padding: '28px 32px', maxWidth: 420, width: '90%', maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.3)' }}>

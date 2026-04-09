@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 import ast
-import asyncio
 import logging
 import threading
 import time
@@ -93,167 +92,132 @@ DEFAULT_IMAGES = [
 ]
 
 
-def _fetch_host_details_v2(resources, site_name: str) -> list[dict[str, Any]]:
-    """Fetch per-host resource details for a site (FABlib v2 dict format)."""
-    hosts_detail: list[dict[str, Any]] = []
-    try:
-        hosts_map = resources.get_hosts_by_site(site_name)
-    except Exception:
-        logger.debug("Could not fetch hosts for site", exc_info=True)
-        return hosts_detail
-    if not hosts_map:
-        return hosts_detail
-    host_dicts = hosts_map.values() if isinstance(hosts_map, dict) else hosts_map
-    for host in host_dicts:
-        if not isinstance(host, dict):
-            continue
-        host_info: dict[str, Any] = {
-            "name": host.get("name", ""),
-            "cores_available": host.get("cores_available", 0) or 0,
-            "cores_capacity": host.get("cores_capacity", 0) or 0,
-            "ram_available": host.get("ram_available", 0) or 0,
-            "ram_capacity": host.get("ram_capacity", 0) or 0,
-            "disk_available": host.get("disk_available", 0) or 0,
-            "disk_capacity": host.get("disk_capacity", 0) or 0,
-        }
-        host_components: dict[str, dict[str, int]] = {}
-        comp_data = host.get("components", {})
-        if isinstance(comp_data, dict):
-            for model_name, comp_info in comp_data.items():
-                if isinstance(comp_info, dict):
-                    cap = comp_info.get("capacity", 0) or 0
-                    if cap > 0:
-                        host_components[model_name] = {
-                            "capacity": cap,
-                            "available": comp_info.get("available", 0) or 0,
-                        }
-        host_info["components"] = host_components
-        hosts_detail.append(host_info)
-    return hosts_detail
+def _host_dict_to_detail(host: dict) -> dict[str, Any]:
+    """Convert a ResourcesV2 host dict to our API host detail format."""
+    host_components: dict[str, dict[str, int]] = {}
+    comp_data = host.get("components", {})
+    if isinstance(comp_data, dict):
+        for model_name, comp_info in comp_data.items():
+            if isinstance(comp_info, dict):
+                cap = comp_info.get("capacity", 0) or 0
+                if cap > 0:
+                    host_components[model_name] = {
+                        "capacity": cap,
+                        "available": comp_info.get("available", 0) or 0,
+                    }
+    return {
+        "name": host.get("name", ""),
+        "cores_available": host.get("cores_available", 0) or 0,
+        "cores_capacity": host.get("cores_capacity", 0) or 0,
+        "ram_available": host.get("ram_available", 0) or 0,
+        "ram_capacity": host.get("ram_capacity", 0) or 0,
+        "disk_available": host.get("disk_available", 0) or 0,
+        "disk_capacity": host.get("disk_capacity", 0) or 0,
+        "components": host_components,
+    }
+
+
+def _site_dict_to_api(site: dict, hosts_data: list[dict]) -> dict[str, Any]:
+    """Convert a ResourcesV2 site dict + its hosts to our API site format."""
+    site_name = site.get("name", "")
+    fallback = SITE_LOCATIONS.get(site_name, {"lat": 0, "lon": 0})
+
+    # Extract components
+    components: dict[str, dict[str, int]] = {}
+    comp_data = site.get("components", {})
+    if isinstance(comp_data, dict):
+        for model_name, comp_info in comp_data.items():
+            if isinstance(comp_info, dict):
+                cap = comp_info.get("capacity", 0) or 0
+                if cap > 0:
+                    components[model_name] = {
+                        "capacity": cap,
+                        "allocated": comp_info.get("allocated", 0) or 0,
+                        "available": comp_info.get("available", 0) or 0,
+                    }
+
+    # Host details for this site
+    hosts_detail = [_host_dict_to_detail(h) for h in hosts_data if h.get("site") == site_name]
+
+    # Recompute site-level totals from host data — the orchestrator's site-level
+    # aggregates can be inaccurate (e.g., reporting 0 cores when hosts have cores).
+    if hosts_detail:
+        agg_cores_a = sum(h["cores_available"] for h in hosts_detail)
+        agg_cores_c = sum(h["cores_capacity"] for h in hosts_detail)
+        agg_ram_a = sum(h["ram_available"] for h in hosts_detail)
+        agg_ram_c = sum(h["ram_capacity"] for h in hosts_detail)
+        agg_disk_a = sum(h["disk_available"] for h in hosts_detail)
+        agg_disk_c = sum(h["disk_capacity"] for h in hosts_detail)
+
+        # Aggregate components from hosts
+        agg_components: dict[str, dict[str, int]] = {}
+        for h in hosts_detail:
+            for model_name, comp_info in h.get("components", {}).items():
+                if model_name not in agg_components:
+                    agg_components[model_name] = {"capacity": 0, "allocated": 0, "available": 0}
+                agg_components[model_name]["capacity"] += comp_info.get("capacity", 0)
+                agg_components[model_name]["available"] += comp_info.get("available", 0)
+            # allocated = capacity - available
+        for v in agg_components.values():
+            v["allocated"] = v["capacity"] - v["available"]
+
+        # Also include components from site data that may not appear in host data
+        for model_name, comp_info in components.items():
+            if model_name not in agg_components:
+                agg_components[model_name] = comp_info
+    else:
+        agg_cores_a = site.get("cores_available", 0) or 0
+        agg_cores_c = site.get("cores_capacity", 0) or 0
+        agg_ram_a = site.get("ram_available", 0) or 0
+        agg_ram_c = site.get("ram_capacity", 0) or 0
+        agg_disk_a = site.get("disk_available", 0) or 0
+        agg_disk_c = site.get("disk_capacity", 0) or 0
+        agg_components = components
+
+    loc = site.get("location", [0, 0])
+    lat = loc[0] if isinstance(loc, (list, tuple)) and len(loc) >= 2 else fallback["lat"]
+    lon = loc[1] if isinstance(loc, (list, tuple)) and len(loc) >= 2 else fallback["lon"]
+
+    return {
+        "name": site_name,
+        "lat": lat,
+        "lon": lon,
+        "state": site.get("state", "Active"),
+        "hosts": site.get("hosts_count", site.get("hosts", 0)) or 0,
+        "cores_available": agg_cores_a,
+        "cores_capacity": agg_cores_c,
+        "ram_available": agg_ram_a,
+        "ram_capacity": agg_ram_c,
+        "disk_available": agg_disk_a,
+        "disk_capacity": agg_disk_c,
+        "components": agg_components,
+        "hosts_detail": hosts_detail,
+    }
 
 
 def _fetch_sites_sync() -> list[dict[str, Any]]:
-    """Fetch sites from FABlib (synchronous, must hold _fablib_lock).
+    """Fetch sites from FABlib using ResourcesV2 data APIs (plain dicts).
 
-    FABlib v2 returns site/host data as dicts rather than objects.
+    Uses list_sites() and _hosts_data instead of iterating FIM topology
+    objects, avoiding thread-safety issues with the NetworkX graph.
     """
     fablib = get_fablib()
     resources = fablib.get_resources()
+
+    # ResourcesV2: _sites_data is a list of dicts, _hosts_data likewise
+    hosts_data = getattr(resources, '_hosts_data', []) or []
+
     sites = []
     for site_name in list(resources.get_site_names()):
         site = resources.get_site(site_name)
         if site is None:
             continue
-        location = SITE_LOCATIONS.get(site_name, {"lat": 0, "lon": 0})
-
-        # In FABlib v2, site is a dict with keys like cores_available, etc.
         if isinstance(site, dict):
-            # Extract components from the dict
-            components: dict[str, dict[str, int]] = {}
-            comp_data = site.get("components", {})
-            if isinstance(comp_data, dict):
-                for model_name, comp_info in comp_data.items():
-                    if isinstance(comp_info, dict):
-                        cap = comp_info.get("capacity", 0) or 0
-                        if cap > 0:
-                            components[model_name] = {
-                                "capacity": cap,
-                                "allocated": comp_info.get("allocated", 0) or 0,
-                                "available": comp_info.get("available", 0) or 0,
-                            }
-
-            hosts_detail = _fetch_host_details_v2(resources, site_name)
-
-            loc = site.get("location", [0, 0])
-            lat = loc[0] if isinstance(loc, (list, tuple)) and len(loc) >= 2 else location["lat"]
-            lon = loc[1] if isinstance(loc, (list, tuple)) and len(loc) >= 2 else location["lon"]
-
-            sites.append({
-                "name": site_name,
-                "lat": lat,
-                "lon": lon,
-                "state": site.get("state", "Active"),
-                "hosts": site.get("hosts_count", 0) or 0,
-                "cores_available": site.get("cores_available", 0) or 0,
-                "cores_capacity": site.get("cores_capacity", 0) or 0,
-                "ram_available": site.get("ram_available", 0) or 0,
-                "ram_capacity": site.get("ram_capacity", 0) or 0,
-                "disk_available": site.get("disk_available", 0) or 0,
-                "disk_capacity": site.get("disk_capacity", 0) or 0,
-                "components": components,
-                "hosts_detail": hosts_detail,
-            })
+            sites.append(_site_dict_to_api(site, hosts_data))
         else:
-            # Legacy FABlib v1 path — site is an object with methods
-            components = {}
-            for model_name, display_name in COMPONENT_QUERY_MODELS:
-                try:
-                    capacity = site.get_component_capacity(model_name)
-                    if capacity and capacity > 0:
-                        allocated = site.get_component_allocated(model_name) or 0
-                        available = site.get_component_available(model_name) or 0
-                        components[model_name] = {
-                            "capacity": capacity,
-                            "allocated": allocated,
-                            "available": available,
-                        }
-                except Exception:
-                    continue
-
-            hosts_detail = _fetch_host_details_v1(site)
-
-            sites.append({
-                "name": site_name,
-                "lat": location["lat"],
-                "lon": location["lon"],
-                "state": str(site.get_state()) if hasattr(site, "get_state") else "Active",
-                "hosts": _safe_count(site, "get_hosts"),
-                "cores_available": _safe_attr(site, "get_core_available", 0),
-                "cores_capacity": _safe_attr(site, "get_core_capacity", 0),
-                "ram_available": _safe_attr(site, "get_ram_available", 0),
-                "ram_capacity": _safe_attr(site, "get_ram_capacity", 0),
-                "disk_available": _safe_attr(site, "get_disk_available", 0),
-                "disk_capacity": _safe_attr(site, "get_disk_capacity", 0),
-                "components": components,
-                "hosts_detail": hosts_detail,
-            })
+            # Fallback for non-dict (shouldn't happen with ResourcesV2)
+            sites.append({"name": site_name, "state": "Unknown"})
     return sites
-
-
-def _fetch_host_details_v1(site) -> list[dict[str, Any]]:
-    """Fetch per-host resource details (legacy FABlib v1 object format)."""
-    hosts_detail: list[dict[str, Any]] = []
-    try:
-        hosts = site.get_hosts()
-    except Exception:
-        logger.debug("v1 host fetch failed", exc_info=True)
-        return hosts_detail
-    for host in hosts:
-        host_info: dict[str, Any] = {
-            "name": str(getattr(host, "name", "")),
-            "cores_available": _safe_attr(host, "get_core_available", 0),
-            "cores_capacity": _safe_attr(host, "get_core_capacity", 0),
-            "ram_available": _safe_attr(host, "get_ram_available", 0),
-            "ram_capacity": _safe_attr(host, "get_ram_capacity", 0),
-            "disk_available": _safe_attr(host, "get_disk_available", 0),
-            "disk_capacity": _safe_attr(host, "get_disk_capacity", 0),
-        }
-        host_components: dict[str, dict[str, int]] = {}
-        for model_name, display_name in COMPONENT_QUERY_MODELS:
-            try:
-                cap = host.get_component_capacity(model_name)
-                if cap and cap > 0:
-                    avail = host.get_component_available(model_name) or 0
-                    host_components[model_name] = {
-                        "capacity": cap,
-                        "available": avail,
-                    }
-            except Exception:
-                logger.debug("Component query failed", exc_info=True)
-                continue
-        host_info["components"] = host_components
-        hosts_detail.append(host_info)
-    return hosts_detail
 
 
 def _fetch_sites_locked() -> list[dict[str, Any]]:
@@ -319,32 +283,37 @@ async def list_sites(max_age: float = Query(_RESOURCE_TTL, ge=0)) -> list[dict[s
 
 
 def _fetch_links_locked() -> list[dict[str, Any]]:
-    """Fetch backbone links with lock held (used as call manager fetcher)."""
-    import re
+    """Fetch backbone links using ResourcesV2 _links_data (plain dicts).
+
+    Each link dict has a ``sites`` list (e.g. ['CERN', 'AMST']) plus
+    bandwidth info.  No FIM topology iteration needed.
+    """
     with _fablib_lock:
         fablib = get_fablib()
         resources = fablib.get_resources()
-        topo = resources.get_topology()
+        raw = getattr(resources, '_links_data', None)
+        if raw is None:
+            raw = resources.list_links(output='list') or []
         seen: set[tuple[str, str]] = set()
         links = []
-        for link in list(topo.links.values()):
-            try:
-                parts = re.findall(r"port\+(\w+)-data-sw:", link.name)
-                if len(parts) < 2:
-                    continue
-                site_a, site_b = parts[0].upper(), parts[1].upper()
-                if site_a == site_b:
-                    continue
-                pair = tuple(sorted([site_a, site_b]))
-                if pair in seen:
-                    continue
-                seen.add(pair)
-                links.append({
-                    "site_a": pair[0],
-                    "site_b": pair[1],
-                })
-            except Exception:
+        for link in raw:
+            sites = link.get("sites", [])
+            if len(sites) < 2:
                 continue
+            site_a, site_b = sites[0].upper(), sites[1].upper()
+            if site_a == site_b:
+                continue
+            pair = tuple(sorted([site_a, site_b]))
+            if pair in seen:
+                continue
+            seen.add(pair)
+            links.append({
+                "site_a": pair[0],
+                "site_b": pair[1],
+                "bandwidth": link.get("bandwidth", 0),
+                "available_bandwidth": link.get("available_bandwidth", 0),
+                "layer": link.get("layer", ""),
+            })
         return links
 
 
@@ -360,18 +329,6 @@ async def list_links(max_age: float = Query(_RESOURCE_TTL, ge=0)) -> list[dict[s
     )
 
 
-COMPONENT_QUERY_MODELS = [
-    ("SharedNIC-ConnectX-6", "SharedNIC ConnectX-6"),
-    ("SmartNIC-ConnectX-5", "SmartNIC ConnectX-5"),
-    ("SmartNIC-ConnectX-6", "SmartNIC ConnectX-6"),
-    ("SmartNIC-ConnectX-7", "SmartNIC ConnectX-7"),
-    ("GPU-Tesla T4", "GPU Tesla T4"),
-    ("GPU-RTX6000", "GPU RTX6000"),
-    ("GPU-A30", "GPU A30"),
-    ("GPU-A40", "GPU A40"),
-    ("FPGA-Xilinx-U280", "FPGA Xilinx U280"),
-    ("NVME-P4510", "NVMe P4510"),
-]
 
 
 @router.get("/sites/{site_name}/hosts")
@@ -389,13 +346,11 @@ async def list_site_hosts(site_name: str) -> list[dict[str, Any]]:
         with _fablib_lock:
             fablib = get_fablib()
             resources = fablib.get_resources()
-            try:
-                site = resources.get_site(site_name)
-            except Exception:
+            hosts_map = resources.get_hosts_by_site(site_name)
+            if not hosts_map:
                 return []
-            if isinstance(site, dict):
-                return _fetch_host_details_v2(resources, site_name)
-            return _fetch_host_details_v1(site)
+            host_dicts = hosts_map.values() if isinstance(hosts_map, dict) else hosts_map
+            return [_host_dict_to_detail(h) for h in host_dicts if isinstance(h, dict)]
     try:
         return await run_in_fablib_pool(_do)
     except Exception as e:
@@ -414,74 +369,74 @@ async def get_site_detail(site_name: str) -> dict[str, Any]:
                 raise HTTPException(status_code=404, detail=f"Site '{site_name}' not found")
             location = SITE_LOCATIONS.get(site_name, {"lat": 0, "lon": 0})
 
-            if isinstance(site, dict):
-                components: dict[str, dict[str, int]] = {}
-                comp_data = site.get("components", {})
-                if isinstance(comp_data, dict):
-                    for model_name, comp_info in comp_data.items():
-                        if isinstance(comp_info, dict):
-                            cap = comp_info.get("capacity", 0) or 0
-                            if cap > 0:
-                                display = model_name
-                                for mn, dn in COMPONENT_QUERY_MODELS:
-                                    if mn == model_name:
-                                        display = dn
-                                        break
-                                components[display] = {
-                                    "capacity": cap,
-                                    "allocated": comp_info.get("allocated", 0) or 0,
-                                    "available": comp_info.get("available", 0) or 0,
-                                }
-                return {
-                    "name": site_name,
-                    "lat": location["lat"],
-                    "lon": location["lon"],
-                    "state": site.get("state", "Active"),
-                    "hosts": site.get("hosts_count", 0) or 0,
-                    "cores_available": site.get("cores_available", 0) or 0,
-                    "cores_capacity": site.get("cores_capacity", 0) or 0,
-                    "cores_allocated": site.get("cores_allocated", 0) or 0,
-                    "ram_available": site.get("ram_available", 0) or 0,
-                    "ram_capacity": site.get("ram_capacity", 0) or 0,
-                    "ram_allocated": site.get("ram_allocated", 0) or 0,
-                    "disk_available": site.get("disk_available", 0) or 0,
-                    "disk_capacity": site.get("disk_capacity", 0) or 0,
-                    "disk_allocated": site.get("disk_allocated", 0) or 0,
-                    "components": components,
-                }
-            else:
-                # Legacy FABlib v1
-                components = {}
-                for model_name, display_name in COMPONENT_QUERY_MODELS:
-                    try:
-                        capacity = site.get_component_capacity(model_name)
-                        if capacity and capacity > 0:
-                            allocated = site.get_component_allocated(model_name) or 0
-                            available = site.get_component_available(model_name) or 0
-                            components[display_name] = {
-                                "capacity": capacity,
-                                "allocated": allocated,
-                                "available": available,
+            components: dict[str, dict[str, int]] = {}
+            comp_data = site.get("components", {})
+            if isinstance(comp_data, dict):
+                for model_name, comp_info in comp_data.items():
+                    if isinstance(comp_info, dict):
+                        cap = comp_info.get("capacity", 0) or 0
+                        if cap > 0:
+                            components[model_name] = {
+                                "capacity": cap,
+                                "allocated": comp_info.get("allocated", 0) or 0,
+                                "available": comp_info.get("available", 0) or 0,
                             }
-                    except Exception:
-                        continue
-                return {
-                    "name": site_name,
-                    "lat": location["lat"],
-                    "lon": location["lon"],
-                    "state": str(site.get_state()) if hasattr(site, "get_state") else "Active",
-                    "hosts": _safe_count(site, "get_hosts"),
-                    "cores_available": _safe_attr(site, "get_core_available", 0),
-                    "cores_capacity": _safe_attr(site, "get_core_capacity", 0),
-                    "cores_allocated": _safe_attr(site, "get_core_allocated", 0),
-                    "ram_available": _safe_attr(site, "get_ram_available", 0),
-                    "ram_capacity": _safe_attr(site, "get_ram_capacity", 0),
-                    "ram_allocated": _safe_attr(site, "get_ram_allocated", 0),
-                    "disk_available": _safe_attr(site, "get_disk_available", 0),
-                    "disk_capacity": _safe_attr(site, "get_disk_capacity", 0),
-                    "disk_allocated": _safe_attr(site, "get_disk_allocated", 0),
-                    "components": components,
-                }
+
+            # Fetch host data and recompute site totals from hosts
+            # (orchestrator site-level aggregates can be inaccurate)
+            hosts_data = getattr(resources, '_hosts_data', []) or []
+            hosts_detail = [_host_dict_to_detail(h) for h in hosts_data if h.get("site") == site_name]
+
+            if hosts_detail:
+                agg_cores_a = sum(h["cores_available"] for h in hosts_detail)
+                agg_cores_c = sum(h["cores_capacity"] for h in hosts_detail)
+                agg_ram_a = sum(h["ram_available"] for h in hosts_detail)
+                agg_ram_c = sum(h["ram_capacity"] for h in hosts_detail)
+                agg_disk_a = sum(h["disk_available"] for h in hosts_detail)
+                agg_disk_c = sum(h["disk_capacity"] for h in hosts_detail)
+
+                agg_components: dict[str, dict[str, int]] = {}
+                for h in hosts_detail:
+                    for mn, ci in h.get("components", {}).items():
+                        if mn not in agg_components:
+                            agg_components[mn] = {"capacity": 0, "allocated": 0, "available": 0}
+                        agg_components[mn]["capacity"] += ci.get("capacity", 0)
+                        agg_components[mn]["available"] += ci.get("available", 0)
+                for v in agg_components.values():
+                    v["allocated"] = v["capacity"] - v["available"]
+                for mn, ci in components.items():
+                    if mn not in agg_components:
+                        agg_components[mn] = ci
+            else:
+                agg_cores_a = site.get("cores_available", 0) or 0
+                agg_cores_c = site.get("cores_capacity", 0) or 0
+                agg_ram_a = site.get("ram_available", 0) or 0
+                agg_ram_c = site.get("ram_capacity", 0) or 0
+                agg_disk_a = site.get("disk_available", 0) or 0
+                agg_disk_c = site.get("disk_capacity", 0) or 0
+                agg_components = components
+
+            loc = site.get("location", [0, 0])
+            lat = loc[0] if isinstance(loc, (list, tuple)) and len(loc) >= 2 else location["lat"]
+            lon = loc[1] if isinstance(loc, (list, tuple)) and len(loc) >= 2 else location["lon"]
+
+            return {
+                "name": site_name,
+                "lat": lat,
+                "lon": lon,
+                "state": site.get("state", "Active"),
+                "hosts": site.get("hosts_count", site.get("hosts", 0)) or 0,
+                "cores_available": agg_cores_a,
+                "cores_capacity": agg_cores_c,
+                "cores_allocated": agg_cores_c - agg_cores_a,
+                "ram_available": agg_ram_a,
+                "ram_capacity": agg_ram_c,
+                "ram_allocated": agg_ram_c - agg_ram_a,
+                "disk_available": agg_disk_a,
+                "disk_capacity": agg_disk_c,
+                "disk_allocated": agg_disk_c - agg_disk_a,
+                "components": agg_components,
+            }
     try:
         return await run_in_fablib_pool(_do)
     except Exception as e:
@@ -495,11 +450,25 @@ async def get_resources() -> dict[str, Any]:
         with _fablib_lock:
             fablib = get_fablib()
             resources = fablib.get_resources()
+            hosts_data = getattr(resources, '_hosts_data', []) or []
             result = {}
             for site_name in list(resources.get_site_names()):
                 try:
                     site = resources.get_site(site_name)
-                    if isinstance(site, dict):
+                    if site is None:
+                        continue
+                    # Recompute from hosts for accuracy
+                    site_hosts = [_host_dict_to_detail(h) for h in hosts_data if h.get("site") == site_name]
+                    if site_hosts:
+                        result[site_name] = {
+                            "cores_available": sum(h["cores_available"] for h in site_hosts),
+                            "cores_capacity": sum(h["cores_capacity"] for h in site_hosts),
+                            "ram_available": sum(h["ram_available"] for h in site_hosts),
+                            "ram_capacity": sum(h["ram_capacity"] for h in site_hosts),
+                            "disk_available": sum(h["disk_available"] for h in site_hosts),
+                            "disk_capacity": sum(h["disk_capacity"] for h in site_hosts),
+                        }
+                    else:
                         result[site_name] = {
                             "cores_available": site.get("cores_available", 0) or 0,
                             "cores_capacity": site.get("cores_capacity", 0) or 0,
@@ -507,15 +476,6 @@ async def get_resources() -> dict[str, Any]:
                             "ram_capacity": site.get("ram_capacity", 0) or 0,
                             "disk_available": site.get("disk_available", 0) or 0,
                             "disk_capacity": site.get("disk_capacity", 0) or 0,
-                        }
-                    else:
-                        result[site_name] = {
-                            "cores_available": _safe_attr(site, "get_core_available"),
-                            "cores_capacity": _safe_attr(site, "get_core_capacity"),
-                            "ram_available": _safe_attr(site, "get_ram_available"),
-                            "ram_capacity": _safe_attr(site, "get_ram_capacity"),
-                            "disk_available": _safe_attr(site, "get_disk_available"),
-                            "disk_capacity": _safe_attr(site, "get_disk_capacity"),
                         }
                 except Exception:
                     result[site_name] = {"error": "unavailable"}
@@ -527,32 +487,21 @@ async def get_resources() -> dict[str, Any]:
 
 
 def _fetch_facility_ports_locked() -> list[dict[str, Any]]:
-    """Fetch facility ports with lock held (used as call manager fetcher)."""
+    """Fetch facility ports using ResourcesV2 _facility_ports_data (plain dicts).
+
+    No FIM topology iteration needed — all data comes from the REST API
+    response cached in ResourcesV2.
+    """
     with _fablib_lock:
         fablib = get_fablib()
-        fp_obj = fablib.get_facility_ports()
-        raw = getattr(fp_obj, '_facility_ports_data', None)
+        resources = fablib.get_resources()
+        raw = getattr(resources, '_facility_ports_data', None)
         if raw is None:
-            raw = fp_obj.list_facility_ports(output='list') or []
-
-        # Try to load FIM topology for richer data (device_name, region)
-        fim_lookup: dict[str, dict[str, Any]] = {}
-        try:
-            fp_obj._ensure_topology_loaded()
-            topo = fp_obj.get_topology()
-            if topo and hasattr(topo, 'facilities'):
-                for fp_name, fp_node in topo.facilities.items():
-                    for iface in fp_node.interface_list:
-                        labels = iface.labels
-                        if labels:
-                            fim_lookup[fp_name] = {
-                                "device_name": labels.device_name or "",
-                                "region": labels.region or "",
-                                "local_name": labels.local_name or "",
-                            }
-                        break
-        except Exception:
-            pass
+            # Fallback: use the old FacilityPorts object
+            fp_obj = fablib.get_facility_ports()
+            raw = getattr(fp_obj, '_facility_ports_data', None)
+            if raw is None:
+                raw = fp_obj.list_facility_ports(output='list') or []
 
         result = []
         for fp in raw:
@@ -570,17 +519,16 @@ def _fetch_facility_ports_locked() -> list[dict[str, Any]]:
             else:
                 vlan_range = [vlans_raw] if vlans_raw else []
 
-            fim = fim_lookup.get(fp_name, {})
             result.append({
                 "name": fp_name,
                 "site": fp.get("site", ""),
                 "interfaces": [{
                     "name": fp.get("port", ""),
                     "vlan_range": vlan_range,
-                    "local_name": fim.get("local_name") or local_name,
-                    "device_name": fim.get("device_name", ""),
+                    "local_name": local_name,
+                    "device_name": "",
                     "allocated_vlans": [],
-                    "region": fim.get("region", ""),
+                    "region": "",
                 }],
             })
         return result
@@ -610,15 +558,3 @@ async def list_component_models() -> list[dict[str, str]]:
     return COMPONENT_MODELS
 
 
-def _safe_attr(obj, method_name, default=None):
-    try:
-        return getattr(obj, method_name)()
-    except Exception:
-        return default
-
-
-def _safe_count(obj, method_name):
-    try:
-        return len(getattr(obj, method_name)())
-    except Exception:
-        return 0

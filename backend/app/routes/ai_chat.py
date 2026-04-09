@@ -1,4 +1,4 @@
-"""Streaming agentic AI chat — proxies to FABRIC LLMs with tool calling."""
+"""Streaming agentic AI assistant — proxies to FABRIC LLMs with tool calling."""
 from __future__ import annotations
 
 import asyncio
@@ -28,7 +28,7 @@ def _ai_server_url() -> str:
 def _nrp_server_url() -> str:
     from app.settings_manager import get_nrp_server_url
     return get_nrp_server_url()
-_MAX_TOOL_ROUNDS = 50  # generous limit; stops only truly runaway loops
+_MAX_TOOL_ROUNDS = 20  # reasonable limit; prevents runaway tool loops
 
 _APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _AI_TOOLS_DIR = os.path.join(_APP_ROOT, "ai-tools")
@@ -656,24 +656,24 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "create_weave",
-            "description": "Create a new weave with all files (Python script, weave.sh, weave.json, weave.md, notebook) in one step. The server generates the Python script — you only need to provide the name and description. Set network_type to 'FABNetv4' for cross-site L3 connectivity or 'L2Bridge' for same-site L2.",
+            "description": "Create a new weave experiment. YOU MUST provide script_content with a complete Python script that uses FABlib to create, provision, and configure the slice. The script must have start(slice_name), stop(slice_name), and monitor(slice_name) functions. Include exactly as many VMs, networks, components (GPUs, SmartNICs, etc.), and software installs as the experiment requires. Use node.execute() to install software and run experiments after provisioning. If you omit script_content, a basic template is generated.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Weave name (used as directory name)"},
                     "description": {"type": "string", "description": "What this weave does (1-2 sentences)"},
-                    "num_nodes": {"type": "integer", "description": "Number of VMs (default: 2)", "default": 2},
-                    "site": {"type": "string", "description": "FABRIC site or 'auto' (default: 'auto')", "default": "auto"},
-                    "network_type": {"type": "string", "description": "Network type: 'L2Bridge' (same-site) or 'FABNetv4' (cross-site routed). Default: L2Bridge", "default": "L2Bridge"},
+                    "num_nodes": {"type": "integer", "description": "Number of VMs (fallback if no script_content)", "default": 2},
+                    "site": {"type": "string", "description": "FABRIC site or 'auto' (fallback if no script_content)", "default": "auto"},
+                    "network_type": {"type": "string", "description": "Network type (fallback if no script_content): 'L2Bridge' or 'FABNetv4'", "default": "L2Bridge"},
+                    "script_content": {"type": "string", "description": "REQUIRED: Complete Python experiment script with start/stop/monitor functions using FABlib. Create the right number of nodes, networks, and components for the experiment. Install software via node.execute(). See FABRIC_AI.md for FABlib API examples."},
                     "include_notebooks": {"type": "boolean", "description": "Include Jupyter notebook (default: true)", "default": True},
                     "include_node_tools": {"type": "boolean", "description": "Include node setup scripts (default: false)", "default": False},
                     "include_data_folder": {"type": "boolean", "description": "Include data/ folder (default: false)", "default": False},
                     "node_tools_content": {"type": "string", "description": "Shell script content for node setup (e.g. 'sudo apt install iperf3')"},
                     "notebook_description": {"type": "string", "description": "What the notebook should cover"},
-                    "script_content": {"type": "string", "description": "Custom Python script (advanced — leave empty to auto-generate)"},
                     "weave_md": {"type": "string", "description": "Custom weave.md spec content (leave empty to auto-generate)"},
                 },
-                "required": ["name"],
+                "required": ["name", "script_content"],
             },
         },
     },
@@ -1002,14 +1002,41 @@ done
     os.chmod(os.path.join(weave_dir, "weave.sh"), 0o755)
     created_files.append("weave.sh")
 
-    # Python experiment script — simple single-node "Hello FABRIC" stub
+    # Python experiment script — uses num_nodes, site, and network_type
     if not script_content:
         slice_default = dir_name.lower().replace('_', '-')
+        site_arg = f'"{site}"' if site and site != "auto" else "None"
+
+        # Build node creation code
+        node_lines = []
+        nic_lines = []
+        for i in range(1, num_nodes + 1):
+            node_lines.append(
+                f'    node{i} = slice_obj.add_node(name="node{i}", site={site_arg}, cores=2, ram=8, disk=10, image="default_ubuntu_22")'
+            )
+            if num_nodes >= 2 and network_type:
+                nic_lines.append(f'    iface{i} = node{i}.add_component(model="NIC_Basic", name="nic1").get_interfaces()[0]')
+
+        nodes_code = "\n".join(node_lines)
+        nics_code = "\n".join(nic_lines) if nic_lines else ""
+
+        # Build network code
+        net_code = ""
+        if num_nodes >= 2 and network_type:
+            iface_list = ", ".join(f"iface{i}" for i in range(1, num_nodes + 1))
+            if network_type in ("FABNetv4", "IPv4"):
+                net_code = f'    slice_obj.add_l3network(name="net1", interfaces=[{iface_list}], type="IPv4")'
+            else:
+                net_code = f'    slice_obj.add_l2network(name="net1", interfaces=[{iface_list}], type="{network_type}")'
+
+        total_steps = 3 if num_nodes == 1 else 4
+        step = 1
+
         script_content = f'''#!/usr/bin/env python3
 """
 {name} — FABRIC Experiment Lifecycle Script
 
-A single-node FABRIC slice managed with the FABlib Python API.
+{num_nodes}-node FABRIC slice managed with the FABlib Python API.
 Edit this file to customize the topology, add nodes, networks, and software.
 
 Usage:
@@ -1024,33 +1051,40 @@ import sys
 
 
 def start(slice_name: str):
-    """Create and provision a single-node FABRIC slice."""
+    """Create and provision a {num_nodes}-node FABRIC slice."""
     from fabrictestbed_extensions.fablib.fablib import FablibManager
     fablib = FablibManager()
 
-    # Step 1: Create a new slice (local draft — no resources allocated yet)
-    print(f"### PROGRESS: Step 1/3 — Creating slice '{{slice_name}}'...")
+    print(f"### PROGRESS: Step {step}/{total_steps} — Creating slice '{{slice_name}}'...")
     slice_obj = fablib.new_slice(name=slice_name)
 
-    # Step 2: Add a single node
-    #   site=None lets FABRIC automatically pick a site with available resources
-    #   Customize cores, ram, disk, image as needed
-    node = slice_obj.add_node(
-        name="node1",
-        site=None,
-        cores=2,
-        ram=8,
-        disk=10,
-        image="default_ubuntu_22",
-    )
+    # Add {num_nodes} node{"s" if num_nodes > 1 else ""}
+{nodes_code}
+'''
+        if nics_code:
+            step2 = step + 1
+            script_content += f'''
+    # Add NICs and network
+    print("### PROGRESS: Step {step2}/{total_steps} — Adding network...")
+{nics_code}
+{net_code}
+'''
 
-    # Step 3: Submit and wait for SSH
-    print("### PROGRESS: Step 2/3 — Submitting slice (3-5 minutes)...")
+        submit_step = total_steps - 1
+        ssh_step = total_steps
+        script_content += f'''
+    # Submit and wait
+    print("### PROGRESS: Step {submit_step}/{total_steps} — Submitting slice (3-5 minutes)...")
     slice_obj.submit()
-    print("### PROGRESS: Step 3/3 — Waiting for SSH access...")
+    print("### PROGRESS: Step {ssh_step}/{total_steps} — Waiting for SSH access...")
     slice_obj.wait_ssh(progress=True)
 
-    # Done!
+    # Re-fetch slice — node objects from add_node() go stale after submit
+    slice_obj = fablib.get_slice(name=slice_name)
+
+    # Configure networking
+    slice_obj.post_boot_config()
+
     print()
     print(f"### PROGRESS: READY! Slice '{{slice_name}}' is provisioned.")
     for n in slice_obj.get_nodes():
@@ -1951,8 +1985,25 @@ async def chat_stream(request: Request):
     from app.chat_intent import detect_intent, detect_multi_step, is_destructive
     from app.chat_prompt import LOOMAI_MODE_PROMPT, LOOMAI_MODE_EXTENDED
 
-    profile = get_model_profile(model)
-    logger.info("Chat model=%s tier=%s context=%d", model, profile["tier"], profile["context_window"])
+    # Look up actual context_length from discovered models
+    from app.settings_manager import load_settings
+    _ctx_length = None
+    try:
+        _discovered = load_settings().get("ai", {}).get("discovered_models", {})
+        _model_bare = model.split(":")[-1] if ":" in model else model  # strip provider prefix
+        for _provider_models in _discovered.values():
+            if isinstance(_provider_models, list):
+                for _m in _provider_models:
+                    if isinstance(_m, dict) and _m.get("id") == _model_bare:
+                        _ctx_length = _m.get("context_length")
+                        break
+            if _ctx_length:
+                break
+    except Exception:
+        pass
+
+    profile = get_model_profile(model, context_length=_ctx_length)
+    logger.info("Chat model=%s tier=%s context=%d (discovered=%s)", model, profile["tier"], profile["context_window"], _ctx_length)
 
     # --- LoomAI-side intent detection (pre-processing) ---
     # Extract the user's last message for intent matching
@@ -2004,6 +2055,16 @@ async def chat_stream(request: Request):
         except Exception:
             pass
 
+    # Pre-fetch FABlib examples when weave/experiment creation detected
+    _weave_keywords = ["weave", "experiment", "topology", "iperf", "benchmark", "deploy"]
+    _is_weave_request = any(kw in user_message.lower() for kw in _weave_keywords)
+    if _is_weave_request and not any(t == "search_examples" for t, _ in prefetched_tools):
+        try:
+            examples = await execute_tool("search_examples", {"query": user_message[:100]})
+            prefetched_tools.append(("search_examples", examples[:2000]))
+        except Exception:
+            pass
+
     # --- Build system prompt ---
     # For low-confidence / complex requests: use the full system prompt with tool-calling
     # so the LLM can call write_file, create_slice, etc. directly.
@@ -2029,6 +2090,20 @@ async def chat_stream(request: Request):
             "Never write FABlib code from scratch — use the example library.\n"
             "When updating a weave, read `weave.md` first — it is the authoritative spec.\n"
         )
+        # Inject create-weave skill when the user is building weaves/experiments
+        if _is_weave_request:
+            _skill_path = os.path.join(_AI_TOOLS_DIR, "shared", "skills", "create-weave.md")
+            try:
+                with open(_skill_path) as _sf:
+                    _skill = _sf.read()
+                # Strip frontmatter
+                if _skill.startswith("---"):
+                    _end = _skill.find("---", 3)
+                    if _end > 0:
+                        _skill = _skill[_end + 3:].strip()
+                system_parts.append(f"\n\n## Weave Creation Guide\n\n{_skill}\n")
+            except Exception:
+                pass
     elif profile["tier"] == "compact":
         system_parts = [LOOMAI_MODE_PROMPT]
     else:
@@ -2121,6 +2196,11 @@ async def chat_stream(request: Request):
                 # Warn user if context is nearly full (but not on the first message)
                 if trim_result.near_full and tool_round > 0:
                     yield f"data: {json.dumps({'warning': 'Context window is nearly full. The conversation will be automatically compacted to continue.'})}\n\n"
+                    # If context is full AND we've been trimming, stop tool calls
+                    if trim_result.was_trimmed and tool_round >= 3:
+                        ctx_full_msg = "\n\n[Context window full after repeated tool calls. Generating a summary.]\n"
+                        yield f"data: {json.dumps({'content': ctx_full_msg})}\n\n"
+                        break
 
                 # Make LLM call (non-streaming for tool rounds, streaming for final)
                 llm_body: dict[str, Any] = {
@@ -2202,12 +2282,13 @@ async def chat_stream(request: Request):
                 msg = choice.get("message", {})
                 finish = choice.get("finish_reason", "")
 
-                # Check for tool calls
+                # Check for tool calls (handle both finish_reason="tool_calls" and "length")
                 tool_calls = msg.get("tool_calls")
-                if tool_calls and finish == "tool_calls":
+                if tool_calls and finish in ("tool_calls", "length", "stop"):
                     # Append assistant message with tool calls to conversation
                     conversation.append(msg)
 
+                    consecutive_errors = 0
                     for tc in tool_calls:
                         fn = tc.get("function", {})
                         tc_name = fn.get("name", "")
@@ -2220,9 +2301,22 @@ async def chat_stream(request: Request):
                         # Notify frontend about tool call
                         yield f"data: {json.dumps({'tool_call': {'name': tc_name, 'arguments': tc_args}})}\n\n"
 
-                        # Execute the tool
-                        tool_result = await execute_tool(tc_name, tc_args)
+                        # Execute the tool with a 5-minute timeout
+                        try:
+                            tool_result = await asyncio.wait_for(
+                                execute_tool(tc_name, tc_args), timeout=300
+                            )
+                        except asyncio.TimeoutError:
+                            tool_result = json.dumps({"error": f"Tool {tc_name} timed out after 5 minutes"})
+                            logger.warning("Tool %s timed out after 300s", tc_name)
+
                         summary = _tool_summary(tc_name, tc_args, tool_result)
+
+                        # Track consecutive errors to break infinite retry loops
+                        if tool_result and '"error"' in tool_result:
+                            consecutive_errors += 1
+                        else:
+                            consecutive_errors = 0
 
                         # Notify frontend about tool result with summary
                         yield f"data: {json.dumps({'tool_result': {'name': tc_name, 'result': tool_result[:2000], 'summary': summary}})}\n\n"
@@ -2239,6 +2333,13 @@ async def chat_stream(request: Request):
 
                     tool_round += 1
                     _tool_call_count += len(tool_calls)
+
+                    # Break out if too many consecutive errors (model is stuck)
+                    if consecutive_errors >= 3:
+                        err_break_msg = "\n\n[Multiple tool calls failed. Please try a different approach.]\n"
+                        yield f"data: {json.dumps({'content': err_break_msg})}\n\n"
+                        break
+
                     continue
 
                 # No tool calls — stream the final text response

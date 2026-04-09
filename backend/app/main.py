@@ -10,6 +10,25 @@ from contextlib import asynccontextmanager
 
 import logging
 
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format=_LOG_FORMAT,
+    datefmt=_LOG_DATEFMT,
+)
+
+# Override uvicorn's loggers so access logs get the same timestamp format.
+# By default uvicorn.access uses its own formatter without timestamps.
+for _uv_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+    _uv_logger = logging.getLogger(_uv_name)
+    for _handler in _uv_logger.handlers:
+        _handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
+    # If no handlers yet (uvicorn adds them at startup), set propagate so
+    # messages bubble up to root which already has the timestamped formatter.
+    _uv_logger.propagate = True
+
 from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, recipes, experiments, http_proxy, tunnels, ai_terminal, ai_chat, ai_agents, jupyter, artifacts, chameleon, trovi, schedule, composite, monitoring
 from app.tunnel_manager import get_tunnel_manager
 
@@ -425,7 +444,11 @@ app = FastAPI(title="LoomAI API", version="0.1.0", lifespan=lifespan)
 from app.error_handler import install_error_handlers
 install_error_handlers(app)
 
-_DEFAULT_ORIGINS = ["http://localhost:3000", "http://localhost:5173"]
+_DEFAULT_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://cm.fabric-testbed.net",
+]
 _cors_env = os.environ.get("CORS_ORIGINS", "")
 _cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else _DEFAULT_ORIGINS
 
@@ -572,12 +595,21 @@ async def health_detailed():
 
             def _count_slices():
                 fablib = get_fablib()
-                all_slices = fablib.get_slices()
-                active = sum(
-                    1 for s in all_slices
-                    if str(s.get_state()) in {"StableOK", "StableError", "ModifyOK", "Configuring"}
+                # Use lightweight list_slices with graph_format=NONE to
+                # avoid per-slice topology/sliver fetches.
+                mgr = fablib.get_manager()
+                dtos = mgr.list_slices(
+                    exclude_states=["Dead", "Closing"],
+                    graph_format="NONE",
+                    as_self=True,
+                    limit=200,
+                    return_fmt="dto",
                 )
-                return {"active": active, "total": len(all_slices)}
+                active = sum(
+                    1 for d in dtos
+                    if (d.state or "") in {"StableOK", "StableError", "ModifyOK", "Configuring"}
+                )
+                return {"active": active, "total": len(dtos)}
 
             slices_info = await run_in_fablib_pool(_count_slices)
     except Exception:

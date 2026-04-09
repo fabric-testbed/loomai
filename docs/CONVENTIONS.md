@@ -16,7 +16,7 @@ Coding conventions for the fabric-webgui project, inferred from the existing cod
 - React hooks only — no Redux, Zustand, or Recoil
 - All application state lifted to `App.tsx` as `useState` hooks
 - `useCallback` for event handlers passed as props (14+ extracted callbacks)
-- `useMemo` for expensive computations (e.g., `JSON.stringify(sliceData)` in AI chat)
+- `useMemo` for expensive computations (e.g., `JSON.stringify(sliceData)` in AI assistant)
 - `React.memo` on heavy components (13 of 40+ components wrapped)
 - Panel layout state persisted to `localStorage`
 
@@ -158,7 +158,7 @@ Pattern: `{item.description_short || item.description}`
 
 This applies to both `LibrariesPanel.tsx` (side panel cards) and `LibrariesView.tsx` (full-screen cards).
 
-## AI Chat System
+## AI Assistant System
 
 ### Intent Detection (`chat_intent.py`)
 

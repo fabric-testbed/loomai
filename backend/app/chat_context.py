@@ -1,4 +1,4 @@
-"""Per-model context window management for LoomAI chat.
+"""Per-model context window management for LoomAI assistant.
 
 Provides model profiles, token estimation, conversation trimming,
 system prompt variants, and tool schema filtering so the chat stays
@@ -50,7 +50,7 @@ def estimate_conversation_tokens(messages: list[dict]) -> int:
 PROFILE_TIERS = {
     "compact": {
         "context_window": 8192,
-        "max_output": 1024,
+        "max_output": 2048,
         "system_prompt": "compact",
         "tool_result_max": 200,
         "summarize_at": 0.40,
@@ -60,7 +60,7 @@ PROFILE_TIERS = {
     },
     "standard": {
         "context_window": 32768,
-        "max_output": 4096,
+        "max_output": 16384,
         "system_prompt": "standard",
         "tool_result_max": 800,
         "summarize_at": 0.70,
@@ -70,7 +70,7 @@ PROFILE_TIERS = {
     },
     "large": {
         "context_window": 131072,
-        "max_output": 4096,
+        "max_output": 16384,
         "system_prompt": "full",
         "tool_result_max": 2000,
         "summarize_at": 0.85,
@@ -81,32 +81,37 @@ PROFILE_TIERS = {
 }
 
 # Per-model overrides (model name substring → overrides)
-# Check more specific patterns first (longer strings matched before shorter)
+# The "tier" controls CAPABILITY settings (prompt variant, max_tools, max_output).
+# The discovered context_length controls CONTEXT BUDGET (context_window, summarize_at).
+# These are separate concerns: a 30B model with 256K context still works best
+# with a focused "standard" prompt and 25 tools, not the full 37-tool "large" prompt.
 MODEL_OVERRIDES: dict[str, dict] = {
     "qwen3-coder-30b": {"temperature": 0.3, "tier": "standard"},
     "qwen3-coder-8b": {"temperature": 0.3, "tier": "compact"},
     "qwen3-30b": {"tier": "standard"},
     "qwen3-8b": {"tier": "compact"},
     "qwen3-small": {"tier": "compact"},
+    "qwen3": {"tier": "standard"},
+    "qwen3-27b": {"tier": "standard"},
     "deepseek-coder": {"temperature": 0.2, "tier": "standard"},
     "claude-3-5-sonnet": {"tier": "large", "temperature": 0.5},
     "claude-haiku": {"tier": "standard", "temperature": 0.5},
     "gpt-4": {"tier": "large"},
     "gpt-3.5": {"tier": "standard"},
-    "gpt-oss-20b": {"tier": "compact"},  # 20B model — likely 8-16K context
-    "gpt-oss": {"tier": "compact"},       # Assume small by default
+    "gpt-oss-20b": {"tier": "standard"},
+    "gpt-oss": {"tier": "standard"},
     "mixtral": {"tier": "standard"},
     "llama": {"tier": "standard"},
     "gemma": {"tier": "compact"},
     "olmo": {"tier": "compact"},
-    "kimi": {"tier": "compact"},
-    "minimax": {"tier": "compact"},
-    "glm": {"tier": "compact"},
+    "kimi": {"tier": "standard"},
+    "minimax": {"tier": "standard"},
+    "glm": {"tier": "standard"},
 }
 
 
 def _detect_tier(context_length: Optional[int]) -> str:
-    """Detect profile tier from context window size."""
+    """Detect capability tier from context window size (fallback only)."""
     if context_length is None:
         return "standard"  # safe default
     if context_length <= 12000:
@@ -119,10 +124,16 @@ def _detect_tier(context_length: Optional[int]) -> str:
 def get_model_profile(model_name: str, context_length: Optional[int] = None) -> dict:
     """Get a complete profile for a model.
 
-    Checks MODEL_OVERRIDES first (substring match), then falls back to
-    auto-detection from context_length, then defaults to "standard".
+    Two-axis design:
+    - CAPABILITY (tier): controls system_prompt variant, max_tools, max_output,
+      tool_result_max. Comes from MODEL_OVERRIDES or _detect_tier() fallback.
+    - CONTEXT BUDGET: controls context_window and summarize_at. Comes from
+      discovered context_length when available, otherwise from tier defaults.
+
+    A 30B model with 256K context gets standard-tier capabilities (focused prompt,
+    25 tools, 4096 max_output) but a 256K context budget for conversation.
     """
-    # Find override by substring match
+    # Find tier + overrides from MODEL_OVERRIDES (substring match)
     tier = None
     overrides: dict = {}
     model_lower = model_name.lower()
@@ -132,16 +143,27 @@ def get_model_profile(model_name: str, context_length: Optional[int] = None) -> 
             overrides = {k: v for k, v in ovr.items() if k != "tier"}
             break
 
-    # Auto-detect tier from context_length if not overridden
+    # If no tier from overrides, auto-detect from context_length
     if tier is None:
         tier = _detect_tier(context_length)
 
-    # Build profile from tier + overrides
+    # Start with capability settings from the tier
     profile = dict(PROFILE_TIERS[tier])
-    if context_length:
-        profile["context_window"] = context_length
-    profile.update(overrides)
     profile["tier"] = tier
+
+    # Override context_window with actual discovered context_length
+    if context_length and context_length > 0:
+        profile["context_window"] = context_length
+        # Scale summarize_at based on actual context size (bigger context = trim later)
+        if context_length > 200000:
+            profile["summarize_at"] = 0.90
+        elif context_length > 65000:
+            profile["summarize_at"] = 0.85
+        elif context_length > 32000:
+            profile["summarize_at"] = 0.75
+
+    # Apply per-model overrides (temperature, etc.)
+    profile.update(overrides)
     profile["model"] = model_name
     return profile
 
@@ -291,13 +313,9 @@ def _build_standard_prompt() -> str:
         "recipe.json",
         "Creating a notebook from scratch",
         "Basic Slice Creation",
-        "Common FABlib Operations",
         "Adding Components",
-        "Easy L3 Networking",
         "Sub-Interfaces",
         "Modifying a Running Slice",
-        "Post-Boot Tasks",
-        "SSH and Remote Execution",
         "Resource Availability Queries",
         "Facility Ports",
         "Port Mirroring",

@@ -51,6 +51,9 @@
   height: 14px;
   flex-shrink: 0;
 }
+.ai-chat-wordmark-dark { display: none; }
+[data-theme="dark"] .ai-chat-wordmark-light { display: none; }
+[data-theme="dark"] .ai-chat-wordmark-dark { display: inline; }
 
 .ai-chat-header-title {
   font-size: 13px;

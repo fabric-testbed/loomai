@@ -260,7 +260,7 @@ def _configure_jupyter_ai_prompt() -> None:
         "- FABRIC provides bare-metal and VM resources across 29+ sites in the US and internationally",
         "- Users create 'slices' (virtual topologies) with nodes, networks, and specialized hardware (GPUs, FPGAs, SmartNICs)",
         "- FABlib is the Python library for managing slices: `from fabrictestbed_extensions.fablib.fablib import FablibManager`",
-        "- The `loomai` CLI is available for slice management, SSH, file transfer, monitoring, and AI chat",
+        "- The `loomai` CLI is available for slice management, SSH, file transfer, monitoring, and AI assistant",
         "- Run `loomai --help` to see all available commands",
         "",
         "Common FABlib patterns:",

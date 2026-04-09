@@ -15,10 +15,10 @@ interface LandingViewProps {
 }
 
 const QUICK_LINKS: Array<{ view: TopView; icon: string; label: string; desc: string }> = [
-  { view: 'slices', icon: '\u25A6', label: 'Slices', desc: 'Build, monitor, and manage slice topologies' },
-  { view: 'artifacts', icon: '\u29C9', label: 'Artifacts', desc: 'Templates, recipes, and notebooks' },
-  { view: 'infrastructure', icon: '\u25C9', label: 'Infrastructure', desc: 'FABRIC testbed resources and availability' },
-  { view: 'jupyter', icon: '\uD83D\uDCD3', label: 'JupyterLab', desc: 'Interactive notebooks' },
+  { view: 'infrastructure', icon: '\u25C9', label: 'FABRIC', desc: 'Topology editor, site map, slice management' },
+  { view: 'slices', icon: '\u25A6', label: 'Composite Slice', desc: 'Cross-testbed experiments spanning FABRIC and Chameleon' },
+  { view: 'artifacts', icon: '\u29C9', label: 'Marketplace', desc: 'Browse, download, and publish weaves and templates' },
+  { view: 'jupyter', icon: '\uD83D\uDCD3', label: 'JupyterLab', desc: 'Notebooks with full FABlib access' },
 ];
 
 export default function LandingView({ onNavigate, onOpenSettings, listLoaded, onLoadSlices, onStartTour, hasToken, tokenExpired, onLogin }: LandingViewProps) {
@@ -36,8 +36,8 @@ export default function LandingView({ onNavigate, onOpenSettings, listLoaded, on
             <button className="landing-tour-btn landing-tour-btn-primary" onClick={() => onStartTour('discover-loomai')}>
               Discover LoomAI
             </button>
-            <button className="landing-tour-btn landing-tour-btn-secondary" onClick={() => onStartTour('getting-started')}>
-              Getting Started
+            <button className="landing-tour-btn landing-tour-btn-secondary" onClick={() => onStartTour('hello-fabric')}>
+              Hello, FABRIC
             </button>
           </div>
         </section>
@@ -75,21 +75,21 @@ export default function LandingView({ onNavigate, onOpenSettings, listLoaded, on
             <h2 className="landing-card-title">About FABRIC</h2>
             <p>
               <a href="https://fabric-testbed.net" target="_blank" rel="noopener noreferrer">FABRIC</a> is
-              a unique, large-scale research infrastructure with 35 globally distributed sites providing
-              programmable networking, compute, and storage resources. Researchers deploy custom
-              topologies with bare-metal VMs, SmartNICs, GPUs, FPGAs, and high-speed optical links
-              to run networking and distributed systems experiments that aren't possible on
-              traditional infrastructure.
+              a global research infrastructure with 35 sites providing programmable networking,
+              bare-metal VMs, SmartNICs, GPUs, FPGAs, and high-speed optical links. It connects to
+              external facilities including AWS, GCP, Azure, Chameleon, CloudLab, and ACCESS,
+              letting you build experiments that span real production infrastructure.
             </p>
           </div>
           <div className="landing-card landing-card-loom">
             <h2 className="landing-card-title">About LoomAI</h2>
             <p>
-              LoomAI is an AI-assisted sandbox for building experiments and prototyping research
-              infrastructure on FABRIC. Design topologies visually, deploy with one click, and
-              iterate toward production using in-network programmability and connections to
-              external facilities &mdash; computing centers, campuses, public clouds, ACCESS,
-              and other NSF testbeds.
+              LoomAI is a browser-based environment for designing, deploying, and managing
+              experiments on FABRIC. Draw topologies in a visual editor, provision with one click,
+              run automated weave scripts, and connect to provisioned VMs through built-in terminals.
+              Six free AI coding assistants help you write scripts, debug networks, and manage
+              slices through natural language. A 65+ command CLI, embedded JupyterLab, and a
+              community artifact marketplace round out the toolkit.
             </p>
           </div>
         </section>
@@ -97,43 +97,43 @@ export default function LandingView({ onNavigate, onOpenSettings, listLoaded, on
         {/* AI Tools highlight */}
         <section className="landing-section">
           <div className="landing-card landing-card-ai">
-            <h2 className="landing-card-title">AI-Powered Development</h2>
+            <h2 className="landing-card-title">Built-in AI Tools</h2>
             <p>
-              LoomAI embeds multiple AI coding assistants directly into your workflow. Use them to
-              quickly create slice topologies, write deployment scripts, troubleshoot networking
-              issues, and manage experiments &mdash; all through natural language conversation.
+              LoomAI includes several AI coding assistants, all pre-loaded with FABRIC knowledge.
+              Tell them what you want in plain English and they'll write the code, create
+              topologies, or troubleshoot your experiments. Free tools use FABRIC AI models;
+              add an NRP API key in Settings for more options.
             </p>
             <div className="landing-ai-tools">
               <div className="landing-ai-tool">
+                <span className="landing-ai-tool-name">LoomAI Assistant</span>
+                <span className="landing-ai-tool-tag free">Free</span>
+                <span className="landing-ai-tool-desc">Chat with tool calling: creates slices, queries sites, runs commands</span>
+              </div>
+              <div className="landing-ai-tool">
                 <span className="landing-ai-tool-name">Aider</span>
                 <span className="landing-ai-tool-tag free">Free</span>
-                <span className="landing-ai-tool-desc">AI pair programmer for editing files and writing FABRIC scripts</span>
+                <span className="landing-ai-tool-desc">Pair programmer for editing weave scripts and boot configs</span>
               </div>
               <div className="landing-ai-tool">
                 <span className="landing-ai-tool-name">OpenCode</span>
                 <span className="landing-ai-tool-tag free">Free</span>
-                <span className="landing-ai-tool-desc">Full-featured coding assistant with FABRIC-specific skills and agents</span>
+                <span className="landing-ai-tool-desc">Coding assistant with FABRIC-specific agents and skills</span>
               </div>
               <div className="landing-ai-tool">
                 <span className="landing-ai-tool-name">Crush</span>
                 <span className="landing-ai-tool-tag free">Free</span>
-                <span className="landing-ai-tool-desc">Terminal AI assistant from Charm with FABRIC and NRP LLM support</span>
-              </div>
-              <div className="landing-ai-tool">
-                <span className="landing-ai-tool-name">Deep Agents</span>
-                <span className="landing-ai-tool-tag free">Free</span>
-                <span className="landing-ai-tool-desc">LangChain coding agent with planning, memory, and skills</span>
+                <span className="landing-ai-tool-desc">Terminal chat from Charm, works with FABRIC and NRP models</span>
               </div>
               <div className="landing-ai-tool">
                 <span className="landing-ai-tool-name">Claude Code</span>
                 <span className="landing-ai-tool-tag paid">Paid</span>
-                <span className="landing-ai-tool-desc">Anthropic's CLI with deep FABRIC integration via MCP tools</span>
+                <span className="landing-ai-tool-desc">Anthropic CLI with FABRIC MCP tool integration</span>
               </div>
             </div>
             <p className="landing-ai-note">
-              All tools come pre-configured with FABRIC domain knowledge, FABlib API context, and
-              direct access to testbed operations. Launch them from
-              the AI Tools section in the View selector.
+              Launch any tool from the AI Tools view. Each one has access to your slices,
+              FABRIC resources, and the <code>loomai</code> CLI.
             </p>
           </div>
         </section>
@@ -163,52 +163,52 @@ export default function LandingView({ onNavigate, onOpenSettings, listLoaded, on
             <div className="landing-step">
               <span className="landing-step-num">1</span>
               <div>
-                <strong>Configure your account</strong>
+                <strong>Log in</strong>
                 <p>
-                  Open <button className="landing-inline-link" onClick={onOpenSettings}>Settings</button> to
-                  paste your FABRIC token and set up SSH keys. You'll need a bastion key (from
-                  the <a href="https://portal.fabric-testbed.net" target="_blank" rel="noopener noreferrer">FABRIC Portal</a>)
-                  and a slice key (auto-generated or uploaded).
+                  Click "Login to FABRIC" above. LoomAI will set up your SSH keys, project,
+                  and API credentials automatically. Or open <button className="landing-inline-link" onClick={onOpenSettings}>Settings</button> to
+                  configure manually.
                 </p>
               </div>
             </div>
             <div className="landing-step">
               <span className="landing-step-num">2</span>
               <div>
-                <strong>Load your slices</strong>
+                <strong>Try the <button className="landing-inline-link" onClick={() => onStartTour('hello-fabric')}>Hello, FABRIC</button> tour</strong>
                 <p>
-                  {listLoaded
-                    ? 'Your slices are loaded. Select one from the toolbar or create a new draft.'
-                    : <>Click <button className="landing-inline-link" onClick={onLoadSlices}>Load Slices</button> to fetch your existing slices from FABRIC, or create a new draft from the Topology editor.</>
-                  }
+                  Deploy your first slice in under 5 minutes. The tour walks you through downloading
+                  a weave from the marketplace, running it, and connecting to your VM.
                 </p>
               </div>
             </div>
             <div className="landing-step">
               <span className="landing-step-num">3</span>
               <div>
-                <strong>Build a topology</strong>
+                <strong>Build your own</strong>
                 <p>
-                  Open <button className="landing-inline-link" onClick={() => onNavigate('slices')}>Slices</button> to
-                  add VMs, configure components and networks, then submit your slice to FABRIC.
-                  Or browse <button className="landing-inline-link" onClick={() => onNavigate('artifacts')}>Artifacts</button> to
-                  start from a pre-built template.
+                  Open the <button className="landing-inline-link" onClick={() => onNavigate('infrastructure')}>FABRIC</button> view
+                  to design topologies with the visual editor, or browse
+                  the <button className="landing-inline-link" onClick={() => onNavigate('artifacts')}>Marketplace</button> to
+                  start from a community weave.
                 </p>
               </div>
             </div>
             <div className="landing-step">
               <span className="landing-step-num">4</span>
               <div>
-                <strong>Use your slice</strong>
+                <strong>Work with your slice</strong>
                 <p>
-                  Once provisioned, right-click nodes to open SSH terminals, transfer files
-                  via <button className="landing-inline-link" onClick={() => onNavigate('slices')}>Slices &gt; Storage</button>,
-                  or run experiments
-                  in <button className="landing-inline-link" onClick={() => onNavigate('jupyter')}>JupyterLab</button>.
+                  Right-click nodes to SSH in, transfer files with the Storage tab,
+                  write notebooks in <button className="landing-inline-link" onClick={() => onNavigate('jupyter')}>JupyterLab</button>,
+                  or ask the LoomAI assistant to do it for you.
                 </p>
               </div>
             </div>
           </div>
+          <p style={{ fontSize: 12, color: 'var(--fabric-text-muted)', marginTop: 12 }}>
+            New here? Take the <button className="landing-inline-link" onClick={() => onStartTour('discover-loomai')}>Discover LoomAI</button> tour
+            for a quick overview of all features.
+          </p>
         </section>
 
         {/* External links */}

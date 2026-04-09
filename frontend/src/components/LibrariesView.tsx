@@ -19,6 +19,7 @@ interface LibrariesViewProps {
   initialMarketplaceCategory?: CategoryFilter;  // pre-set marketplace tab + category filter
   onClearMarketplaceCategory?: () => void;
   onNavigateToSlicesView?: (dirName: string) => void;
+  chameleonEnabled?: boolean;
 }
 
 type TabId = 'my-artifacts' | 'published' | 'community' | 'chameleon';
@@ -30,7 +31,7 @@ const BtnText = ({ full, short }: { full: string; short: string }) => (
   <><span className="tv-btn-full">{full}</span><span className="tv-btn-short">{short}</span></>
 );
 
-export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArtifact, initialPublishNotebook, onClearPublishNotebook, initialPublishArtifact, onClearPublishArtifact, initialMarketplaceCategory, onClearMarketplaceCategory, onNavigateToSlicesView }: LibrariesViewProps) {
+export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArtifact, initialPublishNotebook, onClearPublishNotebook, initialPublishArtifact, onClearPublishArtifact, initialMarketplaceCategory, onClearMarketplaceCategory, onNavigateToSlicesView, chameleonEnabled }: LibrariesViewProps) {
   const [tab, setTab] = useState<TabId>('my-artifacts');
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
@@ -2274,9 +2275,11 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         <button className={`tv-tab ${tab === 'community' ? 'active' : ''}`} onClick={() => { setTab('community'); if (!mpLoaded) fetchMarketplace(); }} data-help-id="libraries.marketplace">
           FABRIC Marketplace {mpLoaded ? `(${mpAllArtifacts.length})` : ''}
         </button>
-        <button className={`tv-tab ${tab === 'chameleon' ? 'active' : ''}`} onClick={() => { setTab('chameleon'); if (!troviLoaded) fetchTrovi(); }}>
-          Chameleon Marketplace {troviLoaded ? `(${troviArtifacts.length})` : ''}
-        </button>
+        {chameleonEnabled && (
+          <button className={`tv-tab ${tab === 'chameleon' ? 'active' : ''}`} onClick={() => { setTab('chameleon'); if (!troviLoaded) fetchTrovi(); }}>
+            Chameleon Marketplace {troviLoaded ? `(${troviArtifacts.length})` : ''}
+          </button>
+        )}
       </div>
 
       {/* ================================================================= */}

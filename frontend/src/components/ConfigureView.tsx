@@ -35,9 +35,11 @@ interface ConfigureViewProps {
   onHiddenProjectsChange?: (hidden: Set<string>) => void;
   /** Full project list from Core API (more complete than JWT-only list) */
   allProjects?: ProjectInfo[];
+  /** Parent login handler — delegates OAuth flow to App.tsx so config/state stays in sync */
+  onLogin?: () => void;
 }
 
-export default function ConfigureView({ onConfigured, onClose, hiddenProjects, onHiddenProjectsChange, allProjects }: ConfigureViewProps) {
+export default function ConfigureView({ onConfigured, onClose, hiddenProjects, onHiddenProjectsChange, allProjects, onLogin }: ConfigureViewProps) {
   const [activeSection, setActiveSection] = useState<SectionId>('profile');
   const [status, setStatus] = useState<ConfigStatus | null>(null);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
@@ -107,6 +109,10 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   const [showKeyModal, setShowKeyModal] = useState<'fabric' | 'nrp' | null>(null);
   // Custom LLM providers
   const [customProviders, setCustomProviders] = useState<Array<{name: string; base_url: string; api_key: string}>>([]);
+
+  // LLM key creation
+  const [creatingLlmKey, setCreatingLlmKey] = useState(false);
+  const [llmKeyMessage, setLlmKeyMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Views
   const [compositeViewEnabled, setCompositeViewEnabled] = useState(false);
@@ -305,13 +311,11 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     }
   };
 
-  const handleOAuthLogin = async () => {
-    try {
-      const { login_url } = await api.getLoginUrl();
-      window.open(login_url, 'fabric-login', 'width=600,height=700');
-      setShowTokenPaste(true);
-    } catch (err: any) {
-      setMessage({ text: `Login failed: ${err.message}`, type: 'error' });
+  const handleOAuthLogin = () => {
+    if (onLogin) {
+      // Delegate to App.tsx which handles token polling, auto-setup,
+      // config state updates, and closing the settings panel.
+      onLogin();
     }
   };
 
@@ -749,6 +753,29 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           >
             Upload Bastion Key
           </button>
+          <button
+            className="btn"
+            onClick={async () => {
+              if (status?.has_bastion_key && !confirm('Regenerate bastion key? This will replace the existing key.')) return;
+              setLoading(true);
+              try {
+                const res = await api.generateBastionKey(!!status?.has_bastion_key);
+                if (res.generated) {
+                  setMessage({ text: 'Bastion key generated successfully', type: 'success' });
+                  loadStatus();
+                } else {
+                  setMessage({ text: 'Bastion key already exists. Use Regenerate to replace it.', type: 'error' });
+                }
+              } catch (e: any) {
+                setMessage({ text: `Key generation failed: ${e.message}`, type: 'error' });
+              } finally {
+                setLoading(false);
+              }
+            }}
+            disabled={loading || !status?.has_token}
+          >
+            {status?.has_bastion_key ? 'Regenerate Key' : 'Generate Key'}
+          </button>
           {status?.has_bastion_key && <span className="status-item"><span className="status-dot ok" /> Uploaded</span>}
         </div>
         {status?.bastion_key_fingerprint && (
@@ -1022,7 +1049,39 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           {status?.ai_api_key_set && !litellmApiKey && (
             <span style={{ fontSize: 12, color: '#008e7a', whiteSpace: 'nowrap' }}>{'\u2713'} Configured</span>
           )}
+          <button
+            disabled={creatingLlmKey || !status?.has_token || (status?.ai_api_key_set && !litellmApiKey) || !(allProjects || []).some(p => /^SERVICE\s*[-\u2013\u2014].*LLM/i.test(p.name))}
+            onClick={async () => {
+              setCreatingLlmKey(true);
+              setLlmKeyMessage(null);
+              try {
+                const result = await api.createLlmKey();
+                setLlmKeyMessage({ text: result.message, type: 'success' });
+                // Refresh config status to update the "Configured" badge
+                const cfg = await api.getConfig();
+                setStatus(cfg);
+              } catch (err: any) {
+                setLlmKeyMessage({ text: err.message || 'Failed to create LLM key', type: 'error' });
+              } finally {
+                setCreatingLlmKey(false);
+              }
+            }}
+            title={
+              !status?.has_token ? 'Login first to create an LLM key' :
+              (status?.ai_api_key_set && !litellmApiKey) ? 'FABRIC AI key already configured' :
+              !(allProjects || []).some(p => /^SERVICE\s*[-\u2013\u2014].*LLM/i.test(p.name)) ? 'Requires membership in a SERVICE LLM project' :
+              'Create or retrieve a FABRIC LLM API key'
+            }
+            style={{ whiteSpace: 'nowrap', fontSize: 11, padding: '4px 8px' }}
+          >
+            {creatingLlmKey ? 'Creating...' : 'Create FABRIC LLM Token'}
+          </button>
         </div>
+        {llmKeyMessage && (
+          <p style={{ fontSize: 11, marginTop: 4, color: llmKeyMessage.type === 'success' ? '#008e7a' : '#e25241' }}>
+            {llmKeyMessage.text}
+          </p>
+        )}
 
         <p style={{ marginTop: 10 }} data-help-id="settings.nrp-api-key">
           API key for NRP LLM services (nrp.ai). Adds additional models to all AI tools.
@@ -1038,6 +1097,19 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           {status?.nrp_api_key_set && !nrpApiKey && (
             <span style={{ fontSize: 12, color: '#008e7a', whiteSpace: 'nowrap' }}>{'\u2713'} Configured</span>
           )}
+          <a
+            href="https://nrp.ai/llmtoken/"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              whiteSpace: 'nowrap', fontSize: 11, padding: '4px 8px',
+              background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+              borderRadius: 4, color: 'var(--text-color)', textDecoration: 'none',
+              cursor: 'pointer', display: 'inline-block',
+            }}
+          >
+            Get NRP Token {'\u2197'}
+          </a>
         </div>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
@@ -1382,7 +1454,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
         </div>
         <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
           {type === 'agent'
-            ? 'Agent personas define how LoomAI Chat behaves. Select an agent in the chat panel to activate it.'
+            ? 'Agent personas define how the LoomAI assistant behaves. Select an agent in the assistant panel to activate it.'
             : 'Skills are instruction sets that AI tools can use. They appear as slash commands in compatible tools.'}
         </p>
 
@@ -1580,10 +1652,10 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
         <div className="configure-topbar-actions">
           <button
             className="btn primary"
-            onClick={async () => { await handleSave(); onClose?.(); }}
+            onClick={handleSave}
             disabled={saving || !status?.has_token || !selectedProject || !bastionLogin}
           >
-            {saving ? 'Saving...' : 'Save & Close'}
+            {saving ? 'Saving...' : 'Save'}
           </button>
           {onClose && (
             <button className="btn configure-close-btn" onClick={onClose}>

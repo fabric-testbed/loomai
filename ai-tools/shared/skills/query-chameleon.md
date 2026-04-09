@@ -40,7 +40,7 @@ loomai chameleon images CHI@TACC
 loomai chameleon test
 ```
 
-## Tool Calls (LoomAI chat)
+## Tool Calls (LoomAI assistant)
 - `list_chameleon_leases` — all leases or filtered by site
 - `list_chameleon_instances` — running instances
 - `list_chameleon_sites` — site list with config status

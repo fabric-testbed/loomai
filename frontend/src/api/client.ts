@@ -217,6 +217,7 @@ export function addNetwork(
     gateway?: string;
     ip_mode?: string;
     interface_ips?: Record<string, string>;
+    vlan?: string;
   }
 ): Promise<SliceData> {
   return fetchJson(`/slices/${encodeURIComponent(sliceName)}/networks`, {
@@ -638,6 +639,18 @@ export function resolveSites(sliceName: string, overrides?: Record<string, strin
   });
 }
 
+export interface SliceAvailabilityResult {
+  feasible_now: boolean;
+  next_slot: { start: string } | null;
+  slots: Array<{ start: string }>;
+  node_requirements: Array<{ name: string; cores: number; ram: number; disk: number; site?: string; components?: string[] }>;
+  message: string;
+}
+
+export function checkSliceAvailability(nameOrId: string): Promise<SliceAvailabilityResult> {
+  return fetchJson(`/slices/${encodeURIComponent(nameOrId)}/check-availability`, { method: 'POST' });
+}
+
 export function getSiteMetrics(name: string): Promise<SiteMetrics> {
   return fetchJson(`/metrics/site/${encodeURIComponent(name)}`);
 }
@@ -668,6 +681,7 @@ export interface AIModelEntry { id: string; name: string; healthy?: boolean; }
 export interface AIModelsResponse {
   fabric: AIModelEntry[];
   nrp: AIModelEntry[];
+  custom?: Record<string, AIModelEntry[]>;
   default: string;
   has_key: { fabric: boolean; nrp: boolean };
   models: string[];       // backward compat
@@ -687,6 +701,10 @@ export function setDefaultModel(model: string, source?: string): Promise<{ defau
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, source: source || '' }),
   });
+}
+
+export function refreshAiModels(): Promise<{ added: number; removed: number; updated: number; message: string }> {
+  return fetchJson('/ai/models/refresh', { method: 'POST' });
 }
 
 export function testModelHealth(model: string, source?: string): Promise<{ healthy: boolean; latency_ms: number; error: string; model: string; source: string }> {
@@ -1710,6 +1728,7 @@ export interface AutoSetupResponse {
   project_id: string;
   bastion_username: string;
   bastion_key_generated: boolean;
+  bastion_key_error: string;
   slice_keys_generated: boolean;
   llm_key_created: boolean;
   llm_key_error: string;
@@ -1722,6 +1741,14 @@ export function autoSetup(projectId: string): Promise<AutoSetupResponse> {
   });
 }
 
+export function createLlmKey(): Promise<{ status: string; created: boolean; message: string }> {
+  return fetchJson('/config/llm-key', { method: 'POST' });
+}
+
+export function logout(): Promise<{ status: string }> {
+  return fetchJson('/config/logout', { method: 'POST' });
+}
+
 export function pasteToken(tokenText: string): Promise<{ status: string; message: string }> {
   return fetchJson('/config/token/paste', {
     method: 'POST',
@@ -1731,6 +1758,10 @@ export function pasteToken(tokenText: string): Promise<{ status: string; message
 
 export function getProjects(): Promise<ProjectsResponse> {
   return fetchJson('/config/projects');
+}
+
+export function generateBastionKey(force = false): Promise<{ status: string; generated: boolean }> {
+  return fetchJson(`/config/keys/bastion/generate?force=${force}`, { method: 'POST' });
 }
 
 export async function uploadBastionKey(file: File): Promise<{ status: string; message: string }> {
@@ -2040,9 +2071,21 @@ export function writeVmFileContent(sliceName: string, nodeName: string, path: st
 
 // --- Schedule / Calendar ---
 
-export function getScheduleCalendar(days?: number): Promise<CalendarData> {
-  const params = days !== undefined ? `?days=${days}` : '';
-  return fetchJson(`/schedule/calendar${params}`);
+export function getScheduleCalendar(opts?: {
+  days?: number;
+  interval?: 'hour' | 'day' | 'week';
+  site?: string;
+  exclude_site?: string;
+  show?: 'sites' | 'hosts' | 'all';
+}): Promise<CalendarData> {
+  const sp = new URLSearchParams();
+  if (opts?.days !== undefined) sp.set('days', String(opts.days));
+  if (opts?.interval) sp.set('interval', opts.interval);
+  if (opts?.site) sp.set('site', opts.site);
+  if (opts?.exclude_site) sp.set('exclude_site', opts.exclude_site);
+  if (opts?.show) sp.set('show', opts.show);
+  const qs = sp.toString();
+  return fetchJson(`/schedule/calendar${qs ? `?${qs}` : ''}`);
 }
 
 export function findNextAvailable(params: { cores?: number; ram?: number; disk?: number; gpu?: string; site?: string }): Promise<NextAvailableResult> {
@@ -2214,7 +2257,7 @@ export function listUserProjects(): Promise<{ projects: Array<{ name: string; uu
   return _userProjectsCache;
 }
 
-export function switchProject(projectId: string): Promise<{ status: string; project_id: string; token_refreshed?: boolean; warning?: string; login_url?: string }> {
+export function switchProject(projectId: string): Promise<{ status: string; project_id: string; token_refreshed?: boolean; needs_relogin?: boolean; warning?: string }> {
   return fetchJson('/projects/switch', {
     method: 'POST',
     body: JSON.stringify({ project_id: projectId }),

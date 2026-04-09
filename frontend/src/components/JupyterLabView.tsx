@@ -128,6 +128,7 @@ export default function JupyterLabView({ initialPath, dark }: JupyterLabViewProp
         {status === 'running' && (
           <>
             <button onClick={refreshIframe}>Refresh</button>
+            <button onClick={() => window.open(iframeUrl || '/jupyter/lab', '_blank')}>Open in New Tab</button>
             <button className="jupyter-stop-btn" onClick={async () => {
               await api.stopJupyter().catch(() => {});
               setStatus('loading');

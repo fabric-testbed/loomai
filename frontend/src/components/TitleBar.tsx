@@ -31,12 +31,13 @@ interface TitleBarProps {
   userEmail?: string;
   userName?: string;
   onLogin?: () => void;
+  onLogout?: () => void;
 }
 
 const VIEWS: Array<{ key: TopView; label: string; icon: string; desc: string; requiresChameleon?: boolean; requiresComposite?: boolean }> = [
+  { key: 'infrastructure', label: 'FABRIC', icon: '__fabric_logo__', desc: 'FABRIC — testbed slices, resources, and availability' },
   { key: 'slices', label: 'Composite Slice', icon: '__composite_icon__', desc: 'Composite Slice — build, monitor, transfer files, and launch apps', requiresComposite: true },
   { key: 'artifacts', label: 'Marketplace', icon: '__marketplace_icon__', desc: 'Marketplace — browse, publish, and download experiment artifacts' },
-  { key: 'infrastructure', label: 'FABRIC', icon: '__fabric_logo__', desc: 'FABRIC — testbed slices, resources, and availability' },
   { key: 'chameleon', label: 'Chameleon', icon: '__chameleon_logo__', desc: 'Chameleon Cloud — leases, instances, and bare-metal resources', requiresChameleon: true },
   { key: 'jupyter', label: 'JupyterLab', icon: '__jupyter_logo__', desc: 'JupyterLab — interactive notebooks' },
 ];
@@ -64,7 +65,7 @@ function ViewIcon({ icon, size = 12, dark }: { icon: string; size?: number; dark
   return <>{icon}</>;
 }
 
-export default React.memo(function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, aiTools, selectedAiTool, onLaunchAiTool, chameleonEnabled, compositeEnabled, hasToken, tokenExpired, userEmail, userName, onLogin }: TitleBarProps) {
+export default React.memo(function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, aiTools, selectedAiTool, onLaunchAiTool, chameleonEnabled, compositeEnabled, hasToken, tokenExpired, userEmail, userName, onLogin, onLogout }: TitleBarProps) {
   const [viewOpen, setViewOpen] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
@@ -261,6 +262,11 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
           <span className="title-user-pill" title={userName || userEmail}>
             <span className="title-user-avatar">{(userName || userEmail).charAt(0).toUpperCase()}</span>
             <span className="title-user-email">{userEmail}</span>
+            {onLogout && (
+              <button className="title-logout-btn" onClick={onLogout} title="Logout">
+                {'\u23FB'}
+              </button>
+            )}
           </span>
         )}
 

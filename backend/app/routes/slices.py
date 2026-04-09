@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import threading
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ from app.fablib_manager import get_fablib
 from app.fablib_executor import run_in_fablib_pool
 from app.fabric_call_manager import get_call_manager
 from app.user_context import get_user_storage
-from app.slice_serializer import slice_to_dict, slice_summary, check_has_errors
+from app.slice_serializer import slice_to_dict, check_has_errors
 from app.graph_builder import build_graph, STATE_COLORS, DEFAULT_STATE
 from app.site_resolver import resolve_sites
 from app.routes.resources import get_cached_sites, get_fresh_sites
@@ -32,6 +33,17 @@ from app.slice_registry import (
 )
 
 router = APIRouter(tags=["slices"])
+
+
+def _ensure_project_id(fablib) -> None:
+    """Ensure FABlib's internal project_id matches the current env setting.
+
+    After a project switch, the FABlib singleton may still have the old
+    project_id cached.  This syncs it before every FABRIC API call.
+    """
+    pid = os.environ.get("FABRIC_PROJECT_ID", "")
+    if pid:
+        fablib.set_project_id(pid)
 
 
 def _resolve_slice_name(slice_id: str) -> str:
@@ -168,6 +180,7 @@ def _load_persistent_drafts() -> None:
     """Scan drafts dir and load any new drafts not yet in memory."""
     try:
         fablib = get_fablib()
+        _ensure_project_id(fablib)
     except Exception:
         logger.warning("Cannot load persistent drafts: fablib not available yet")
         return
@@ -330,6 +343,7 @@ def _get_slice_obj(name: str):
     if draft is not None:
         return draft
     fablib = get_fablib()
+    _ensure_project_id(fablib)
     uuid = get_slice_uuid(name)
     if uuid:
         try:
@@ -339,9 +353,9 @@ def _get_slice_obj(name: str):
     return fablib.get_slice(name=name)
 
 
-# Serialization cache: keyed on (slice_name, state), stores serialized dict.
+# Serialization cache: keyed on (slice_name, cache_key), stores serialized dict.
 # Invalidated on any mutation (add/remove node, submit, modify).
-_serialize_cache: dict[str, tuple[str, dict[str, Any]]] = {}  # name -> (state, data)
+_serialize_cache: dict[str, tuple[str, dict[str, Any]]] = {}  # name -> (cache_key, data)
 
 
 def _invalidate_serialize_cache(name: str):
@@ -363,11 +377,23 @@ def _serialize(slice_obj, dirty: bool = False) -> dict[str, Any]:
     except ImportError:
         pass
 
+    # Build a cache key that includes state + node instantiation/interface data
+    # so stale cache entries are bypassed when user_data or IPs/MACs change.
+    _node_sigs = []
+    for nd in data.get("nodes", []):
+        ud = nd.get("user_data", {}).get("fablib_data", {})
+        inst = ud.get("instantiated", "")
+        rs = nd.get("reservation_state", "")
+        # Include interface MACs as part of the fingerprint
+        iface_macs = "|".join(i.get("mac", "") for i in nd.get("interfaces", []))
+        _node_sigs.append(f"{nd.get('name')}:{rs}:{inst}:{iface_macs}")
+    cache_key = f"{state}|{'|'.join(_node_sigs)}"
+
     # Check serialization cache for stable, non-dirty slices
     # Skip cache when Chameleon nodes are attached (they change independently)
     if not dirty and not is_new and not _has_chi_nodes:
         cached = _serialize_cache.get(name)
-        if cached and cached[0] == state:
+        if cached and cached[0] == cache_key:
             return cached[1]
 
     # Mark as "Draft" for genuinely new local slices (never submitted to FABRIC).
@@ -413,7 +439,7 @@ def _serialize(slice_obj, dirty: bool = False) -> dict[str, Any]:
     # Cache the result for stable, non-dirty slices
     # Skip caching when Chameleon nodes are attached (they change independently)
     if not dirty and not is_new and not _has_chi_nodes:
-        _serialize_cache[name] = (state, result)
+        _serialize_cache[name] = (cache_key, result)
 
     return result
 
@@ -447,6 +473,7 @@ class CreateNetworkRequest(BaseModel):
     gateway: Optional[str] = None     # e.g. "192.168.1.1"
     ip_mode: str = "none"             # "auto" | "config" | "none"
     interface_ips: Dict[str, str] = {} # {"node1-nic1-p1": "10.0.0.1"}
+    vlan: Optional[str] = None        # VLAN tag for L2 networks (omit for auto)
 
 
 class PostBootConfigRequest(BaseModel):
@@ -531,12 +558,32 @@ def _list_slices_sync() -> list[dict[str, Any]]:
     current_pid = os.environ.get("FABRIC_PROJECT_ID", "")
 
     fablib = get_fablib()
-    slices = fablib.get_slices()
-    # Filter to current project — get_slices() returns all accessible slices
+    _ensure_project_id(fablib)
+    # Use manager.list_slices() directly with graph_format=NONE to avoid
+    # per-slice topology/sliver fetches. This reduces O(3N) orchestrator
+    # calls to O(1) — a single list_slices API call.
+    mgr = fablib.get_manager()
+    exclude_states = ["Dead", "Closing"]
+    dtos = mgr.list_slices(
+        exclude_states=exclude_states,
+        graph_format="NONE",
+        as_self=True,
+        limit=200,
+        return_fmt="dto",
+    )
+    # Filter to current project
     if current_pid:
-        slices = [s for s in slices
-                  if (getattr(s, 'get_project_id', lambda: '')() or '') == current_pid]
-    fabric_results = [slice_summary(s) for s in slices]
+        dtos = [d for d in dtos if (d.project_id or '') == current_pid]
+    # Build summaries directly from DTOs (no topology/sliver fetches)
+    fabric_results = [
+        {
+            "name": d.name or "",
+            "id": d.slice_id or "",
+            "state": d.state or "",
+            "lease_end": d.lease_end_time or "",
+        }
+        for d in dtos
+    ]
 
     # Load non-archived registry entries for the current project
     registry = get_all_entries(include_archived=False, project_id=current_pid)
@@ -690,9 +737,18 @@ async def reconcile_projects() -> dict[str, Any]:
                 try:
                     fablib.set_project_id(pid)
                     os.environ["FABRIC_PROJECT_ID"] = pid
-                    slices = fablib.get_slices()
-                    for s in slices:
-                        sid = str(s.get_slice_id()) if s.get_slice_id() else ""
+                    # Use lightweight list_slices with graph_format=NONE to
+                    # avoid per-slice topology/sliver fetches (O(1) instead
+                    # of O(3N) orchestrator calls per project).
+                    dtos = mgr.list_slices(
+                        exclude_states=["Dead", "Closing"],
+                        graph_format="NONE",
+                        as_self=True,
+                        limit=200,
+                        return_fmt="dto",
+                    )
+                    for d in dtos:
+                        sid = d.slice_id or ""
                         if sid:
                             uuid_to_project[sid] = pid
                     projects_scanned += 1
@@ -751,6 +807,7 @@ async def get_slice(slice_name: str, max_age: float = Query(0, ge=0)) -> dict[st
 
         # Submitted slices — always pull fresh from FABRIC by UUID
         fablib = get_fablib()
+        _ensure_project_id(fablib)
         uuid = get_slice_uuid(slice_name)
         slice_obj = None
         if uuid:
@@ -798,6 +855,7 @@ async def create_slice(name: str) -> dict[str, Any]:
     def _do():
         import uuid as _uuid_mod
         fablib = get_fablib()
+        _ensure_project_id(fablib)
         slice_obj = fablib.new_slice(name=name)
         # Generate a local draft UUID so the frontend can identify this slice
         draft_id = f"draft-{_uuid_mod.uuid4()}"
@@ -1123,6 +1181,7 @@ async def refresh_slice(slice_name: str) -> dict[str, Any]:
 
     def _do():
         fablib = get_fablib()
+        _ensure_project_id(fablib)
         # Use UUID if available for reliable lookup
         uuid = get_slice_uuid(slice_name)
         if uuid:
@@ -1203,6 +1262,7 @@ async def get_sliver_states(
 def _fetch_sliver_states(slice_name: str) -> dict[str, Any]:
     """Sync fetcher: extract per-node sliver states from a FABlib slice."""
     fablib = get_fablib()
+    _ensure_project_id(fablib)
     uuid = get_slice_uuid(slice_name) or ""
     try:
         slice_obj = (
@@ -1290,6 +1350,7 @@ async def resolve_sites_endpoint(slice_name: str, body: ResolveSitesRequest = Re
 
         # Update FABlib draft node sites
         fablib = get_fablib()
+        _ensure_project_id(fablib)
         for nd in resolved_defs:
             try:
                 fab_node = draft.get_node(name=nd["name"])
@@ -1312,6 +1373,95 @@ async def resolve_sites_endpoint(slice_name: str, body: ResolveSitesRequest = Re
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/slices/{slice_name}/check-availability")
+async def check_slice_availability(slice_name: str) -> dict[str, Any]:
+    """Check resource availability for all nodes in a draft slice.
+
+    Uses FABlib's ``find_resource_slot(slice=draft)`` to determine whether
+    the current topology can be satisfied now or within the next 7 days.
+    """
+    slice_name = _resolve_slice_name(slice_name)
+    draft = _get_draft(slice_name)
+    if draft is None:
+        raise HTTPException(status_code=404, detail=f"No draft found for slice '{slice_name}'")
+
+    # Extract node requirements from the draft for the response
+    data = slice_to_dict(draft)
+    nodes = data.get("nodes", [])
+    if not nodes:
+        raise HTTPException(status_code=400, detail="Slice has no nodes to check")
+
+    node_requirements = []
+    for node in nodes:
+        req: dict[str, Any] = {
+            "name": node.get("name", ""),
+            "cores": node.get("cores", 2),
+            "ram": node.get("ram", 8),
+            "disk": node.get("disk", 10),
+        }
+        site = node.get("site", "")
+        if site:
+            req["site"] = site
+        comps = node.get("components", [])
+        if comps:
+            req["components"] = [
+                c.get("model", "") for c in comps if c.get("model")
+            ]
+        node_requirements.append(req)
+
+    def _do():
+        fablib = get_fablib()
+        _ensure_project_id(fablib)
+        now = datetime.now(timezone.utc)
+        search_end = now + timedelta(days=7)
+
+        result = fablib.find_resource_slot(
+            start=now,
+            end=search_end,
+            duration=24,
+            slice=draft,
+            max_results=3,
+        )
+        return result
+
+    try:
+        result = await run_in_fablib_pool(_do)
+    except Exception as e:
+        logger.warning("check-availability failed for '%s': %s", slice_name, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Availability check failed: {e}")
+
+    slots = result.get("slots", [])
+    now = datetime.now(timezone.utc)
+
+    # Determine if the first slot starts within 5 minutes (effectively "now")
+    feasible_now = False
+    if slots:
+        first_start_str = slots[0].get("start", "")
+        try:
+            first_start = datetime.fromisoformat(first_start_str.replace("Z", "+00:00"))
+            if first_start.tzinfo is None:
+                first_start = first_start.replace(tzinfo=timezone.utc)
+            feasible_now = (first_start - now) < timedelta(minutes=5)
+        except (ValueError, TypeError):
+            pass
+
+    # Build human-readable message
+    if feasible_now:
+        message = "Resources are available now"
+    elif slots:
+        message = f"Earliest availability: {slots[0].get('start', 'unknown')}"
+    else:
+        message = "No availability found in the next 7 days"
+
+    return {
+        "feasible_now": feasible_now,
+        "next_slot": slots[0] if slots else None,
+        "slots": slots,
+        "node_requirements": node_requirements,
+        "message": message,
+    }
+
+
 @router.delete("/slices/{slice_name}")
 async def delete_slice(slice_name: str) -> dict[str, str]:
     """Delete a slice."""
@@ -1328,6 +1478,7 @@ async def delete_slice(slice_name: str) -> dict[str, str]:
     # Delete the actual slice from FABRIC
     def _do():
         fablib = get_fablib()
+        _ensure_project_id(fablib)
         # Use UUID if available for reliable lookup
         uuid = get_slice_uuid(slice_name)
         if uuid:
@@ -1363,6 +1514,7 @@ async def renew_slice(slice_name: str, body: RenewRequest) -> dict[str, Any]:
 
     def _do():
         fablib = get_fablib()
+        _ensure_project_id(fablib)
         uuid = get_slice_uuid(slice_name)
         if uuid:
             try:
@@ -1799,9 +1951,23 @@ def add_network(slice_name: str, req: CreateNetworkRequest) -> dict[str, Any]:
             net = slice_obj.add_l3network(name=req.name, interfaces=ifaces, type=canonical_type)
             for iface in ifaces:
                 iface.set_mode("auto")
+            # Auto-create default L3 config with FABNet subnet from FABlib
+            fablib = get_fablib()
+            is_v4 = canonical_type in ("IPv4", "IPv4Ext")
+            default_subnet = fablib.FABNETV4_SUBNET if is_v4 else fablib.FABNETV6_SUBNET
+            _store_l3_config(slice_name, req.name, {
+                "mode": "auto",
+                "route_mode": "default_fabnet",
+                "custom_routes": [],
+                "default_fabnet_subnet": default_subnet,
+            })
         else:
             # L2 network
             net = slice_obj.add_l2network(name=req.name, interfaces=ifaces, type=req.type)
+            # Set VLAN tag on all interfaces if specified
+            if req.vlan:
+                for iface in ifaces:
+                    iface.set_vlan(req.vlan)
             if req.subnet:
                 net.set_subnet(req.subnet)
             if req.gateway:
@@ -2137,12 +2303,50 @@ async def run_post_boot_config(slice_name: str) -> dict[str, Any]:
         if state not in ("StableOK", "Active"):
             logger.warning("post_boot_config: slice '%s' in state '%s', expected StableOK/Active", slice_name, state)
         logger.info("post_boot_config: running on slice '%s' (state=%s)", slice_name, state)
+
         try:
             slice_obj.post_boot_config()
             logger.info("post_boot_config: completed successfully for '%s'", slice_name)
         except Exception as e:
             logger.error("post_boot_config: failed for '%s': %s", slice_name, e)
             raise
+
+        # After post_boot_config, add FABNet aggregate routes via SSH.
+        # post_boot_config configures IPs but only adds the local subnet route.
+        # We add the aggregate route (e.g. 10.128.0.0/10) so nodes can reach
+        # all FABNet subnets across sites.
+        fablib = get_fablib()
+        _fabnet_v4 = {"FABNetv4", "FABNetv4Ext", "IPv4", "IPv4Ext"}
+        _fabnet_v6 = {"FABNetv6", "FABNetv6Ext", "IPv6", "IPv6Ext"}
+        _fabnet_all = _fabnet_v4 | _fabnet_v6
+        for net in slice_obj.get_networks():
+            net_type = str(net.get_type()) if net.get_type() else ""
+            if net_type not in _fabnet_all:
+                continue
+            try:
+                gw = net.get_gateway()
+                if not gw:
+                    continue
+                subnet = fablib.FABNETV4_SUBNET if net_type in _fabnet_v4 else fablib.FABNETV6_SUBNET
+                seen_nodes: set[str] = set()
+                for iface in net.get_interfaces():
+                    node = iface.get_node()
+                    node_name = node.get_name()
+                    if node_name in seen_nodes:
+                        continue
+                    seen_nodes.add(node_name)
+                    dev = iface.get_os_interface()
+                    try:
+                        cmd = f"sudo ip route replace {subnet} via {gw} dev {dev}"
+                        stdout, stderr = node.execute(cmd)
+                        logger.info("post_boot_config: route %s via %s dev %s on '%s'",
+                                    subnet, gw, dev, node_name)
+                    except Exception as e:
+                        logger.warning("post_boot_config: failed to add route on '%s': %s",
+                                       node_name, e)
+            except Exception as e:
+                logger.warning("post_boot_config: failed to get gateway for network '%s': %s",
+                               net.get_name(), e)
         return _serialize(slice_obj)
     try:
         return await run_in_fablib_pool(_do)
@@ -2189,7 +2393,9 @@ async def auto_configure_networks(slice_name: str) -> dict[str, Any]:
                 continue
 
             # Build routes for FABNet — check L3 config for custom routes, else default
-            default_route = "10.128.0.0/10" if network_obj.version == 4 else "2602:fcfb::/40"
+            fablib = get_fablib()
+            default_route = (fablib.FABNETV4_SUBNET if network_obj.version == 4
+                             else fablib.FABNETV6_SUBNET)
             l3_cfg = _get_l3_config(slice_name, net_name) if net_name else {}
             route_mode = l3_cfg.get("route_mode", "default_fabnet")
             if route_mode == "custom" and l3_cfg.get("custom_routes"):
@@ -2377,6 +2583,7 @@ async def clone_slice(slice_name: str, new_name: str) -> dict[str, Any]:
         logger.info("Clone: creating new draft '%s' with %d nodes, %d networks",
                      new_name, len(model_data["nodes"]), len(model_data["networks"]))
         fablib = get_fablib()
+        _ensure_project_id(fablib)
 
         # Extract @group tags without resolving — defer until user action or submit
         clone_groups: dict[str, str] = {}
@@ -2705,6 +2912,7 @@ def import_slice(model: SliceModelImport) -> dict[str, Any]:
     """Import a slice model and create a new draft."""
     try:
         fablib = get_fablib()
+        _ensure_project_id(fablib)
         slice_obj = fablib.new_slice(name=model.name)
 
         # --- Extract @group tags without resolving — defer until user action or submit ---

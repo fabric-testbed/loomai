@@ -1353,9 +1353,11 @@ async def execute_all_boot_configs_stream(slice_name: str):
                     _emit("error", {"node": node_name, "type": "upload", "id": uid,
                                     "message": str(e)})
 
-            # 2. Network config
+            # 2. Network config (skip auto-generated entries — FABlib post_boot_config handles L3)
             for net in sorted(config.get("network", []), key=lambda n: n.get("order", 0)):
                 nid = net.get("id", "?")
+                if isinstance(nid, str) and nid.startswith("auto-"):
+                    continue  # FABlib post_boot_config already configured this
                 iface = net.get("iface", "?")
                 _emit("step", {"node": node_name, "type": "network", "id": nid,
                                "message": f"Configuring network interface {iface}"})
