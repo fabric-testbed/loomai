@@ -2,7 +2,7 @@
 # Serves both the FastAPI backend and nginx frontend in one container
 
 # --- Stage 1: Build frontend ---
-FROM node:20-alpine AS frontend-build
+FROM node:22-alpine AS frontend-build
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --prefer-offline --no-audit && npm cache clean --force
@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client git nginx supervisor tmux sudo curl \
     vim nano less htop strace tree jq wget rsync zip unzip \
     iputils-ping dnsutils net-tools traceroute ripgrep \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && pip install --no-cache-dir -r requirements.txt \
     && pip uninstall -y jupyter-collaboration jupyter-collaboration-ui jupyter-docprovider jupyter-server-ydoc jupyter-server-documents 2>/dev/null || true \

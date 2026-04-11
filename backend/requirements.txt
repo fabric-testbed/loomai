@@ -21,3 +21,8 @@ seaborn
 ipywidgets
 pytest-cov
 pytest-asyncio
+# RAG: local ONNX embeddings (fastembed) + BM25 safety-net retriever.
+# fastembed pulls onnxruntime (~60MB) and lazy-downloads a ~130MB ONNX model
+# on first use, cached under FABRIC_STORAGE_DIR/.cache/fastembed/.
+fastembed>=0.4.0
+rank-bm25>=0.2.2

@@ -1060,6 +1060,9 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                 // Refresh config status to update the "Configured" badge
                 const cfg = await api.getConfig();
                 setStatus(cfg);
+                // Reload settings so the new key is in the settings state
+                // (prevents handleSave from overwriting it with stale empty value)
+                await loadSettings();
               } catch (err: any) {
                 setLlmKeyMessage({ text: err.message || 'Failed to create LLM key', type: 'error' });
               } finally {

@@ -28,10 +28,12 @@ Regular users cannot access them. Only use if the user has admin access:
 If a regular user wants usage stats, collect data from their slices via
 `get_slice` and `ssh_execute` instead.
 
-### Analysis Tools (Python via `run_command`)
+### Analysis Tools (Python inside notebooks or via `ssh_execute` on VMs)
 - pandas, numpy, scipy — Data manipulation and statistics
 - matplotlib, plotly — Visualization
-- Jupyter notebooks — Interactive analysis (write `.ipynb` files)
+- Jupyter notebooks — Interactive analysis. Write `.ipynb` files with `write_file`;
+  the user opens them in JupyterLab. For batch analysis on a VM, upload a Python
+  script with `write_vm_file` and execute it via `ssh_execute`.
 
 ## Your Approach
 

@@ -13,8 +13,9 @@ fabric_client = httpx.AsyncClient(
 )
 
 # For AI/LLM API calls and web fetches (longer timeouts)
+# Complex weave prompts can take 5+ min for the LLM to generate long scripts
 ai_client = httpx.AsyncClient(
-    timeout=httpx.Timeout(180.0, connect=10.0),
+    timeout=httpx.Timeout(600.0, connect=10.0),
     limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
     follow_redirects=True,
     headers={"User-Agent": "Mozilla/5.0 (compatible; LooMAI/1.0)"},

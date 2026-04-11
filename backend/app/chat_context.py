@@ -46,11 +46,24 @@ def estimate_conversation_tokens(messages: list[dict]) -> int:
 # Model profiles
 # ---------------------------------------------------------------------------
 
-# Profile tiers — keyed by size category
+# Profile tiers — keyed by size category.
+#
+# max_output is a RESERVATION of output-token headroom AND the API max_tokens
+# cap. It must be big enough for the model to complete a realistic file write
+# in a single tool call, and small enough to leave conversation budget on
+# small-context models. Empirically validated against qwen3-coder-30b: a full
+# 22KB Python script generates in ~4,440 completion tokens, ~113s wall-clock,
+# with finish_reason=stop. Models can go bigger via max_output_override in
+# MODEL_OVERRIDES for code-specialists with known-good long-output behavior.
+#
+# Budget math for standard tier on a 32K-context model (pessimistic case):
+#   budget = 32768 * 0.70 - 8000 system - 6144 output = 8793 conversation tokens
+# Still workable. For 256K-context models (typical qwen3-coder), budget is
+# ~235K — headroom is irrelevant.
 PROFILE_TIERS = {
     "compact": {
         "context_window": 8192,
-        "max_output": 2048,
+        "max_output": 1024,
         "system_prompt": "compact",
         "tool_result_max": 200,
         "summarize_at": 0.40,
@@ -60,17 +73,28 @@ PROFILE_TIERS = {
     },
     "standard": {
         "context_window": 32768,
-        "max_output": 16384,
+        # Bumped 2048 → 6144: covers ~95% of realistic single-file writes
+        # (full lifecycle scripts up to ~24KB). Above this, code-specialist
+        # models should use a per-model max_output_override.
+        "max_output": 6144,
         "system_prompt": "standard",
-        "tool_result_max": 800,
+        # Bumped from 800 → 2000: slice JSON responses are 2-4KB typical and
+        # 800 chars drops network/interface details the LLM needs for follow-ups.
+        "tool_result_max": 2000,
         "summarize_at": 0.70,
-        "max_tools": 25,
+        # Bumped from 25 → 30 to absorb the expanded CORE_TOOLS set below without
+        # squeezing non-core tools out. Token cost on a 256K-context model is
+        # immaterial (~10% more prompt tokens per live probe).
+        "max_tools": 30,
         "temperature": 0.5,
         "supports_tools": True,
     },
     "large": {
         "context_window": 131072,
-        "max_output": 16384,
+        # Bumped 4096 → 12288: large-tier models have 131K+ context so the
+        # reservation is immaterial (<10%). Handles full Jupyter notebooks
+        # with analysis + plots in one write call.
+        "max_output": 12288,
         "system_prompt": "full",
         "tool_result_max": 2000,
         "summarize_at": 0.85,
@@ -85,16 +109,51 @@ PROFILE_TIERS = {
 # The discovered context_length controls CONTEXT BUDGET (context_window, summarize_at).
 # These are separate concerns: a 30B model with 256K context still works best
 # with a focused "standard" prompt and 25 tools, not the full 37-tool "large" prompt.
+#
+# Optional per-model keys:
+#  - ``max_output_override``: absolute token cap that replaces the tier default
+#    AFTER any reasoning scaling. Use for code-specialist models with large
+#    context windows that need to write substantial files in a single tool call.
+#    Empirically validated: qwen3-coder-30b at 12288 generates 22KB in ~113s.
+#  - ``is_reasoning`` / ``max_output_scale``: for models with a separate
+#    reasoning_content field (NVIDIA Nemotron-style). The completion budget
+#    is multiplied by the scale to leave room for reasoning tokens. Typical
+#    overhead: 2-3x. Override is applied AFTER scaling so override always wins.
 MODEL_OVERRIDES: dict[str, dict] = {
-    "qwen3-coder-30b": {"temperature": 0.3, "tier": "standard"},
-    "qwen3-coder-8b": {"temperature": 0.3, "tier": "compact"},
+    # Qwen3 Coder family — code specialists, validated for long output
+    "qwen3-coder-30b": {
+        "temperature": 0.3,
+        "tier": "standard",
+        "max_output_override": 12288,  # ~48KB per file write, ~113s wall-clock
+    },
+    "qwen3-coder-8b": {
+        "temperature": 0.3,
+        "tier": "compact",
+        "max_output_override": 6144,   # 8K-context model; this eats most of it, use sparingly
+    },
+    "qwen3-coder": {
+        "temperature": 0.3,
+        "tier": "standard",
+        "max_output_override": 12288,
+    },
+    # Qwen3 general family
     "qwen3-30b": {"tier": "standard"},
     "qwen3-8b": {"tier": "compact"},
     "qwen3-small": {"tier": "compact"},
     "qwen3": {"tier": "standard"},
     "qwen3-27b": {"tier": "standard"},
-    "deepseek-coder": {"temperature": 0.2, "tier": "standard"},
-    "claude-3-5-sonnet": {"tier": "large", "temperature": 0.5},
+    # Other code specialists
+    "deepseek-coder": {
+        "temperature": 0.2,
+        "tier": "standard",
+        "max_output_override": 12288,
+    },
+    # Claude (closed-source, very good at long output)
+    "claude-3-5-sonnet": {
+        "tier": "large",
+        "temperature": 0.5,
+        "max_output_override": 16384,
+    },
     "claude-haiku": {"tier": "standard", "temperature": 0.5},
     "gpt-4": {"tier": "large"},
     "gpt-3.5": {"tier": "standard"},
@@ -107,6 +166,22 @@ MODEL_OVERRIDES: dict[str, dict] = {
     "kimi": {"tier": "standard"},
     "minimax": {"tier": "standard"},
     "glm": {"tier": "standard"},
+    # Reasoning model — separate reasoning_content field, ~2-3x completion
+    # overhead, strong on multi-step design questions, noticeably slower than
+    # qwen3-coder. Standard tier + focused prompt works better than "large"
+    # because the model is trained to reason from concise context.
+    "nemotron-nano-30b": {
+        "tier": "standard",
+        "temperature": 0.3,
+        "is_reasoning": True,
+        "max_output_scale": 2.5,
+    },
+    "nemotron": {
+        "tier": "standard",
+        "temperature": 0.3,
+        "is_reasoning": True,
+        "max_output_scale": 2.5,
+    },
 }
 
 
@@ -162,8 +237,33 @@ def get_model_profile(model_name: str, context_length: Optional[int] = None) -> 
         elif context_length > 32000:
             profile["summarize_at"] = 0.75
 
-    # Apply per-model overrides (temperature, etc.)
+    # Apply per-model overrides (temperature, is_reasoning, max_output_override, etc.)
     profile.update(overrides)
+
+    # Reasoning models burn completion tokens on internal thinking. Scale
+    # max_output up so there's still room for a substantive visible reply
+    # after reasoning overhead. Only applied when is_reasoning is set AND
+    # max_output_scale wasn't itself overridden by the caller.
+    if profile.get("is_reasoning"):
+        scale = profile.get("max_output_scale", 2.5)
+        try:
+            profile["max_output"] = max(1024, int(profile["max_output"] * float(scale)))
+        except (TypeError, ValueError):
+            pass
+
+    # max_output_override wins unconditionally — takes precedence over tier
+    # defaults AND reasoning scaling. Used for code-specialist models that
+    # need to write long files in a single tool call (e.g. qwen3-coder-30b
+    # at 12288 tokens handles 48KB file writes in one shot).
+    override = profile.get("max_output_override")
+    if override is not None:
+        try:
+            override_val = int(override)
+            if override_val > 0:
+                profile["max_output"] = override_val
+        except (TypeError, ValueError):
+            pass
+
     profile["model"] = model_name
     return profile
 
@@ -472,14 +572,31 @@ def _truncate_tool_results(messages: list[dict], max_chars: int) -> list[dict]:
 # Tool schema filtering
 # ---------------------------------------------------------------------------
 
-# Most commonly needed tools — prioritized when filtering for smaller models
+# Most commonly needed tools — prioritized when filtering for smaller models.
+# Weave/slice lifecycle coverage: creation, mutation (add/remove/update),
+# submission, background runs (start/stop/list/output), and the site tools
+# needed for placement decisions. Chameleon core kept alongside FABRIC.
 CORE_TOOLS = {
+    # Slice lifecycle
     "list_slices", "get_slice", "create_slice", "submit_slice", "delete_slice",
-    "add_node", "add_component", "add_network", "query_sites", "ssh_execute",
-    "renew_slice", "validate_slice", "list_templates", "load_template",
-    "refresh_slice", "create_weave", "write_file", "read_file",
+    "renew_slice", "validate_slice", "refresh_slice",
+    # Slice mutation (topology editing)
+    "add_node", "add_component", "add_network", "add_fabnet",
+    "update_node", "remove_node", "remove_network",
+    # Resource discovery for placement
+    "query_sites", "get_site_hosts",
+    # Weaves / templates
+    "create_weave", "list_templates", "load_template", "save_as_template",
+    # Background run lifecycle
+    "start_background_run", "stop_background_run",
+    "list_background_runs", "get_background_run_output",
+    # Files + VM ops
+    "write_file", "read_file", "ssh_execute", "write_vm_file", "read_vm_file",
+    "reboot_and_wait",
+    # Examples / search
+    "search_examples",
+    # Chameleon core
     "list_chameleon_leases", "list_chameleon_sites", "create_chameleon_lease",
-    "save_as_template", "start_background_run", "search_examples",
 }
 
 

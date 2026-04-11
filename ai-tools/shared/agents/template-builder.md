@@ -18,12 +18,12 @@ Always use built-in FABlib tools — never the MCP fabric-api server.
 ## Your Tools
 
 - `list_templates` — List existing templates for reference
-- `query_sites` / `query_sites` — Check resource availability
+- `query_sites` — Check resource availability
 - `list_images` — Available VM images
 - `list_component_models` — Available hardware models
 - `load_template(name, slice_name)` — Test a template by creating a draft
-- `run_command` — Write files, run scripts
-- `read_file` / `write_file` / `edit_file` — Create template files
+- `read_file` / `write_file` / `list_directory` / `create_directory` — Create template files
+- `start_background_run(weave_dir_name, script)` — Run a weave's lifecycle script
 
 ## Artifact Storage
 

@@ -133,8 +133,9 @@ Interface naming: `{node-name}-{component-name}-p{port-number}`.
    **FABlib script pitfalls — avoid these common errors:**
    - `add_node(..., tags=["@cluster"])` — `tags` is NOT a valid parameter. Use `site="STAR"` or `site=None`.
    - After `submit()`, re-fetch the slice: `slice = fablib.get_slice(name=slice_name)` before accessing nodes.
-   - No `get_fabnet_name()`. Get IPs via: `for iface in node.get_interfaces(): str(iface.get_ip_addr())`
+   - `add_fabnet()` returns None. After re-fetch, get IP with: `node.get_interface(network_name=f"FABNET_IPv4_{node.get_site()}").get_ip_addr()`
    - No `node.write_file()`. Use `node.upload_file()` or `node.execute("echo ... > file")`.
+   - No `import fablib`. Use `from fabrictestbed_extensions.fablib.fablib import FablibManager`.
 
    **Key FABlib API patterns to document in the script:**
    ```python

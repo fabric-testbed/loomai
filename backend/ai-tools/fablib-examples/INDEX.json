@@ -1,5 +1,77 @@
 [
   {
+    "file": "experiments/weave_lifecycle_template.py",
+    "title": "Weave Lifecycle Template — Golden Pattern for start/stop/monitor",
+    "tags": ["weave", "lifecycle", "start", "stop", "monitor", "template", "mac", "fabnetv4", "re-fetch", "submit", "progress"],
+    "description": "Canonical weave script structure with correct FABlib patterns: MAC-based IP retrieval, re-fetch after submit, PROGRESS markers, graceful cleanup. Use as base for any create_weave script."
+  },
+  {
+    "file": "experiments/multi_node_software_install.py",
+    "title": "Multi-Node Parallel Software Installation",
+    "tags": ["install", "apt-get", "software", "packages", "multi-node", "execute", "ssh"],
+    "description": "Install apt packages on all nodes in a slice with verification. Uses sequential SSH execution with error handling."
+  },
+  {
+    "file": "experiments/network_performance_test.py",
+    "title": "Network Performance Test with iperf3",
+    "tags": ["iperf3", "bandwidth", "performance", "network", "test", "fabnetv4", "mac", "weave", "start", "stop", "monitor"],
+    "description": "Complete iperf3 bandwidth test weave: create slice, install iperf3, run TCP/UDP tests, parse results. Shows MAC-based IP retrieval."
+  },
+  {
+    "file": "experiments/ping_mesh_connectivity.py",
+    "title": "Ping Mesh Connectivity Check — All-Pairs Verification",
+    "tags": ["ping", "mesh", "connectivity", "monitor", "verification", "multi-node", "mac", "ip"],
+    "description": "Test connectivity between every pair of nodes. Useful as monitor function. Reports pass/fail and latency for each path."
+  },
+  {
+    "file": "experiments/collect_results_from_nodes.py",
+    "title": "Collect Results from Multiple Nodes",
+    "tags": ["collect", "results", "download", "upload", "multi-node", "file", "execute", "upload_file"],
+    "description": "Gather command output or files from all nodes. Shows correct file transfer (upload_file/download_file, NOT write_file). Includes write_content_to_node helper."
+  },
+  {
+    "file": "experiments/gpu_cuda_setup.py",
+    "title": "GPU Setup with CUDA on FABRIC",
+    "tags": ["gpu", "cuda", "nvidia", "rtx6000", "tesla", "a30", "a40", "hardware", "driver", "weave"],
+    "description": "Create GPU slice, install NVIDIA drivers, verify nvidia-smi. Shows GPU component model selection and GPU-specific monitoring."
+  },
+  {
+    "file": "experiments/web_service_deployment.py",
+    "title": "Web Service Deployment on FABRIC",
+    "tags": ["web", "flask", "nginx", "service", "deployment", "tunnel", "http", "weave"],
+    "description": "Deploy a Flask web app on FABRIC, verify it responds, show SSH tunnel access pattern. Works for any web service (nginx, Grafana, etc.)."
+  },
+  {
+    "file": "experiments/cloud_init_userdata.py",
+    "title": "Node Configuration with Cloud-Init Userdata",
+    "tags": ["cloud-init", "userdata", "configuration", "first-boot", "setup", "automated"],
+    "description": "Use set_user_data() for automatic first-boot configuration. Alternative to post_boot_config — node is pre-configured when SSH becomes available."
+  },
+  {
+    "file": "experiments/fablib_api_reference.py",
+    "title": "FABlib API Quick Reference — Actual Methods (Ground Truth)",
+    "tags": ["api", "reference", "methods", "fablib", "node", "slice", "interface", "component", "network", "hallucination"],
+    "description": "Complete list of REAL FABlib methods extracted from the installed package. Lists common hallucinated methods that DO NOT EXIST (write_file, get_fabnet_name, get_network_type, import fablib). Use this to verify method names."
+  },
+  {
+    "file": "experiments/slice_submit_patterns.py",
+    "title": "Slice Submit Patterns — wait, no-wait, and lease options",
+    "tags": ["submit", "wait", "poll", "lease", "timeout", "post_boot_config", "wait_ssh", "re-fetch"],
+    "description": "Three submit patterns: blocking (default), non-blocking with polling, and lease duration. Shows what submit() actually does and when to use each pattern."
+  },
+  {
+    "file": "experiments/node_networking_patterns.py",
+    "title": "Node Networking Patterns — Correct Interface and IP Handling",
+    "tags": ["interface", "ip", "mac", "network", "fabnetv4", "get_interfaces", "get_ip_addr", "get_mac", "get_network", "upload_file"],
+    "description": "All correct ways to access interfaces, IPs, and network info. Shows MAC matching, network name lookup, interface iteration. Documents which methods exist and which are hallucinated."
+  },
+  {
+    "file": "networking/get_fabnet_ip_by_mac.py",
+    "title": "Get FABNetv4 IP Address by MAC Matching",
+    "tags": ["fabnetv4", "ip", "mac", "interface", "network", "add_fabnet", "get_ip", "submit", "re-fetch", "ping"],
+    "description": "Proven pattern for retrieving FABNetv4 IP addresses after provisioning. Saves MAC before submit, re-fetches slice, matches MAC to find IP. Do NOT filter by IP prefix — use MAC matching instead."
+  },
+  {
     "file": "networking/accessing_ipv4_services_from_ipv6_nodes.py",
     "title": "Accessing IPv4 Services from IPv6 FABRIC Nodes",
     "tags": [

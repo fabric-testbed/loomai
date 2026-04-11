@@ -568,6 +568,47 @@
   padding: 4px 0;
 }
 
+/* ── Progress strip (compact summary shown above ToolCallsView during streaming) ─── */
+
+.ai-chat-progress-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 8px;
+  margin-bottom: 6px;
+  background: rgba(87, 152, 188, 0.08);
+  border-left: 2px solid var(--fabric-primary, #5798bc);
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--fabric-text-muted, #888);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+}
+
+.ai-chat-progress-count {
+  color: var(--fabric-primary, #5798bc);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ai-chat-progress-elapsed {
+  /* Keep digits from jittering as the clock ticks */
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ai-chat-progress-current {
+  margin-left: auto;
+  color: var(--fabric-orange, #ff8542);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+[data-theme="dark"] .ai-chat-progress-strip {
+  background: rgba(87, 152, 188, 0.12);
+}
+
 /* ── Streaming indicator ────────────────────────────────────────────────── */
 
 .ai-chat-streaming {

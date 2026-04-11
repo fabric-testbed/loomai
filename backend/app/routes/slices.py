@@ -1819,6 +1819,42 @@ def remove_component(slice_name: str, node_name: str, comp_name: str) -> dict[st
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# --- FABnet per-node helper (multi-site networking) ---
+
+class AddFabnetRequest(BaseModel):
+    net_type: str = "IPv4"  # "IPv4" | "IPv6"
+
+
+@router.post("/slices/{slice_name}/nodes/{node_name}/fabnet")
+def add_fabnet_to_node(slice_name: str, node_name: str, req: AddFabnetRequest) -> dict[str, Any]:
+    """Attach FABNetv4 or FABNetv6 to a single node.
+
+    Wraps FABlib's ``node.add_fabnet()`` convenience method, which:
+    - Creates a per-site FABnet network service (if one doesn't exist for this site)
+    - Adds a NIC_Basic component to the node
+    - Attaches the node's interface to the network
+    - Enables automatic IP assignment at submit time
+
+    This is the correct pattern for multi-site FABnet connectivity: call this
+    once per node, and FABRIC's backbone routes between the resulting per-site
+    networks automatically. A single FABNetv4 network service cannot span
+    multiple sites — the orchestrator rejects it with
+    'Service cannot span N sites. Limit: 1.'
+    """
+    slice_name = _resolve_slice_name(slice_name)
+    net_type = (req.net_type or "IPv4").strip()
+    if net_type not in ("IPv4", "IPv6"):
+        raise HTTPException(status_code=400, detail=f"net_type must be 'IPv4' or 'IPv6', got {net_type!r}")
+    try:
+        slice_obj = _get_slice_obj(slice_name)
+        node = slice_obj.get_node(name=node_name)
+        # FABlib signature: node.add_fabnet(net_type="IPv4") — returns None
+        node.add_fabnet(net_type=net_type)
+        return _serialize(slice_obj, dirty=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Facility port operations ---
 
 @router.post("/slices/{slice_name}/facility-ports")

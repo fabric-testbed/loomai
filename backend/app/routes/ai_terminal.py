@@ -75,10 +75,14 @@ _NRP_CONTEXT_DEFAULTS: dict[str, int] = {
 }
 _NRP_EXCLUDE = {"qwen3-embedding"}  # Embedding models, not for chat
 
-# Fallback context sizes for FABRIC AI models (if /v1/model/info fails)
+# Fallback context sizes for FABRIC AI models (if /v1/model/info fails).
+# These match the values advertised by FABRIC AI's LiteLLM proxy and are used
+# as a safety net so the chat handler never falls back to the 32K tier default.
 _FABRIC_CONTEXT_DEFAULTS: dict[str, int] = {
     "gpt-oss-20b": 131072,
     "qwen3-coder-30b": 262144,
+    "nemotron-nano-30b": 262144,
+    "gemma-4-27b": 262144,
 }
 
 
@@ -1418,13 +1422,84 @@ def _find_first_healthy_model() -> dict:
     return {"default": "", "source": ""}
 
 
+def _persist_discovered_context_lengths() -> None:
+    """Fetch per-provider model context lengths and persist to settings.ai.discovered_models.
+
+    Runs at startup (best-effort). The chat handler reads this to size its
+    context budget. Without this, models get the 32K default which triggers
+    "context window nearly full" warnings very quickly for 256K-context models.
+    """
+    from app import settings_manager
+
+    api_key = _get_ai_api_key()
+    nrp_key = _get_nrp_api_key()
+    fabric_list: list[dict] = []
+    nrp_list: list[dict] = []
+
+    # FABRIC AI: prefer /v1/model/info (rich metadata), fall back to /v1/models + defaults
+    if api_key:
+        try:
+            rich = _fetch_fabric_model_info(api_key)
+            if rich:
+                fabric_list = [
+                    {"id": m["id"], "context_length": m.get("context_length") or _FABRIC_CONTEXT_DEFAULTS.get(m["id"])}
+                    for m in rich
+                ]
+            else:
+                basic = _fetch_models(api_key)
+                fabric_list = [
+                    {"id": m["id"], "context_length": m.get("context_length") or _FABRIC_CONTEXT_DEFAULTS.get(m["id"])}
+                    for m in basic
+                ]
+        except Exception as e:
+            logger.warning("FABRIC model-info discovery failed: %s", e)
+
+    # NRP: /v1/models doesn't advertise context, so apply NRP defaults
+    if nrp_key:
+        try:
+            basic = _fetch_nrp_models(nrp_key)
+            for m in basic:
+                if m["id"] in _NRP_EXCLUDE:
+                    continue
+                nrp_list.append({
+                    "id": m["id"],
+                    "context_length": m.get("context_length") or _NRP_CONTEXT_DEFAULTS.get(m["id"]) or 131072,
+                })
+        except Exception as e:
+            logger.warning("NRP model discovery failed: %s", e)
+
+    if not (fabric_list or nrp_list):
+        return
+
+    try:
+        settings = settings_manager.load_settings()
+        settings.setdefault("ai", {})["discovered_models"] = {
+            "fabric": fabric_list,
+            "nrp": nrp_list,
+        }
+        settings_manager.save_settings(settings)
+        logger.info(
+            "Persisted discovered_models: fabric=%d nrp=%d (sample: %s)",
+            len(fabric_list), len(nrp_list),
+            ", ".join(f"{m['id']}={m['context_length']}" for m in (fabric_list + nrp_list)[:3]),
+        )
+    except Exception as e:
+        logger.warning("Failed to persist discovered_models: %s", e)
+
+
 def discover_and_persist_default_model() -> dict:
     """Discover the first healthy model and persist it to settings.json.
 
     Called at startup. Only discovers a new model if no default is set.
     Never overwrites a user-chosen model — even if it's temporarily unhealthy.
+    Also persists per-provider context lengths so the chat handler can
+    correctly size its context budget.
     """
     from app import settings_manager
+
+    # Always refresh discovered_models on startup — the chat handler relies on
+    # the context_length values to size its budget correctly.
+    _persist_discovered_context_lengths()
 
     current_model = settings_manager.get_default_model()
     current_source = settings_manager.get_default_model_source()

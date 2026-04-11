@@ -622,16 +622,110 @@ async def vm_delete(slice_name: str, node_name: str, body: VmDeleteRequest):
 
 class VmExecBody(BaseModel):
     command: str
+    # Optional per-call timeout in seconds (FABlib node.execute default is ~60s
+    # which is too short for apt operations). Clamped to [10, 1800].
+    timeout: int | None = None
 
 
 @router.post("/api/files/vm/{slice_name}/{node_name}/execute")
 async def execute_on_vm(slice_name: str, node_name: str, body: VmExecBody):
     """Execute an ad-hoc command on a VM node."""
     slice_name = resolve_slice_name(slice_name)
+    # Default to 600s (10 min) which covers apt update + apt install of ~20
+    # packages on a cold Ubuntu VM. Allow the caller to override up to 30 min.
+    timeout = 600 if body.timeout is None else max(10, min(1800, int(body.timeout)))
     def _do():
         node_obj = _get_node(slice_name, node_name)
-        stdout, stderr = node_obj.execute(body.command, quiet=True)
+        stdout, stderr = node_obj.execute(body.command, timeout=timeout, quiet=True)
         return {"stdout": stdout or "", "stderr": stderr or ""}
+
+    return await asyncio.to_thread(_do)
+
+
+class VmRebootBody(BaseModel):
+    # How long to wait for SSH to come back after reboot (seconds).
+    # Clamped to [30, 1500].
+    timeout: int = 300
+
+
+@router.post("/api/files/vm/{slice_name}/{node_name}/reboot")
+async def reboot_and_wait(slice_name: str, node_name: str, body: VmRebootBody):
+    """Reboot a VM and wait for SSH to become reachable again.
+
+    Sends `sudo reboot` via a detached nohup to avoid blocking SSH on the
+    command return, then polls FABlib's SSH test every 10 seconds until the
+    node is reachable or the timeout expires. Returns elapsed time and
+    reachability status.
+    """
+    import time as _time
+    slice_name = resolve_slice_name(slice_name)
+    timeout = max(30, min(1500, int(body.timeout or 300)))
+
+    def _try_ssh(node_obj) -> bool:
+        """Return True if a trivial SSH command succeeds."""
+        try:
+            stdout, stderr = node_obj.execute("echo __loomai_ssh_ok__", timeout=15, quiet=True)
+            return "__loomai_ssh_ok__" in (stdout or "")
+        except Exception:
+            return False
+
+    def _do():
+        t0 = _time.time()
+        node_obj = _get_node(slice_name, node_name)
+
+        # 1. Trigger the reboot. We use nohup so the reboot command returns
+        #    immediately and doesn't keep the SSH session open. 'sleep 1'
+        #    lets the ssh_execute return before systemd kills the shell.
+        try:
+            node_obj.execute(
+                "nohup sudo bash -c 'sleep 1 && reboot' >/dev/null 2>&1 & disown; exit 0",
+                timeout=30, quiet=True,
+            )
+        except Exception as e:
+            # Some FABlib/paramiko versions raise when the session closes
+            # before the command returns cleanly — that's actually success
+            # for reboot. Log and continue to the poll phase.
+            logger.debug("reboot command raised (expected): %s", e)
+
+        # 2. Give the node a few seconds to actually begin shutting down so
+        #    we don't immediately see a "still up" false positive on the
+        #    pre-reboot SSH socket.
+        _time.sleep(15)
+
+        # 3. Poll for reachability. Get a fresh node object each time — the
+        #    SSH config may need refreshing and stale state is a common
+        #    post-reboot failure mode.
+        deadline = t0 + timeout
+        attempt = 0
+        last_error = ""
+        while _time.time() < deadline:
+            attempt += 1
+            try:
+                fresh_node = _get_node(slice_name, node_name)
+                if _try_ssh(fresh_node):
+                    elapsed = round(_time.time() - t0, 1)
+                    return {
+                        "status": "reachable",
+                        "elapsed_seconds": elapsed,
+                        "attempts": attempt,
+                        "message": f"Node {node_name} rebooted and is back online",
+                    }
+            except Exception as e:
+                last_error = str(e)[:200]
+            _time.sleep(10)
+
+        elapsed = round(_time.time() - t0, 1)
+        return {
+            "status": "unreachable",
+            "elapsed_seconds": elapsed,
+            "attempts": attempt,
+            "last_error": last_error,
+            "message": (
+                f"Node {node_name} did not come back within {timeout}s. "
+                f"It may still be booting — try ssh_execute with an 'uptime' "
+                f"command in 30-60s, or check the slice state."
+            ),
+        }
 
     return await asyncio.to_thread(_do)
 

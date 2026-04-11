@@ -40,6 +40,8 @@ interface ChatStore {
   pendingSliceRefresh: boolean;
   /** Tool limit was reached — show Continue button */
   toolLimitReached: boolean;
+  /** Epoch ms when the current stream started; null when not streaming */
+  streamStartTime: number | null;
 }
 
 const _stores = new Map<string, ChatStore>();
@@ -65,6 +67,7 @@ function getStore(id: string): ChatStore {
       streaming: false, error: '', abortController: null,
       requestId: '', didMutate: false, listener: null,
       pendingSliceRefresh: false, toolLimitReached: false,
+      streamStartTime: null,
     };
     _stores.set(id, s);
   }
@@ -134,6 +137,16 @@ const MUTATING_TOOLS = new Set([
   'save_as_template', 'remove_node', 'remove_network',
 ]);
 
+/** Format elapsed ms as "M:SS" (or "H:MM:SS" for long sessions) for the progress strip. */
+function formatElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (h > 0) return `${h}:${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}`;
+  return `${mm}:${ss.toString().padStart(2, '0')}`;
+}
+
 /** Run a chat stream at the module level — continues even if component unmounts */
 async function runModuleStream(
   storeId: string,
@@ -152,6 +165,7 @@ async function runModuleStream(
   store.requestId = reqId;
   store.didMutate = false;
   store.pendingSliceRefresh = false;
+  store.streamStartTime = Date.now();
 
   // Add empty assistant message to stream into
   store.messages = [...store.messages, { role: 'assistant' as const, content: '', toolCalls: [] }];
@@ -270,6 +284,7 @@ async function runModuleStream(
     store.streaming = false;
     store.abortController = null;
     store.requestId = '';
+    store.streamStartTime = null;
     if (store.didMutate) store.pendingSliceRefresh = true;
     _persistMessages(storeId, store.messages);
     store.listener?.();
@@ -442,6 +457,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
   const localAbortRef = useRef<AbortController | null>(null);
   const localReqIdRef = useRef('');
   const localDidMutateRef = useRef(false);
+  const localStreamStartRef = useRef<number | null>(null);
 
   // --- Common state ---
   const [input, setInput] = useState('');
@@ -474,6 +490,22 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
   const streaming = store ? store.streaming : localStreaming;
   const error = store ? store.error : localError;
   const toolLimitReached = store ? store.toolLimitReached : false;
+
+  // Live-updating elapsed time for the progress strip — ticks every 1s while
+  // streaming so users can see how long a long tool-calling session has been
+  // running without scrolling through the tool card list.
+  const [elapsedMs, setElapsedMs] = useState(0);
+  useEffect(() => {
+    if (!streaming) { setElapsedMs(0); return; }
+    const getStart = () => (store ? store.streamStartTime : localStreamStartRef.current);
+    const tick = () => {
+      const start = getStart();
+      setElapsedMs(start ? Date.now() - start : 0);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [streaming, store]);
 
   // Subscribe to store updates
   useEffect(() => {
@@ -608,6 +640,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
       setLocalStreaming(true);
       setLocalError('');
       localDidMutateRef.current = false;
+      localStreamStartRef.current = Date.now();
 
       const reqId = `chat-${Date.now()}`;
       localReqIdRef.current = reqId;
@@ -680,6 +713,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
         setLocalStreaming(false);
         localAbortRef.current = null;
         localReqIdRef.current = '';
+        localStreamStartRef.current = null;
         if (localDidMutateRef.current && onSliceChanged) onSliceChanged();
       }
     }
@@ -793,31 +827,6 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
       </div>
 
       <div className="ai-chat-config">
-        <select className="ai-chat-select" value={activeConvId} onChange={e => {
-          const val = e.target.value;
-          if (val === '__new__') {
-            const name = prompt('Conversation name:', `Chat ${conversations.length + 1}`);
-            if (name) {
-              const id = `conv-${Date.now()}`;
-              const newConv: ConversationMeta = { id, name, createdAt: Date.now() };
-              const updated = [...conversations, newConv];
-              setConversations(updated);
-              _saveConversations(updated);
-              setActiveConvId(id);
-              _setActiveConvId(id);
-            }
-          } else {
-            handleSwitchConversation(val);
-          }
-        }} title="Conversation" disabled={streaming}>
-          {conversations.map(c => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-          <option value="__new__">+ New Chat...</option>
-        </select>
-        {conversations.length > 1 && (
-          <button className="ai-chat-conv-delete-btn" onClick={() => handleDeleteConversation(activeConvId)} title="Delete this conversation">{'\u2715'}</button>
-        )}
         <select className="ai-chat-select" value={selectedModel} onChange={e => {
           const val = e.target.value;
           const isNrp = nrpModels.some(m => m.id === val.replace('nrp:', ''));
@@ -902,6 +911,23 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
           <div key={i} className={`ai-chat-msg ${msg.role === 'user' ? 'user' : 'assistant'}`}>
             <span className="ai-chat-msg-role">{msg.role === 'user' ? 'You' : 'AI'}</span>
             <div className="ai-chat-msg-bubble">
+              {streaming && i === messages.length - 1 && msg.toolCalls && msg.toolCalls.length > 0 && (() => {
+                const running = [...msg.toolCalls].reverse().find(tc => !tc.result);
+                const n = msg.toolCalls.length;
+                return (
+                  <div className="ai-chat-progress-strip" role="status" aria-live="polite">
+                    <span className="ai-chat-progress-count">
+                      ⏳ {n} tool call{n === 1 ? '' : 's'}
+                    </span>
+                    <span className="ai-chat-progress-elapsed">{formatElapsed(elapsedMs)}</span>
+                    {running && (
+                      <span className="ai-chat-progress-current" title={running.name}>
+                        ▸ {running.name}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
               {msg.toolCalls && msg.toolCalls.length > 0 && (
                 <ToolCallsView
                   toolCalls={msg.toolCalls}

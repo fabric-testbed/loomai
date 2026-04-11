@@ -303,8 +303,8 @@ export default React.memo(function AllSliversView({
         case 'lease_end': {
           const ca = sliceCache.get(a.name);
           const cb = sliceCache.get(b.name);
-          av = ca?.lease_end || '';
-          bv = cb?.lease_end || '';
+          av = ca?.lease_end || a.lease_end || '';
+          bv = cb?.lease_end || b.lease_end || '';
           break;
         }
         case 'nodes': {
@@ -723,7 +723,7 @@ export default React.memo(function AllSliversView({
                   <td>
                     <span className={`sliver-state-badge ${stateClass(slice.state)}`}>{slice.state}</span>
                   </td>
-                  <td>{cached ? formatLeaseEnd(cached.lease_end) : <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
+                  <td>{(cached?.lease_end || slice.lease_end) ? formatLeaseEnd(cached?.lease_end || slice.lease_end || '') : <span className="sliver-cell-muted">{'\u2014'}</span>}</td>
                   <td>{nodeCount}</td>
                   <td>{netCount}</td>
                   <td>

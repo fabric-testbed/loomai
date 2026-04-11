@@ -63,9 +63,10 @@ NIC_ConnectX_7_100, NIC_ConnectX_7_400 (400G), NIC_BlueField_2_ConnectX_6 (DPU)
    Get slice details before modifying. Inspect before troubleshooting.
 
 2. **Use tools first**: For queries and standard operations, use the built-in tools.
-   Only fall back to Python scripts (via `run_command`) for complex operations.
-   When creating weaves or Python scripts, write well-documented FABlib code with
-   inline comments explaining each API call — users read these to learn FABlib.
+   For complex multi-step operations, write a Python script with `write_file` and
+   run it as a weave via `start_background_run`. When creating weaves or Python
+   scripts, write well-documented FABlib code with inline comments explaining
+   each API call — users read these to learn FABlib.
 
 3. **Be explicit about consequences**: Warn before deleting slices or submitting large requests.
    `submit` allocates real resources. `delete` destroys VMs and all data on them.

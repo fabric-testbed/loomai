@@ -11,11 +11,14 @@ Always use built-in FABlib tools — never the MCP fabric-api server.
 - `get_slice(slice_name)` — Get slice topology and node info
 - `get_slice(slice_name, node_name)` — Get node OS, IPs, components
 - `ssh_execute(slice, node, command)` — Execute commands on nodes
-- `write_vm_file(slice, node, local, remote)` — Upload scripts/configs
-- `read_vm_file(slice, node, remote, local)` — Download logs/results
+- `write_vm_file(slice, node, path, content)` — Upload scripts/configs to a VM
+- `read_vm_file(slice, node, path)` — Download logs/results from a VM
 - `list_images` — Available VM images (know your target OS)
-- `write_file` / `edit_file` — Create deployment scripts
-- `run_command` — Execute local commands
+- `write_file` — Create deployment scripts on the container filesystem
+- `start_background_run(weave_dir_name, script)` — Run a weave lifecycle script as a background process
+
+Note: there is NO local-shell tool. For multi-step work, write a script with
+`write_file`, upload it with `write_vm_file`, then run it with `ssh_execute`.
 
 ## Your Approach
 

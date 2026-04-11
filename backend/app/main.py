@@ -29,7 +29,7 @@ for _uv_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
     # messages bubble up to root which already has the timestamped formatter.
     _uv_logger.propagate = True
 
-from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, recipes, experiments, http_proxy, tunnels, ai_terminal, ai_chat, ai_agents, jupyter, artifacts, chameleon, trovi, schedule, composite, monitoring
+from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, recipes, experiments, http_proxy, tunnels, ai_terminal, ai_chat, ai_agents, ai_rag, jupyter, artifacts, chameleon, trovi, schedule, composite, monitoring
 from app.tunnel_manager import get_tunnel_manager
 
 logger = logging.getLogger(__name__)
@@ -408,17 +408,30 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("Background model discovery failed (non-fatal): %s", e)
 
+    # Background RAG index build — happens after model discovery so the
+    # embedder probe sees the configured providers. Runs off-loop via
+    # asyncio.to_thread to avoid blocking other startup tasks.
+    async def _rag_index_build():
+        await asyncio.sleep(10)  # Let settings load and model discovery warm up
+        try:
+            from app.rag import startup_build_index
+            await startup_build_index()
+        except Exception as e:
+            logger.warning("RAG index build failed (non-fatal): %s", e, exc_info=True)
+
     task = asyncio.create_task(_cleanup_loop())
     cache_task = asyncio.create_task(_site_cache_warmer())
     backup_task = asyncio.create_task(_claude_config_backup_loop())
     reservation_task = asyncio.create_task(_reservation_checker())
     model_task = asyncio.create_task(_model_discovery())
+    rag_task = asyncio.create_task(_rag_index_build())
     yield
     task.cancel()
     cache_task.cancel()
     backup_task.cancel()
     reservation_task.cancel()
     model_task.cancel()
+    rag_task.cancel()
     mgr.close_all()
 
     # Close shared httpx connection pools
@@ -439,7 +452,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Claude Code config backup failed on shutdown: %s", e)
 
 
-app = FastAPI(title="LoomAI API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="LoomAI API", version="0.2.0", lifespan=lifespan)
 
 from app.error_handler import install_error_handlers
 install_error_handlers(app)
@@ -466,6 +479,7 @@ app.include_router(metrics.router, prefix="/api")
 app.include_router(ai_terminal.router)
 app.include_router(ai_chat.router)
 app.include_router(ai_agents.router)
+app.include_router(ai_rag.router)
 app.include_router(terminal.router)
 app.include_router(config.router)
 app.include_router(files.router)

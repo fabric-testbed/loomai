@@ -28,12 +28,37 @@ def _ai_server_url() -> str:
 def _nrp_server_url() -> str:
     from app.settings_manager import get_nrp_server_url
     return get_nrp_server_url()
-_MAX_TOOL_ROUNDS = 20  # reasonable limit; prevents runaway tool loops
+_MAX_TOOL_ROUNDS = 30  # raised from 20 to absorb larger multi-file project
+                       # generation (e.g. a full weave with script+notebook+tuning+docs).
+                       # Worst-case wall clock on qwen3-coder-30b at ~25s/round is ~12.5
+                       # min; if users exceed this they see the Continue button and can
+                       # extend the session.
 
 _APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _AI_TOOLS_DIR = os.path.join(_APP_ROOT, "ai-tools")
 _FABRIC_AI_MD_PATH = os.path.join(_AI_TOOLS_DIR, "shared", "FABRIC_AI.md")
 _AGENTS_DIR = os.path.join(_AI_TOOLS_DIR, "shared", "agents")
+
+# FABlib API ground truth — authoritative method reference that lists real
+# methods and common hallucinations. Injected into the system prompt on
+# weave/slice-mutation requests to prevent qwen3-coder from inventing
+# non-existent FABlib methods (verified hallucination issue from live probes).
+_FABLIB_REF_PATH = os.path.join(
+    _AI_TOOLS_DIR, "fablib-examples", "experiments", "fablib_api_reference.py"
+)
+_fablib_ref_cache: str | None = None
+
+
+def _load_fablib_ref() -> str:
+    """Return the FABlib API reference file content (cached in memory)."""
+    global _fablib_ref_cache
+    if _fablib_ref_cache is None:
+        try:
+            with open(_FABLIB_REF_PATH) as f:
+                _fablib_ref_cache = f.read()
+        except OSError:
+            _fablib_ref_cache = ""
+    return _fablib_ref_cache
 
 # ---------------------------------------------------------------------------
 # Caches
@@ -212,6 +237,36 @@ TOOL_SCHEMAS: list[dict] = [
                     "model": {"type": "string", "description": "Component model: NIC_Basic, NIC_ConnectX_5, NIC_ConnectX_6, GPU_Tesla_T4, GPU_RTX6000, GPU_A30, GPU_A40, NVME_P4510, FPGA_Xilinx_U280"},
                 },
                 "required": ["slice_name", "node_name", "component_name", "model"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_fabnet",
+            "description": (
+                "Attach FABNetv4 or FABNetv6 to a single node in a draft slice. "
+                "THIS IS THE CORRECT TOOL FOR MULTI-SITE FABNET CONNECTIVITY. "
+                "Call once per node — FABRIC automatically creates a per-site "
+                "network and routes between sites via its backbone. Handles "
+                "NIC attachment, interface creation, and automatic IP assignment. "
+                "Do NOT use add_network(type='FABNetv4') for multi-site — a single "
+                "FABNetv4 network cannot span more than one site (FABRIC returns "
+                "'Service cannot span N sites. Limit: 1.')."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slice_name": {"type": "string", "description": "Name of the draft slice"},
+                    "node_name": {"type": "string", "description": "Name of the node to attach"},
+                    "net_type": {
+                        "type": "string",
+                        "description": "Address family: IPv4 for FABNetv4, IPv6 for FABNetv6",
+                        "enum": ["IPv4", "IPv6"],
+                        "default": "IPv4",
+                    },
+                },
+                "required": ["slice_name", "node_name"],
             },
         },
     },
@@ -500,15 +555,51 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "ssh_execute",
-            "description": "Execute a command on a VM node via SSH. The slice must be in StableOK state.",
+            "description": (
+                "Execute a command on a VM node via SSH. The slice must be in "
+                "StableOK state. Default timeout is 600s (10 min) which covers "
+                "apt update + apt install of ~20 packages. For very long "
+                "operations (kernel upgrade, large package sets, docker pulls), "
+                "set timeout up to 1800s (30 min)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "slice_name": {"type": "string", "description": "Name of the slice"},
                     "node_name": {"type": "string", "description": "Name of the node"},
-                    "command": {"type": "string", "description": "Shell command to execute on the VM"},
+                    "command": {"type": "string", "description": "Shell command to execute on the VM. For non-interactive apt use DEBIAN_FRONTEND=noninteractive and apt-get -y -qq."},
+                    "timeout": {"type": "integer", "description": "Command timeout in seconds (default 600, max 1800)", "default": 600},
                 },
                 "required": ["slice_name", "node_name", "command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reboot_and_wait",
+            "description": (
+                "Reboot a VM node and wait for SSH to become reachable again. "
+                "Use this in 'reboot if needed' workflows: first check "
+                "`test -f /var/run/reboot-required` with ssh_execute; if "
+                "present, call this tool, then continue with post-reboot steps. "
+                "Returns status 'reachable' with elapsed seconds, or "
+                "'unreachable' if the node doesn't come back within the "
+                "timeout (default 300s, max 1500s). Safe to call per-node in "
+                "multi-node workflows."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slice_name": {"type": "string", "description": "Name of the slice"},
+                    "node_name": {"type": "string", "description": "Name of the node to reboot"},
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Max seconds to wait for SSH to return (default 300, max 1500)",
+                        "default": 300,
+                    },
+                },
+                "required": ["slice_name", "node_name"],
             },
         },
     },
@@ -850,7 +941,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "search_examples",
-            "description": "Search FABlib code examples by keyword. Returns matching example filenames, titles, and descriptions. Use read_file to load the full example code. Examples: 'fabnetv4', 'gpu', 'l2 network', 'ssh execute', 'storage'.",
+            "description": "Search FABlib code examples by keyword. Returns matching examples with their full source code included. Do NOT call read_file on the results — the code is already in the response. Examples: 'fabnetv4', 'gpu', 'l2 network', 'weave lifecycle', 'iperf'.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -911,18 +1002,40 @@ async def _search_examples(query: str) -> str:
             scored.append((score, entry))
 
     scored.sort(key=lambda x: -x[0])
-    top = scored[:8]  # Return top 8 matches
 
+    examples_dir = os.path.join(_APP_ROOT, "ai-tools", "fablib-examples")
     results = []
-    for score, entry in top:
-        results.append({
-            "file": f"ai-tools/fablib-examples/{entry['file']}",
+    total_content_chars = 0
+    content_budget = 5000  # Total chars for all inline content
+
+    for score, entry in scored:
+        item = {
+            "file": entry["file"],
             "title": entry["title"],
             "description": entry["description"],
             "tags": entry.get("tags", []),
-        })
+        }
+        # Include file content for top results that fit in the budget
+        if total_content_chars < content_budget:
+            fpath = os.path.join(examples_dir, entry["file"])
+            if os.path.isfile(fpath):
+                try:
+                    with open(fpath) as ef:
+                        content = ef.read()
+                    remaining = content_budget - total_content_chars
+                    if len(content) > remaining:
+                        content = content[:remaining] + "\n# ... (truncated)"
+                    item["content"] = content
+                    total_content_chars += len(content)
+                except Exception:
+                    pass
+        results.append(item)
+        if len(results) >= 8:
+            break
 
-    return json.dumps({"query": query, "results": results, "total_matches": len(scored)})
+    total = len(scored)
+    note = f"Found {total} examples, showing top {len(results)}"
+    return json.dumps({"query": query, "results": results, "note": note})
 
 
 async def _create_weave_tool(args: dict) -> str:
@@ -1400,8 +1513,7 @@ def _tool_summary(name: str, args: dict, result: str) -> str:
 
     if name == "search_examples" and isinstance(data, dict):
         results = data.get("results", [])
-        total = data.get("total_matches", 0)
-        return f"Found {total} examples, showing top {len(results)}"
+        return data.get("note", f"Found {len(results)} examples")
 
     # Default: truncate result
     if result:
@@ -1428,7 +1540,66 @@ async def execute_tool(name: str, arguments: dict) -> str:
         elif name == "get_slice":
             from app.routes.slices import get_slice
             result = await get_slice(arguments["slice_name"], max_age=0)
-            return json.dumps(result, default=str)
+            # Return a COMPACT summary so the result fits in standard tier's
+            # tool_result_max (2000 chars). Full topology JSON for a 3-node
+            # multi-network slice is 3-6KB and gets truncated mid-node, which
+            # caused the LLM to miss later nodes and forget them in multi-node
+            # workflows. If the caller needs low-level interface details
+            # (MACs, VLAN IDs), they can query specific nodes via ssh_execute.
+            nodes_summary = []
+            for n in result.get("nodes", []) or []:
+                if not isinstance(n, dict):
+                    continue
+                # Keep only fields a workflow would need: identity, placement,
+                # image, IPs, and the network names it's attached to.
+                net_names = []
+                for iface in (n.get("interfaces") or []):
+                    if isinstance(iface, dict):
+                        nn = iface.get("network_name")
+                        if nn and nn not in net_names:
+                            net_names.append(nn)
+                comp_models = []
+                for c in (n.get("components") or []):
+                    if isinstance(c, dict):
+                        m = c.get("model")
+                        if m:
+                            comp_models.append(m)
+                nodes_summary.append({
+                    "name": n.get("name"),
+                    "site": n.get("site"),
+                    "host": n.get("host"),
+                    "cores": n.get("cores"),
+                    "ram": n.get("ram"),
+                    "disk": n.get("disk"),
+                    "image": n.get("image"),
+                    "management_ip": n.get("management_ip"),
+                    "username": n.get("username", "ubuntu"),
+                    "reservation_state": n.get("reservation_state"),
+                    "error_message": n.get("error_message") or "",
+                    "components": comp_models,
+                    "networks": net_names,
+                })
+            networks_summary = []
+            for net in result.get("networks", []) or []:
+                if not isinstance(net, dict):
+                    continue
+                networks_summary.append({
+                    "name": net.get("name"),
+                    "type": net.get("type"),
+                    "site": net.get("site"),
+                })
+            compact = {
+                "name": result.get("name"),
+                "id": result.get("id"),
+                "state": result.get("state"),
+                "lease_end": result.get("lease_end"),
+                "error_messages": result.get("error_messages") or [],
+                "node_count": len(nodes_summary),
+                "nodes": nodes_summary,
+                "network_count": len(networks_summary),
+                "networks": networks_summary,
+            }
+            return json.dumps(compact, default=str)
 
         elif name == "query_sites":
             from app.routes.resources import list_sites
@@ -1477,6 +1648,21 @@ async def execute_tool(name: str, arguments: dict) -> str:
             )
             result = await asyncio.to_thread(_run_sync, add_component, arguments["slice_name"], arguments["node_name"], req)
             return json.dumps({"status": "added", "component": arguments["component_name"], "model": arguments["model"]}, default=str)
+
+        elif name == "add_fabnet":
+            from app.routes.slices import add_fabnet_to_node, AddFabnetRequest
+            net_type = arguments.get("net_type", "IPv4")
+            req = AddFabnetRequest(net_type=net_type)
+            await asyncio.to_thread(
+                _run_sync, add_fabnet_to_node,
+                arguments["slice_name"], arguments["node_name"], req,
+            )
+            return json.dumps({
+                "status": "attached",
+                "node": arguments["node_name"],
+                "net_type": net_type,
+                "note": f"Per-site FABNet{net_type[-2:].lower()} created; FABRIC backbone routes between sites.",
+            }, default=str)
 
         elif name == "add_network":
             from app.routes.slices import add_network as add_network_fn, CreateNetworkRequest
@@ -1669,12 +1855,21 @@ async def execute_tool(name: str, arguments: dict) -> str:
         # --- VM Operations (SSH) ---
         elif name == "ssh_execute":
             from app.routes.files import execute_on_vm, VmExecBody
-            body = VmExecBody(command=arguments["command"])
+            body = VmExecBody(
+                command=arguments["command"],
+                timeout=arguments.get("timeout"),
+            )
             result = await execute_on_vm(arguments["slice_name"], arguments["node_name"], body)
             # Truncate long output
             stdout = result.get("stdout", "")[:8000]
             stderr = result.get("stderr", "")[:2000]
             return json.dumps({"stdout": stdout, "stderr": stderr}, default=str)
+
+        elif name == "reboot_and_wait":
+            from app.routes.files import reboot_and_wait as reboot_fn, VmRebootBody
+            body = VmRebootBody(timeout=int(arguments.get("timeout", 300) or 300))
+            result = await reboot_fn(arguments["slice_name"], arguments["node_name"], body)
+            return json.dumps(result, default=str)
 
         elif name == "write_vm_file":
             from app.routes.files import write_vm_file_content, VmWriteFileRequest
@@ -1849,7 +2044,9 @@ async def execute_tool(name: str, arguments: dict) -> str:
             return json.dumps(result, default=str)
 
         elif name == "search_examples":
-            return await _search_examples(arguments.get("query", ""))
+            # LLMs sometimes send "name" instead of "query"
+            q = arguments.get("query") or arguments.get("name") or arguments.get("search") or ""
+            return await _search_examples(q)
 
         else:
             return json.dumps({"error": f"Unknown tool: {name}"})
@@ -1982,12 +2179,13 @@ async def chat_stream(request: Request):
         get_model_profile, get_system_prompt, trim_conversation,
         filter_tool_schemas, estimate_tokens, estimate_conversation_tokens,
     )
-    from app.chat_intent import detect_intent, detect_multi_step, is_destructive
+    from app.chat_intent import detect_intent, detect_multi_step, is_destructive, record_intent_result
     from app.chat_prompt import LOOMAI_MODE_PROMPT, LOOMAI_MODE_EXTENDED
 
     # Look up actual context_length from discovered models
     from app.settings_manager import load_settings
     _ctx_length = None
+    _ctx_source = "default"
     try:
         _discovered = load_settings().get("ai", {}).get("discovered_models", {})
         _model_bare = model.split(":")[-1] if ":" in model else model  # strip provider prefix
@@ -1996,14 +2194,25 @@ async def chat_stream(request: Request):
                 for _m in _provider_models:
                     if isinstance(_m, dict) and _m.get("id") == _model_bare:
                         _ctx_length = _m.get("context_length")
+                        if _ctx_length:
+                            _ctx_source = "discovered"
                         break
             if _ctx_length:
                 break
     except Exception:
         pass
 
+    # Fallback to hardcoded defaults if discovery hasn't persisted yet
+    # (first-turn bootstrap before the startup task writes discovered_models)
+    if not _ctx_length:
+        from app.routes.ai_terminal import _FABRIC_CONTEXT_DEFAULTS, _NRP_CONTEXT_DEFAULTS
+        _model_bare = model.split(":")[-1] if ":" in model else model
+        _ctx_length = _FABRIC_CONTEXT_DEFAULTS.get(_model_bare) or _NRP_CONTEXT_DEFAULTS.get(_model_bare)
+        if _ctx_length:
+            _ctx_source = "hardcoded-default"
+
     profile = get_model_profile(model, context_length=_ctx_length)
-    logger.info("Chat model=%s tier=%s context=%d (discovered=%s)", model, profile["tier"], profile["context_window"], _ctx_length)
+    logger.info("Chat model=%s tier=%s context=%d (source=%s)", model, profile["tier"], profile["context_window"], _ctx_source)
 
     # --- LoomAI-side intent detection (pre-processing) ---
     # Extract the user's last message for intent matching
@@ -2015,6 +2224,25 @@ async def chat_stream(request: Request):
 
     intent_tool, intent_args, intent_confidence = detect_intent(user_message)
     template = detect_multi_step(user_message)
+
+    # --- Destructive-action authorization check ---
+    # If the LLM decides to call submit_slice / delete_slice on its own but the
+    # user's message doesn't explicitly authorize it, we synthesize a
+    # "blocked" tool result instead of executing. The intent-detection path
+    # already has its own confirm_needed gate; this handles the case where
+    # the model picks a destructive tool via native function calling.
+    _user_msg_lower = (user_message or "").lower()
+    _DESTRUCTIVE_VERBS = (
+        "submit", "deploy", "provision", "launch the slice", "start the slice",
+        "go live", "bring up", "build the slice",
+        "delete", "destroy", "tear down", "teardown", "release",
+        "remove slice", "drop slice", "kill slice", "terminate slice",
+    )
+    _user_authorized_destructive = any(v in _user_msg_lower for v in _DESTRUCTIVE_VERBS)
+    if _user_authorized_destructive:
+        logger.info("User message authorizes destructive actions")
+    else:
+        logger.debug("User message does NOT authorize destructive actions — LLM submit/delete calls will be blocked")
 
     # Pre-fetch data for high-confidence intents
     prefetched_data = ""
@@ -2033,8 +2261,17 @@ async def chat_stream(request: Request):
                 prefetched_data = result
                 prefetched_tools.append((intent_tool, result[:profile["tool_result_max"]]))
                 logger.info("Pre-fetched %s (%s confidence)", intent_tool, intent_confidence)
+                # Record intent success for learning (persists to disk)
+                try:
+                    record_intent_result(model, intent_tool, True)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning("Pre-fetch failed for %s: %s", intent_tool, e)
+                try:
+                    record_intent_result(model, intent_tool, False)
+                except Exception:
+                    pass
 
     elif template and not template.get("confirm"):
         # Non-destructive template — execute first step
@@ -2057,13 +2294,71 @@ async def chat_stream(request: Request):
 
     # Pre-fetch FABlib examples when weave/experiment creation detected
     _weave_keywords = ["weave", "experiment", "topology", "iperf", "benchmark", "deploy"]
-    _is_weave_request = any(kw in user_message.lower() for kw in _weave_keywords)
+    _slice_mutation_keywords = [
+        "add node", "add a node", "attach", "add component",
+        "add network", "change image", "update node", "remove node",
+        "remove network", "modify slice", "add gpu", "add nic",
+        "add smartnic", "add fpga", "add nvme",
+    ]
+    # Any mention of FABlib specifics, network types, or "slice" in a
+    # code-generation context should inject the ground truth. This catches
+    # questions like "write a FABlib function to create a 2-node L2Bridge
+    # slice" which otherwise slip past the weave/mutation keyword filters.
+    _fablib_code_keywords = [
+        "fablib", "fabric_lib", "fabrictestbed",
+        "l2bridge", "l2sts", "l2ptp", "fabnetv4", "fabnetv6", "fabnet",
+        "new_slice", "add_node", "add_l2network", "add_l3network",
+        "slice.submit", "slice.add",
+    ]
+    _msg_lower = user_message.lower()
+    _is_weave_request = any(kw in _msg_lower for kw in _weave_keywords)
+    _is_slice_mutation = any(kw in _msg_lower for kw in _slice_mutation_keywords)
+    _is_fablib_code = any(kw in _msg_lower for kw in _fablib_code_keywords)
+    # Also treat "slice" + any code-generation verb as a FABlib code request.
+    _has_slice_word = "slice" in _msg_lower
+    _code_gen_verbs = ("write", "create", "code", "function", "python", "script", "generate")
+    _is_slice_code = _has_slice_word and any(v in _msg_lower for v in _code_gen_verbs)
+    _needs_fablib_ref = (
+        _is_weave_request or _is_slice_mutation or _is_fablib_code or _is_slice_code
+    )
     if _is_weave_request and not any(t == "search_examples" for t, _ in prefetched_tools):
         try:
             examples = await execute_tool("search_examples", {"query": user_message[:100]})
-            prefetched_tools.append(("search_examples", examples[:2000]))
+            prefetched_tools.append(("search_examples", examples[:6000]))
         except Exception:
             pass
+
+    # --- RAG retrieval: hybrid semantic+BM25 search over the knowledge corpus ---
+    # Runs for every non-trivial chat turn. Retrieved chunks are injected as
+    # a "Retrieved Context" block in the system prompt.
+    rag_context_block = ""
+    try:
+        from app.rag import refresh_index_if_stale, retrieve_for_chat, format_hits_as_context
+        # Cheap incremental refresh (rescans corpus, re-embeds changed files only)
+        await refresh_index_if_stale(max_age=30.0)
+        # Don't waste retrieval on trivial greetings
+        if len(user_message) >= 8:
+            # Weave-biased retrieval when the user is clearly talking about weaves
+            hits = retrieve_for_chat(
+                user_message,
+                k=5,
+                min_score=0.30,
+                weave_bias=_is_weave_request,
+            )
+            if hits:
+                # Size budget scales with tier: compact models get less, large models more
+                max_rag_chars = {
+                    "compact": 1500,
+                    "standard": 4000,
+                    "large": 6000,
+                }.get(profile["tier"], 3000)
+                rag_context_block = format_hits_as_context(hits, max_chars=max_rag_chars)
+                logger.info(
+                    "RAG: retrieved %d chunks for chat (top source=%s, top score=%.2f)",
+                    len(hits), hits[0].chunk.source_type, hits[0].score,
+                )
+    except Exception as e:
+        logger.debug("RAG retrieval skipped: %s", e)
 
     # --- Build system prompt ---
     # For low-confidence / complex requests: use the full system prompt with tool-calling
@@ -2089,6 +2384,62 @@ async def chat_stream(request: Request):
             "proven code patterns, then `read_file` to load the example. Adapt it.\n"
             "Never write FABlib code from scratch — use the example library.\n"
             "When updating a weave, read `weave.md` first — it is the authoritative spec.\n"
+            "**JSON output**: Never wrap JSON in markdown ```json``` code fences. "
+            "Emit raw JSON only when the user asks for JSON.\n\n"
+            "## Critical Rules — Read Carefully\n"
+            "**Create slice ≠ submit slice.** When the user says 'create a slice', "
+            "build a DRAFT topology only (`create_slice`, `add_node`, `add_fabnet`, "
+            "`add_network`, `add_component`). Do NOT call `submit_slice` unless the "
+            "user's message explicitly contains 'submit', 'deploy', 'provision', or "
+            "similar. When the draft is ready, describe what you built and ask the "
+            "user to confirm before submitting. If you call submit_slice without "
+            "authorization you will receive DESTRUCTIVE_ACTION_BLOCKED — do not "
+            "retry, summarize instead.\n\n"
+            "**Create slice ≠ create weave.** A SLICE is a live FABRIC topology "
+            "(nodes + networks, provisioned as VMs). A WEAVE is a project directory "
+            "in `my_artifacts/` containing scripts, notebooks, and metadata. If the "
+            "user asks for a slice, use `create_slice` only — do NOT also call "
+            "`create_weave` unless they explicitly ask for one.\n\n"
+            "**Multi-site FABNetv4/FABNetv6.** To connect N nodes at different sites "
+            "over FABnet, call `add_fabnet(slice_name, node_name, net_type='IPv4')` "
+            "ONCE PER NODE. FABRIC automatically creates a per-site FABnet network "
+            "for each site and routes between them via its backbone. Do NOT use "
+            "`add_network(type='FABNetv4', interfaces=[...])` for multi-site — a "
+            "single FABNetv4 service cannot span more than one site and the FABRIC "
+            "orchestrator will reject it with 'Service cannot span N sites. Limit: 1.'\n\n"
+            "**Don't retry blocked actions.** If a tool returns "
+            "`DESTRUCTIVE_ACTION_BLOCKED`, STOP. Summarize progress and ask the "
+            "user to confirm the destructive action in plain text. Retrying the "
+            "same blocked tool will be blocked again.\n\n"
+            "**Multi-node operations must touch EVERY node.** When the user says "
+            "'all nodes', 'every node', 'the nodes', or any phrase implying all "
+            "nodes in a slice, you MUST issue at least one `ssh_execute`, "
+            "`write_vm_file`, `read_vm_file`, or `reboot_and_wait` call against "
+            "every node returned by `get_slice`. Before emitting your final "
+            "summary, verify you touched every node. Your summary MUST list each "
+            "node by name with its per-node status (success/partial/skipped/error). "
+            "Do NOT say 'both nodes' if there are three.\n\n"
+            "**Container filesystem ≠ VM filesystem.** `write_file`, `read_file`, "
+            "`list_directory`, `create_directory`, `delete_path` operate on the "
+            "LoomAI container's user storage (rooted at `my_artifacts/`, "
+            "`my_slices/`, `notebooks/`). Files written with these tools are NOT "
+            "visible inside provisioned VMs. To put a file on a VM, use "
+            "`write_vm_file(slice_name, node_name, path, content)`. To run a "
+            "command on a VM, use `ssh_execute(...)`. Never `ssh_execute "
+            "python3 /home/fabric/script.py` unless you first `write_vm_file` to "
+            "that path on the VM.\n\n"
+            "**Reboot handling.** To reboot a VM as part of a workflow, use "
+            "`reboot_and_wait(slice_name, node_name)`. It reboots via SSH and "
+            "polls until the VM is reachable again (default 5 min). For "
+            "'reboot if needed' workflows, first check "
+            "`test -f /var/run/reboot-required` with ssh_execute; if present, "
+            "call reboot_and_wait, then continue with post-reboot steps.\n\n"
+            "**Be honest in your summary.** Before writing your final summary, "
+            "count the nodes and operations you actually performed. Mention any "
+            "node that was skipped or any operation that returned an error or "
+            "timed out. Do not claim success when a tool returned an error. "
+            "Be specific: 'node1 fully configured; node2 apt lock — 5/10 "
+            "packages installed; node3 not reached.'\n"
         )
         # Inject create-weave skill when the user is building weaves/experiments
         if _is_weave_request:
@@ -2104,6 +2455,25 @@ async def chat_stream(request: Request):
                 system_parts.append(f"\n\n## Weave Creation Guide\n\n{_skill}\n")
             except Exception:
                 pass
+        # Inject FABlib ground-truth method reference on any weave or slice
+        # mutation request. Prevents hallucinated method names like
+        # fablib.get_fab(), node.write_file(), network.add_interface() —
+        # all verified to occur in live probes at every temperature.
+        if _needs_fablib_ref:
+            _ref = _load_fablib_ref()
+            if _ref:
+                # Cap at 4500 chars (~1100 tokens) — fits the standard-tier
+                # budget comfortably and covers the FablibManager/Slice/Node
+                # method lists plus the "common hallucinations" preamble.
+                _ref_snippet = _ref[:4500]
+                system_parts.append(
+                    "\n\n## FABlib Ground Truth — Real Method Names\n\n"
+                    "The following is the authoritative list of real FABlib methods. "
+                    "If a method is NOT in this reference, it does NOT exist — do not "
+                    "invent method names. This file is extracted directly from the "
+                    "installed fabrictestbed-extensions package.\n\n"
+                    f"```python\n{_ref_snippet}\n```\n"
+                )
     elif profile["tier"] == "compact":
         system_parts = [LOOMAI_MODE_PROMPT]
     else:
@@ -2115,6 +2485,10 @@ async def chat_stream(request: Request):
         for tool_name, result in prefetched_tools:
             data_section += f"**{tool_name}**:\n```json\n{result}\n```\n\n"
         system_parts.append(data_section)
+
+    # Inject retrieved RAG context (from semantic search over the corpus)
+    if rag_context_block:
+        system_parts.append("\n\n" + rag_context_block)
 
     # C2: If destructive action detected, tell LLM to confirm
     if confirm_needed:
@@ -2221,7 +2595,7 @@ async def chat_stream(request: Request):
                         "Content-Type": "application/json",
                     },
                     json={**llm_body, "stream": False},
-                    timeout=60.0,
+                    timeout=300.0,
                 )
 
                 # On server error or model-not-found, try fallbacks
@@ -2242,7 +2616,7 @@ async def chat_stream(request: Request):
                                     "Content-Type": "application/json",
                                 },
                                 json={**llm_body, "stream": False},
-                                timeout=60.0,
+                                timeout=300.0,
                             )
 
                     # On 5xx, fallback to NRP
@@ -2258,7 +2632,7 @@ async def chat_stream(request: Request):
                                     "Content-Type": "application/json",
                                 },
                                 json={**llm_body, "stream": False},
-                                timeout=60.0,
+                                timeout=300.0,
                             )
 
                 if resp.status_code != 200:
@@ -2285,8 +2659,18 @@ async def chat_stream(request: Request):
                 # Check for tool calls (handle both finish_reason="tool_calls" and "length")
                 tool_calls = msg.get("tool_calls")
                 if tool_calls and finish in ("tool_calls", "length", "stop"):
-                    # Append assistant message with tool calls to conversation
-                    conversation.append(msg)
+                    # Append assistant message with tool calls to conversation.
+                    # Strip reasoning_content / reasoning fields (NVIDIA Nemotron-style
+                    # reasoning models return these as a separate channel — we never
+                    # want them re-sent on subsequent turns because: (a) the server
+                    # usually rejects unknown fields; (b) they inflate conversation
+                    # tokens without contributing visible content; (c) the estimator
+                    # wouldn't count them anyway, making budget math wrong.
+                    clean_msg = {
+                        k: v for k, v in msg.items()
+                        if k in ("role", "content", "tool_calls", "tool_call_id", "name")
+                    }
+                    conversation.append(clean_msg)
 
                     consecutive_errors = 0
                     for tc in tool_calls:
@@ -2301,14 +2685,59 @@ async def chat_stream(request: Request):
                         # Notify frontend about tool call
                         yield f"data: {json.dumps({'tool_call': {'name': tc_name, 'arguments': tc_args}})}\n\n"
 
-                        # Execute the tool with a 5-minute timeout
-                        try:
-                            tool_result = await asyncio.wait_for(
-                                execute_tool(tc_name, tc_args), timeout=300
+                        # Destructive-action safety gate — the LLM can decide
+                        # on its own to call submit_slice/delete_slice. If the
+                        # user's original message didn't authorize it, block
+                        # the call and force the model to summarize and ask.
+                        if is_destructive(tc_name) and not _user_authorized_destructive:
+                            logger.info(
+                                "BLOCKED destructive LLM-initiated tool call: %s (user did not authorize)",
+                                tc_name,
                             )
-                        except asyncio.TimeoutError:
-                            tool_result = json.dumps({"error": f"Tool {tc_name} timed out after 5 minutes"})
-                            logger.warning("Tool %s timed out after 300s", tc_name)
+                            tool_result = json.dumps({
+                                "error": "DESTRUCTIVE_ACTION_BLOCKED",
+                                "tool": tc_name,
+                                "message": (
+                                    f"{tc_name} is a destructive action and "
+                                    f"the user's original message did not "
+                                    f"explicitly authorize it. DO NOT RETRY "
+                                    f"this tool. Instead, summarize what you "
+                                    f"have built so far and ask the user to "
+                                    f"explicitly confirm with keywords like "
+                                    f"'submit', 'deploy', or 'delete' in "
+                                    f"their next message."
+                                ),
+                            })
+                        else:
+                            # Per-tool outer timeout. SSH operations on cold VMs
+                            # can easily exceed the old 5-min default (apt install,
+                            # docker pull, kernel upgrade). For ssh_execute / vm
+                            # file ops we honor the caller-specified timeout + 60s
+                            # grace to cover transport overhead; for everything
+                            # else we keep a conservative 5-min default.
+                            if tc_name in ("ssh_execute", "write_vm_file", "read_vm_file", "reboot_and_wait"):
+                                _requested = tc_args.get("timeout") if isinstance(tc_args, dict) else None
+                                if isinstance(_requested, (int, float)) and _requested > 0:
+                                    _outer_timeout = min(1860, int(_requested) + 60)
+                                else:
+                                    _outer_timeout = 660  # 600s default + 60s grace
+                            else:
+                                _outer_timeout = 300
+                            try:
+                                tool_result = await asyncio.wait_for(
+                                    execute_tool(tc_name, tc_args), timeout=_outer_timeout
+                                )
+                            except asyncio.TimeoutError:
+                                tool_result = json.dumps({
+                                    "error": f"Tool {tc_name} timed out after {_outer_timeout}s",
+                                    "hint": (
+                                        "For long-running VM operations, set a larger "
+                                        "'timeout' argument (max 1800s). For apt "
+                                        "operations, include DEBIAN_FRONTEND=noninteractive "
+                                        "and use apt-get -y -qq to avoid interactive prompts."
+                                    ) if tc_name in ("ssh_execute", "write_vm_file") else None,
+                                })
+                                logger.warning("Tool %s timed out after %ds", tc_name, _outer_timeout)
 
                         summary = _tool_summary(tc_name, tc_args, tool_result)
 
@@ -2322,7 +2751,10 @@ async def chat_stream(request: Request):
                         yield f"data: {json.dumps({'tool_result': {'name': tc_name, 'result': tool_result[:2000], 'summary': summary}})}\n\n"
 
                         # Add tool result to conversation (truncated per model profile)
+                        # search_examples returns inline code — give it more space
                         tool_max = profile["tool_result_max"]
+                        if tc_name == "search_examples":
+                            tool_max = max(tool_max, 6000)  # examples need room for code
                         tool_result = tool_result or ""
                         trimmed_result = tool_result[:tool_max] if len(tool_result) > tool_max else tool_result
                         conversation.append({
