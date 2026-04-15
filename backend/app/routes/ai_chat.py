@@ -1552,12 +1552,21 @@ async def execute_tool(name: str, arguments: dict) -> str:
                     continue
                 # Keep only fields a workflow would need: identity, placement,
                 # image, IPs, and the network names it's attached to.
+                # Include compact interfaces so the model can read
+                # dataplane IPs (FABnet, L2) without running ip addr show.
+                iface_summary = []
                 net_names = []
                 for iface in (n.get("interfaces") or []):
                     if isinstance(iface, dict):
                         nn = iface.get("network_name")
                         if nn and nn not in net_names:
                             net_names.append(nn)
+                        ip = iface.get("ip_addr")
+                        if nn or ip:
+                            iface_summary.append({
+                                "network_name": nn,
+                                "ip_addr": ip,
+                            })
                 comp_models = []
                 for c in (n.get("components") or []):
                     if isinstance(c, dict):
@@ -1577,6 +1586,7 @@ async def execute_tool(name: str, arguments: dict) -> str:
                     "reservation_state": n.get("reservation_state"),
                     "error_message": n.get("error_message") or "",
                     "components": comp_models,
+                    "interfaces": iface_summary,
                     "networks": net_names,
                 })
             networks_summary = []
@@ -2293,7 +2303,11 @@ async def chat_stream(request: Request):
             pass
 
     # Pre-fetch FABlib examples when weave/experiment creation detected
-    _weave_keywords = ["weave", "experiment", "topology", "iperf", "benchmark", "deploy"]
+    _weave_keywords = ["weave", "experiment", "topology", "deploy"]
+    _benchmark_keywords = [
+        "iperf", "benchmark", "bandwidth test", "throughput test",
+        "latency test", "fio", "stress-ng", "stress test",
+    ]
     _slice_mutation_keywords = [
         "add node", "add a node", "attach", "add component",
         "add network", "change image", "update node", "remove node",
@@ -2312,6 +2326,7 @@ async def chat_stream(request: Request):
     ]
     _msg_lower = user_message.lower()
     _is_weave_request = any(kw in _msg_lower for kw in _weave_keywords)
+    _is_benchmark_request = any(kw in _msg_lower for kw in _benchmark_keywords)
     _is_slice_mutation = any(kw in _msg_lower for kw in _slice_mutation_keywords)
     _is_fablib_code = any(kw in _msg_lower for kw in _fablib_code_keywords)
     # Also treat "slice" + any code-generation verb as a FABlib code request.
@@ -2453,6 +2468,22 @@ async def chat_stream(request: Request):
                     if _end > 0:
                         _skill = _skill[_end + 3:].strip()
                 system_parts.append(f"\n\n## Weave Creation Guide\n\n{_skill}\n")
+            except Exception:
+                pass
+        # Inject benchmark skill when the user wants to run an ad-hoc test
+        # on existing nodes. This must be in the system prompt (not just
+        # RAG context) so the model reliably follows the IP-discovery and
+        # anti-weave rules. Mirrors the create-weave injection above.
+        if _is_benchmark_request and not _is_weave_request:
+            _bench_path = os.path.join(_AI_TOOLS_DIR, "shared", "skills", "benchmark.md")
+            try:
+                with open(_bench_path) as _bf:
+                    _bench = _bf.read()
+                if _bench.startswith("---"):
+                    _end = _bench.find("---", 3)
+                    if _end > 0:
+                        _bench = _bench[_end + 3:].strip()
+                system_parts.append(f"\n\n## Benchmark Guide\n\n{_bench}\n")
             except Exception:
                 pass
         # Inject FABlib ground-truth method reference on any weave or slice

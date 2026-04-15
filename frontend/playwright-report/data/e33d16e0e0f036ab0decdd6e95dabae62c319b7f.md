@@ -1,0 +1,322 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - generic "Go to LoomAI home" [ref=e5] [cursor=pointer]:
+          - img "LoomAI" [ref=e6]
+        - button "v0.0.17-beta (beta)" [ref=e8] [cursor=pointer]:
+          - generic [ref=e9]: v0.0.17-beta (beta)
+      - generic [ref=e11]:
+        - button "View Chameleon ▾" [ref=e13] [cursor=pointer]:
+          - generic [ref=e14]: View
+          - generic [ref=e15]: Chameleon
+          - generic [ref=e16]: ▾
+        - generic "Paul Ruth" [ref=e17]:
+          - generic [ref=e18]: P
+          - generic [ref=e19]: paul.ruth@gmail.com
+        - button "⚙" [ref=e20] [cursor=pointer]
+        - button "☾" [ref=e21] [cursor=pointer]
+        - button "?" [ref=e22] [cursor=pointer]
+    - generic [ref=e23]:
+      - generic [ref=e24]: Chameleon
+      - generic [ref=e25]:
+        - button "Slices" [ref=e26] [cursor=pointer]
+        - button "Topology" [ref=e27] [cursor=pointer]
+        - button "Map" [ref=e28] [cursor=pointer]
+        - button "Calendar" [ref=e29] [cursor=pointer]
+        - button "OpenStack" [ref=e30] [cursor=pointer]
+      - combobox [ref=e31] [cursor=pointer]:
+        - option "-- Select Slice --" [selected]
+        - option "e2e-nic-mnf6q47q [Configuring] (CHI@TACC)"
+        - option "e2e-chi-ed-mnf6q45b [Draft] (no nodes)"
+        - option "e2e-chi-lease-mnf6q4a5 [Draft] (no nodes)"
+        - option "e2e-chi-node-mnf6q48k [Draft] (no nodes)"
+        - option "e2e-chi-topo-mnf6q491 [Draft] (no nodes)"
+        - option "e2e-chi-mnf6q458 [Draft] (no nodes)"
+        - option "e2e-nic-mnf6y4ep [Configuring] (CHI@TACC)"
+        - option "e2e-chi-node-mnf6y4jq [Draft] (no nodes)"
+        - option "e2e-chi-lease-mnf6y4jq [Draft] (no nodes)"
+        - option "e2e-chi-topo-mnf6y4i9 [Draft] (no nodes)"
+        - option "e2e-chi-ed-mnf6y4e5 [Draft] (no nodes)"
+        - option "e2e-nic-mnf71h1x [Configuring] (CHI@TACC)"
+        - option "e2e-chi-mnf71h0z [Draft] (no nodes)"
+        - option "e2e-chi-lease-mnf71h8e [Draft] (no nodes)"
+        - option "e2e-nic-mnf789c7 [Configuring] (CHI@TACC)"
+        - option "e2e-chi-mnf789c6 [Draft] (no nodes)"
+        - option "e2e-chi-lease-mnf789cl [Draft] (no nodes)"
+        - option "e2e-nic-mnf7o4rp [Configuring] (CHI@TACC)"
+        - option "e2e-chi-lease-mnf7o4po [Draft] (no nodes)"
+        - option "e2e-chi-topo-mnf7o4rx [Draft] (no nodes)"
+      - button "+ New" [active] [ref=e32] [cursor=pointer]
+      - button "Submit" [disabled] [ref=e33]
+      - button "Delete" [disabled] [ref=e34]
+      - button "Delete All" [ref=e35] [cursor=pointer]
+      - button "↻ Slices" [ref=e36] [cursor=pointer]
+      - 'button "● Auto: ON" [ref=e37] [cursor=pointer]'
+    - generic [ref=e38]:
+      - generic [ref=e42]:
+        - generic [ref=e43]:
+          - generic [ref=e44]: ✎
+          - text: Chameleon Editor
+        - generic [ref=e47]: Select or create a draft from the Chameleon bar to start editing.
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - textbox "Filter by name, site, status..." [ref=e52]
+          - generic [ref=e53]: 21 of 21 items
+          - button "↻" [ref=e54] [cursor=pointer]
+        - table [ref=e56]:
+          - rowgroup [ref=e57]:
+            - row "Select all Name ▲ Site Status Nodes Networks" [ref=e58]:
+              - columnheader "Select all" [ref=e59]:
+                - checkbox "Select all" [ref=e60]
+              - columnheader [ref=e61]
+              - columnheader "Name ▲" [ref=e62] [cursor=pointer]
+              - columnheader "Site" [ref=e63] [cursor=pointer]
+              - columnheader "Status" [ref=e64] [cursor=pointer]
+              - columnheader "Nodes" [ref=e65] [cursor=pointer]
+              - columnheader "Networks" [ref=e66]
+          - rowgroup [ref=e67]:
+            - row "▶ e2e-chi-ed-mnf6q45bDraft CHI@TACC Draft 0 —" [ref=e68] [cursor=pointer]:
+              - cell [ref=e69]:
+                - checkbox [ref=e70]
+              - cell "▶" [ref=e71]
+              - cell "e2e-chi-ed-mnf6q45bDraft" [ref=e72]
+              - cell "CHI@TACC" [ref=e73]
+              - cell "Draft" [ref=e74]
+              - cell "0" [ref=e75]
+              - cell "—" [ref=e76]
+            - row "▶ e2e-chi-ed-mnf6y4e5Draft CHI@TACC Draft 0 —" [ref=e77] [cursor=pointer]:
+              - cell [ref=e78]:
+                - checkbox [ref=e79]
+              - cell "▶" [ref=e80]
+              - cell "e2e-chi-ed-mnf6y4e5Draft" [ref=e81]
+              - cell "CHI@TACC" [ref=e82]
+              - cell "Draft" [ref=e83]
+              - cell "0" [ref=e84]
+              - cell "—" [ref=e85]
+            - row "▶ e2e-chi-lease-mnf6q4a5Draft CHI@TACC Draft 0 —" [ref=e86] [cursor=pointer]:
+              - cell [ref=e87]:
+                - checkbox [ref=e88]
+              - cell "▶" [ref=e89]
+              - cell "e2e-chi-lease-mnf6q4a5Draft" [ref=e90]
+              - cell "CHI@TACC" [ref=e91]
+              - cell "Draft" [ref=e92]
+              - cell "0" [ref=e93]
+              - cell "—" [ref=e94]
+            - row "▶ e2e-chi-lease-mnf6y4jqDraft CHI@TACC Draft 0 —" [ref=e95] [cursor=pointer]:
+              - cell [ref=e96]:
+                - checkbox [ref=e97]
+              - cell "▶" [ref=e98]
+              - cell "e2e-chi-lease-mnf6y4jqDraft" [ref=e99]
+              - cell "CHI@TACC" [ref=e100]
+              - cell "Draft" [ref=e101]
+              - cell "0" [ref=e102]
+              - cell "—" [ref=e103]
+            - row "▶ e2e-chi-lease-mnf71h8eDraft CHI@TACC Draft 0 —" [ref=e104] [cursor=pointer]:
+              - cell [ref=e105]:
+                - checkbox [ref=e106]
+              - cell "▶" [ref=e107]
+              - cell "e2e-chi-lease-mnf71h8eDraft" [ref=e108]
+              - cell "CHI@TACC" [ref=e109]
+              - cell "Draft" [ref=e110]
+              - cell "0" [ref=e111]
+              - cell "—" [ref=e112]
+            - row "▶ e2e-chi-lease-mnf789clDraft CHI@TACC Draft 0 —" [ref=e113] [cursor=pointer]:
+              - cell [ref=e114]:
+                - checkbox [ref=e115]
+              - cell "▶" [ref=e116]
+              - cell "e2e-chi-lease-mnf789clDraft" [ref=e117]
+              - cell "CHI@TACC" [ref=e118]
+              - cell "Draft" [ref=e119]
+              - cell "0" [ref=e120]
+              - cell "—" [ref=e121]
+            - row "▶ e2e-chi-lease-mnf7o4poDraft CHI@TACC Draft 0 —" [ref=e122] [cursor=pointer]:
+              - cell [ref=e123]:
+                - checkbox [ref=e124]
+              - cell "▶" [ref=e125]
+              - cell "e2e-chi-lease-mnf7o4poDraft" [ref=e126]
+              - cell "CHI@TACC" [ref=e127]
+              - cell "Draft" [ref=e128]
+              - cell "0" [ref=e129]
+              - cell "—" [ref=e130]
+            - row "▶ e2e-chi-mnf6q458Draft CHI@TACC Draft 0 —" [ref=e131] [cursor=pointer]:
+              - cell [ref=e132]:
+                - checkbox [ref=e133]
+              - cell "▶" [ref=e134]
+              - cell "e2e-chi-mnf6q458Draft" [ref=e135]
+              - cell "CHI@TACC" [ref=e136]
+              - cell "Draft" [ref=e137]
+              - cell "0" [ref=e138]
+              - cell "—" [ref=e139]
+            - row "▶ e2e-chi-mnf71h0zDraft CHI@TACC Draft 0 —" [ref=e140] [cursor=pointer]:
+              - cell [ref=e141]:
+                - checkbox [ref=e142]
+              - cell "▶" [ref=e143]
+              - cell "e2e-chi-mnf71h0zDraft" [ref=e144]
+              - cell "CHI@TACC" [ref=e145]
+              - cell "Draft" [ref=e146]
+              - cell "0" [ref=e147]
+              - cell "—" [ref=e148]
+            - row "▶ e2e-chi-mnf789c6Draft CHI@TACC Draft 0 —" [ref=e149] [cursor=pointer]:
+              - cell [ref=e150]:
+                - checkbox [ref=e151]
+              - cell "▶" [ref=e152]
+              - cell "e2e-chi-mnf789c6Draft" [ref=e153]
+              - cell "CHI@TACC" [ref=e154]
+              - cell "Draft" [ref=e155]
+              - cell "0" [ref=e156]
+              - cell "—" [ref=e157]
+            - row "▶ e2e-chi-node-mnf6q48kDraft CHI@TACC Draft 0 —" [ref=e158] [cursor=pointer]:
+              - cell [ref=e159]:
+                - checkbox [ref=e160]
+              - cell "▶" [ref=e161]
+              - cell "e2e-chi-node-mnf6q48kDraft" [ref=e162]
+              - cell "CHI@TACC" [ref=e163]
+              - cell "Draft" [ref=e164]
+              - cell "0" [ref=e165]
+              - cell "—" [ref=e166]
+            - row "▶ e2e-chi-node-mnf6y4jqDraft CHI@TACC Draft 0 —" [ref=e167] [cursor=pointer]:
+              - cell [ref=e168]:
+                - checkbox [ref=e169]
+              - cell "▶" [ref=e170]
+              - cell "e2e-chi-node-mnf6y4jqDraft" [ref=e171]
+              - cell "CHI@TACC" [ref=e172]
+              - cell "Draft" [ref=e173]
+              - cell "0" [ref=e174]
+              - cell "—" [ref=e175]
+            - row "▶ e2e-chi-topo-mnf6q491Draft CHI@TACC Draft 0 —" [ref=e176] [cursor=pointer]:
+              - cell [ref=e177]:
+                - checkbox [ref=e178]
+              - cell "▶" [ref=e179]
+              - cell "e2e-chi-topo-mnf6q491Draft" [ref=e180]
+              - cell "CHI@TACC" [ref=e181]
+              - cell "Draft" [ref=e182]
+              - cell "0" [ref=e183]
+              - cell "—" [ref=e184]
+            - row "▶ e2e-chi-topo-mnf6y4i9Draft CHI@TACC Draft 0 —" [ref=e185] [cursor=pointer]:
+              - cell [ref=e186]:
+                - checkbox [ref=e187]
+              - cell "▶" [ref=e188]
+              - cell "e2e-chi-topo-mnf6y4i9Draft" [ref=e189]
+              - cell "CHI@TACC" [ref=e190]
+              - cell "Draft" [ref=e191]
+              - cell "0" [ref=e192]
+              - cell "—" [ref=e193]
+            - row "▶ e2e-chi-topo-mnf7o4rxDraft CHI@TACC Draft 0 —" [ref=e194] [cursor=pointer]:
+              - cell [ref=e195]:
+                - checkbox [ref=e196]
+              - cell "▶" [ref=e197]
+              - cell "e2e-chi-topo-mnf7o4rxDraft" [ref=e198]
+              - cell "CHI@TACC" [ref=e199]
+              - cell "Draft" [ref=e200]
+              - cell "0" [ref=e201]
+              - cell "—" [ref=e202]
+            - row "▶ e2e-nic-mnf6q47qDraft CHI@TACC Draft 1 —" [ref=e203] [cursor=pointer]:
+              - cell [ref=e204]:
+                - checkbox [ref=e205]
+              - cell "▶" [ref=e206]
+              - cell "e2e-nic-mnf6q47qDraft" [ref=e207]
+              - cell "CHI@TACC" [ref=e208]
+              - cell "Draft" [ref=e209]
+              - cell "1" [ref=e210]
+              - cell "—" [ref=e211]
+            - row "▶ e2e-nic-mnf6y4epDraft CHI@TACC Draft 1 —" [ref=e212] [cursor=pointer]:
+              - cell [ref=e213]:
+                - checkbox [ref=e214]
+              - cell "▶" [ref=e215]
+              - cell "e2e-nic-mnf6y4epDraft" [ref=e216]
+              - cell "CHI@TACC" [ref=e217]
+              - cell "Draft" [ref=e218]
+              - cell "1" [ref=e219]
+              - cell "—" [ref=e220]
+            - row "▶ e2e-nic-mnf71h1xDraft CHI@TACC Draft 1 —" [ref=e221] [cursor=pointer]:
+              - cell [ref=e222]:
+                - checkbox [ref=e223]
+              - cell "▶" [ref=e224]
+              - cell "e2e-nic-mnf71h1xDraft" [ref=e225]
+              - cell "CHI@TACC" [ref=e226]
+              - cell "Draft" [ref=e227]
+              - cell "1" [ref=e228]
+              - cell "—" [ref=e229]
+            - row "▶ e2e-nic-mnf789c7Draft CHI@TACC Draft 1 —" [ref=e230] [cursor=pointer]:
+              - cell [ref=e231]:
+                - checkbox [ref=e232]
+              - cell "▶" [ref=e233]
+              - cell "e2e-nic-mnf789c7Draft" [ref=e234]
+              - cell "CHI@TACC" [ref=e235]
+              - cell "Draft" [ref=e236]
+              - cell "1" [ref=e237]
+              - cell "—" [ref=e238]
+            - row "▶ e2e-nic-mnf7o4rpDraft CHI@TACC Draft 1 —" [ref=e239] [cursor=pointer]:
+              - cell [ref=e240]:
+                - checkbox [ref=e241]
+              - cell "▶" [ref=e242]
+              - cell "e2e-nic-mnf7o4rpDraft" [ref=e243]
+              - cell "CHI@TACC" [ref=e244]
+              - cell "Draft" [ref=e245]
+              - cell "1" [ref=e246]
+              - cell "—" [ref=e247]
+            - row "▶ chi99999Lease CHI@TACC ACTIVE 1 —" [ref=e248] [cursor=pointer]:
+              - cell [ref=e249]
+              - cell "▶" [ref=e250]
+              - cell "chi99999Lease" [ref=e251]
+              - cell "CHI@TACC" [ref=e252]
+              - cell "ACTIVE" [ref=e253]
+              - cell "1" [ref=e254]
+              - cell "—" [ref=e255]
+      - generic [ref=e256]:
+        - generic [ref=e257]:
+          - button "Show LoomAI" [ref=e258] [cursor=pointer]
+          - button "❖" [ref=e259] [cursor=pointer]
+        - generic [ref=e263]:
+          - generic [ref=e264] [cursor=pointer]:
+            - generic [ref=e266]:
+              - generic [ref=e267]: ⠿
+              - text: My Artifacts
+            - button "↻" [ref=e268]
+            - button "✕" [ref=e269]
+          - generic [ref=e270]:
+            - button "Weaves" [ref=e271] [cursor=pointer]
+            - button "VM" [ref=e272] [cursor=pointer]
+            - button "Recipes" [ref=e273] [cursor=pointer]
+            - button "Notebooks" [ref=e274] [cursor=pointer]
+          - generic [ref=e275]:
+            - textbox "Filter weaves..." [ref=e277]
+            - generic [ref=e278]:
+              - generic [ref=e279]:
+                - generic [ref=e280]:
+                  - generic [ref=e281]: Hello, FABRIC
+                  - generic [ref=e282]: ✓ done
+                  - button "⋯" [ref=e284] [cursor=pointer]
+                - generic [ref=e285]: The "hello world" of FABRIC — provisions a single Ubuntu VM and walks you through the weave lifecycle. A hands-on starting point and structural template for building your own weaves.
+                - generic [ref=e286]:
+                  - button "▶ Run" [ref=e289] [cursor=pointer]
+                  - button "Publish" [ref=e291] [cursor=pointer]
+              - generic [ref=e292]:
+                - generic [ref=e293]:
+                  - generic [ref=e294]: Prometheus Grafana Monitor
+                  - generic [ref=e295]: ✗ error
+                  - button "⋯" [ref=e297] [cursor=pointer]
+                - generic [ref=e298]: "3-node monitoring stack: Prometheus + Grafana + node_exporter on FABNetv4."
+                - generic [ref=e299]:
+                  - button "▶ Run" [ref=e302] [cursor=pointer]
+                  - button "Publish" [ref=e304] [cursor=pointer]
+              - generic [ref=e305]:
+                - generic [ref=e306]:
+                  - generic [ref=e307]: Weave Template (Claude)
+                  - generic [ref=e308]: ✓ done
+                  - button "⋯" [ref=e310] [cursor=pointer]
+                - generic [ref=e311]: Weave Template (Claude)
+                - generic [ref=e312]:
+                  - button "▶ Run" [ref=e315] [cursor=pointer]
+                  - button "Publish" [ref=e317] [cursor=pointer]
+      - generic [ref=e319]:
+        - generic "Expand the console panel" [ref=e320] [cursor=pointer]:
+          - text: ▲ Console
+          - generic [ref=e321]: 0 validation
+        - button "Toggle console between full width and panel-constrained width" [ref=e323] [cursor=pointer]
+  - alert [ref=e326]
+```

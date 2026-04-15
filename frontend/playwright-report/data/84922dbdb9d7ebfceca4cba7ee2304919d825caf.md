@@ -1,0 +1,452 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - generic "Go to LoomAI home" [ref=e5] [cursor=pointer]:
+          - img "LoomAI" [ref=e6]
+        - button "v0.0.17-beta (beta)" [ref=e8] [cursor=pointer]:
+          - generic [ref=e9]: v0.0.17-beta (beta)
+      - generic [ref=e11]:
+        - button "View Composite Slice ▾" [ref=e13] [cursor=pointer]:
+          - generic [ref=e14]: View
+          - generic [ref=e15]: Composite Slice
+          - generic [ref=e16]: ▾
+        - generic "Paul Ruth" [ref=e17]:
+          - generic [ref=e18]: P
+          - generic [ref=e19]: paul.ruth@gmail.com
+        - button "⚙" [ref=e20] [cursor=pointer]
+        - button "☾" [ref=e21] [cursor=pointer]
+        - button "?" [ref=e22] [cursor=pointer]
+    - generic [ref=e23]:
+      - generic [ref=e24]: Composite Slices
+      - generic [ref=e25]:
+        - button "Slices" [ref=e26] [cursor=pointer]
+        - button "Topology" [ref=e27] [cursor=pointer]
+        - button "Storage" [ref=e28] [cursor=pointer]
+        - button "Map" [ref=e29] [cursor=pointer]
+        - button "Apps" [ref=e30] [cursor=pointer]
+        - button "Calendar" [ref=e31] [cursor=pointer]
+      - combobox [ref=e32] [cursor=pointer]:
+        - option "-- Select Composite Slice --"
+        - option "e2e-editor-test (Draft)"
+        - option "e2e-test-composite (Draft)"
+        - option "e2e-test-composite (Draft)"
+        - option "e2e-editor-test (Draft)"
+        - option "e2e-fabric-tab-test (Draft)"
+        - option "e2e-fabric-tab-test (Draft)"
+        - option "e2e-editor-test (Draft)"
+        - option "e2e-test-composite (Draft)"
+        - option "e2e-test-composite (Draft)"
+        - option "e2e-test-composite (Draft)"
+        - option "e2e-fabric-tab-test (Draft)"
+        - option "e2e-editor-test (Draft)"
+        - option "e2e-comp-cfab-mnf6qcof (Draft)"
+        - option "e2e-comp-empty-mnf6qdq2 (Draft)"
+        - option "e2e-comp-pick-mnf6qbr0 (Draft)"
+        - option "e2e-bulk1-mnf6qeph (Draft)"
+        - option "e2e-comp-fab-mnf6qcn0 (Draft)"
+        - option "e2e-xview-mnf6qh7r (Draft)"
+        - option "e2e-bulk2-mnf6qhty (Draft)"
+        - option "e2e-comp-mnf6y90m (Draft)"
+        - option "e2e-comp-empty-mnf6yd1n (Draft)"
+        - option "e2e-comp-pick-mnf6yc8s (Draft)"
+        - option "e2e-comp-fab-mnf6ycut (Draft)"
+        - option "e2e-comp-cfab-mnf6ye0h (Draft)"
+        - option "e2e-fab-from-comp-mnf6yior (Draft)"
+        - option "e2e-bulk1-mnf6ynel (Draft)"
+        - option "e2e-xview-mnf6yoiq (Draft)"
+        - option "e2e-bulk2-mnf6yqiz (Draft)"
+        - option "e2e-xfab-mnf6yt6x (Draft)"
+        - option "e2e-comp-mnf71lnx (Draft)"
+        - option "e2e-comp-cfab-mnf7oe2d (Draft)"
+        - option "e2e-comp-pick-mnf7odxo (Draft)"
+        - option "e2e-comp-fab-mnf7of5z (Draft)"
+        - option "e2e-comp-mnf7o9et (Draft)"
+        - option "e2e-comp-empty-mnf7ofgb (Draft)"
+        - option "e2e-bulk1-mnf7oin3 (Draft)"
+        - option "e2e-fab-from-comp-mnf7ojic (Draft)"
+        - option "e2e-bulk2-mnf7omjr (Draft)"
+        - option "e2e-comp-add-mnf7opdb (Draft)"
+        - option "e2e-xview-mnf7onv2 (Draft)"
+        - option "e2e-xfab-mnf7otb9 (Draft)"
+        - option "e2e-comp-cfab-mnf7ptke (Draft)"
+        - option "e2e-fab-from-comp-mnf7pz0l (Draft)" [selected]
+      - button "+ New" [active] [ref=e33] [cursor=pointer]
+      - button "Submit" [disabled] [ref=e34]
+      - button "Delete" [ref=e35] [cursor=pointer]
+      - button "↻ Slices" [ref=e36] [cursor=pointer]
+      - button "↻ Resources" [ref=e37] [cursor=pointer]
+      - 'button "● Auto: ON" [ref=e38] [cursor=pointer]'
+    - generic [ref=e39]:
+      - generic [ref=e44]:
+        - generic [ref=e45]: ✎
+        - text: Composite Editor
+        - button "×" [ref=e46] [cursor=pointer]
+      - table [ref=e51]:
+        - rowgroup [ref=e52]:
+          - row "Name State Members Created" [ref=e53]:
+            - columnheader [ref=e54]:
+              - checkbox [ref=e55]
+            - columnheader "Name" [ref=e56]
+            - columnheader "State" [ref=e57]
+            - columnheader "Members" [ref=e58]
+            - columnheader "Created" [ref=e59]
+        - rowgroup [ref=e60]:
+          - row "▸e2e-editor-test Draft No members 3/31/2026" [ref=e61] [cursor=pointer]:
+            - cell [ref=e62]:
+              - checkbox [ref=e63]
+            - cell "▸e2e-editor-test" [ref=e64]
+            - cell "Draft" [ref=e65]
+            - cell "No members" [ref=e66]
+            - cell "3/31/2026" [ref=e67]
+          - row "▸e2e-test-composite Draft No members 3/31/2026" [ref=e68] [cursor=pointer]:
+            - cell [ref=e69]:
+              - checkbox [ref=e70]
+            - cell "▸e2e-test-composite" [ref=e71]
+            - cell "Draft" [ref=e72]
+            - cell "No members" [ref=e73]
+            - cell "3/31/2026" [ref=e74]
+          - row "▸e2e-test-composite Draft No members 3/31/2026" [ref=e75] [cursor=pointer]:
+            - cell [ref=e76]:
+              - checkbox [ref=e77]
+            - cell "▸e2e-test-composite" [ref=e78]
+            - cell "Draft" [ref=e79]
+            - cell "No members" [ref=e80]
+            - cell "3/31/2026" [ref=e81]
+          - row "▸e2e-editor-test Draft No members 3/31/2026" [ref=e82] [cursor=pointer]:
+            - cell [ref=e83]:
+              - checkbox [ref=e84]
+            - cell "▸e2e-editor-test" [ref=e85]
+            - cell "Draft" [ref=e86]
+            - cell "No members" [ref=e87]
+            - cell "3/31/2026" [ref=e88]
+          - row "▸e2e-fabric-tab-test Draft No members 3/31/2026" [ref=e89] [cursor=pointer]:
+            - cell [ref=e90]:
+              - checkbox [ref=e91]
+            - cell "▸e2e-fabric-tab-test" [ref=e92]
+            - cell "Draft" [ref=e93]
+            - cell "No members" [ref=e94]
+            - cell "3/31/2026" [ref=e95]
+          - row "▸e2e-fabric-tab-test Draft No members 3/31/2026" [ref=e96] [cursor=pointer]:
+            - cell [ref=e97]:
+              - checkbox [ref=e98]
+            - cell "▸e2e-fabric-tab-test" [ref=e99]
+            - cell "Draft" [ref=e100]
+            - cell "No members" [ref=e101]
+            - cell "3/31/2026" [ref=e102]
+          - row "▸e2e-editor-test Draft No members 3/31/2026" [ref=e103] [cursor=pointer]:
+            - cell [ref=e104]:
+              - checkbox [ref=e105]
+            - cell "▸e2e-editor-test" [ref=e106]
+            - cell "Draft" [ref=e107]
+            - cell "No members" [ref=e108]
+            - cell "3/31/2026" [ref=e109]
+          - row "▸e2e-test-composite Draft No members 3/31/2026" [ref=e110] [cursor=pointer]:
+            - cell [ref=e111]:
+              - checkbox [ref=e112]
+            - cell "▸e2e-test-composite" [ref=e113]
+            - cell "Draft" [ref=e114]
+            - cell "No members" [ref=e115]
+            - cell "3/31/2026" [ref=e116]
+          - row "▸e2e-test-composite Draft No members 3/31/2026" [ref=e117] [cursor=pointer]:
+            - cell [ref=e118]:
+              - checkbox [ref=e119]
+            - cell "▸e2e-test-composite" [ref=e120]
+            - cell "Draft" [ref=e121]
+            - cell "No members" [ref=e122]
+            - cell "3/31/2026" [ref=e123]
+          - row "▸e2e-test-composite Draft No members 3/31/2026" [ref=e124] [cursor=pointer]:
+            - cell [ref=e125]:
+              - checkbox [ref=e126]
+            - cell "▸e2e-test-composite" [ref=e127]
+            - cell "Draft" [ref=e128]
+            - cell "No members" [ref=e129]
+            - cell "3/31/2026" [ref=e130]
+          - row "▸e2e-fabric-tab-test Draft No members 3/31/2026" [ref=e131] [cursor=pointer]:
+            - cell [ref=e132]:
+              - checkbox [ref=e133]
+            - cell "▸e2e-fabric-tab-test" [ref=e134]
+            - cell "Draft" [ref=e135]
+            - cell "No members" [ref=e136]
+            - cell "3/31/2026" [ref=e137]
+          - row "▸e2e-editor-test Draft No members 3/31/2026" [ref=e138] [cursor=pointer]:
+            - cell [ref=e139]:
+              - checkbox [ref=e140]
+            - cell "▸e2e-editor-test" [ref=e141]
+            - cell "Draft" [ref=e142]
+            - cell "No members" [ref=e143]
+            - cell "3/31/2026" [ref=e144]
+          - row "▸e2e-comp-cfab-mnf6qcof Draft No members 3/31/2026" [ref=e145] [cursor=pointer]:
+            - cell [ref=e146]:
+              - checkbox [ref=e147]
+            - cell "▸e2e-comp-cfab-mnf6qcof" [ref=e148]
+            - cell "Draft" [ref=e149]
+            - cell "No members" [ref=e150]
+            - cell "3/31/2026" [ref=e151]
+          - row "▸e2e-comp-empty-mnf6qdq2 Draft No members 3/31/2026" [ref=e152] [cursor=pointer]:
+            - cell [ref=e153]:
+              - checkbox [ref=e154]
+            - cell "▸e2e-comp-empty-mnf6qdq2" [ref=e155]
+            - cell "Draft" [ref=e156]
+            - cell "No members" [ref=e157]
+            - cell "3/31/2026" [ref=e158]
+          - row "▸e2e-comp-pick-mnf6qbr0 Draft No members 3/31/2026" [ref=e159] [cursor=pointer]:
+            - cell [ref=e160]:
+              - checkbox [ref=e161]
+            - cell "▸e2e-comp-pick-mnf6qbr0" [ref=e162]
+            - cell "Draft" [ref=e163]
+            - cell "No members" [ref=e164]
+            - cell "3/31/2026" [ref=e165]
+          - row "▸e2e-bulk1-mnf6qeph Draft No members 3/31/2026" [ref=e166] [cursor=pointer]:
+            - cell [ref=e167]:
+              - checkbox [ref=e168]
+            - cell "▸e2e-bulk1-mnf6qeph" [ref=e169]
+            - cell "Draft" [ref=e170]
+            - cell "No members" [ref=e171]
+            - cell "3/31/2026" [ref=e172]
+          - row "▸e2e-comp-fab-mnf6qcn0 Draft No members 3/31/2026" [ref=e173] [cursor=pointer]:
+            - cell [ref=e174]:
+              - checkbox [ref=e175]
+            - cell "▸e2e-comp-fab-mnf6qcn0" [ref=e176]
+            - cell "Draft" [ref=e177]
+            - cell "No members" [ref=e178]
+            - cell "3/31/2026" [ref=e179]
+          - row "▸e2e-xview-mnf6qh7r Draft No members 3/31/2026" [ref=e180] [cursor=pointer]:
+            - cell [ref=e181]:
+              - checkbox [ref=e182]
+            - cell "▸e2e-xview-mnf6qh7r" [ref=e183]
+            - cell "Draft" [ref=e184]
+            - cell "No members" [ref=e185]
+            - cell "3/31/2026" [ref=e186]
+          - row "▸e2e-bulk2-mnf6qhty Draft No members 3/31/2026" [ref=e187] [cursor=pointer]:
+            - cell [ref=e188]:
+              - checkbox [ref=e189]
+            - cell "▸e2e-bulk2-mnf6qhty" [ref=e190]
+            - cell "Draft" [ref=e191]
+            - cell "No members" [ref=e192]
+            - cell "3/31/2026" [ref=e193]
+          - row "▸e2e-comp-mnf6y90m Draft No members 3/31/2026" [ref=e194] [cursor=pointer]:
+            - cell [ref=e195]:
+              - checkbox [ref=e196]
+            - cell "▸e2e-comp-mnf6y90m" [ref=e197]
+            - cell "Draft" [ref=e198]
+            - cell "No members" [ref=e199]
+            - cell "3/31/2026" [ref=e200]
+          - row "▸e2e-comp-empty-mnf6yd1n Draft No members 3/31/2026" [ref=e201] [cursor=pointer]:
+            - cell [ref=e202]:
+              - checkbox [ref=e203]
+            - cell "▸e2e-comp-empty-mnf6yd1n" [ref=e204]
+            - cell "Draft" [ref=e205]
+            - cell "No members" [ref=e206]
+            - cell "3/31/2026" [ref=e207]
+          - row "▸e2e-comp-pick-mnf6yc8s Draft No members 3/31/2026" [ref=e208] [cursor=pointer]:
+            - cell [ref=e209]:
+              - checkbox [ref=e210]
+            - cell "▸e2e-comp-pick-mnf6yc8s" [ref=e211]
+            - cell "Draft" [ref=e212]
+            - cell "No members" [ref=e213]
+            - cell "3/31/2026" [ref=e214]
+          - row "▸e2e-comp-fab-mnf6ycut Draft No members 3/31/2026" [ref=e215] [cursor=pointer]:
+            - cell [ref=e216]:
+              - checkbox [ref=e217]
+            - cell "▸e2e-comp-fab-mnf6ycut" [ref=e218]
+            - cell "Draft" [ref=e219]
+            - cell "No members" [ref=e220]
+            - cell "3/31/2026" [ref=e221]
+          - row "▸e2e-comp-cfab-mnf6ye0h Draft No members 3/31/2026" [ref=e222] [cursor=pointer]:
+            - cell [ref=e223]:
+              - checkbox [ref=e224]
+            - cell "▸e2e-comp-cfab-mnf6ye0h" [ref=e225]
+            - cell "Draft" [ref=e226]
+            - cell "No members" [ref=e227]
+            - cell "3/31/2026" [ref=e228]
+          - row "▸e2e-fab-from-comp-mnf6yior Draft No members 3/31/2026" [ref=e229] [cursor=pointer]:
+            - cell [ref=e230]:
+              - checkbox [ref=e231]
+            - cell "▸e2e-fab-from-comp-mnf6yior" [ref=e232]
+            - cell "Draft" [ref=e233]
+            - cell "No members" [ref=e234]
+            - cell "3/31/2026" [ref=e235]
+          - row "▸e2e-bulk1-mnf6ynel Draft No members 3/31/2026" [ref=e236] [cursor=pointer]:
+            - cell [ref=e237]:
+              - checkbox [ref=e238]
+            - cell "▸e2e-bulk1-mnf6ynel" [ref=e239]
+            - cell "Draft" [ref=e240]
+            - cell "No members" [ref=e241]
+            - cell "3/31/2026" [ref=e242]
+          - row "▸e2e-xview-mnf6yoiq Draft No members 3/31/2026" [ref=e243] [cursor=pointer]:
+            - cell [ref=e244]:
+              - checkbox [ref=e245]
+            - cell "▸e2e-xview-mnf6yoiq" [ref=e246]
+            - cell "Draft" [ref=e247]
+            - cell "No members" [ref=e248]
+            - cell "3/31/2026" [ref=e249]
+          - row "▸e2e-bulk2-mnf6yqiz Draft No members 3/31/2026" [ref=e250] [cursor=pointer]:
+            - cell [ref=e251]:
+              - checkbox [ref=e252]
+            - cell "▸e2e-bulk2-mnf6yqiz" [ref=e253]
+            - cell "Draft" [ref=e254]
+            - cell "No members" [ref=e255]
+            - cell "3/31/2026" [ref=e256]
+          - row "▸e2e-xfab-mnf6yt6x Draft No members 3/31/2026" [ref=e257] [cursor=pointer]:
+            - cell [ref=e258]:
+              - checkbox [ref=e259]
+            - cell "▸e2e-xfab-mnf6yt6x" [ref=e260]
+            - cell "Draft" [ref=e261]
+            - cell "No members" [ref=e262]
+            - cell "3/31/2026" [ref=e263]
+          - row "▸e2e-comp-mnf71lnx Draft No members 3/31/2026" [ref=e264] [cursor=pointer]:
+            - cell [ref=e265]:
+              - checkbox [ref=e266]
+            - cell "▸e2e-comp-mnf71lnx" [ref=e267]
+            - cell "Draft" [ref=e268]
+            - cell "No members" [ref=e269]
+            - cell "3/31/2026" [ref=e270]
+          - row "▸e2e-comp-cfab-mnf7oe2d Draft No members 3/31/2026" [ref=e271] [cursor=pointer]:
+            - cell [ref=e272]:
+              - checkbox [ref=e273]
+            - cell "▸e2e-comp-cfab-mnf7oe2d" [ref=e274]
+            - cell "Draft" [ref=e275]
+            - cell "No members" [ref=e276]
+            - cell "3/31/2026" [ref=e277]
+          - row "▸e2e-comp-pick-mnf7odxo Draft No members 3/31/2026" [ref=e278] [cursor=pointer]:
+            - cell [ref=e279]:
+              - checkbox [ref=e280]
+            - cell "▸e2e-comp-pick-mnf7odxo" [ref=e281]
+            - cell "Draft" [ref=e282]
+            - cell "No members" [ref=e283]
+            - cell "3/31/2026" [ref=e284]
+          - row "▸e2e-comp-fab-mnf7of5z Draft No members 3/31/2026" [ref=e285] [cursor=pointer]:
+            - cell [ref=e286]:
+              - checkbox [ref=e287]
+            - cell "▸e2e-comp-fab-mnf7of5z" [ref=e288]
+            - cell "Draft" [ref=e289]
+            - cell "No members" [ref=e290]
+            - cell "3/31/2026" [ref=e291]
+          - row "▸e2e-comp-mnf7o9et Draft No members 3/31/2026" [ref=e292] [cursor=pointer]:
+            - cell [ref=e293]:
+              - checkbox [ref=e294]
+            - cell "▸e2e-comp-mnf7o9et" [ref=e295]
+            - cell "Draft" [ref=e296]
+            - cell "No members" [ref=e297]
+            - cell "3/31/2026" [ref=e298]
+          - row "▸e2e-comp-empty-mnf7ofgb Draft No members 3/31/2026" [ref=e299] [cursor=pointer]:
+            - cell [ref=e300]:
+              - checkbox [ref=e301]
+            - cell "▸e2e-comp-empty-mnf7ofgb" [ref=e302]
+            - cell "Draft" [ref=e303]
+            - cell "No members" [ref=e304]
+            - cell "3/31/2026" [ref=e305]
+          - row "▸e2e-bulk1-mnf7oin3 Draft No members 3/31/2026" [ref=e306] [cursor=pointer]:
+            - cell [ref=e307]:
+              - checkbox [ref=e308]
+            - cell "▸e2e-bulk1-mnf7oin3" [ref=e309]
+            - cell "Draft" [ref=e310]
+            - cell "No members" [ref=e311]
+            - cell "3/31/2026" [ref=e312]
+          - row "▸e2e-fab-from-comp-mnf7ojic Draft No members 3/31/2026" [ref=e313] [cursor=pointer]:
+            - cell [ref=e314]:
+              - checkbox [ref=e315]
+            - cell "▸e2e-fab-from-comp-mnf7ojic" [ref=e316]
+            - cell "Draft" [ref=e317]
+            - cell "No members" [ref=e318]
+            - cell "3/31/2026" [ref=e319]
+          - row "▸e2e-bulk2-mnf7omjr Draft No members 3/31/2026" [ref=e320] [cursor=pointer]:
+            - cell [ref=e321]:
+              - checkbox [ref=e322]
+            - cell "▸e2e-bulk2-mnf7omjr" [ref=e323]
+            - cell "Draft" [ref=e324]
+            - cell "No members" [ref=e325]
+            - cell "3/31/2026" [ref=e326]
+          - row "▸e2e-comp-add-mnf7opdb Draft No members 3/31/2026" [ref=e327] [cursor=pointer]:
+            - cell [ref=e328]:
+              - checkbox [ref=e329]
+            - cell "▸e2e-comp-add-mnf7opdb" [ref=e330]
+            - cell "Draft" [ref=e331]
+            - cell "No members" [ref=e332]
+            - cell "3/31/2026" [ref=e333]
+          - row "▸e2e-xview-mnf7onv2 Draft No members 3/31/2026" [ref=e334] [cursor=pointer]:
+            - cell [ref=e335]:
+              - checkbox [ref=e336]
+            - cell "▸e2e-xview-mnf7onv2" [ref=e337]
+            - cell "Draft" [ref=e338]
+            - cell "No members" [ref=e339]
+            - cell "3/31/2026" [ref=e340]
+          - row "▸e2e-xfab-mnf7otb9 Draft No members 3/31/2026" [ref=e341] [cursor=pointer]:
+            - cell [ref=e342]:
+              - checkbox [ref=e343]
+            - cell "▸e2e-xfab-mnf7otb9" [ref=e344]
+            - cell "Draft" [ref=e345]
+            - cell "No members" [ref=e346]
+            - cell "3/31/2026" [ref=e347]
+          - row "▸e2e-comp-cfab-mnf7ptke Draft No members 3/31/2026" [ref=e348] [cursor=pointer]:
+            - cell [ref=e349]:
+              - checkbox [ref=e350]
+            - cell "▸e2e-comp-cfab-mnf7ptke" [ref=e351]
+            - cell "Draft" [ref=e352]
+            - cell "No members" [ref=e353]
+            - cell "3/31/2026" [ref=e354]
+          - row "▾e2e-fab-from-comp-mnf7pz0l Draft No members 3/31/2026" [ref=e355] [cursor=pointer]:
+            - cell [ref=e356]:
+              - checkbox [ref=e357]
+            - cell "▾e2e-fab-from-comp-mnf7pz0l" [ref=e358]
+            - cell "Draft" [ref=e359]
+            - cell "No members" [ref=e360]
+            - cell "3/31/2026" [ref=e361]
+      - generic [ref=e362]:
+        - generic [ref=e363]:
+          - button "Show LoomAI" [ref=e364] [cursor=pointer]
+          - button "❖" [ref=e365] [cursor=pointer]
+        - generic [ref=e369]:
+          - generic [ref=e370] [cursor=pointer]:
+            - generic [ref=e372]:
+              - generic [ref=e373]: ⠿
+              - text: My Artifacts
+            - button "↻" [ref=e374]
+            - button "✕" [ref=e375]
+          - generic [ref=e376]:
+            - button "Weaves" [ref=e377] [cursor=pointer]
+            - button "VM" [ref=e378] [cursor=pointer]
+            - button "Recipes" [ref=e379] [cursor=pointer]
+            - button "Notebooks" [ref=e380] [cursor=pointer]
+          - generic [ref=e381]:
+            - textbox "Filter weaves..." [ref=e383]
+            - generic [ref=e384]:
+              - generic [ref=e385]:
+                - generic [ref=e386]:
+                  - generic [ref=e387]: Hello, FABRIC
+                  - generic [ref=e388]: ✓ done
+                  - button "⋯" [ref=e390] [cursor=pointer]
+                - generic [ref=e391]: The "hello world" of FABRIC — provisions a single Ubuntu VM and walks you through the weave lifecycle. A hands-on starting point and structural template for building your own weaves.
+                - generic [ref=e392]:
+                  - button "▶ Run" [ref=e395] [cursor=pointer]
+                  - button "Publish" [ref=e397] [cursor=pointer]
+              - generic [ref=e398]:
+                - generic [ref=e399]:
+                  - generic [ref=e400]: Prometheus Grafana Monitor
+                  - generic [ref=e401]: ✗ error
+                  - button "⋯" [ref=e403] [cursor=pointer]
+                - generic [ref=e404]: "3-node monitoring stack: Prometheus + Grafana + node_exporter on FABNetv4."
+                - generic [ref=e405]:
+                  - button "▶ Run" [ref=e408] [cursor=pointer]
+                  - button "Publish" [ref=e410] [cursor=pointer]
+              - generic [ref=e411]:
+                - generic [ref=e412]:
+                  - generic [ref=e413]: Weave Template (Claude)
+                  - generic [ref=e414]: ✓ done
+                  - button "⋯" [ref=e416] [cursor=pointer]
+                - generic [ref=e417]: Weave Template (Claude)
+                - generic [ref=e418]:
+                  - button "▶ Run" [ref=e421] [cursor=pointer]
+                  - button "Publish" [ref=e423] [cursor=pointer]
+      - generic [ref=e425]:
+        - generic "Expand the console panel" [ref=e426] [cursor=pointer]:
+          - text: ▲ Console
+          - generic [ref=e427]: 0 validation
+        - button "Toggle console between full width and panel-constrained width" [ref=e429] [cursor=pointer]
+    - generic [ref=e434]: Refreshing slice list...
+  - alert [ref=e435]
+```

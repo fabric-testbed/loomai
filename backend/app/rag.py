@@ -198,39 +198,73 @@ def load_fabric_ai_md(ai_tools_dir: str) -> list[Chunk]:
 
 
 def load_skills(ai_tools_dir: str) -> list[Chunk]:
-    """Load each ai-tools/shared/skills/*.md as one or more chunks."""
-    skills_dir = os.path.join(ai_tools_dir, "shared", "skills")
-    if not os.path.isdir(skills_dir):
-        return []
-    chunks = []
-    for name in sorted(os.listdir(skills_dir)):
-        if not name.endswith(".md"):
-            continue
-        path = os.path.join(skills_dir, name)
-        try:
-            with open(path) as f:
-                text = f.read()
-        except OSError:
-            continue
-        # Strip YAML frontmatter
-        if text.startswith("---"):
-            end = text.find("---", 3)
-            if end > 0:
-                text = text[end + 3:].lstrip()
-        file_hash = _sha256_text(text)
-        skill_name = name[:-3]
-        for i, (section, body) in enumerate(_split_markdown_by_heading(text, max_chars=1500)):
-            chunks.append(
-                Chunk(
-                    chunk_id=f"skill:{skill_name}:{i}",
-                    source_type="skill",
-                    source_path=f"ai-tools/shared/skills/{name}",
-                    section=f"{skill_name} > {section}",
-                    text=f"# Skill: {skill_name}\n## {section}\n\n{body}",
-                    file_hash=file_hash,
-                    metadata={"skill": skill_name},
+    """Load each shared/skills/*.md as one or more chunks.
+
+    Built-in skills live under ``{ai_tools_dir}/shared/skills/``. User-custom
+    skills are overlaid from ``{storage_dir}/.loomai/skills/`` — any file whose
+    stem matches a built-in replaces the built-in entirely, matching the
+    overlay semantics used by ``app/routes/ai_agents.py:_load_all`` and
+    ``app/routes/ai_chat.py:_load_agents``. This makes skills written via
+    ``PUT /api/ai/skills/{id}`` visible to the RAG corpus so operators can
+    hotfix skill content at runtime without rebuilding the image.
+    """
+    # skill_name -> list of chunks for that skill. Built-ins populate first;
+    # custom files overwrite the entry if their stem matches.
+    by_skill: "dict[str, list[Chunk]]" = {}
+
+    def _ingest(skill_dir: str, source_path_prefix: str) -> None:
+        if not os.path.isdir(skill_dir):
+            return
+        for name in sorted(os.listdir(skill_dir)):
+            if not name.endswith(".md"):
+                continue
+            path = os.path.join(skill_dir, name)
+            try:
+                with open(path) as f:
+                    text = f.read()
+            except OSError:
+                continue
+            # Strip YAML frontmatter
+            if text.startswith("---"):
+                end = text.find("---", 3)
+                if end > 0:
+                    text = text[end + 3:].lstrip()
+            file_hash = _sha256_text(text)
+            skill_name = name[:-3]
+            skill_chunks: list[Chunk] = []
+            for i, (section, body) in enumerate(_split_markdown_by_heading(text, max_chars=1500)):
+                skill_chunks.append(
+                    Chunk(
+                        chunk_id=f"skill:{skill_name}:{i}",
+                        source_type="skill",
+                        source_path=f"{source_path_prefix}/{name}",
+                        section=f"{skill_name} > {section}",
+                        text=f"# Skill: {skill_name}\n## {section}\n\n{body}",
+                        file_hash=file_hash,
+                        metadata={"skill": skill_name},
+                    )
                 )
-            )
+            by_skill[skill_name] = skill_chunks
+
+    # 1. Built-in skills
+    _ingest(
+        os.path.join(ai_tools_dir, "shared", "skills"),
+        "ai-tools/shared/skills",
+    )
+
+    # 2. Overlay user-custom skills from {storage_dir}/.loomai/skills/.
+    #    Lazy-import settings_manager to mirror _load_agents() in ai_chat.py
+    #    and to tolerate environments where storage isn't configured yet.
+    try:
+        from app.settings_manager import get_storage_dir
+        custom_dir = os.path.join(get_storage_dir(), ".loomai", "skills")
+        _ingest(custom_dir, ".loomai/skills")
+    except Exception:
+        logger.warning("RAG: failed to load user-custom skills", exc_info=True)
+
+    chunks: list[Chunk] = []
+    for skill_chunks in by_skill.values():
+        chunks.extend(skill_chunks)
     return chunks
 
 
