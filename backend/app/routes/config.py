@@ -516,18 +516,16 @@ def _process_oauth_callback(id_token: str, refresh_token: str = "") -> RedirectR
             settings = settings_manager.load_settings()
             settings["fabric"]["project_id"] = project_id
 
-            # Resolve bastion_username
+            # Resolve bastion_username from UIS API (authoritative)
             bastion_login = ""
-            try:
-                email = payload.get("email", "")
-                sub = payload.get("sub", "")
-                if email and sub:
-                    username = email.split("@")[0].replace(".", "_")
-                    cilogon_id = sub.rstrip("/").rsplit("/", 1)[-1]
-                    if cilogon_id.isdigit():
-                        bastion_login = f"{username}_{cilogon_id.zfill(10)}"
-            except Exception:
-                pass
+            if user_uuid and id_token:
+                try:
+                    data = _fetch_uis_person(id_token, user_uuid)
+                    results = data.get("results", [])
+                    if results:
+                        bastion_login = results[0].get("bastion_login", "")
+                except Exception as e:
+                    logger.warning("oauth_callback: UIS bastion_login lookup failed: %s", e)
             if bastion_login:
                 settings["fabric"]["bastion_username"] = bastion_login
 
@@ -692,19 +690,6 @@ async def get_projects():
         except Exception as e:
             logger.warning("UIS bastion_login lookup failed: %s", e)
 
-    if not bastion_login:
-        # Fallback: derive from JWT (replace dots with underscores to match FABRIC convention)
-        try:
-            email = payload.get("email", "")
-            sub = payload.get("sub", "")
-            if email and sub:
-                username = email.split("@")[0].replace(".", "_")
-                cilogon_id = sub.rstrip("/").rsplit("/", 1)[-1]
-                if cilogon_id.isdigit():
-                    bastion_login = f"{username}_{cilogon_id.zfill(10)}"
-        except Exception:
-            pass
-
     return {
         "projects": projects,
         "bastion_login": bastion_login,
@@ -738,7 +723,7 @@ async def auto_setup(req: AutoSetupRequest):
     user_name = payload.get("name", "")
     user_uuid = payload.get("uuid", "")
 
-    # Resolve bastion_username from UIS API (authoritative), with JWT fallback
+    # Resolve bastion_username from UIS API (authoritative)
     bastion_login = ""
     if user_uuid and id_token:
         try:
@@ -754,18 +739,6 @@ async def auto_setup(req: AutoSetupRequest):
                 bastion_login = results[0].get("bastion_login", "")
         except Exception as e:
             logger.warning("auto-setup: UIS bastion_login lookup failed: %s", e)
-
-    if not bastion_login:
-        try:
-            email = payload.get("email", "")
-            sub = payload.get("sub", "")
-            if email and sub:
-                username = email.split("@")[0].replace(".", "_")
-                cilogon_id = sub.rstrip("/").rsplit("/", 1)[-1]
-                if cilogon_id.isdigit():
-                    bastion_login = f"{username}_{cilogon_id.zfill(10)}"
-        except Exception:
-            pass
 
     # Update settings with project_id and bastion_username, then save (generates fabric_rc + ssh_config)
     from app import settings_manager

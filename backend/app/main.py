@@ -452,7 +452,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Claude Code config backup failed on shutdown: %s", e)
 
 
-app = FastAPI(title="LoomAI API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="LoomAI API", version="0.2.2", lifespan=lifespan)
 
 from app.error_handler import install_error_handlers
 install_error_handlers(app)
