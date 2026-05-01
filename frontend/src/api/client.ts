@@ -2,7 +2,17 @@
 
 import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult, UpdateInfo, IpHint, L3Config, FacilityPortInfo, LoomAISettings, ToolConfigStatus, UsersResponse, CalendarData, NextAvailableResult, AlternativeResult, ExperimentVariable } from '../types/fabric';
 
-const BASE = '/api';
+// When deployed on K8s behind the hub proxy at /user/{username}/,
+// window.__LOOMAI_BASE_PATH is set by an injected env-config.js script.
+// In standalone mode it defaults to '/api'.
+declare global {
+  interface Window {
+    __LOOMAI_BASE_PATH?: string;
+  }
+}
+const BASE = (typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH)
+  ? `${window.__LOOMAI_BASE_PATH}/api`
+  : '/api';
 
 // In-flight GET request deduplication — if the same GET URL is already
 // pending, return the existing promise instead of firing a duplicate request.
@@ -27,6 +37,11 @@ async function _doFetch<T>(url: string, options?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
+  if (res.status === 401) {
+    // Session expired or not authenticated — notify App to show login
+    window.dispatchEvent(new CustomEvent('loomai-auth-required'));
+    throw new Error('Authentication required');
+  }
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(`API error ${res.status}: ${detail}`);

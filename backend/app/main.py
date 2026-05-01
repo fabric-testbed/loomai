@@ -30,6 +30,7 @@ for _uv_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
     _uv_logger.propagate = True
 
 from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, recipes, experiments, http_proxy, tunnels, ai_terminal, ai_chat, ai_agents, ai_rag, jupyter, artifacts, chameleon, trovi, schedule, composite, monitoring
+from app.auth import router as auth_router, AuthMiddleware, is_auth_enabled
 from app.tunnel_manager import get_tunnel_manager
 
 logger = logging.getLogger(__name__)
@@ -452,7 +453,11 @@ async def lifespan(app: FastAPI):
         logger.warning("Claude Code config backup failed on shutdown: %s", e)
 
 
-app = FastAPI(title="LoomAI API", version="0.2.2", lifespan=lifespan)
+# Disable Swagger/ReDoc in production unless explicitly enabled
+_enable_docs = os.environ.get("LOOMAI_ENABLE_DOCS", "").strip() == "1"
+_docs_kwargs = {} if _enable_docs else {"docs_url": None, "redoc_url": None, "openapi_url": None}
+
+app = FastAPI(title="LoomAI API", version="0.3.0", lifespan=lifespan, **_docs_kwargs)
 
 from app.error_handler import install_error_handlers
 install_error_handlers(app)
@@ -473,6 +478,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Auth middleware — added after CORS so preflight requests pass through first
+app.add_middleware(AuthMiddleware)
+
+app.include_router(auth_router)
 app.include_router(slices.router, prefix="/api")
 app.include_router(resources.router, prefix="/api")
 app.include_router(metrics.router, prefix="/api")

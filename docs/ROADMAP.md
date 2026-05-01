@@ -52,6 +52,19 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
 
 - **Login button & auto-setup (2026-03-30)**: One-click Login button in TitleBar and LandingView. CM OAuth popup with token polling. `POST /api/config/auto-setup` endpoint: project selection, bastion key generation (Core API), slice key generation, FABRIC LLM API key creation (CM Bearer token auth). Token expiration detection with "Re-login" UI. Multi-project picker modal. User avatar pill in TitleBar.
 
+- **Kubernetes multi-user deployment (2026-04-30)**: Full Helm chart for K8s deployment with Hub (CILogon OIDC auth + pod spawning), Configurable HTTP Proxy (CHP), and per-user pods with persistent storage. Key features:
+  - Hub: CILogon OIDC with PKCE, FABRIC Core API role verification, CM token provisioning, pod lifecycle management, idle culling, admin dashboard
+  - Sub-path routing: `LOOMAI_BASE_PATH` env var, `assetUrl()` utility for static assets, dynamic nginx config generation in entrypoint.sh
+  - JupyterLab: Dynamic `base_url` includes CHP sub-path for correct redirects
+  - AI tools: Nginx reverse proxy for Aider (9197), OpenCode (9198), web tunnels (9100-9199)
+  - Logout: Stops user pod, removes CHP route, clears session (K8s mode only)
+  - Stale pod handling: Delete + recreate on 409 conflict during spawn
+  - Error pages: User-friendly HTML for CHP 503/500/404 with auto-refresh
+  - Tool install locks: Unconditional cleanup on startup (fixes PID reuse across container restarts)
+  - Tunnel security: Port-restricted regex `(91[0-9][0-9])` prevents proxying to arbitrary ports
+  - PVC: 5Gi recommended for AI tools (~900MB for JupyterLab alone)
+  - Image builds: `docker buildx --platform linux/amd64` with versioned tags
+
 ## In Progress
 
 (None)

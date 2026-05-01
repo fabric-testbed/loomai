@@ -1,0 +1,122 @@
+hub:
+  image:
+    name: fabrictestbed/loomai-hub
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  db:
+    type: sqlite
+    pvc:
+      capacity: 1Gi
+      storageClass: ""
+  admin:
+    users: []
+  cookie:
+    secret: ""      # auto-generated if empty
+    maxAge: 86400
+    secure: true
+  baseUrl: ""       # auto-derived from ingress
+
+auth:
+  cilogon:
+    clientId: ""
+    clientSecret: ""
+    callbackUrl: ""
+    scopes: "openid email profile org.cilogon.userinfo"
+    skin: "FABRIC"
+  fabricCM:
+    host: cm.fabric-testbed.net
+    tokenLifetime: 4
+    scope: all
+  fabricCoreAPI:
+    host: "https://uis.fabric-testbed.net"
+    bearerToken: ""
+    requiredRole: Jupyterhub
+  allowedUsers: []
+  blockedUsers: []
+
+proxy:
+  image:
+    name: quay.io/jupyterhub/configurable-http-proxy
+    tag: "4.6.2"
+    pullPolicy: IfNotPresent
+  secretToken: ""  # auto-generated if empty
+  service:
+    type: LoadBalancer
+    port: 80
+    annotations: {}
+  chp:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+  https:
+    enabled: false
+    type: manual  # manual, letsencrypt, or offload
+    manual:
+      key: ""
+      cert: ""
+
+singleuser:
+  image:
+    name: fabrictestbed/loomai
+    tag: latest
+    pullPolicy: IfNotPresent
+  allowPrivilegeEscalation: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 512M
+    limits:
+      cpu: "4"
+      memory: 2G
+  storage:
+    capacity: 5Gi     # ≥5Gi recommended (AI tools require ~2GB)
+    storageClass: ""
+    homeMountPath: /home/fabric/work
+  extraEnv:
+    FABRIC_CREDMGR_HOST: cm.fabric-testbed.net
+    FABRIC_ORCHESTRATOR_HOST: orchestrator.fabric-testbed.net
+    FABRIC_CORE_API_HOST: uis.fabric-testbed.net
+    FABRIC_BASTION_HOST: bastion.fabric-testbed.net
+  startTimeout: 300
+  profileList: []
+
+cull:
+  enabled: true
+  timeout: 3600
+  every: 600
+  maxAge: 86400
+
+scheduling:
+  imagePuller:
+    enabled: true
+  placeholders:
+    enabled: false
+    replicas: 3
+  userPods:
+    nodeAffinity:
+      matchNodePurpose: prefer  # prefer or require
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: loomai.fabric-testbed.net
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+global:
+  safeToShowValues: false

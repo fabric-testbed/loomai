@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "loomai.hub.fullname" . }}-config
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hub
+data:
+  # Hub configuration
+  HUB_BASE_URL: {{ include "loomai.hub.baseUrl" . | quote }}
+  COOKIE_MAX_AGE: {{ .Values.hub.cookie.maxAge | quote }}
+  COOKIE_SECURE: {{ .Values.hub.cookie.secure | quote }}
+  HUB_DB_TYPE: {{ .Values.hub.db.type | quote }}
+
+  # CILogon / OAuth
+  CILOGON_SCOPES: {{ .Values.auth.cilogon.scopes | quote }}
+  CILOGON_SKIN: {{ .Values.auth.cilogon.skin | quote }}
+  {{- if .Values.auth.cilogon.callbackUrl }}
+  CILOGON_CALLBACK_URL: {{ .Values.auth.cilogon.callbackUrl | quote }}
+  {{- end }}
+
+  # FABRIC services
+  FABRIC_CM_HOST: {{ .Values.auth.fabricCM.host | quote }}
+  FABRIC_CM_TOKEN_LIFETIME: {{ .Values.auth.fabricCM.tokenLifetime | quote }}
+  FABRIC_CM_SCOPE: {{ .Values.auth.fabricCM.scope | quote }}
+  FABRIC_CORE_API_HOST: {{ .Values.auth.fabricCoreAPI.host | quote }}
+  FABRIC_CORE_API_REQUIRED_ROLE: {{ .Values.auth.fabricCoreAPI.requiredRole | quote }}
+
+  # Single-user pod configuration
+  SINGLEUSER_IMAGE: "{{ .Values.singleuser.image.name }}:{{ .Values.singleuser.image.tag }}"
+  SINGLEUSER_IMAGE_NAME: {{ .Values.singleuser.image.name | quote }}
+  SINGLEUSER_IMAGE_TAG: {{ .Values.singleuser.image.tag | quote }}
+  SINGLEUSER_IMAGE_PULL_POLICY: {{ .Values.singleuser.image.pullPolicy | quote }}
+  SINGLEUSER_CPU_REQUEST: {{ .Values.singleuser.resources.requests.cpu | quote }}
+  SINGLEUSER_MEM_REQUEST: {{ .Values.singleuser.resources.requests.memory | quote }}
+  SINGLEUSER_CPU_LIMIT: {{ .Values.singleuser.resources.limits.cpu | quote }}
+  SINGLEUSER_MEM_LIMIT: {{ .Values.singleuser.resources.limits.memory | quote }}
+  SINGLEUSER_STORAGE_CAPACITY: {{ .Values.singleuser.storage.capacity | quote }}
+  SINGLEUSER_STORAGE_CLASS: {{ .Values.singleuser.storage.storageClass | quote }}
+  SINGLEUSER_HOME_MOUNT_PATH: {{ .Values.singleuser.storage.homeMountPath | quote }}
+  SINGLEUSER_START_TIMEOUT: {{ .Values.singleuser.startTimeout | quote }}
+  SINGLEUSER_ALLOW_PRIVILEGE_ESCALATION: {{ .Values.singleuser.allowPrivilegeEscalation | quote }}
+
+  # Single-user extra environment (serialized as JSON for Hub to parse)
+  SINGLEUSER_EXTRA_ENV: {{ .Values.singleuser.extraEnv | toJson | quote }}
+
+  # Idle culler
+  CULL_ENABLED: {{ .Values.cull.enabled | quote }}
+  CULL_TIMEOUT: {{ .Values.cull.timeout | quote }}
+  CULL_EVERY: {{ .Values.cull.every | quote }}
+  CULL_MAX_AGE: {{ .Values.cull.maxAge | quote }}
+
+  # Proxy API URL (for Hub to manage CHP routes)
+  PROXY_API_URL: "http://{{ include "loomai.proxy.fullname" . }}-api:8001"
+
+  # Kubernetes namespace (also injected via downward API, but useful in config)
+  K8S_NAMESPACE: {{ .Release.Namespace | quote }}
+
+  # Admin users
+  {{- if .Values.hub.admin.users }}
+  HUB_ADMIN_USERS: {{ join "," .Values.hub.admin.users | quote }}
+  {{- end }}
+
+  # Allowed / blocked users
+  {{- if .Values.auth.allowedUsers }}
+  AUTH_ALLOWED_USERS: {{ join "," .Values.auth.allowedUsers | quote }}
+  {{- end }}
+  {{- if .Values.auth.blockedUsers }}
+  AUTH_BLOCKED_USERS: {{ join "," .Values.auth.blockedUsers | quote }}
+  {{- end }}

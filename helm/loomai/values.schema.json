@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["hub", "auth", "proxy", "singleuser"],
+  "properties": {
+    "hub": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": { "type": "object" },
+            "limits": { "type": "object" }
+          }
+        },
+        "db": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["sqlite"] },
+            "pvc": {
+              "type": "object",
+              "properties": {
+                "capacity": { "type": "string" },
+                "storageClass": { "type": "string" }
+              }
+            }
+          }
+        },
+        "admin": {
+          "type": "object",
+          "properties": {
+            "users": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "cookie": {
+          "type": "object",
+          "properties": {
+            "secret": { "type": "string" },
+            "maxAge": { "type": "integer", "minimum": 0 },
+            "secure": { "type": "boolean" }
+          }
+        },
+        "baseUrl": { "type": "string" }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "required": ["cilogon", "fabricCoreAPI"],
+      "properties": {
+        "cilogon": {
+          "type": "object",
+          "required": ["clientId", "clientSecret"],
+          "properties": {
+            "clientId": {
+              "type": "string",
+              "minLength": 1,
+              "description": "CILogon OAuth client ID (required)"
+            },
+            "clientSecret": {
+              "type": "string",
+              "minLength": 1,
+              "description": "CILogon OAuth client secret (required)"
+            },
+            "callbackUrl": { "type": "string" },
+            "scopes": { "type": "string" },
+            "skin": { "type": "string" }
+          }
+        },
+        "fabricCM": {
+          "type": "object",
+          "properties": {
+            "host": { "type": "string" },
+            "tokenLifetime": { "type": "integer", "minimum": 1 },
+            "scope": { "type": "string" }
+          }
+        },
+        "fabricCoreAPI": {
+          "type": "object",
+          "required": ["bearerToken"],
+          "properties": {
+            "host": { "type": "string" },
+            "bearerToken": {
+              "type": "string",
+              "minLength": 1,
+              "description": "FABRIC Core API bearer token (required)"
+            },
+            "requiredRole": { "type": "string" }
+          }
+        },
+        "allowedUsers": { "type": "array", "items": { "type": "string" } },
+        "blockedUsers": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "proxy": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "secretToken": { "type": "string" },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["LoadBalancer", "ClusterIP", "NodePort"] },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "annotations": { "type": "object" }
+          }
+        },
+        "chp": {
+          "type": "object",
+          "properties": {
+            "resources": {
+              "type": "object",
+              "properties": {
+                "requests": { "type": "object" },
+                "limits": { "type": "object" }
+              }
+            }
+          }
+        },
+        "https": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "type": { "type": "string", "enum": ["manual", "letsencrypt", "offload"] },
+            "manual": {
+              "type": "object",
+              "properties": {
+                "key": { "type": "string" },
+                "cert": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "singleuser": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": { "type": "object" },
+            "limits": { "type": "object" }
+          }
+        },
+        "storage": {
+          "type": "object",
+          "properties": {
+            "capacity": { "type": "string" },
+            "storageClass": { "type": "string" },
+            "homeMountPath": { "type": "string" }
+          }
+        },
+        "extraEnv": { "type": "object" },
+        "startTimeout": { "type": "integer", "minimum": 30 },
+        "profileList": { "type": "array" }
+      }
+    },
+    "cull": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "timeout": { "type": "integer", "minimum": 0 },
+        "every": { "type": "integer", "minimum": 0 },
+        "maxAge": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "scheduling": {
+      "type": "object",
+      "properties": {
+        "imagePuller": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "placeholders": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "replicas": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "userPods": {
+          "type": "object",
+          "properties": {
+            "nodeAffinity": {
+              "type": "object",
+              "properties": {
+                "matchNodePurpose": { "type": "string", "enum": ["prefer", "require"] }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string" },
+        "annotations": { "type": "object" },
+        "hosts": { "type": "array" },
+        "tls": { "type": "array" }
+      }
+    },
+    "global": {
+      "type": "object",
+      "properties": {
+        "safeToShowValues": { "type": "boolean" }
+      }
+    }
+  }
+}

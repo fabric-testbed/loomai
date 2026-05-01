@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "loomai.hub.fullname" . }}
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hub
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "loomai.hub.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "loomai.hub.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

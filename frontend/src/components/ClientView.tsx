@@ -116,7 +116,8 @@ export default function ClientView({ slices, selectedSliceName, sliceData, clien
       setHasTunnel(true);
 
       if (info.status === 'active') {
-        const src = `http://${window.location.hostname}:${info.local_port}/`;
+        const bp = (typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH) || '';
+        const src = bp ? `${bp}/tunnel/${info.local_port}/` : `http://${window.location.hostname}:${info.local_port}/`;
         setIframeSrc(src);
         setTunnelStatus('active');
         selfTriggeredRef.current = true;
@@ -152,7 +153,8 @@ export default function ClientView({ slices, selectedSliceName, sliceData, clien
             clearInterval(poll);
             if (pollRef.current === poll) pollRef.current = null;
             if (tunnelIdRef.current === createdId) {
-              const src = `http://${window.location.hostname}:${t.local_port}/`;
+              const bp = (typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH) || '';
+              const src = bp ? `${bp}/tunnel/${t.local_port}/` : `http://${window.location.hostname}:${t.local_port}/`;
               setIframeSrc(src);
               setTunnelStatus('active');
               selfTriggeredRef.current = true;

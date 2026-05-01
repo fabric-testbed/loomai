@@ -128,7 +128,8 @@ export default function OpenCodeWebView({ visible = true }: Props) {
     }
   }, []);
 
-  const iframeUrl = port ? `http://${window.location.hostname}:${port}` : '';
+  const basePath = (typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH) || '';
+  const iframeUrl = port ? (basePath ? `${basePath}/opencode/` : `http://${window.location.hostname}:${port}`) : '';
 
   return (
     <div className="tc-layout">
@@ -208,7 +209,7 @@ export default function OpenCodeWebView({ visible = true }: Props) {
           )}
           <span className="tc-header-title">OpenCode</span>
           <span className="tc-header-badge">Web</span>
-          <button className="tc-popout-btn" onClick={() => window.open(iframeUrl || `http://${window.location.hostname}:9198`, '_blank')} title="Open in new tab">
+          <button className="tc-popout-btn" onClick={() => window.open(iframeUrl || (basePath ? `${basePath}/opencode/` : `http://${window.location.hostname}:9198`), '_blank')} title="Open in new tab">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
               <polyline points="15 3 21 3 21 9" />

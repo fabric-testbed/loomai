@@ -26,6 +26,17 @@ def _jupyter_port() -> int:
     from app.settings_manager import get_jupyter_port
     return get_jupyter_port()
 
+
+def _jupyter_base_url() -> str:
+    """Return the JupyterLab base URL path.
+
+    In K8s mode (LOOMAI_BASE_PATH set), includes the full sub-path so
+    JupyterLab's internal redirects (e.g. /jupyter/ → /jupyter/lab) go
+    through the correct CHP route.
+    """
+    base_path = os.environ.get("LOOMAI_BASE_PATH", "")
+    return f"{base_path}/jupyter/"
+
 _jupyter_proc: subprocess.Popen | None = None
 
 
@@ -386,7 +397,7 @@ async def start_jupyter():
         "--ServerApp.disable_check_xsrf=True",
         "--ServerApp.allow_origin=*",
         "--ServerApp.allow_remote_access=True",
-        "--ServerApp.base_url=/jupyter/",
+        f"--ServerApp.base_url={_jupyter_base_url()}",
         f"--ServerApp.root_dir={workdir}",
         # Use bash for JupyterLab terminals
         "--ServerApp.terminado_settings={'shell_command': ['/bin/bash']}",
@@ -477,7 +488,7 @@ async def set_jupyter_theme(req: ThemeRequest):
         return {"status": "not_running"}
 
     jlab_theme = "JupyterLab Dark" if req.theme == "dark" else "JupyterLab Light"
-    settings_url = f"http://127.0.0.1:{_jupyter_port()}/jupyter/lab/api/settings/@jupyterlab/apputils-extension:themes"
+    settings_url = f"http://127.0.0.1:{_jupyter_port()}{_jupyter_base_url()}lab/api/settings/@jupyterlab/apputils-extension:themes"
 
     try:
         r = await fabric_client.put(
@@ -576,10 +587,11 @@ async def launch_notebook(name: str):
         pass
 
     # Build the Jupyter URL path
+    jbase = _jupyter_base_url()
     if notebook_file:
-        jupyter_path = f"/jupyter/lab/tree/notebooks/{safe}/{notebook_file}"
+        jupyter_path = f"{jbase}lab/tree/notebooks/{safe}/{notebook_file}"
     else:
-        jupyter_path = f"/jupyter/lab/tree/notebooks/{safe}"
+        jupyter_path = f"{jbase}lab/tree/notebooks/{safe}"
 
     return {
         "status": "running",

@@ -25,7 +25,11 @@ curl -fsSL https://raw.githubusercontent.com/fabric-testbed/loomai/main/install.
 
 This will download the compose file, pull the image, start the container, and verify it's healthy.
 
-Open **http://localhost:3000** in your browser.
+Open **http://localhost:3000** in your browser. A password is auto-generated on first start — check the container logs:
+
+```bash
+docker compose logs loomai | grep "password"
+```
 
 ### Manual Install
 
@@ -58,37 +62,15 @@ docker compose up -d
 
 Open **http://localhost:3000** in your browser.
 
-To use a local directory for persistent storage instead of a Docker volume:
+> **Password protection:** LoomAI auto-generates a password on first start. Find it in the container logs with `docker compose logs loomai | grep "password"`. The password persists across restarts. To set your own: `LOOMAI_PASSWORD=mysecret docker compose up -d`
 
-```yaml
-services:
-  loomai:
-    image: fabrictestbed/loomai:latest
-    ports:
-      - "3000:3000"        # Web UI (nginx)
-      - "8000:8000"        # Backend API (direct access)
-      - "8889:8889"        # JupyterLab
-      - "9100-9199:9100-9199"  # SSH tunnels for My Web Apps
-    volumes:
-      - fabric_work:/home/fabric/work
-    environment:
-      - FABRIC_CONFIG_DIR=/home/fabric/work/fabric_config
-      - FABRIC_STORAGE_DIR=/home/fabric/work
-      - DOCKER_REPO=fabrictestbed/loomai
-    dns:
-      - 8.8.8.8
-      - 8.8.4.4
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
+> **Localhost only by default:** Ports are bound to `127.0.0.1` so LoomAI is only accessible from the local machine. To expose on all interfaces (e.g., for remote access on a cloud VM), change the port bindings in `docker-compose.yml`:
+> ```yaml
+> ports:
+>   - "0.0.0.0:3000:3000"   # Accessible from any IP
+> ```
 
-volumes:
-  fabric_work:
-```
+### Option 2: Local Development
 
 ### Option 2: Local Development
 
@@ -112,6 +94,15 @@ npm run dev
 ```
 
 ## Configuration
+
+### Authentication
+
+| Environment Variable | Description |
+|---|---|
+| `LOOMAI_PASSWORD` | Set a custom password (default: auto-generated, shown in logs) |
+| `LOOMAI_NO_AUTH` | Set to `1` to disable password protection (for trusted networks) |
+
+### FABRIC Setup
 
 On first launch, the Getting Started tour will guide you through:
 

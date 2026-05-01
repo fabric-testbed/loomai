@@ -24,6 +24,8 @@ import ClientView from './components/ClientView';
 const JupyterLabView = dynamic(() => import('./components/JupyterLabView'), { ssr: false });
 const AICompanionView = dynamic(() => import('./components/AICompanionView'), { ssr: false });
 import AIChatPanel from './components/AIChatPanel';
+import { assetUrl } from './utils/assetUrl';
+import LoginPage from './components/LoginPage';
 const LandingView = dynamic(() => import('./components/LandingView'), { ssr: false });
 const ArtifactEditorView = dynamic(() => import('./components/ArtifactEditorView'), { ssr: false });
 import type { CompositeSubView } from './components/CompositeView';
@@ -45,7 +47,48 @@ import type { SliceSummary, SliceData, ComponentModel, ValidationIssue, ProjectI
 import type { ChameleonSite, ChameleonInstance, ChameleonDraft, ChameleonSlice } from './types/chameleon';
 import { useInfrastructure } from './hooks/useInfrastructure';
 
+const AUTH_BASE = (typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH)
+  ? `${window.__LOOMAI_BASE_PATH}/api`
+  : '/api';
+
 export default function App() {
+  // --- Auth gating state ---
+  const [authChecked, setAuthChecked] = useState(false);
+  const [needsLogin, setNeedsLogin] = useState(false);
+
+  // Check auth status on mount
+  useEffect(() => {
+    fetch(`${AUTH_BASE}/auth/status`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.auth_enabled) {
+          // Auth not enabled — proceed directly
+          setAuthChecked(true);
+          setNeedsLogin(false);
+          return;
+        }
+        // Auth enabled — test if we have a valid session cookie
+        return fetch(`${AUTH_BASE}/health`).then(r => {
+          if (r.status === 401) {
+            setNeedsLogin(true);
+          }
+          setAuthChecked(true);
+        });
+      })
+      .catch(() => {
+        // Backend unreachable — show app anyway (will fail on API calls)
+        setAuthChecked(true);
+      });
+  }, []);
+
+  // Listen for 401 events from the API client
+  useEffect(() => {
+    const handler = () => setNeedsLogin(true);
+    window.addEventListener('loomai-auth-required', handler);
+    return () => window.removeEventListener('loomai-auth-required', handler);
+  }, []);
+
+  // --- Original app state ---
   const [slices, setSlices] = useState<SliceSummary[]>([]);
   const [selectedSliceId, setSelectedSliceId] = useState('');
   const [sliceData, setSliceData] = useState<SliceData | null>(null);
@@ -768,6 +811,12 @@ export default function App() {
   }, []);
 
   const handleLogout = useCallback(async () => {
+    // In K8s mode, redirect to hub logout which stops the pod and clears the session
+    const basePath = (typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH) || '';
+    if (basePath) {
+      window.location.href = '/hub/logout';
+      return;
+    }
     // Clean up any active login polling/timeouts first
     if (loginPollRef.current) { clearInterval(loginPollRef.current); loginPollRef.current = null; }
     if (loginTimeoutRef.current) { clearTimeout(loginTimeoutRef.current); loginTimeoutRef.current = null; }
@@ -777,6 +826,12 @@ export default function App() {
     } catch (err: any) {
       // Best-effort — clear local state regardless
       console.warn('Logout API call failed:', err.message);
+    }
+    // Clear password auth session cookie (standalone mode)
+    try {
+      await fetch(`${AUTH_BASE}/auth/logout`, { method: 'POST' });
+    } catch {
+      // Best-effort
     }
     // Clear local state
     setConfigStatus(null);
@@ -789,6 +844,8 @@ export default function App() {
     setProjectName('');
     setUserUuid('');
     setCurrentView('landing');
+    // Show login page again if auth is enabled
+    setNeedsLogin(true);
   }, []);
 
   // --- (continued from mount effect) ---
@@ -3469,6 +3526,12 @@ export default function App() {
   // LoomAI is always visible; other tools filtered by settings
   const visibleAiTools = AI_TOOL_INFO.filter((t) => t.id === 'loomai' || enabledAiTools[t.id] !== false);
 
+  // Auth gate — show login page before anything else
+  if (!authChecked) return null;
+  if (needsLogin) {
+    return <LoginPage onSuccess={() => setNeedsLogin(false)} />;
+  }
+
   return (
     <>
       <TitleBar
@@ -3488,7 +3551,6 @@ export default function App() {
         tokenExpired={configStatus?.has_token && configStatus?.token_info?.exp ? configStatus.token_info.exp * 1000 < Date.now() : false}
         userEmail={configStatus?.token_info?.email}
         userName={configStatus?.token_info?.name}
-        onLogin={handleLogin}
         onLogout={handleLogout}
       />
 
@@ -3554,7 +3616,6 @@ export default function App() {
               setListLoaded(false);
               infraRequestedRef.current = false; sitesRequestedRef.current = false; // re-fetch infra on next tab visit
             }}
-            onLogin={handleLogin}
           />
         </div>
       )}
@@ -3562,8 +3623,8 @@ export default function App() {
       {/* FABRIC title bar with tabs — sits above the content grid */}
       {currentView === 'infrastructure' && !(settingsOpen || helpOpen) && (
         <div className="fabric-bar">
-          <img src="/fabric_wave_dark.png" alt="" className="fabric-bar-logo fabric-wave-light-mode" />
-          <img src="/fabric_wave_light.png" alt="" className="fabric-bar-logo fabric-wave-dark-mode" />
+          <img src={assetUrl('/fabric_wave_dark.png')} alt="" className="fabric-bar-logo fabric-wave-light-mode" />
+          <img src={assetUrl('/fabric_wave_light.png')} alt="" className="fabric-bar-logo fabric-wave-dark-mode" />
           <span className="fabric-bar-title">FABRIC</span>
           {projectName && (
             <span
@@ -3669,7 +3730,7 @@ export default function App() {
       {/* Chameleon title bar — mirrors FABRIC bar with extracted callbacks */}
       {currentView === 'chameleon' && !(settingsOpen || helpOpen) && chameleonEnabled && (
         <div className="chameleon-bar">
-          <img src="/chameleon-icon.png" alt="" className="chameleon-bar-logo" />
+          <img src={assetUrl('/chameleon-icon.png')} alt="" className="chameleon-bar-logo" />
           <span className="chameleon-bar-title">Chameleon</span>
           <div className="chameleon-bar-tabs">
             {([
@@ -3720,7 +3781,7 @@ export default function App() {
       {/* Composite Slice bar — mirrors FABRIC/Chameleon bar with LoomAI indigo */}
       {currentView === 'slices' && !(settingsOpen || helpOpen) && (
         <div className="composite-bar">
-          <img src="/composite-slice-icon-transparent.svg" alt="" className="composite-bar-logo" />
+          <img src={assetUrl('/composite-slice-icon-transparent.svg')} alt="" className="composite-bar-logo" />
           <span className="composite-bar-title">Composite Slices</span>
           <div className="composite-bar-tabs">
             {([
@@ -3919,7 +3980,6 @@ export default function App() {
               onStartTour={(id: string) => startTour(id)}
               hasToken={configStatus?.has_token ?? undefined}
               tokenExpired={configStatus?.has_token && configStatus?.token_info?.exp ? configStatus.token_info.exp * 1000 < Date.now() : false}
-              onLogin={handleLogin}
             />
           ) : currentView === 'jupyter' ? (
             null /* JupyterLabView rendered persistently below */

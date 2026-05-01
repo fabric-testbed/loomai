@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import { getAiModels, getDefaultModel, setDefaultModel as apiSetDefaultModel, refreshAiModels, getChatAgents, streamChat, stopChatStream, getConfig } from '../api/client';
 import type { ChatAgent } from '../api/client';
 import '../styles/ai-chat-panel.css';
+import { assetUrl } from '../utils/assetUrl';
 
 const VISIBLE_TOOL_COUNT = 3;
 
@@ -799,11 +800,11 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
     return (
       <div className={`ai-chat-panel${fullScreen ? ' ai-chat-fullscreen' : ''}`}>
         <div className="ai-chat-header" {...(fullScreen ? {} : dragHandleProps)}>
-          {panelIcon && !fullScreen && <span style={{ cursor: 'grab' }}>{panelIcon === '__loomai_icon__' ? <img src="/loomai-icon-transparent.svg" alt="" style={{ height: 14 }} /> : panelIcon}</span>}
-          <img src="/loomai-icon-transparent.svg" alt="" className="ai-chat-header-icon-img" />
-          <img src="/loomai-wordmark-transparent-light-ink-trimmed.svg" alt="LoomAI" className="ai-chat-header-wordmark ai-chat-wordmark-light" />
-          <img src="/loomai-wordmark-transparent-dark-ink-trimmed.svg" alt="LoomAI" className="ai-chat-header-wordmark ai-chat-wordmark-dark" />
-          {showPopout && <button className="ai-chat-popout-btn" onClick={() => window.open('/popout?tool=loomai', '_blank')} title="Open in new tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg></button>}
+          {panelIcon && !fullScreen && <span style={{ cursor: 'grab' }}>{panelIcon === '__loomai_icon__' ? <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" style={{ height: 14 }} /> : panelIcon}</span>}
+          <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" className="ai-chat-header-icon-img" />
+          <img src={assetUrl('/loomai-wordmark-transparent-light-ink-trimmed.svg')} alt="LoomAI" className="ai-chat-header-wordmark ai-chat-wordmark-light" />
+          <img src={assetUrl('/loomai-wordmark-transparent-dark-ink-trimmed.svg')} alt="LoomAI" className="ai-chat-header-wordmark ai-chat-wordmark-dark" />
+          {showPopout && <button className="ai-chat-popout-btn" onClick={() => window.open(`${(typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH) || ''}/popout?tool=loomai`, '_blank')} title="Open in new tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg></button>}
           {!fullScreen && <button className="ai-chat-collapse-btn" onClick={onCollapse} title="Collapse">{'\u2715'}</button>}
         </div>
         <div className="ai-chat-no-key">
@@ -818,11 +819,11 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
   return (
     <div className={`ai-chat-panel${fullScreen ? ' ai-chat-fullscreen' : ''}`} data-help-id="ai-chat.panel">
       <div className="ai-chat-header" data-help-id="ai-chat.panel" {...(fullScreen ? {} : dragHandleProps)}>
-        {panelIcon && !fullScreen && <span style={{ cursor: 'grab' }}>{panelIcon === '__loomai_icon__' ? <img src="/loomai-icon-transparent.svg" alt="" style={{ height: 14 }} /> : panelIcon}</span>}
-        <img src="/loomai-wordmark-transparent-light-ink-trimmed.svg" alt="LoomAI" className="ai-chat-header-wordmark ai-chat-wordmark-light" />
-        <img src="/loomai-wordmark-transparent-dark-ink-trimmed.svg" alt="LoomAI" className="ai-chat-header-wordmark ai-chat-wordmark-dark" />
+        {panelIcon && !fullScreen && <span style={{ cursor: 'grab' }}>{panelIcon === '__loomai_icon__' ? <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" style={{ height: 14 }} /> : panelIcon}</span>}
+        <img src={assetUrl('/loomai-wordmark-transparent-light-ink-trimmed.svg')} alt="LoomAI" className="ai-chat-header-wordmark ai-chat-wordmark-light" />
+        <img src={assetUrl('/loomai-wordmark-transparent-dark-ink-trimmed.svg')} alt="LoomAI" className="ai-chat-header-wordmark ai-chat-wordmark-dark" />
         <button className="ai-chat-new-btn" onClick={handleClear} title="Clear current chat">{'\u21BA'}</button>
-        {showPopout && <button className="ai-chat-popout-btn" onClick={() => window.open('/popout?tool=loomai', '_blank')} title="Open in new tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg></button>}
+        {showPopout && <button className="ai-chat-popout-btn" onClick={() => window.open(`${(typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH) || ''}/popout?tool=loomai`, '_blank')} title="Open in new tab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg></button>}
         {!fullScreen && <button className="ai-chat-collapse-btn" onClick={onCollapse} title="Collapse">{'\u2715'}</button>}
       </div>
 
@@ -900,7 +901,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
       <div className="ai-chat-messages">
         {messages.length === 0 && !error && (
           <div className="ai-chat-empty">
-            <div className="ai-chat-empty-icon"><img src="/loomai-icon-transparent.svg" alt="" style={{ height: 32, opacity: 0.5 }} /></div>
+            <div className="ai-chat-empty-icon"><img src={assetUrl('/loomai-icon-transparent.svg')} alt="" style={{ height: 32, opacity: 0.5 }} /></div>
             <div className="ai-chat-empty-text">
               Ask about your slice, FABRIC resources, or tell me to create and deploy experiments.
               {sliceContext && <><br /><strong>Slice context active</strong> — I can see your topology.</>}

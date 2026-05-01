@@ -26,3 +26,4 @@ pytest-asyncio
 # on first use, cached under FABRIC_STORAGE_DIR/.cache/fastembed/.
 fastembed>=0.4.0
 rank-bm25>=0.2.2
+bcrypt>=4.0.0

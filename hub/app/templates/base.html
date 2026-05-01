@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}LoomAI Hub{% endblock %}</title>
+    <style>
+        :root {
+            --fabric-primary: #5798bc;
+            --fabric-dark: #1f6a8c;
+            --fabric-teal: #008e7a;
+            --fabric-orange: #ff8542;
+            --fabric-coral: #e25241;
+            --bg-dark: #0f1419;
+            --bg-card: #1a2332;
+            --bg-input: #243044;
+            --text-primary: #e8edf2;
+            --text-secondary: #8899aa;
+            --border-color: #2a3a4e;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        .hub-header {
+            background: linear-gradient(135deg, var(--fabric-dark) 0%, var(--fabric-primary) 50%, var(--fabric-teal) 100%);
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+
+        .hub-header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            color: white;
+            letter-spacing: 0.5px;
+        }
+
+        .hub-header .hub-nav a {
+            color: rgba(255,255,255,0.85);
+            text-decoration: none;
+            margin-left: 24px;
+            font-size: 14px;
+            transition: color 0.2s;
+        }
+
+        .hub-header .hub-nav a:hover {
+            color: white;
+        }
+
+        .hub-content {
+            max-width: 960px;
+            margin: 48px auto;
+            padding: 0 24px;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 32px;
+            margin-bottom: 24px;
+        }
+
+        .card h2 {
+            font-size: 18px;
+            margin-bottom: 16px;
+            color: var(--fabric-primary);
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 10px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--fabric-primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--fabric-dark);
+        }
+
+        .btn-danger {
+            background: var(--fabric-coral);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c43a2e;
+        }
+
+        .btn-sm {
+            padding: 6px 14px;
+            font-size: 12px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 10px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            color: var(--text-secondary);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-ready { background: rgba(0,142,122,0.2); color: var(--fabric-teal); }
+        .badge-pending { background: rgba(255,133,66,0.2); color: var(--fabric-orange); }
+        .badge-stopped { background: rgba(136,153,170,0.2); color: var(--text-secondary); }
+        .badge-stopping { background: rgba(226,82,65,0.2); color: var(--fabric-coral); }
+
+        .progress-container {
+            margin: 24px 0;
+        }
+
+        .progress-bar {
+            height: 4px;
+            background: var(--border-color);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+
+        .progress-bar-inner {
+            height: 100%;
+            background: var(--fabric-primary);
+            border-radius: 2px;
+            animation: progress-pulse 2s ease-in-out infinite;
+            width: 30%;
+        }
+
+        @keyframes progress-pulse {
+            0%, 100% { transform: translateX(-100%); }
+            50% { transform: translateX(330%); }
+        }
+
+        .progress-message {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .error-message {
+            color: var(--fabric-coral);
+            padding: 12px;
+            background: rgba(226,82,65,0.1);
+            border: 1px solid rgba(226,82,65,0.3);
+            border-radius: 8px;
+            font-size: 14px;
+        }
+    </style>
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <header class="hub-header">
+        <h1>LoomAI Hub</h1>
+        <nav class="hub-nav">
+            {% block nav %}{% endblock %}
+        </nav>
+    </header>
+
+    <main class="hub-content">
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

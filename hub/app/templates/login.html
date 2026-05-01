@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Sign In - LoomAI Hub{% endblock %}
+
+{% block content %}
+<div style="display: flex; align-items: center; justify-content: center; min-height: 60vh;">
+    <div class="card" style="text-align: center; max-width: 440px; width: 100%;">
+        <div style="margin-bottom: 24px;">
+            <!-- LoomAI logo (inline SVG for dark background) -->
+            <svg width="260" height="80" viewBox="0 0 480 120" xmlns="http://www.w3.org/2000/svg" style="margin-bottom: 16px;">
+              <rect x="16" y="16" width="88" height="88" rx="14" fill="#1c2e4a"/>
+              <rect x="45.5" y="25.7" width="29.1" height="18.3" rx="4.0" fill="#27aae1"/>
+              <rect x="25.7" y="50.9" width="68.6" height="18.3" rx="4.0" fill="#27aae1"/>
+              <rect x="45.5" y="76.1" width="29.1" height="18.3" rx="4.0" fill="#27aae1"/>
+              <rect x="25.7" y="25.7" width="18.3" height="23.7" rx="4.0" fill="#4cc4f0"/>
+              <rect x="25.7" y="70.7" width="18.3" height="23.6" rx="4.0" fill="#4cc4f0"/>
+              <rect x="50.9" y="45.5" width="18.3" height="29.1" rx="4.0" fill="#4cc4f0"/>
+              <rect x="76.1" y="25.7" width="18.3" height="23.7" rx="4.0" fill="#4cc4f0"/>
+              <rect x="76.1" y="70.7" width="18.3" height="23.6" rx="4.0" fill="#4cc4f0"/>
+              <circle cx="60.0" cy="60.0" r="4.4" fill="#e8f0f8"/>
+              <line x1="118" y1="20" x2="118" y2="100" stroke="#27aae1" stroke-width="1.5" opacity="0.3"/>
+              <text x="134" y="72" font-size="46" font-weight="700" letter-spacing="-1.5" fill="#ffffff" font-family="'Inter','Helvetica Neue',Arial,sans-serif">Loom<tspan fill="#27aae1">AI</tspan></text>
+              <text x="136" y="91" font-size="9.5" letter-spacing="3" fill="#7aaac8" font-family="'Inter','Helvetica Neue',Arial,sans-serif">WEAVE · BUILD · DISCOVER</text>
+            </svg>
+            <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 16px;">
+                Sign in with your FABRIC identity to launch your personal LoomAI environment.
+            </p>
+            <!-- FABRIC logo -->
+            <div style="display: flex; align-items: center; justify-content: center; gap: 8px; opacity: 0.7;">
+                <span style="font-size: 11px; color: var(--text-secondary); letter-spacing: 1px;">POWERED BY</span>
+                <img src="{{ hub_prefix }}/static/img/fabric-logo-light.png"
+                     alt="FABRIC"
+                     style="height: 28px;"
+                     onerror="this.textContent='FABRIC'; this.style.cssText='font-size:14px; font-weight:700; color:var(--fabric-primary);'">
+            </div>
+        </div>
+
+        <a href="{{ hub_prefix }}/login/start" class="btn btn-primary" style="display: block; padding: 14px 24px; font-size: 16px;">
+            Sign in with CILogon
+        </a>
+
+        <p style="margin-top: 20px; font-size: 12px; color: var(--text-secondary);">
+            You need a FABRIC account with the appropriate role to access this service.
+            <br>
+            <a href="https://portal.fabric-testbed.net" target="_blank" style="color: var(--fabric-primary);">
+                Request access at the FABRIC Portal
+            </a>
+        </p>
+    </div>
+</div>
+{% endblock %}

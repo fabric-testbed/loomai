@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}Starting Server - LoomAI Hub{% endblock %}
+
+{% block nav %}
+<a href="{{ hub_prefix }}/logout">Sign Out</a>
+{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 600px; margin: 80px auto;">
+    <h2 style="color: var(--text-primary); font-size: 20px; margin-bottom: 8px;">
+        Starting your LoomAI server
+    </h2>
+    <p style="color: var(--text-secondary); font-size: 14px; margin-bottom: 24px;">
+        This may take a minute while we set up your environment.
+    </p>
+
+    <div class="progress-container" id="progress-container">
+        <div class="progress-bar">
+            <div class="progress-bar-inner"></div>
+        </div>
+        <p class="progress-message" id="progress-message">Connecting...</p>
+    </div>
+
+    <div id="error-container" style="display: none;">
+        <div class="error-message" id="error-message"></div>
+        <div style="margin-top: 16px;">
+            <a href="{{ hub_prefix }}/spawn" class="btn btn-primary btn-sm">Try Again</a>
+            <a href="{{ hub_prefix }}/logout" class="btn btn-sm" style="margin-left: 8px; color: var(--text-secondary);">Sign Out</a>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    const username = "{{ username }}";
+    const hubPrefix = "{{ hub_prefix }}";
+    const progressMsg = document.getElementById("progress-message");
+    const progressContainer = document.getElementById("progress-container");
+    const errorContainer = document.getElementById("error-container");
+    const errorMessage = document.getElementById("error-message");
+
+    // First, trigger the spawn via POST
+    fetch(`${hubPrefix}/api/users/${username}/server`, { method: "POST", credentials: "same-origin" })
+        .then(resp => resp.json())
+        .then(data => {
+            if (data.status === "ready" && data.url) {
+                window.location.href = data.url;
+                return;
+            }
+            // If not immediately ready, connect to SSE for progress
+            connectSSE();
+        })
+        .catch(err => {
+            // Fall back to SSE progress
+            connectSSE();
+        });
+
+    function connectSSE() {
+        const evtSource = new EventSource(`${hubPrefix}/api/users/${username}/server/progress`);
+
+        evtSource.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+
+                if (data.event === "ready" && data.url) {
+                    evtSource.close();
+                    progressMsg.textContent = "Server is ready! Redirecting...";
+                    setTimeout(() => { window.location.href = data.url; }, 500);
+                } else if (data.event === "error") {
+                    evtSource.close();
+                    progressContainer.style.display = "none";
+                    errorContainer.style.display = "block";
+                    errorMessage.textContent = data.message || "Server startup failed.";
+                } else if (data.event === "progress") {
+                    progressMsg.textContent = data.message || "Working...";
+                }
+            } catch (e) {
+                console.error("SSE parse error:", e);
+            }
+        };
+
+        evtSource.onerror = function() {
+            evtSource.close();
+            progressContainer.style.display = "none";
+            errorContainer.style.display = "block";
+            errorMessage.textContent = "Lost connection to the hub. Please try again.";
+        };
+    }
+})();
+</script>
+{% endblock %}

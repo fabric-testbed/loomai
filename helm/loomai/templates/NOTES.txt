@@ -1,0 +1,63 @@
+LoomAI has been deployed to namespace {{ .Release.Namespace }}.
+
+==========================================================
+ ACCESS
+==========================================================
+
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  Ingress URL: http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else if eq .Values.proxy.service.type "LoadBalancer" }}
+  The proxy service is type LoadBalancer.
+  Run the following to get the external IP:
+
+    kubectl get svc {{ include "loomai.proxy.fullname" . }}-public -n {{ .Release.Namespace }}
+
+  Then visit: http://<EXTERNAL-IP>:{{ .Values.proxy.service.port }}
+{{- else if eq .Values.proxy.service.type "NodePort" }}
+  The proxy service is type NodePort.
+  Run the following to get the node port:
+
+    kubectl get svc {{ include "loomai.proxy.fullname" . }}-public -n {{ .Release.Namespace }} -o jsonpath='{.spec.ports[0].nodePort}'
+{{- else }}
+  The proxy service is type ClusterIP.
+  Use port-forward to access:
+
+    kubectl port-forward svc/{{ include "loomai.proxy.fullname" . }}-public {{ .Values.proxy.service.port }}:{{ .Values.proxy.service.port }} -n {{ .Release.Namespace }}
+{{- end }}
+
+==========================================================
+ POD STATUS
+==========================================================
+
+  Check pods:
+    kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+  Hub logs:
+    kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=hub
+
+  Proxy logs:
+    kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=proxy
+
+==========================================================
+ REQUIRED SECRETS
+==========================================================
+
+  Make sure you have provided the following values:
+    - auth.cilogon.clientId
+    - auth.cilogon.clientSecret
+    - auth.fabricCoreAPI.bearerToken
+
+  If any of these are empty, the Hub will not authenticate properly.
+
+{{- if not .Values.proxy.secretToken }}
+
+  NOTE: proxy.secretToken was auto-generated. To persist it across
+  upgrades, retrieve it with:
+
+    kubectl get secret {{ include "loomai.hub.fullname" . }}-secret -n {{ .Release.Namespace }} \
+      -o jsonpath='{.data.PROXY_AUTH_TOKEN}' | base64 -d
+{{- end }}
+
+==========================================================

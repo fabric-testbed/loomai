@@ -1,0 +1,21 @@
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ include "loomai.fullname" . }}-user
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+value: -10
+globalDefault: false
+description: "Priority class for LoomAI user pods. Low priority to allow preemption by system workloads."
+{{- if .Values.scheduling.placeholders.enabled }}
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ include "loomai.fullname" . }}-placeholder
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+value: -100
+globalDefault: false
+description: "Priority class for LoomAI placeholder pods. Lower than user pods so they get preempted first."
+{{- end }}

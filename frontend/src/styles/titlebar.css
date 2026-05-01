@@ -457,28 +457,35 @@
   flex-shrink: 0;
 }
 
-/* ── Login button ── */
-.title-login-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+/* ── Token status pill ── */
+.title-token-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+.title-token-active {
+  background: rgba(255, 255, 255, 0.9);
+  color: #008e7a;
+}
+.title-token-expired {
   background: var(--fabric-orange, #ff8542);
   color: white;
-  border: none;
-  padding: 5px 16px;
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
-  box-shadow: none;
-  white-space: nowrap;
-  letter-spacing: 0.3px;
 }
-.title-login-btn:hover {
+.title-token-none {
+  background: rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.8);
+}
+.title-token-expired-pill:hover .title-token-expired {
   background: #e0723a;
-  transform: translateY(-1px);
-  box-shadow: none;
+}
+.title-token-none-pill:hover .title-token-none {
+  background: rgba(255, 255, 255, 0.35);
 }
 
 /* ── User pill ── */

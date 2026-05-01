@@ -35,11 +35,9 @@ interface ConfigureViewProps {
   onHiddenProjectsChange?: (hidden: Set<string>) => void;
   /** Full project list from Core API (more complete than JWT-only list) */
   allProjects?: ProjectInfo[];
-  /** Parent login handler — delegates OAuth flow to App.tsx so config/state stays in sync */
-  onLogin?: () => void;
 }
 
-export default function ConfigureView({ onConfigured, onClose, hiddenProjects, onHiddenProjectsChange, allProjects, onLogin }: ConfigureViewProps) {
+export default function ConfigureView({ onConfigured, onClose, hiddenProjects, onHiddenProjectsChange, allProjects }: ConfigureViewProps) {
   const [activeSection, setActiveSection] = useState<SectionId>('profile');
   const [status, setStatus] = useState<ConfigStatus | null>(null);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
@@ -311,11 +309,21 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     }
   };
 
-  const handleOAuthLogin = () => {
-    if (onLogin) {
-      // Delegate to App.tsx which handles token polling, auto-setup,
-      // config state updates, and closing the settings panel.
-      onLogin();
+  const handleConfigure = async () => {
+    if (!selectedProject) {
+      setMessage({ text: 'Select a project first', type: 'error' });
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await api.autoSetup(selectedProject);
+      setMessage({ text: `Configured: ${result.email || 'OK'}`, type: 'success' });
+      const cfg = await api.getConfig();
+      setStatus(cfg);
+    } catch (err: any) {
+      setMessage({ text: `Configure failed: ${err.message}`, type: 'error' });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -650,7 +658,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
             <TestButton testKey="token" label="Test Token" />
           </div>
         </div>
-        <p>Upload a token file, or login with FABRIC to get a token from Credential Manager.</p>
+        <p>Upload a token file, or configure FABRIC credentials from the current token.</p>
         <div className="btn-row">
           <input
             ref={tokenFileRef}
@@ -669,11 +677,11 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           </button>
           <button
             className="btn"
-            onClick={handleOAuthLogin}
-            disabled={loading}
-            title="Open FABRIC Credential Manager to get a token"
+            onClick={handleConfigure}
+            disabled={loading || !status?.has_token}
+            title={!status?.has_token ? 'Upload a token first' : 'Generate SSH keys, bastion config, and project setup'}
           >
-            Login via FABRIC
+            Configure
           </button>
         </div>
         {showTokenPaste && (

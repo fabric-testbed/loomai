@@ -1,5 +1,6 @@
 'use client';
 import '../styles/landing-view.css';
+import { assetUrl } from '../utils/assetUrl';
 
 type TopView = 'landing' | 'slices' | 'artifacts' | 'infrastructure' | 'jupyter' | 'ai';
 
@@ -11,7 +12,6 @@ interface LandingViewProps {
   onStartTour: (tourId: string) => void;
   hasToken?: boolean;
   tokenExpired?: boolean;
-  onLogin?: () => void;
 }
 
 const QUICK_LINKS: Array<{ view: TopView; icon: string; label: string; desc: string }> = [
@@ -21,7 +21,7 @@ const QUICK_LINKS: Array<{ view: TopView; icon: string; label: string; desc: str
   { view: 'jupyter', icon: '\uD83D\uDCD3', label: 'JupyterLab', desc: 'Notebooks with full FABlib access' },
 ];
 
-export default function LandingView({ onNavigate, onOpenSettings, listLoaded, onLoadSlices, onStartTour, hasToken, tokenExpired, onLogin }: LandingViewProps) {
+export default function LandingView({ onNavigate, onOpenSettings, listLoaded, onLoadSlices, onStartTour, hasToken, tokenExpired }: LandingViewProps) {
   return (
     <div className="landing-root">
       <div className="landing-scroll">
@@ -29,8 +29,8 @@ export default function LandingView({ onNavigate, onOpenSettings, listLoaded, on
         {/* Hero */}
         <section className="landing-hero">
           <div className="landing-logo-wrap">
-            <img src="/loomai-horizontal-transparent-light-ink-trimmed.svg" alt="LoomAI" className="landing-logo landing-logo-light" />
-            <img src="/loomai-horizontal-transparent-dark-ink-trimmed.svg" alt="LoomAI" className="landing-logo landing-logo-dark" />
+            <img src={assetUrl('/loomai-horizontal-transparent-light-ink-trimmed.svg')} alt="LoomAI" className="landing-logo landing-logo-light" />
+            <img src={assetUrl('/loomai-horizontal-transparent-dark-ink-trimmed.svg')} alt="LoomAI" className="landing-logo landing-logo-dark" />
           </div>
           <div className="landing-tour-buttons">
             <button className="landing-tour-btn landing-tour-btn-primary" onClick={() => onStartTour('discover-loomai')}>
@@ -42,32 +42,69 @@ export default function LandingView({ onNavigate, onOpenSettings, listLoaded, on
           </div>
         </section>
 
-        {/* Login card — shown when not authenticated or token expired */}
-        {(hasToken === false || tokenExpired) && onLogin && (
-          <section className="landing-section">
-            <div className="landing-card landing-card-login">
-              <h2 className="landing-card-title">{tokenExpired ? 'Session Expired' : 'Connect to FABRIC'}</h2>
-              <p>
-                {tokenExpired
-                  ? 'Your FABRIC token has expired. Log in again to continue using LoomAI. Your configuration and keys are preserved.'
-                  : 'Log in with your FABRIC account to start building experiments. LoomAI will automatically configure your environment, generate SSH keys, and set up your project.'}
-              </p>
-              <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                <button className="landing-login-btn" onClick={onLogin}>
-                  {tokenExpired ? 'Re-login to FABRIC' : 'Login to FABRIC'}
-                </button>
-                {!tokenExpired && (
-                  <span style={{ fontSize: 12, color: 'var(--fabric-text-muted)' }}>
-                    New to FABRIC?{' '}
-                    <a href="https://portal.fabric-testbed.net" target="_blank" rel="noopener noreferrer" style={{ color: '#27aae1', fontWeight: 600, textDecoration: 'none' }}>
-                      Create an account
-                    </a>
+        {/* Token status card */}
+        <section className="landing-section">
+          <div className={`landing-card ${hasToken && !tokenExpired ? 'landing-card-active' : 'landing-card-login'}`}>
+            {hasToken && !tokenExpired ? (
+              <>
+                <h2 className="landing-card-title">
+                  <span className="landing-token-badge landing-token-active">Active</span>
+                  Connected to FABRIC
+                </h2>
+                <p>Your token is valid. You can build slices, manage resources, and run experiments.</p>
+              </>
+            ) : (
+              <>
+                <h2 className="landing-card-title">
+                  <span className={`landing-token-badge ${tokenExpired ? 'landing-token-expired' : 'landing-token-none'}`}>
+                    {tokenExpired ? 'Expired' : 'No Token'}
                   </span>
-                )}
-              </div>
-            </div>
-          </section>
-        )}
+                  {tokenExpired ? 'Token Expired' : 'Connect to FABRIC'}
+                </h2>
+                <p>
+                  {tokenExpired
+                    ? 'Your FABRIC token has expired. Download a fresh token from the Credential Manager and upload it in Settings. Your configuration and keys are preserved.'
+                    : 'To start building experiments, you need a FABRIC token. Follow the steps below to get one and configure LoomAI.'}
+                </p>
+                <div style={{ marginTop: 16, padding: '14px 16px', background: 'var(--fabric-bg-tint, rgba(39,170,225,0.06))', borderRadius: 8, border: '1px solid var(--fabric-border)' }}>
+                  <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: 'var(--fabric-text-muted)', lineHeight: 1.8 }}>
+                    <li>
+                      Go to the{' '}
+                      <a href="https://portal.fabric-testbed.net/experiments#managetokens" target="_blank" rel="noopener noreferrer" style={{ color: '#27aae1', textDecoration: 'none', fontWeight: 600 }}>
+                        FABRIC Portal
+                      </a>
+                      {' '}&rarr; Experiments &rarr; Manage Tokens
+                    </li>
+                    <li>
+                      Open the{' '}
+                      <a href="https://cm.fabric-testbed.net" target="_blank" rel="noopener noreferrer" style={{ color: '#27aae1', textDecoration: 'none', fontWeight: 600 }}>
+                        Credential Manager
+                      </a>
+                      {' '}and download your token
+                    </li>
+                    <li>
+                      Upload the token in{' '}
+                      <button
+                        onClick={onOpenSettings}
+                        style={{ background: 'none', border: 'none', padding: 0, color: '#27aae1', fontWeight: 600, cursor: 'pointer', fontSize: 'inherit', fontFamily: 'inherit' }}
+                      >
+                        Settings
+                      </button>
+                      {' '}and click <strong style={{ color: 'var(--fabric-text)' }}>Configure</strong> to set up SSH keys, project, and credentials automatically
+                    </li>
+                  </ol>
+                </div>
+                <div style={{ marginTop: 12, fontSize: 12, color: 'var(--fabric-text-muted)' }}>
+                  New to FABRIC?{' '}
+                  <a href="https://portal.fabric-testbed.net" target="_blank" rel="noopener noreferrer" style={{ color: '#27aae1', fontWeight: 600, textDecoration: 'none' }}>
+                    Create an account
+                  </a>
+                  {' '}to get started.
+                </div>
+              </>
+            )}
+          </div>
+        </section>
 
         {/* About cards */}
         <section className="landing-about">
@@ -163,11 +200,16 @@ export default function LandingView({ onNavigate, onOpenSettings, listLoaded, on
             <div className="landing-step">
               <span className="landing-step-num">1</span>
               <div>
-                <strong>Log in</strong>
+                <strong>Get a FABRIC token</strong>
                 <p>
-                  Click "Login to FABRIC" above. LoomAI will set up your SSH keys, project,
-                  and API credentials automatically. Or open <button className="landing-inline-link" onClick={onOpenSettings}>Settings</button> to
-                  configure manually.
+                  Go to the{' '}
+                  <a href="https://portal.fabric-testbed.net" target="_blank" rel="noopener noreferrer" style={{ color: '#27aae1', fontWeight: 600, textDecoration: 'none' }}>
+                    FABRIC Portal
+                  </a>
+                  {' '}&rarr; Experiments &rarr; Manage Tokens &rarr; Open Fabric Credential Manager
+                  to download your token. Then upload it in{' '}
+                  <button className="landing-inline-link" onClick={onOpenSettings}>Settings</button> and
+                  click <strong>Configure</strong> to set up your SSH keys, project, and credentials automatically.
                 </p>
               </div>
             </div>

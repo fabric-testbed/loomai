@@ -362,6 +362,8 @@ do_install() {
     echo -e "  ${BOLD}API:${NC}        http://localhost:8000"
     echo -e "  ${BOLD}Jupyter:${NC}    http://localhost:8889"
     echo ""
+    echo -e "  ${BOLD}Password:${NC}   docker compose logs loomai | grep password"
+    echo ""
     echo "  Manage:     docker compose logs -f    (view logs)"
     echo "  Upgrade:    bash install.sh            (pull latest)"
     echo "  Uninstall:  bash install.sh --uninstall"

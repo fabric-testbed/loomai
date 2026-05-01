@@ -9,6 +9,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <head>
+        {/* K8s hub injects this script to set window.__LOOMAI_BASE_PATH for sub-path routing.
+            In standalone mode the file won't exist and the script tag is harmlessly ignored. */}
+        <script src="/env-config.js" defer />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link

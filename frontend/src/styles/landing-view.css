@@ -428,9 +428,37 @@
   opacity: 0.6;
 }
 
-/* ── Login card ── */
+/* ── Login / token status card ── */
 .landing-card-login {
   border-top-color: var(--fabric-orange, #ff8542);
+}
+.landing-card-active {
+  border-top-color: var(--fabric-teal, #008e7a);
+}
+
+/* Token status badges */
+.landing-token-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+.landing-token-active {
+  background: var(--fabric-teal, #008e7a);
+  color: white;
+}
+.landing-token-expired {
+  background: var(--fabric-orange, #ff8542);
+  color: white;
+}
+.landing-token-none {
+  background: var(--fabric-text-muted, #999);
+  color: white;
 }
 
 .landing-login-btn {

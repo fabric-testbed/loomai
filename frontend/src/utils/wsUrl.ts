@@ -19,5 +19,6 @@ export function buildWsUrl(path: string): string {
   }
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.host}${path}`;
+  const basePath = (typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH) || '';
+  return `${protocol}//${window.location.host}${basePath}${path}`;
 }

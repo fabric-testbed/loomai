@@ -161,3 +161,70 @@ Key architectural decisions for the fabric-webgui project.
 - (+) Easy to grep and understand — standard CSS
 - (-) No compile-time class name safety (typos fail silently)
 - (-) Global namespace requires disciplined naming conventions
+
+---
+
+## ADR-011: Kubernetes Multi-User Deployment via Hub + CHP
+
+**Status**: Accepted
+
+**Context**: LoomAI needed multi-user deployment where each user gets an isolated environment with their own FABRIC credentials, persistent storage, and AI tools. Considered JupyterHub (heavyweight, Jupyter-centric) vs. custom lightweight hub.
+
+**Decision**: Build a custom lightweight Hub (FastAPI) inspired by JupyterHub's architecture: CILogon OIDC authentication, Configurable HTTP Proxy (CHP) for dynamic routing, and per-user Kubernetes pods. Reuses CHP from JupyterHub ecosystem but everything else is custom.
+
+**Consequences**:
+- (+) Full control over authentication flow, token management, and pod lifecycle
+- (+) Lightweight — no Jupyter kernel management, spawner abstractions, or hub DB migrations
+- (+) CHP is battle-tested and handles dynamic routing reliably
+- (-) Must maintain pod spawning, idle culling, and session management ourselves
+- (-) No ecosystem of JupyterHub plugins
+
+---
+
+## ADR-012: Nginx Reverse Proxy for AI Tools in User Pods
+
+**Status**: Accepted
+
+**Context**: AI tools (JupyterLab, Aider, OpenCode) run on separate ports inside user pods (8889, 9197, 9198). In K8s mode, CHP only routes to one port per pod (3000). Needed a way to expose multiple services.
+
+**Decision**: Use the existing nginx (port 3000) inside each user pod as a reverse proxy. Add location blocks for each tool: `/jupyter/` → port 8889, `/aider/` → port 9197, `/opencode/` → port 9198, `/tunnel/{port}/` → dynamic ports 9100-9199.
+
+**Consequences**:
+- (+) No additional K8s services or CHP configuration per tool
+- (+) All traffic goes through the single CHP route to port 3000
+- (+) Security: tunnel proxy restricted to ports 9100-9199 via regex `(91[0-9][0-9])`
+- (-) Nginx config is generated dynamically in entrypoint.sh (adds complexity)
+- (-) JupyterLab requires `base_url` to include the full CHP sub-path for correct redirects
+
+---
+
+## ADR-013: Lazy Tool Installation on Persistent Volume
+
+**Status**: Accepted
+
+**Context**: AI tools (JupyterLab ~900MB, Aider ~900MB, OpenCode ~200MB, etc.) are too large to bake into the Docker image. Users may not need all tools.
+
+**Decision**: Tools are lazy-installed on first use into the persistent volume at `.ai-tools/`. A `ToolInstallOverlay` component shows progress. File-based locks (`fcntl.flock`) prevent concurrent installs. On pod startup, all lock files are unconditionally cleaned (stale locks from previous containers caused "being installed by another process" errors due to PID reuse).
+
+**Consequences**:
+- (+) Docker image stays small (~1.5GB vs ~5GB+)
+- (+) Users only pay the install time for tools they actually use
+- (+) Tools persist across pod restarts via PVC
+- (-) First-use latency for each tool (30s–3min depending on tool size)
+- (-) PVC must be sized to accommodate installed tools (≥5Gi recommended)
+
+---
+
+## ADR-014: Versioned Image Tags for Kubernetes Deployments
+
+**Status**: Accepted
+
+**Context**: Using `latest` tag for Docker images caused deployment issues — Kubernetes cached old image digests, `helm upgrade` didn't trigger pod restarts, and `kubectl rollout restart` was needed as a workaround.
+
+**Decision**: Always use versioned tags (e.g., `0.2.4`) for production deployments. Reserve `latest` for development only.
+
+**Consequences**:
+- (+) Deterministic deployments — every `helm upgrade` with a new tag pulls the correct image
+- (+) Easy rollback — just change the tag back to a previous version
+- (+) No need for manual `kubectl rollout restart` workarounds
+- (-) Must remember to bump the tag on every release

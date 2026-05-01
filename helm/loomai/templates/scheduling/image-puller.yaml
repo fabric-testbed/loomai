@@ -1,0 +1,64 @@
+{{- if .Values.scheduling.imagePuller.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "loomai.fullname" . }}-image-puller
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: image-puller
+spec:
+  selector:
+    matchLabels:
+      {{- include "loomai.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: image-puller
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: "100%"
+  template:
+    metadata:
+      labels:
+        {{- include "loomai.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: image-puller
+    spec:
+      terminationGracePeriodSeconds: 0
+      initContainers:
+        - name: singleuser-image-puller
+          image: "{{ .Values.singleuser.image.name }}:{{ .Values.singleuser.image.tag }}"
+          imagePullPolicy: {{ .Values.singleuser.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - echo "Image pulled successfully"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+        - name: hub-image-puller
+          image: "{{ .Values.hub.image.name }}:{{ .Values.hub.image.tag }}"
+          imagePullPolicy: {{ .Values.hub.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - echo "Image pulled successfully"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.9
+          resources:
+            requests:
+              cpu: 1m
+              memory: 4Mi
+            limits:
+              cpu: 5m
+              memory: 16Mi
+{{- end }}

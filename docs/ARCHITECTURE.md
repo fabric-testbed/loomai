@@ -662,6 +662,20 @@ sudo ./build/build-lxc.sh --tag v0.1.4
 # Builds a Proxmox-ready .tar.gz with systemd services
 ```
 
+### Kubernetes (Multi-User)
+
+```bash
+helm install loomai ./helm/loomai -f my-values.yaml --namespace loomai
+# Hub (CILogon auth) + CHP (dynamic proxy) + per-user pods
+# See docs/KUBERNETES.md for full deployment guide
+```
+
+Key K8s components:
+- **Hub** (`hub/`): CILogon OIDC auth, FABRIC role verification, pod spawning, idle culling
+- **CHP**: Routes `/hub/*` to Hub, `/user/{uuid}/*` to user pods
+- **User pods**: Single combined image (nginx + uvicorn) with per-user PVC
+- **entrypoint.sh**: Dynamically generates nginx config with sub-path prefix, injects FABRIC tokens
+
 ## CLI Tool (`loomai`)
 
 A Click-based Python CLI providing full FABRIC testbed management from the terminal. Pre-installed in the Docker container at `/usr/local/bin/loomai`. Source: `cli/loomai_cli/`.

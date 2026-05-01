@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../api/client';
 import ToolInstallOverlay from './ToolInstallOverlay';
+import { assetUrl } from '../utils/assetUrl';
 import '../styles/jupyter-view.css';
 
 interface JupyterLabViewProps {
@@ -107,7 +108,8 @@ export default function JupyterLabView({ initialPath, dark }: JupyterLabViewProp
     }
   }, []);
 
-  const iframeUrl = port ? (initialPath || '/jupyter/') : '';
+  const basePath = (typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH) || '';
+  const iframeUrl = port ? (initialPath || `${basePath}/jupyter/`) : '';
 
   return (
     <div className="jupyter-view">
@@ -128,7 +130,7 @@ export default function JupyterLabView({ initialPath, dark }: JupyterLabViewProp
         {status === 'running' && (
           <>
             <button onClick={refreshIframe}>Refresh</button>
-            <button onClick={() => window.open(iframeUrl || '/jupyter/lab', '_blank')}>Open in New Tab</button>
+            <button onClick={() => window.open(iframeUrl || `${basePath}/jupyter/lab`, '_blank')}>Open in New Tab</button>
             <button className="jupyter-stop-btn" onClick={async () => {
               await api.stopJupyter().catch(() => {});
               setStatus('loading');

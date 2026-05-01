@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Admin - LoomAI Hub{% endblock %}
+
+{% block nav %}
+<a href="{{ hub_prefix }}/spawn">My Server</a>
+<a href="{{ hub_prefix }}/admin">Admin</a>
+<a href="{{ hub_prefix }}/logout">Sign Out</a>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <h2 style="margin-bottom: 0;">Users &amp; Servers</h2>
+        <span style="font-size: 13px; color: var(--text-secondary);">{{ users|length }} user{{ 's' if users|length != 1 }}</span>
+    </div>
+
+    {% if users %}
+    <table>
+        <thead>
+            <tr>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Server</th>
+                <th>Pod</th>
+                <th>Started</th>
+                <th>Last Activity</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for u in users %}
+            <tr>
+                <td>
+                    <span style="font-family: monospace; font-size: 13px;">{{ u.username[:12] }}...</span>
+                    {% if u.admin %}
+                    <span class="badge" style="background: rgba(87,152,188,0.2); color: var(--fabric-primary); margin-left: 6px;">admin</span>
+                    {% endif %}
+                </td>
+                <td style="color: var(--text-secondary); font-size: 13px;">{{ u.email }}</td>
+                <td>
+                    <span class="badge badge-{{ u.server_state }}">{{ u.server_state }}</span>
+                </td>
+                <td style="font-family: monospace; font-size: 12px; color: var(--text-secondary);">
+                    {{ u.pod_name or '-' }}
+                </td>
+                <td style="font-size: 12px; color: var(--text-secondary);">
+                    {{ u.started_at[:16] if u.started_at else '-' }}
+                </td>
+                <td style="font-size: 12px; color: var(--text-secondary);">
+                    {{ u.last_activity[:16] if u.last_activity else '-' }}
+                </td>
+                <td>
+                    {% if u.server_state in ['ready', 'pending'] %}
+                    <form method="POST" action="{{ hub_prefix }}/admin/users/{{ u.username }}/stop" style="display: inline;">
+                        <button type="submit" class="btn btn-danger btn-sm"
+                                onclick="return confirm('Stop server for {{ u.email or u.username }}?')">
+                            Stop
+                        </button>
+                    </form>
+                    {% else %}
+                    <span style="color: var(--text-secondary); font-size: 12px;">-</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: var(--text-secondary); text-align: center; padding: 32px;">
+        No users have logged in yet.
+    </p>
+    {% endif %}
+</div>
+{% endblock %}

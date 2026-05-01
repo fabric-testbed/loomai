@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import '../styles/titlebar.css';
 import { VERSION } from '../version';
 import { checkForUpdate } from '../api/client';
+import { assetUrl } from '../utils/assetUrl';
 import type { UpdateInfo } from '../types/fabric';
 
 interface AiToolInfo {
@@ -30,7 +31,6 @@ interface TitleBarProps {
   tokenExpired?: boolean;
   userEmail?: string;
   userName?: string;
-  onLogin?: () => void;
   onLogout?: () => void;
 }
 
@@ -44,28 +44,28 @@ const VIEWS: Array<{ key: TopView; label: string; icon: string; desc: string; re
 
 function ViewIcon({ icon, size = 12, dark }: { icon: string; size?: number; dark?: boolean }) {
   if (icon === '__fabric_logo__') {
-    const src = dark ? '/fabric_wave_light.png' : '/fabric_wave_dark.png';
+    const src = dark ? assetUrl('/fabric_wave_light.png') : assetUrl('/fabric_wave_dark.png');
     return <img src={src} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
   }
   if (icon === '__jupyter_logo__') {
-    return <img src="/jupyter-icon.svg" alt="" style={{ height: size, verticalAlign: 'middle' }} />;
+    return <img src={assetUrl('/jupyter-icon.svg')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
   }
   if (icon === '__chameleon_logo__') {
-    return <img src="/chameleon-icon.png" alt="" style={{ height: size, verticalAlign: 'middle' }} />;
+    return <img src={assetUrl('/chameleon-icon.png')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
   }
   if (icon === '__loomai_icon__') {
-    return <img src="/loomai-icon-transparent.svg" alt="" style={{ height: size, verticalAlign: 'middle' }} />;
+    return <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
   }
   if (icon === '__composite_icon__') {
-    return <img src="/composite-slice-icon-transparent.svg" alt="" style={{ height: size, verticalAlign: 'middle' }} />;
+    return <img src={assetUrl('/composite-slice-icon-transparent.svg')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
   }
   if (icon === '__marketplace_icon__') {
-    return <img src="/marketplace-icon-transparent.svg" alt="" style={{ height: size, verticalAlign: 'middle' }} />;
+    return <img src={assetUrl('/marketplace-icon-transparent.svg')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
   }
   return <>{icon}</>;
 }
 
-export default React.memo(function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, aiTools, selectedAiTool, onLaunchAiTool, chameleonEnabled, compositeEnabled, hasToken, tokenExpired, userEmail, userName, onLogin, onLogout }: TitleBarProps) {
+export default React.memo(function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, aiTools, selectedAiTool, onLaunchAiTool, chameleonEnabled, compositeEnabled, hasToken, tokenExpired, userEmail, userName, onLogout }: TitleBarProps) {
   const [viewOpen, setViewOpen] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
@@ -130,8 +130,8 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
     <div className="title-bar">
       <div className="title-left">
         <span className="loomai-header-brand" onClick={onGoHome} style={{ cursor: 'pointer' }} title="Go to LoomAI home">
-          <img src="/loomai-icon-transparent.svg" alt="" className="loomai-header-icon" />
-          <img src="/loomai-wordmark-transparent-dark-ink-trimmed.svg" alt="LoomAI" className="loomai-header-wordmark" />
+          <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" className="loomai-header-icon" />
+          <img src={assetUrl('/loomai-wordmark-transparent-dark-ink-trimmed.svg')} alt="LoomAI" className="loomai-header-wordmark" />
         </span>
         <div className="title-version-wrapper" ref={updateRef}>
           <button className="title-version-btn" onClick={handleVersionClick} title="Version info and updates">
@@ -252,18 +252,37 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
           )}
         </div>
 
-        {/* Login button or user pill */}
-        {(hasToken === false || tokenExpired) && onLogin && (
-          <button className="title-login-btn" onClick={onLogin} title={tokenExpired ? 'Your token has expired — click to re-authenticate' : 'Login to FABRIC'}>
-            {tokenExpired ? '\u26A0 Re-login' : 'Login'}
-          </button>
-        )}
-        {hasToken && !tokenExpired && userEmail && (
-          <span className="title-user-pill" title={userName || userEmail}>
-            <span className="title-user-avatar">{(userName || userEmail).charAt(0).toUpperCase()}</span>
-            <span className="title-user-email">{userEmail}</span>
+        {/* Token status pill + user info */}
+        {hasToken && !tokenExpired ? (
+          <span className="title-user-pill" title={userName || userEmail || 'Token active'}>
+            <span className="title-token-status title-token-active">Active</span>
+            {userEmail && (
+              <>
+                <span className="title-user-avatar">{(userName || userEmail).charAt(0).toUpperCase()}</span>
+                <span className="title-user-email">{userEmail}</span>
+              </>
+            )}
             {onLogout && (
-              <button className="title-logout-btn" onClick={onLogout} title="Logout">
+              <button className="title-logout-btn" onClick={onLogout} title={typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH ? 'Stop server & logout' : 'Sign out'}>
+                {'\u23FB'}
+              </button>
+            )}
+          </span>
+        ) : tokenExpired ? (
+          <span className="title-user-pill title-token-expired-pill">
+            <span className="title-token-status title-token-expired" onClick={onOpenSettings} title="Token expired — click to open Settings and upload a new token" style={{ cursor: 'pointer' }}>Expired</span>
+            {userEmail && <span className="title-user-email">{userEmail}</span>}
+            {onLogout && (
+              <button className="title-logout-btn" onClick={onLogout} title="Sign out">
+                {'\u23FB'}
+              </button>
+            )}
+          </span>
+        ) : (
+          <span className="title-user-pill title-token-none-pill">
+            <span className="title-token-status title-token-none" onClick={onOpenSettings} title="No token — click to open Settings and upload your FABRIC token" style={{ cursor: 'pointer' }}>No Token</span>
+            {onLogout && (
+              <button className="title-logout-btn" onClick={onLogout} title="Sign out">
                 {'\u23FB'}
               </button>
             )}

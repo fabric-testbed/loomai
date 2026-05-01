@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "loomai.proxy.fullname" . }}-public
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+  {{- with .Values.proxy.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.proxy.service.type }}
+  ports:
+    {{- if .Values.proxy.https.enabled }}
+    - name: https
+      port: 443
+      targetPort: http
+      protocol: TCP
+    {{- end }}
+    - name: http
+      port: {{ .Values.proxy.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "loomai.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "loomai.proxy.fullname" . }}-api
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+spec:
+  type: ClusterIP
+  ports:
+    - name: api
+      port: 8001
+      targetPort: api
+      protocol: TCP
+  selector:
+    {{- include "loomai.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy

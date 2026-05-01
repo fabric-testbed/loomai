@@ -1,0 +1,11 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+authlib>=1.3.0
+httpx>=0.27.0
+kubernetes-asyncio>=30.0.0
+sqlalchemy[asyncio]>=2.0.0
+aiosqlite>=0.20.0
+itsdangerous>=2.1.0
+jinja2>=3.1.0
+pydantic-settings>=2.2.0
+python-multipart>=0.0.9

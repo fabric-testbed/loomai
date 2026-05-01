@@ -391,7 +391,14 @@ def fixup_jupyter_kernel() -> None:
 
 
 def clean_stale_locks() -> None:
-    """Remove stale lock files on startup (from crashed installs)."""
+    """Remove ALL lock files on startup.
+
+    No install can legitimately be in progress when the server is just
+    starting, so unconditionally remove every lock.  This is critical in
+    K8s where persistent volumes survive container restarts and PIDs from
+    the old container may be reused by unrelated processes in the new one,
+    causing the old PID-alive check to wrongly keep stale locks.
+    """
     if not os.path.isdir(_LOCK_DIR):
         return
     for fname in os.listdir(_LOCK_DIR):
@@ -399,14 +406,7 @@ def clean_stale_locks() -> None:
             continue
         path = os.path.join(_LOCK_DIR, fname)
         try:
-            with open(path) as f:
-                pid = int(f.read().strip())
-            # Check if the PID is still alive
-            os.kill(pid, 0)
-        except (ValueError, OSError):
-            # PID is dead or file is corrupt — remove the lock
-            try:
-                os.unlink(path)
-                logger.info("Cleaned stale lock: %s", fname)
-            except OSError:
-                pass
+            os.unlink(path)
+            logger.info("Cleaned lock on startup: %s", fname)
+        except OSError:
+            pass

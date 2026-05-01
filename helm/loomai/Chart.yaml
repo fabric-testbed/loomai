@@ -1,0 +1,15 @@
+apiVersion: v2
+name: loomai
+description: LoomAI — Multi-user FABRIC testbed GUI on Kubernetes
+type: application
+version: 0.1.0
+appVersion: "0.3.0"
+keywords:
+  - fabric
+  - testbed
+  - kubernetes
+  - cilogon
+home: https://github.com/fabric-testbed/loomai
+maintainers:
+  - name: FABRIC Team
+    email: admin@fabric-testbed.net

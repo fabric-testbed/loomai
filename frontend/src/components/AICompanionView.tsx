@@ -11,6 +11,7 @@ import OpenCodeWebView from './OpenCodeWebView';
 import AiderWebView from './AiderWebView';
 import LoomAIChatView from './LoomAIChatView';
 import '../styles/ai-companion.css';
+import { assetUrl } from '../utils/assetUrl';
 
 const TERM_THEME = {
   background: '#1a1a2e',
@@ -229,7 +230,7 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
               <div className="ai-card" key={tool.id} onClick={() => onToolChange?.(tool.id)}>
                 <div className="ai-card-header">
                   <div className={`ai-card-icon ${tool.iconClass}`}>
-                    {tool.icon === '__loomai_icon__' ? <img src="/loomai-icon-transparent.svg" alt="" style={{ height: 24 }} /> : tool.icon}
+                    {tool.icon === '__loomai_icon__' ? <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" style={{ height: 24 }} /> : tool.icon}
                   </div>
                   <div className="ai-card-name">{tool.name}</div>
                 </div>
