@@ -129,6 +129,8 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
     getToolInstallStatus().then(setInstallStatus).catch(() => {});
   }, []);
 
+  const isHubMode = typeof window !== 'undefined' && !!(window as any).__LOOMAI_BASE_PATH;
+
   const visibleTools = TOOLS.filter((t) => enabledTools[t.id] !== false);
 
   const launchTool = useCallback((tool: ToolDef) => {
@@ -212,22 +214,27 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
       ) : showCards ? (
         <div className="ai-cards" data-help-id="ai-companion.launcher">
           {visibleTools.map((tool) => {
+            const hubDisabled = isHubMode && tool.id !== 'loomai';
             const ready = tool.needsKey ? hasKey : true;
             const toolStatus = installStatus[tool.id];
             const isInstalled = !toolStatus || toolStatus.installed;
-            const badge = tool.id === 'claude'
-              ? { cls: 'your-account', text: 'Paid Subscription' }
-              : tool.id === 'loomai'
-                ? (ready ? { cls: 'free', text: 'Free \u2022 API Key Required' } : { cls: 'key-required', text: 'API Key Required' })
-                : ready
-                  ? { cls: 'free', text: 'Free \u2022 API Key Required' }
-                  : { cls: 'key-required', text: 'API Key Required' };
-            const installBadge = toolStatus && !toolStatus.installed
+            const badge = hubDisabled
+              ? (tool.id === 'claude'
+                ? { cls: 'your-account', text: 'Paid \u2022 Local Only' }
+                : { cls: 'local-only', text: 'Local Install Only' })
+              : tool.id === 'claude'
+                ? { cls: 'your-account', text: 'Paid Subscription' }
+                : tool.id === 'loomai'
+                  ? (ready ? { cls: 'free', text: 'Free \u2022 API Key Required' } : { cls: 'key-required', text: 'API Key Required' })
+                  : ready
+                    ? { cls: 'free', text: 'Free \u2022 API Key Required' }
+                    : { cls: 'key-required', text: 'API Key Required' };
+            const installBadge = !hubDisabled && toolStatus && !toolStatus.installed
               ? { cls: 'not-installed', text: `Install \u2022 ${toolStatus.size_estimate}` }
               : null;
 
             return (
-              <div className="ai-card" key={tool.id} onClick={() => onToolChange?.(tool.id)}>
+              <div className={`ai-card${hubDisabled ? ' hub-disabled' : ''}`} key={tool.id} onClick={hubDisabled ? undefined : () => onToolChange?.(tool.id)} title={hubDisabled ? 'Install LoomAI locally with Docker to use this tool. See github.com/fabric-testbed/loomai' : undefined}>
                 <div className="ai-card-header">
                   <div className={`ai-card-icon ${tool.iconClass}`}>
                     {tool.icon === '__loomai_icon__' ? <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" style={{ height: 24 }} /> : tool.icon}
@@ -240,10 +247,10 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
                   {installBadge && <span className={`ai-badge ${installBadge.cls}`}>{installBadge.text}</span>}
                   <button
                     className="ai-launch-btn"
-                    disabled={tool.needsKey && !ready}
-                    onClick={(e) => { e.stopPropagation(); onToolChange?.(tool.id); }}
+                    disabled={hubDisabled || (tool.needsKey && !ready)}
+                    onClick={hubDisabled ? undefined : (e) => { e.stopPropagation(); onToolChange?.(tool.id); }}
                   >
-                    {installBadge ? 'Install & Launch' : 'Launch'}
+                    {hubDisabled ? 'Local Docker Only' : installBadge ? 'Install & Launch' : 'Launch'}
                   </button>
                 </div>
               </div>

@@ -228,3 +228,36 @@ Key architectural decisions for the fabric-webgui project.
 - (+) Easy rollback — just change the tag back to a previous version
 - (+) No need for manual `kubectl rollout restart` workarounds
 - (-) Must remember to bump the tag on every release
+
+---
+
+## ADR-015: CHP TLS Termination (No Ingress Controller)
+
+**Status**: Accepted
+
+**Context**: LoomAI on Kubernetes needs HTTPS for production (secure cookies, CILogon OIDC). Options: (1) install an ingress controller (nginx-ingress, Traefik) + cert-manager, (2) use cloud-managed HTTPS (GKE Ingress), (3) terminate TLS directly in CHP.
+
+**Decision**: CHP (Configurable HTTP Proxy) terminates TLS directly using `--ssl-key` and `--ssl-cert` flags. The TLS certificate chain and private key are stored in a K8s TLS secret (`loomai-proxy-manual-tls`). When `proxy.https.enabled: true`, the LoadBalancer service exposes only port 443. No ingress controller required.
+
+**Consequences**:
+- (+) Zero additional infrastructure — no ingress controller or cert-manager to install/maintain
+- (+) Works on any K8s cluster with a LoadBalancer service (GKE, EKS, AKS, bare-metal with MetalLB)
+- (+) Simple cert rotation — recreate the K8s secret and restart the proxy pod
+- (-) No automatic cert renewal (manual process, or use external automation)
+- (-) No HTTP→HTTPS redirect (clients hitting port 80 get connection refused, not a redirect)
+
+---
+
+## ADR-016: Hub-Disabled AI Tools in Kubernetes Mode
+
+**Status**: Accepted
+
+**Context**: In hub (K8s) mode, each user gets a container with limited PVC storage (typically 5Gi). Installable AI tools (Aider ~900MB, Claude Code ~1GB, OpenCode ~200MB, Crush ~150MB, Deep Agents ~500MB) would consume most of this budget, leaving little room for user data.
+
+**Decision**: In hub mode, installable AI tools are greyed out in the UI with a "Local Install Only" badge and disabled launch buttons. LoomAI (the built-in chat assistant, 0MB install) remains fully available. Hub mode is detected via `window.__LOOMAI_BASE_PATH` (set by the hub spawner in K8s, absent in standalone Docker).
+
+**Consequences**:
+- (+) User PVC space preserved for data, notebooks, and FABRIC credentials
+- (+) No change to standalone Docker — all tools remain available locally
+- (+) LoomAI provides full AI assistant capabilities without installation
+- (-) Users who want the full tool suite must run LoomAI locally via Docker

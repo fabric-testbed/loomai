@@ -266,7 +266,13 @@ export default function ClientView({ slices, selectedSliceName, sliceData, clien
         {iframeSrc && (
           <>
             <div className="client-sep" />
-            <span className="client-url">{iframeSrc}</span>
+            <button
+              className="client-open-tab-btn"
+              onClick={() => window.open(iframeSrc, '_blank', 'noopener')}
+              title={iframeSrc}
+            >
+              Open in New Tab
+            </button>
           </>
         )}
       </div>

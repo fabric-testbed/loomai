@@ -19,6 +19,7 @@ from fastapi import APIRouter, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.settings_manager import get_fabric_api_key as _get_ai_api_key, get_nrp_api_key as _get_nrp_api_key
+from app.tracking_headers import add_tracking_headers, get_tracking_headers
 from app.tool_installer import (
     is_tool_installed, install_tool, get_tool_binary_path,
     get_tool_env, get_all_tool_status, TOOL_REGISTRY,
@@ -89,9 +90,9 @@ _FABRIC_CONTEXT_DEFAULTS: dict[str, int] = {
 def _fetch_models(api_key: str) -> list[dict]:
     """Query the FABRIC AI server for available models with metadata."""
     url = f"{_ai_server_url()}/v1/models"
-    req = urllib.request.Request(url, headers={
+    req = urllib.request.Request(url, headers=add_tracking_headers({
         "Authorization": f"Bearer {api_key}",
-    })
+    }))
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = json.loads(resp.read())
@@ -110,9 +111,9 @@ def _fetch_models(api_key: str) -> list[dict]:
 def _fetch_nrp_models(api_key: str) -> list[dict]:
     """Query the NRP LLM server for available models with metadata."""
     url = f"{_nrp_server_url()}/v1/models"
-    req = urllib.request.Request(url, headers={
+    req = urllib.request.Request(url, headers=add_tracking_headers({
         "Authorization": f"Bearer {api_key}",
-    })
+    }))
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = json.loads(resp.read())
@@ -140,7 +141,7 @@ def _fetch_fabric_model_info(api_key: str) -> list[dict]:
     try:
         resp = httpx.get(
             url,
-            headers={"x-litellm-api-key": api_key},
+            headers={"x-litellm-api-key": api_key, **get_tracking_headers()},
             timeout=10.0,
         )
         if resp.status_code == 404:
@@ -179,10 +180,10 @@ def _check_model_health(server_url: str, api_key: str, model_id: str) -> bool:
         req = urllib.request.Request(
             f"{server_url}/v1/chat/completions",
             data=data,
-            headers={
+            headers=add_tracking_headers({
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-            },
+            }),
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             return resp.status == 200
@@ -1338,7 +1339,7 @@ def _fetch_all_models() -> dict:
             continue
         try:
             url = f"{cp_url.rstrip('/')}/v1/models"
-            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {cp_key}"})
+            req = urllib.request.Request(url, headers=add_tracking_headers({"Authorization": f"Bearer {cp_key}"}))
             with urllib.request.urlopen(req, timeout=10) as resp:
                 body = json.loads(resp.read())
             cp_models = []
@@ -1623,10 +1624,10 @@ async def test_model_health(request: Request):
         req = urllib.request.Request(
             f"{server_url}/v1/chat/completions",
             data=data,
-            headers={
+            headers=add_tracking_headers({
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-            },
+            }),
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             latency = int((time.time() - start) * 1000)

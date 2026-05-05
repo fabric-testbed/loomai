@@ -13,6 +13,8 @@ import time
 import urllib.request
 from typing import Any, Optional
 
+from app.tracking_headers import add_tracking_headers
+
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
@@ -58,7 +60,7 @@ class _ChameleonSession:
         req = urllib.request.Request(
             f"{self.auth_url}/auth/tokens",
             data=auth_body,
-            headers={"Content-Type": "application/json"},
+            headers=add_tracking_headers({"Content-Type": "application/json"}),
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             self._token = resp.headers.get("X-Subject-Token")
@@ -110,10 +112,10 @@ class _ChameleonSession:
         """GET request to a Chameleon service API."""
         endpoint = self.get_endpoint(service_type)
         url = f"{endpoint}{path}"
-        req = urllib.request.Request(url, headers={
+        req = urllib.request.Request(url, headers=add_tracking_headers({
             "X-Auth-Token": self.get_token(),
             "Accept": "application/json",
-        })
+        }))
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read())
 
@@ -122,11 +124,11 @@ class _ChameleonSession:
         endpoint = self.get_endpoint(service_type)
         url = f"{endpoint}{path}"
         data = json.dumps(body).encode()
-        req = urllib.request.Request(url, data=data, headers={
+        req = urllib.request.Request(url, data=data, headers=add_tracking_headers({
             "X-Auth-Token": self.get_token(),
             "Content-Type": "application/json",
             "Accept": "application/json",
-        })
+        }))
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 resp_body = resp.read()
@@ -142,9 +144,9 @@ class _ChameleonSession:
         """DELETE request to a Chameleon service API."""
         endpoint = self.get_endpoint(service_type)
         url = f"{endpoint}{path}"
-        req = urllib.request.Request(url, method="DELETE", headers={
+        req = urllib.request.Request(url, method="DELETE", headers=add_tracking_headers({
             "X-Auth-Token": self.get_token(),
-        })
+        }))
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 resp.read()
@@ -158,11 +160,11 @@ class _ChameleonSession:
         endpoint = self.get_endpoint(service_type)
         url = f"{endpoint}{path}"
         data = json.dumps(body).encode()
-        req = urllib.request.Request(url, data=data, method="PUT", headers={
+        req = urllib.request.Request(url, data=data, method="PUT", headers=add_tracking_headers({
             "X-Auth-Token": self.get_token(),
             "Content-Type": "application/json",
             "Accept": "application/json",
-        })
+        }))
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read())

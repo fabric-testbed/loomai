@@ -73,6 +73,23 @@
   white-space: nowrap;
 }
 
+.client-open-tab-btn {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--fabric-primary, #5798bc);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fabric-primary, #5798bc);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.client-open-tab-btn:hover {
+  background: var(--fabric-primary, #5798bc);
+  color: #fff;
+}
+
 .client-iframe-wrap {
   flex: 1;
   position: relative;

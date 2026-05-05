@@ -34,6 +34,16 @@
   box-shadow: 0 2px 12px rgba(87, 152, 188, 0.15);
 }
 
+.ai-card.hub-disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.ai-card.hub-disabled:hover {
+  border-color: var(--border);
+  box-shadow: none;
+}
+
 .ai-card-header {
   display: flex;
   align-items: center;
@@ -92,6 +102,7 @@
 .ai-badge.key-required { background: rgba(226, 82, 65, 0.15); color: #e25241; }
 .ai-badge.your-account { background: rgba(217, 119, 6, 0.15); color: #b45309; }
 .ai-badge.not-installed { background: rgba(87, 152, 188, 0.15); color: #5798bc; }
+.ai-badge.local-only { background: rgba(128, 128, 128, 0.15); color: #888; }
 
 .ai-launch-btn {
   padding: 6px 16px;

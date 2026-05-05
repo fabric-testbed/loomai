@@ -65,6 +65,8 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
   - PVC: 5Gi recommended for AI tools (~900MB for JupyterLab alone)
   - Image builds: `docker buildx --platform linux/amd64` with versioned tags
 
+- **HTTPS deployment + hub-disabled AI tools (2026-05-01)**: Production HTTPS support via CHP TLS termination with manual certificates (InCommon/Sectigo). LoadBalancer exposes only port 443 when HTTPS enabled. Full cert chain support (leaf + intermediate). K8s TLS secret created manually or via Helm values. CILogon callback URL updated for HTTPS. Secure cookies enforced. AI tools (Aider, OpenCode, Crush, Claude Code, Deep Agents) greyed out in hub mode with "Local Install Only" badge — detected via `window.__LOOMAI_BASE_PATH`. LoomAI (built-in) remains fully available. Docs updated: KUBERNETES.md (cert prep, HTTPS config, renewal, troubleshooting), NOTES.txt (HTTPS-aware), values.yaml (annotated HTTPS options).
+
 ## In Progress
 
 (None)

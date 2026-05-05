@@ -64,13 +64,15 @@ Open **http://localhost:3000** in your browser.
 
 > **Password protection:** LoomAI auto-generates a password on first start. Find it in the container logs with `docker compose logs loomai | grep "password"`. The password persists across restarts. To set your own: `LOOMAI_PASSWORD=mysecret docker compose up -d`
 
-> **Localhost only by default:** Ports are bound to `127.0.0.1` so LoomAI is only accessible from the local machine. To expose on all interfaces (e.g., for remote access on a cloud VM), change the port bindings in `docker-compose.yml`:
+> **Localhost only by default:** Ports are bound to `127.0.0.1` so LoomAI is only accessible from the local machine. **Exposing LoomAI on all interfaces is not recommended** — it makes the UI reachable from any network, which is a security risk even with password protection enabled. If you must allow remote access (e.g., on a cloud VM), use an SSH tunnel instead:
+> ```bash
+> ssh -L 3000:localhost:3000 user@your-vm    # then open http://localhost:3000 locally
+> ```
+> As a last resort, you can change the port bindings in `docker-compose.yml`, but only on trusted networks:
 > ```yaml
 > ports:
->   - "0.0.0.0:3000:3000"   # Accessible from any IP
+>   - "0.0.0.0:3000:3000"   # NOT RECOMMENDED — exposes to all interfaces
 > ```
-
-### Option 2: Local Development
 
 ### Option 2: Local Development
 
@@ -97,10 +99,55 @@ npm run dev
 
 ### Authentication
 
+LoomAI protects the web UI with a password. On first startup, a random password is auto-generated and printed to the container logs.
+
 | Environment Variable | Description |
 |---|---|
 | `LOOMAI_PASSWORD` | Set a custom password (default: auto-generated, shown in logs) |
 | `LOOMAI_NO_AUTH` | Set to `1` to disable password protection (for trusted networks) |
+
+**Find the auto-generated password:**
+
+```bash
+docker compose logs loomai | grep "password"
+```
+
+**Set a custom password:**
+
+```bash
+LOOMAI_PASSWORD=mysecretpassword docker compose up -d
+```
+
+Or add to your `docker-compose.yml`:
+
+```yaml
+environment:
+  - LOOMAI_PASSWORD=mysecretpassword
+```
+
+**Change an existing password:**
+
+Set a new `LOOMAI_PASSWORD` value and restart the container. The new password hash replaces the old one.
+
+```bash
+LOOMAI_PASSWORD=newpassword docker compose up -d
+```
+
+**Reset a forgotten password:**
+
+Delete the stored hash and restart — a new password will be auto-generated and shown in logs:
+
+```bash
+docker compose exec loomai rm -f /home/fabric/work/.loomai/password_hash
+docker compose restart loomai
+docker compose logs loomai | grep "password"
+```
+
+**Disable password protection** (trusted networks only):
+
+```bash
+LOOMAI_NO_AUTH=1 docker compose up -d
+```
 
 ### FABRIC Setup
 

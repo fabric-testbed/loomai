@@ -179,7 +179,7 @@ export default function App() {
   const PANEL_ICONS: Record<PanelId, string> = { editor: '\u270E', template: '__marketplace_icon__', chat: '__loomai_icon__', console: '\u2756', details: '\u2139' };
   const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Artifacts', chat: 'LoomAI', console: 'Console', details: 'Details' };
   const ICON_MAP: Record<string, string> = { '__loomai_icon__': '/loomai-icon-transparent.svg', '__marketplace_icon__': '/marketplace-icon-transparent.svg', '__composite_icon__': '/composite-slice-icon-transparent.svg' };
-  const renderPanelIcon = (iconKey: string, size = 14) => ICON_MAP[iconKey] ? <img src={ICON_MAP[iconKey]} alt="" style={{ height: size }} /> : <>{iconKey}</>;
+  const renderPanelIcon = (iconKey: string, size = 14) => ICON_MAP[iconKey] ? <img src={assetUrl(ICON_MAP[iconKey])} alt="" style={{ height: size }} /> : <>{iconKey}</>;
   const PANEL_IDS: PanelId[] = ['editor', 'template', 'chat', 'console', 'details'];
   const DEFAULT_PANEL_WIDTH = 280;
   const MIN_PANEL_WIDTH = 180;
@@ -396,21 +396,13 @@ export default function App() {
   }, [dark]);
 
   // Fetch static data once on mount (images, component models, VM templates, AI tools, recipes).
-  // Grouped into Promise.all so all setState calls batch into a single render cycle.
+  // Each fetch is independent so a failure in one doesn't block the others.
   useEffect(() => {
-    Promise.all([
-      api.listImages(),
-      api.listComponentModels(),
-      api.listVmTemplates(),
-      api.getAiTools(),
-      api.listRecipes(),
-    ]).then(([images, models, templates, tools, recipeList]) => {
-      setImages(images);
-      setComponentModels(models);
-      setVmTemplates(templates);
-      setEnabledAiTools(tools);
-      setRecipes(recipeList);
-    }).catch(() => {});
+    api.listImages().then(setImages).catch(() => {});
+    api.listComponentModels().then(setComponentModels).catch(() => {});
+    api.listVmTemplates().then(setVmTemplates).catch(() => {});
+    api.getAiTools().then(setEnabledAiTools).catch(() => {});
+    api.listRecipes().then(setRecipes).catch(() => {});
   }, []);
 
   const refreshVmTemplates = useCallback(() => {

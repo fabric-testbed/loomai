@@ -9,8 +9,14 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.tracking_headers import get_tracking_headers
 
 logger = logging.getLogger(__name__)
+
+
+def _tracked_headers(base: dict[str, str], username: str = "") -> dict[str, str]:
+    """Merge tracking headers into a base headers dict."""
+    return {**base, **get_tracking_headers(username)}
 
 
 async def check_fabric_role(sub: str) -> tuple[bool, list[str], dict[str, Any]]:
@@ -27,10 +33,10 @@ async def check_fabric_role(sub: str) -> tuple[bool, list[str], dict[str, Any]]:
     """
     url = f"{settings.FABRIC_CORE_API_HOST}/people/services-auth"
     params = {"sub": sub}
-    headers = {
+    headers = _tracked_headers({
         "Authorization": f"Bearer {settings.FABRIC_CORE_API_BEARER_TOKEN}",
         "Accept": "application/json",
-    }
+    })
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(url, params=params, headers=headers)
@@ -83,10 +89,10 @@ async def get_fabric_username(sub: str) -> str:
     """
     url = f"{settings.FABRIC_CORE_API_HOST}/people/services-auth"
     params = {"sub": sub}
-    headers = {
+    headers = _tracked_headers({
         "Authorization": f"Bearer {settings.FABRIC_CORE_API_BEARER_TOKEN}",
         "Accept": "application/json",
-    }
+    })
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(url, params=params, headers=headers)
@@ -128,10 +134,10 @@ async def provision_fabric_tokens(
     if project_id:
         params["projectId"] = project_id
 
-    headers = {
+    headers = _tracked_headers({
         "Accept": "application/json",
         "Content-Type": "application/json",
-    }
+    })
 
     # The CM authenticates via cookie with the CILogon ID token
     cookies = {"mod_auth_openidc_session": cilogon_id_token}
@@ -164,10 +170,10 @@ async def refresh_fabric_tokens(refresh_token: str) -> dict[str, Any]:
         Dict with refreshed FABRIC token data.
     """
     cm_url = f"https://{settings.FABRIC_CM_HOST}/credmgr/tokens/refresh"
-    headers = {
+    headers = _tracked_headers({
         "Accept": "application/json",
         "Content-Type": "application/json",
-    }
+    })
     body = {
         "refresh_token": refresh_token,
         "scope": settings.FABRIC_CM_SCOPE,

@@ -32,6 +32,18 @@ docker compose up -d
 
 Navigate to **http://localhost:3000** in your browser.
 
+> **Localhost only by default:** Ports are bound to `127.0.0.1` so LoomAI is only accessible from the local machine. **Exposing on all interfaces is not recommended** — even with password protection, it's a security risk. For remote access, use an SSH tunnel: `ssh -L 3000:localhost:3000 user@your-vm`
+
+A password is auto-generated on first start. Find it in the logs:
+
+```bash
+docker compose logs loomai | grep "password"
+```
+
+To set your own password: `LOOMAI_PASSWORD=mysecret docker compose up -d`
+
+To disable password protection: `LOOMAI_NO_AUTH=1 docker compose up -d`
+
 ### 4. Configure credentials
 
 On first launch, the Getting Started tour will guide you through:
@@ -62,6 +74,15 @@ docker compose up -d
 ```
 
 The UI will notify you when a new version is available.
+
+## Environment Variables
+
+| Variable | Description | Default |
+|---|---|---|
+| `LOOMAI_PASSWORD` | Set a custom login password | Auto-generated (shown in logs) |
+| `LOOMAI_NO_AUTH` | Set to `1` to disable password protection | Auth enabled |
+| `FABRIC_CONFIG_DIR` | Path to FABRIC config inside container | `/home/fabric/work/fabric_config` |
+| `FABRIC_STORAGE_DIR` | Path to persistent storage inside container | `/home/fabric/work` |
 
 ## Requirements
 

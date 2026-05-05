@@ -10,6 +10,8 @@ import urllib.request
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app.tracking_headers import add_tracking_headers
+
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["trovi"])
 
@@ -21,7 +23,7 @@ async def list_trovi_artifacts(q: str = "", tag: str = "", limit: int = 50, offs
     """Search/list Trovi artifacts."""
     try:
         url = f"{TROVI_API}/artifacts"
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        req = urllib.request.Request(url, headers=add_tracking_headers({"Accept": "application/json"}))
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
 
@@ -67,7 +69,7 @@ async def get_trovi_artifact(uuid: str):
     """Get details of a specific Trovi artifact."""
     try:
         url = f"{TROVI_API}/artifacts/{uuid}"
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        req = urllib.request.Request(url, headers=add_tracking_headers({"Accept": "application/json"}))
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
         data["source"] = "trovi"
@@ -83,7 +85,7 @@ async def list_trovi_tags():
     """Get all unique tags from Trovi artifacts."""
     try:
         url = f"{TROVI_API}/artifacts"
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        req = urllib.request.Request(url, headers=add_tracking_headers({"Accept": "application/json"}))
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
 
@@ -105,7 +107,7 @@ async def download_trovi_artifact(uuid: str, request: Request):
     try:
         # Fetch artifact details
         url = f"{TROVI_API}/artifacts/{uuid}"
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        req = urllib.request.Request(url, headers=add_tracking_headers({"Accept": "application/json"}))
         with urllib.request.urlopen(req, timeout=15) as resp:
             artifact = json.loads(resp.read())
 

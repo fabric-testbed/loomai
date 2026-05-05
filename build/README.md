@@ -86,23 +86,37 @@ docker login
 chmod +x build/build-multiplatform.sh build/audit-image.sh
 ```
 
+## Images
+
+| Image | Dockerfile | Purpose |
+|-------|-----------|---------|
+| `fabrictestbed/loomai` | `Dockerfile` | Single-user LoomAI container (nginx + uvicorn + AI tools) |
+| `fabrictestbed/loomai-hub` | `hub/Dockerfile` | Multi-user hub for Kubernetes (CILogon auth, pod spawning) |
+
 ## Quick Start
 
 ```bash
-# Build for both platforms (local only, no push)
+# Build LoomAI image for both platforms (local only, no push)
 ./build/build-multiplatform.sh
 
 # Build and push to Docker Hub as latest
 ./build/build-multiplatform.sh --push
 
 # Build and push with a custom tag
-./build/build-multiplatform.sh --push --tag v1.2.0
+./build/build-multiplatform.sh --push --tag v0.4.0
 
 # Force a clean build (no layer cache)
 ./build/build-multiplatform.sh --push --no-cache
 
+# Build hub image (amd64 for cloud K8s)
+cd hub
+docker buildx build --platform linux/amd64 \
+  -t fabrictestbed/loomai-hub:0.1.4 \
+  -t fabrictestbed/loomai-hub:latest \
+  -f Dockerfile --push .
+
 # Run security audit on an existing image
-./build/audit-image.sh fabrictestbed/loomai-dev:latest
+./build/audit-image.sh fabrictestbed/loomai:latest
 ```
 
 ## Platform Coverage
@@ -128,14 +142,14 @@ When `--push` is used, `audit-image.sh` runs automatically before pushing. It ch
 The audit can also be run standalone against any image:
 
 ```bash
-./build/audit-image.sh fabrictestbed/loomai-dev:latest
+./build/audit-image.sh fabrictestbed/loomai:latest
 ```
 
 ## Verifying a Published Image
 
 ```bash
 # Confirm both amd64 and arm64 manifests exist
-docker buildx imagetools inspect fabrictestbed/loomai-dev:latest
+docker buildx imagetools inspect fabrictestbed/loomai:latest
 ```
 
 ## Troubleshooting

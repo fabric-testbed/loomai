@@ -1,7 +1,7 @@
 {
   "name": "fabric-webgui",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "next dev -p 3000",
@@ -35,6 +35,9 @@
     "react-leaflet": "^4.2.1",
     "react-markdown": "^10.1.0"
   },
+  "overrides": {
+    "postcss": "^8.5.10"
+  },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
     "@testing-library/jest-dom": "^6.9.1",
@@ -46,6 +49,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^6.0.1",
     "jsdom": "^29.0.1",
+    "postcss": "^8.5.10",
     "typescript": "~5.6.2",
     "vitest": "^4.1.2"
   }

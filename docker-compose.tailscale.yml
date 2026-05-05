@@ -14,7 +14,7 @@ services:
     restart: unless-stopped
 
   fabric-webui-app:
-    image: ${DOCKER_REPO:-fabrictestbed/loomai-dev}:latest
+    image: ${DOCKER_REPO:-fabrictestbed/loomai}:latest
     network_mode: service:fabric-webui-ts
     volumes:
       - fabric_work:/home/fabric/work

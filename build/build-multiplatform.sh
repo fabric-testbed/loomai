@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Defaults
-REPO="${DOCKER_REPO:-fabrictestbed/loomai-dev}"
+REPO="${DOCKER_REPO:-fabrictestbed/loomai}"
 TAG="latest"
 PUSH=false
 NO_CACHE=""
@@ -24,7 +24,7 @@ Build multi-platform Docker image for fabric-webui.
 Options:
   --push        Push to Docker Hub after building (runs security audit first)
   --tag TAG     Image tag (default: latest)
-  --repo REPO   Docker Hub repository (default: fabrictestbed/loomai-dev)
+  --repo REPO   Docker Hub repository (default: fabrictestbed/loomai)
   --no-cache    Force clean build with no layer cache
   -h, --help    Show this help message
 

@@ -637,13 +637,13 @@ docker compose -f docker-compose.dev.yml up --build
 
 ```bash
 docker compose up -d
-# fabrictestbed/loomai-dev:latest — nginx + uvicorn under supervisord
+# fabrictestbed/loomai:latest — nginx + uvicorn under supervisord
 ```
 
 ### Multi-Platform Build
 
 ```bash
-./build/build-multiplatform.sh --push --tag v0.1.4
+./build/build-multiplatform.sh --push --tag v0.4.0
 # Builds linux/amd64 + linux/arm64
 # Runs build/audit-image.sh security check before push
 ```
@@ -658,7 +658,7 @@ docker-compose -f docker-compose.tailscale.yml up
 ### LXC/Container Template
 
 ```bash
-sudo ./build/build-lxc.sh --tag v0.1.4
+sudo ./build/build-lxc.sh --tag v0.4.0
 # Builds a Proxmox-ready .tar.gz with systemd services
 ```
 
@@ -672,9 +672,13 @@ helm install loomai ./helm/loomai -f my-values.yaml --namespace loomai
 
 Key K8s components:
 - **Hub** (`hub/`): CILogon OIDC auth, FABRIC role verification, pod spawning, idle culling
-- **CHP**: Routes `/hub/*` to Hub, `/user/{uuid}/*` to user pods
+- **CHP**: Routes `/hub/*` to Hub, `/user/{uuid}/*` to user pods; terminates TLS when HTTPS enabled
 - **User pods**: Single combined image (nginx + uvicorn) with per-user PVC
 - **entrypoint.sh**: Dynamically generates nginx config with sub-path prefix, injects FABRIC tokens
+
+HTTPS: CHP terminates TLS directly using a K8s TLS secret (`loomai-proxy-manual-tls`). When `proxy.https.enabled: true`, the LoadBalancer exposes only port 443. See `docs/KUBERNETES.md` for certificate setup.
+
+Hub mode restrictions: Installable AI tools (Aider, OpenCode, Crush, Claude Code, Deep Agents) are greyed out in hub mode since per-user PVC storage is limited. LoomAI (built-in) remains available. Detection: frontend checks `window.__LOOMAI_BASE_PATH` (set by hub spawner, absent in standalone Docker).
 
 ## CLI Tool (`loomai`)
 

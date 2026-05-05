@@ -46,10 +46,10 @@ proxy:
     name: quay.io/jupyterhub/configurable-http-proxy
     tag: "4.6.2"
     pullPolicy: IfNotPresent
-  secretToken: ""  # auto-generated if empty
+  secretToken: ""  # auto-generated if empty; persist across upgrades (see NOTES.txt)
   service:
     type: LoadBalancer
-    port: 80
+    port: 80               # HTTP port; only exposed when https.enabled is false
     annotations: {}
   chp:
     resources:
@@ -60,11 +60,20 @@ proxy:
         cpu: 500m
         memory: 256Mi
   https:
-    enabled: false
-    type: manual  # manual, letsencrypt, or offload
+    enabled: false         # Set to true for production (REQUIRED)
+    # Type options:
+    #   manual    — You provide cert/key (inline below or as pre-created K8s secret)
+    #   offload   — TLS terminated at LB/ingress; CHP receives plain HTTP
+    #   letsencrypt — (not yet implemented)
+    type: manual
     manual:
-      key: ""
-      cert: ""
+      # Option 1: Leave empty and create the K8s TLS secret manually:
+      #   kubectl create secret tls loomai-proxy-manual-tls \
+      #     --cert=fullchain.pem --key=server.key -n <namespace>
+      #
+      # Option 2: Embed PEM content here (chart creates the secret for you):
+      key: ""              # TLS private key (PEM format)
+      cert: ""             # TLS certificate + intermediate chain (PEM format)
 
 singleuser:
   image:
@@ -80,7 +89,7 @@ singleuser:
       cpu: "4"
       memory: 2G
   storage:
-    capacity: 5Gi     # ≥5Gi recommended (AI tools require ~2GB)
+    capacity: 2Gi     # AI tools disabled in hub mode; 2Gi sufficient for user data
     storageClass: ""
     homeMountPath: /home/fabric/work
   extraEnv:
@@ -93,7 +102,7 @@ singleuser:
 
 cull:
   enabled: true
-  timeout: 3600
+  timeout: 28800
   every: 600
   maxAge: 86400
 

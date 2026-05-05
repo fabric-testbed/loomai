@@ -1,0 +1,36 @@
+{{- /*
+  Pre-upgrade hook: delete all running user (singleuser) pods so they
+  respawn with the new image after the upgrade completes.
+*/ -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "loomai.hub.fullname" . }}-pre-upgrade-cull
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hub
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 60
+  template:
+    metadata:
+      labels:
+        {{- include "loomai.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: pre-upgrade-cull
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "loomai.hub.serviceAccountName" . }}
+      containers:
+        - name: cull
+          image: bitnami/kubectl:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Culling all singleuser pods before upgrade..."
+              kubectl delete pods -n {{ .Release.Namespace }} -l app=loomai,component=singleuser --ignore-not-found
+              echo "Done."

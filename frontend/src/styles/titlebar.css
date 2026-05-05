@@ -228,6 +228,22 @@
   color: #fbbf24;
 }
 
+/* ── Hub-disabled AI tools ── */
+.title-pill-option.hub-disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.title-pill-ai-tag.local-only {
+  background: rgba(128, 128, 128, 0.15);
+  color: #888;
+}
+
+[data-theme="dark"] .title-pill-ai-tag.local-only {
+  background: rgba(128, 128, 128, 0.2);
+  color: #aaa;
+}
+
 /* ── Icon buttons (settings, theme toggle) ── */
 .title-icon-btn {
   background: rgba(255, 255, 255, 0.1);

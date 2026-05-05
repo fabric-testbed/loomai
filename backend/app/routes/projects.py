@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.fabric_call_manager import get_call_manager
 from app.slice_registry import get_all_entries
+from app.tracking_headers import get_tracking_headers
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ def _fetch_people_search(token: str, query: str) -> dict:
     """Synchronous UIS people search for use with FabricCallManager."""
     resp = httpx.get(
         f"{UIS_BASE}/people?search={query}&limit=10",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}", **get_tracking_headers()},
         timeout=15,
     )
     resp.raise_for_status()
@@ -58,7 +59,7 @@ def _fetch_project_details(token: str, uuid: str) -> dict:
     """Synchronous UIS project details fetch for use with FabricCallManager."""
     resp = httpx.get(
         f"{UIS_BASE}/projects/{uuid}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}", **get_tracking_headers()},
         timeout=15,
     )
     resp.raise_for_status()

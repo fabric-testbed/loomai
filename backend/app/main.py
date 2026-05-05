@@ -457,7 +457,7 @@ async def lifespan(app: FastAPI):
 _enable_docs = os.environ.get("LOOMAI_ENABLE_DOCS", "").strip() == "1"
 _docs_kwargs = {} if _enable_docs else {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
-app = FastAPI(title="LoomAI API", version="0.3.0", lifespan=lifespan, **_docs_kwargs)
+app = FastAPI(title="LoomAI API", version="0.4.0", lifespan=lifespan, **_docs_kwargs)
 
 from app.error_handler import install_error_handlers
 install_error_handlers(app)

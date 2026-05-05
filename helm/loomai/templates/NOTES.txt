@@ -14,7 +14,16 @@ LoomAI has been deployed to namespace {{ .Release.Namespace }}.
 
     kubectl get svc {{ include "loomai.proxy.fullname" . }}-public -n {{ .Release.Namespace }}
 
+{{- if .Values.proxy.https.enabled }}
+  Then visit: https://<YOUR-DOMAIN>
+
+  HTTPS is enabled. The service exposes port 443 only.
+  Ensure your DNS A record points to the LoadBalancer external IP.
+{{- else }}
   Then visit: http://<EXTERNAL-IP>:{{ .Values.proxy.service.port }}
+
+  WARNING: HTTPS is disabled. Set proxy.https.enabled=true for production.
+{{- end }}
 {{- else if eq .Values.proxy.service.type "NodePort" }}
   The proxy service is type NodePort.
   Run the following to get the node port:
@@ -39,6 +48,23 @@ LoomAI has been deployed to namespace {{ .Release.Namespace }}.
 
   Proxy logs:
     kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=proxy
+
+{{- if .Values.proxy.https.enabled }}
+
+==========================================================
+ TLS CERTIFICATE
+==========================================================
+
+  Verify TLS secret exists:
+    kubectl get secret {{ include "loomai.proxy.fullname" . }}-manual-tls -n {{ .Release.Namespace }}
+
+  Check certificate expiration:
+    kubectl get secret {{ include "loomai.proxy.fullname" . }}-manual-tls -n {{ .Release.Namespace }} \
+      -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -dates
+
+  Test HTTPS:
+    curl -v https://<YOUR-DOMAIN>/hub/health
+{{- end }}
 
 ==========================================================
  REQUIRED SECRETS

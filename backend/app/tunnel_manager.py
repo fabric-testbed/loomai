@@ -3,13 +3,16 @@
 Opens two-hop SSH tunnels (backend → bastion → VM) and runs a lightweight
 HTTP reverse proxy on a local port in the 9100–9199 range.  The proxy
 strips iframe-blocking headers (X-Frame-Options, CSP) so the browser can
-embed the service in an iframe.  No URL rewriting — the app runs at root /.
+embed the service in an iframe.  In hub (K8s) mode, HTML responses are
+rewritten so absolute-path assets load through the sub-path tunnel URL.
 """
 from __future__ import annotations
 
 import http.client
 import http.server
 import logging
+import os
+import re
 import socket
 import threading
 import time
@@ -44,6 +47,77 @@ _HOP_HEADERS = frozenset({
     "proxy-authenticate", "proxy-authorization",
     "te", "trailers", "upgrade",
 })
+
+
+# ---------------------------------------------------------------------------
+# Sub-path URL rewriting (hub / K8s mode only)
+# ---------------------------------------------------------------------------
+
+_BASE_PATH = os.environ.get("LOOMAI_BASE_PATH", "")
+
+
+def _rewrite_for_subpath(body: bytes, content_type: str, local_port: int) -> bytes:
+    """Rewrite absolute URL paths in HTML so sub-resources load through the
+    tunnel sub-path.  Only active when LOOMAI_BASE_PATH is set (hub mode).
+    Returns body unchanged in standalone mode or for non-HTML content."""
+    if not _BASE_PATH:
+        return body
+    if "text/html" not in content_type:
+        return body
+
+    prefix = f"{_BASE_PATH}/tunnel/{local_port}"
+    text = body.decode("utf-8", errors="replace")
+
+    # Inject <base> tag and JS interceptors for fetch, XHR, createElement,
+    # and History API so all resource loads route through the tunnel sub-path.
+    inject = (
+        f'<base href="{prefix}/">'
+        f'<script>'
+        f'(function(){{'
+        f'var P="{prefix}";'
+        f'function rw(u){{if(typeof u==="string"&&u.startsWith("/")&&!u.startsWith(P))return P+u;return u;}}'
+        # fetch
+        f'var _fetch=window.fetch;'
+        f'window.fetch=function(u,o){{return _fetch.call(this,rw(u),o);}};'
+        # XMLHttpRequest
+        f'var _open=XMLHttpRequest.prototype.open;'
+        f'XMLHttpRequest.prototype.open=function(m,u){{arguments[1]=rw(u);return _open.apply(this,arguments);}};'
+        # createElement — intercept script/link/img src and href
+        f'var _ce=document.createElement.bind(document);'
+        f'document.createElement=function(tag){{'
+        f'var el=_ce(tag);'
+        f'var lt=tag.toLowerCase();'
+        f'if(lt==="script"||lt==="img"||lt==="link"){{'
+        f'["src","href"].forEach(function(attr){{'
+        f'var d=Object.getOwnPropertyDescriptor(el.__proto__,attr);'
+        f'if(d&&d.set){{Object.defineProperty(el,attr,{{set:function(v){{d.set.call(this,rw(v));}},get:d.get,configurable:true}});}}'
+        f'}});'
+        f'}}'
+        f'return el;'
+        f'}};'
+        # History pushState/replaceState
+        f'var _ps=history.pushState.bind(history);'
+        f'history.pushState=function(s,t,u){{return _ps(s,t,u?rw(u):u);}};'
+        f'var _rs=history.replaceState.bind(history);'
+        f'history.replaceState=function(s,t,u){{return _rs(s,t,u?rw(u):u);}};'
+        f'}})()'
+        f'</script>'
+    )
+    # Rewrite src="/...", href="/...", action="/..." in HTML attributes FIRST
+    # (before injecting the <base> tag, which itself contains href="/...")
+    text = re.sub(
+        r'((?:src|href|action)\s*=\s*["\'])(/(?!/))',
+        rf'\1{prefix}\2',
+        text,
+    )
+
+    # Then inject <base> + JS interceptors (won't be double-rewritten)
+    if re.search(r'<head[^>]*>', text, re.IGNORECASE):
+        text = re.sub(r'(<head[^>]*>)', rf'\1{inject}', text, count=1, flags=re.IGNORECASE)
+    else:
+        text = inject + text
+
+    return text.encode("utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -365,13 +439,24 @@ def _make_handler(tunnel_info: TunnelInfo):
                 self.send_response_only(resp.status, resp.reason)
 
                 # Forward response headers, stripping iframe-blockers and hop-by-hop
+                tunnel_prefix = f"{_BASE_PATH}/tunnel/{tunnel_info.local_port}" if _BASE_PATH else ""
                 for k, v in resp.getheaders():
                     lk = k.lower()
                     if lk in _STRIP_HEADERS or lk in _HOP_HEADERS or lk == "content-length" or lk == "content-encoding":
                         continue
+                    # Rewrite Location headers for redirects in hub mode
+                    if lk == "location" and tunnel_prefix and v.startswith("/"):
+                        v = tunnel_prefix + v
                     self.send_header(k, v)
 
                 resp_body = resp.read()
+                # Rewrite HTML for sub-path routing in hub mode
+                content_type = ""
+                for k, v in resp.getheaders():
+                    if k.lower() == "content-type":
+                        content_type = v
+                        break
+                resp_body = _rewrite_for_subpath(resp_body, content_type, tunnel_info.local_port)
                 self.send_header("Content-Length", str(len(resp_body)))
                 self.end_headers()
                 self.wfile.write(resp_body)

@@ -66,6 +66,7 @@ function ViewIcon({ icon, size = 12, dark }: { icon: string; size?: number; dark
 }
 
 export default React.memo(function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, aiTools, selectedAiTool, onLaunchAiTool, chameleonEnabled, compositeEnabled, hasToken, tokenExpired, userEmail, userName, onLogout }: TitleBarProps) {
+  const isHubMode = typeof window !== 'undefined' && !!(window as any).__LOOMAI_BASE_PATH;
   const [viewOpen, setViewOpen] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
@@ -105,7 +106,7 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
   };
 
   const handleCopyRun = () => {
-    navigator.clipboard.writeText('docker pull fabrictestbed/loomai-dev:latest\ndocker run -d -p 3000:3000 \\\n  -v fabric_work:/home/fabric/work \\\n  fabrictestbed/loomai-dev:latest').then(() => {
+    navigator.clipboard.writeText('docker pull fabrictestbed/loomai:latest\ndocker run -d -p 3000:3000 \\\n  -v fabric_work:/home/fabric/work \\\n  fabrictestbed/loomai:latest').then(() => {
       setCopiedRun(true);
       setTimeout(() => setCopiedRun(false), 2000);
     });
@@ -160,27 +161,31 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
                   <div className="title-update-status-ok">{'\u2713'} You are running the latest version</div>
                 </>
               )}
-              <div className="title-update-divider" />
-              <div className="title-update-section-label">Update to latest:</div>
-              <div className="title-update-command">
-                <pre>docker compose pull{'\n'}docker compose up -d</pre>
-                <button className="title-update-copy" onClick={handleCopyPull}>
-                  {copiedPull ? 'Copied!' : 'Copy'}
-                </button>
-              </div>
-              <div className="title-update-divider" />
-              <div className="title-update-section-label">Fresh install:</div>
-              <div className="title-update-command">
-                <pre>docker pull fabrictestbed/loomai-dev:latest{'\n'}docker run -d -p 3000:3000 \{'\n'}  -v fabric_work:/home/fabric/work \{'\n'}  fabrictestbed/loomai-dev:latest</pre>
-                <button className="title-update-copy" onClick={handleCopyRun}>
-                  {copiedRun ? 'Copied!' : 'Copy'}
-                </button>
-              </div>
+              {!window.__LOOMAI_BASE_PATH && (
+                <>
+                  <div className="title-update-divider" />
+                  <div className="title-update-section-label">Update to latest:</div>
+                  <div className="title-update-command">
+                    <pre>docker compose pull{'\n'}docker compose up -d</pre>
+                    <button className="title-update-copy" onClick={handleCopyPull}>
+                      {copiedPull ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <div className="title-update-divider" />
+                  <div className="title-update-section-label">Fresh install:</div>
+                  <div className="title-update-command">
+                    <pre>docker pull fabrictestbed/loomai:latest{'\n'}docker run -d -p 3000:3000 \{'\n'}  -v fabric_work:/home/fabric/work \{'\n'}  fabrictestbed/loomai:latest</pre>
+                    <button className="title-update-copy" onClick={handleCopyRun}>
+                      {copiedRun ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                </>
+              )}
               <div className="title-update-divider" />
               <div className="title-update-links">
                 <a
                   className="title-update-link"
-                  href={updateInfo?.docker_hub_url || `https://hub.docker.com/r/fabrictestbed/loomai-dev`}
+                  href={updateInfo?.docker_hub_url || `https://hub.docker.com/r/fabrictestbed/loomai`}
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -188,7 +193,7 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
                 </a>
                 <a
                   className="title-update-link"
-                  href="https://github.com/fabric-testbed/fabric-webgui"
+                  href="https://github.com/fabric-testbed/loomai"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -230,22 +235,31 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
               {aiTools && aiTools.length > 0 && (
                 <>
                   <div className="title-pill-section-header">AI Tools</div>
-                  {aiTools.map((tool) => (
+                  {aiTools.map((tool) => {
+                    const hubDisabled = isHubMode && tool.id !== 'loomai';
+                    return (
                     <button
                       key={tool.id}
-                      className={`title-pill-option ${currentView === 'ai' && selectedAiTool === tool.id ? 'active' : ''}`}
-                      onClick={() => { onLaunchAiTool?.(tool.id); setViewOpen(false); }}
+                      className={`title-pill-option ${currentView === 'ai' && selectedAiTool === tool.id ? 'active' : ''}${hubDisabled ? ' hub-disabled' : ''}`}
+                      onClick={hubDisabled ? undefined : () => { onLaunchAiTool?.(tool.id); setViewOpen(false); }}
+                      disabled={hubDisabled}
+                      title={hubDisabled ? 'Install LoomAI locally with Docker to use this tool — github.com/fabric-testbed/loomai' : undefined}
                     >
                       <span className="title-pill-option-icon">
                         {tool.icon.startsWith('__') ? <ViewIcon icon={tool.icon} size={12} dark={dark} /> : tool.icon}
                       </span>
                       {tool.name}
-                      <span className={`title-pill-ai-tag ${tool.id === 'claude' ? 'paid' : 'free'}`}>
-                        {tool.id === 'claude' ? 'Paid' : 'Free'}
-                      </span>
+                      {hubDisabled
+                        ? <span className={`title-pill-ai-tag ${tool.id === 'claude' ? 'paid' : 'local-only'}`}>
+                            {tool.id === 'claude' ? 'Paid' : 'Local Only'}
+                          </span>
+                        : <span className={`title-pill-ai-tag ${tool.id === 'claude' ? 'paid' : 'free'}`}>
+                            {tool.id === 'claude' ? 'Paid' : 'Free'}
+                          </span>}
                       {currentView === 'ai' && selectedAiTool === tool.id && <span className="title-pill-check">{'\u2713'}</span>}
                     </button>
-                  ))}
+                    );
+                  })}
                 </>
               )}
             </div>

@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from app.http_pool import fabric_client
 from app.slice_registry import resolve_slice_name
+from app.tracking_headers import get_tracking_headers, invalidate_cache as _invalidate_tracking_cache
 from app.fablib_manager import (
     DEFAULT_CONFIG_DIR,
     is_configured,
@@ -101,7 +102,7 @@ def _read_version() -> str:
 
 CURRENT_VERSION = _read_version()
 
-DOCKER_HUB_REPO = os.environ.get("DOCKER_REPO", "fabrictestbed/loomai-dev")
+DOCKER_HUB_REPO = os.environ.get("DOCKER_REPO", "fabrictestbed/loomai")
 DOCKER_HUB_TAGS_URL = f"https://hub.docker.com/v2/repositories/{DOCKER_HUB_REPO}/tags/"
 
 # Simple in-memory cache for update checks (1 hour TTL)
@@ -176,7 +177,7 @@ def _fetch_uis_person(id_token: str, user_uuid: str) -> dict:
     """Synchronous UIS people fetch for use with FabricCallManager cache."""
     resp = httpx.get(
         f"https://uis.fabric-testbed.net/people/{user_uuid}",
-        headers={"Authorization": f"Bearer {id_token}"},
+        headers={"Authorization": f"Bearer {id_token}", **get_tracking_headers()},
         timeout=15,
     )
     resp.raise_for_status()
@@ -491,6 +492,7 @@ def _process_oauth_callback(id_token: str, refresh_token: str = "") -> RedirectR
     # Reset FABlib and notify caches so all views use the new account
     reset_fablib()
     notify_user_changed()
+    _invalidate_tracking_cache()
 
     # --- Inline key generation + project setup ---
     # The frontend auto-setup flow may not trigger reliably (popup/polling race).
@@ -542,7 +544,8 @@ def _process_oauth_callback(id_token: str, refresh_token: str = "") -> RedirectR
                 try:
                     resp = httpx.post(
                         f"https://{core_api_host}/sshkeys",
-                        headers={"Authorization": f"Bearer {id_token}", "Content-Type": "application/json"},
+                        headers={"Authorization": f"Bearer {id_token}", "Content-Type": "application/json",
+                                 **get_tracking_headers()},
                         json={"keytype": "bastion", "comment": f"loomai-bastion-{secrets.token_hex(4)}",
                               "description": "bastion-key-via-loomai", "store_pubkey": True},
                         timeout=15,
@@ -596,7 +599,7 @@ def _process_oauth_callback(id_token: str, refresh_token: str = "") -> RedirectR
                     api_key = ""
                     try:
                         keys_resp = httpx.get(f"https://{cm_host}/credmgr/tokens/llm_keys",
-                                              headers=auth_headers, timeout=15)
+                                              headers={**auth_headers, **get_tracking_headers()}, timeout=15)
                         if keys_resp.status_code == 200:
                             for k in keys_resp.json().get("data", []):
                                 key_val = k.get("details", {}).get("api_key", "")
@@ -612,7 +615,7 @@ def _process_oauth_callback(id_token: str, refresh_token: str = "") -> RedirectR
                             f"https://{cm_host}/credmgr/tokens/create_llm",
                             params={"key_name": f"loomai-{_uuid.uuid4().hex[:8]}",
                                     "comment": "Auto-created by LoomAI", "duration": 30},
-                            headers=auth_headers, timeout=15,
+                            headers={**auth_headers, **get_tracking_headers()}, timeout=15,
                         )
                         resp.raise_for_status()
                         llm_data = resp.json().get("data", [{}])
@@ -748,6 +751,7 @@ async def auto_setup(req: AutoSetupRequest):
         settings["fabric"]["bastion_username"] = bastion_login
     settings_manager.save_settings(settings)
     settings_manager.apply_env_vars(settings)
+    _invalidate_tracking_cache()
 
     config_dir = _ensure_config_dir()
     core_api_host = settings.get("fabric", {}).get("hosts", {}).get("core_api", "uis.fabric-testbed.net")
@@ -766,6 +770,7 @@ async def auto_setup(req: AutoSetupRequest):
                 headers={
                     "Authorization": f"Bearer {id_token}",
                     "Content-Type": "application/json",
+                    **get_tracking_headers(),
                 },
                 json={
                     "keytype": "bastion",
@@ -840,7 +845,7 @@ async def auto_setup(req: AutoSetupRequest):
     if not existing_ai_key:
         try:
             cm_host = settings.get("fabric", {}).get("hosts", {}).get("credmgr", "cm.fabric-testbed.net")
-            auth_headers = {"Authorization": f"Bearer {id_token}"}
+            auth_headers = {"Authorization": f"Bearer {id_token}", **get_tracking_headers()}
 
             # Check for existing LLM keys first — reuse if one exists
             api_key = ""
@@ -948,7 +953,7 @@ async def create_llm_key():
     from app import settings_manager
     settings = settings_manager.load_settings()
     cm_host = settings.get("fabric", {}).get("hosts", {}).get("credmgr", "cm.fabric-testbed.net")
-    auth_headers = {"Authorization": f"Bearer {id_token}"}
+    auth_headers = {"Authorization": f"Bearer {id_token}", **get_tracking_headers()}
 
     try:
         # Check for existing LLM keys first
@@ -1071,7 +1076,8 @@ async def generate_bastion_key(force: bool = Query(False)):
     try:
         resp = httpx.post(
             f"https://{core_api_host}/sshkeys",
-            headers={"Authorization": f"Bearer {id_token}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {id_token}", "Content-Type": "application/json",
+                     **get_tracking_headers()},
             json={"keytype": "bastion", "comment": f"loomai-bastion-{secrets.token_hex(4)}",
                   "description": "bastion-key-via-loomai", "store_pubkey": True},
             timeout=15,
@@ -1472,6 +1478,7 @@ def save_config(req: ConfigSaveRequest):
 
     settings_manager.save_settings(settings)
     settings_manager.apply_env_vars(settings)
+    _invalidate_tracking_cache()
     logger.info("save_config: config_dir=%s, bastion_key=%s",
                 settings.get("paths", {}).get("config_dir", ""),
                 settings.get("paths", {}).get("bastion_key_file", ""))

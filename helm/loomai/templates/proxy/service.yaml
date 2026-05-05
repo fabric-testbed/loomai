@@ -17,11 +17,12 @@ spec:
       port: 443
       targetPort: http
       protocol: TCP
-    {{- end }}
+    {{- else }}
     - name: http
       port: {{ .Values.proxy.service.port }}
       targetPort: http
       protocol: TCP
+    {{- end }}
   selector:
     {{- include "loomai.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: proxy

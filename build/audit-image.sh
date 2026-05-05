@@ -9,7 +9,7 @@ set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
     echo "Usage: $(basename "$0") <image-name>"
-    echo "Example: $(basename "$0") fabrictestbed/loomai-dev:latest"
+    echo "Example: $(basename "$0") fabrictestbed/loomai:latest"
     exit 1
 fi
 

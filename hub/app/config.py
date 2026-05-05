@@ -60,7 +60,7 @@ class HubSettings(BaseSettings):
 
     # ---------- Idle culler ----------
     CULL_ENABLED: bool = True
-    CULL_TIMEOUT: int = 3600
+    CULL_TIMEOUT: int = 28800
     CULL_EVERY: int = 600
     CULL_MAX_AGE: int = 86400
 

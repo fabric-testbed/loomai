@@ -194,10 +194,11 @@ def _configure_jupyter_ai(env: dict) -> None:
             continue
         try:
             from app.routes.ai_terminal import _model_ids
+            from app.tracking_headers import add_tracking_headers
             import urllib.request
             req = urllib.request.Request(
                 f"{cp_url.rstrip('/')}/v1/models",
-                headers={"Authorization": f"Bearer {cp_key}"},
+                headers=add_tracking_headers({"Authorization": f"Bearer {cp_key}"}),
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
                 body = json.loads(resp.read())
