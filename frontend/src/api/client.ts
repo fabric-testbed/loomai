@@ -2614,3 +2614,11 @@ export function testSetting(settingName: string): Promise<SettingTestResult> {
 export function testAllSettings(): Promise<Record<string, SettingTestResult>> {
   return fetchJson('/settings/test-all', { method: 'POST' });
 }
+
+export function testCustomProvider(base_url: string, api_key: string): Promise<SettingTestResult> {
+  return fetchJson('/settings/test-custom-provider', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ base_url, api_key }),
+  });
+}

@@ -15,7 +15,7 @@ from urllib.parse import urlencode
 
 import httpx
 import paramiko
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -307,7 +307,7 @@ def get_config_status():
             token_info = {
                 "email": payload.get("email", ""),
                 "name": payload.get("name", ""),
-                "uuid": payload.get("uuid", ""),
+                "uuid": payload.get("uuid", "") or os.environ.get("FABRIC_USER_UUID", ""),
                 "exp": payload.get("exp"),
                 "projects": payload.get("projects", []),
             }
@@ -501,7 +501,7 @@ def _process_oauth_callback(id_token: str, refresh_token: str = "") -> RedirectR
         payload = _decode_jwt_payload(id_token)
         jwt_projects = payload.get("projects", [])
         user_email = payload.get("email", "")
-        user_uuid = payload.get("uuid", "")
+        user_uuid = payload.get("uuid", "") or os.environ.get("FABRIC_USER_UUID", "")
 
         # Pick the first non-service project
         provisionable = [p for p in jwt_projects
@@ -518,9 +518,9 @@ def _process_oauth_callback(id_token: str, refresh_token: str = "") -> RedirectR
             settings = settings_manager.load_settings()
             settings["fabric"]["project_id"] = project_id
 
-            # Resolve bastion_username from UIS API (authoritative)
-            bastion_login = ""
-            if user_uuid and id_token:
+            # Resolve bastion_username: prefer hub-injected env var, fall back to UIS API
+            bastion_login = os.environ.get("FABRIC_BASTION_LOGIN", "")
+            if not bastion_login and user_uuid and id_token:
                 try:
                     data = _fetch_uis_person(id_token, user_uuid)
                     results = data.get("results", [])
@@ -675,23 +675,38 @@ async def get_projects():
 
     projects = payload.get("projects", [])
 
-    # Get bastion_login from UIS API (authoritative source), cached for 10 min
-    bastion_login = ""
-    user_uuid = payload.get("uuid", "")
-    if user_uuid and id_token:
+    # Merge with hub-provided projects list (from FABRIC roles, more complete)
+    hub_projects_raw = os.environ.get("FABRIC_PROJECTS_JSON", "")
+    if hub_projects_raw:
         try:
-            from app.fabric_call_manager import get_call_manager
-            cm = get_call_manager()
-            data = await cm.get(
-                f"uis:people:{user_uuid}",
-                fetcher=lambda: _fetch_uis_person(id_token, user_uuid),
-                max_age=600,
-            )
-            results = data.get("results", [])
-            if results:
-                bastion_login = results[0].get("bastion_login", "")
-        except Exception as e:
-            logger.warning("UIS bastion_login lookup failed: %s", e)
+            hub_projects = json.loads(hub_projects_raw)
+            # Build set of existing UUIDs from JWT
+            existing_uuids = {p.get("uuid") for p in projects if isinstance(p, dict)}
+            for hp in hub_projects:
+                if isinstance(hp, dict) and hp.get("uuid") and hp["uuid"] not in existing_uuids:
+                    projects.append(hp)
+                    existing_uuids.add(hp["uuid"])
+        except Exception:
+            pass
+
+    # Get bastion_login: prefer hub-injected env var, fall back to UIS API
+    bastion_login = os.environ.get("FABRIC_BASTION_LOGIN", "")
+    if not bastion_login:
+        user_uuid = payload.get("uuid", "") or os.environ.get("FABRIC_USER_UUID", "")
+        if user_uuid and id_token:
+            try:
+                from app.fabric_call_manager import get_call_manager
+                cm = get_call_manager()
+                data = await cm.get(
+                    f"uis:people:{user_uuid}",
+                    fetcher=lambda: _fetch_uis_person(id_token, user_uuid),
+                    max_age=600,
+                )
+                results = data.get("results", [])
+                if results:
+                    bastion_login = results[0].get("bastion_login", "")
+            except Exception as e:
+                logger.warning("UIS bastion_login lookup failed: %s", e)
 
     return {
         "projects": projects,
@@ -724,11 +739,11 @@ async def auto_setup(req: AutoSetupRequest):
 
     user_email = payload.get("email", "")
     user_name = payload.get("name", "")
-    user_uuid = payload.get("uuid", "")
+    user_uuid = payload.get("uuid", "") or os.environ.get("FABRIC_USER_UUID", "")
 
-    # Resolve bastion_username from UIS API (authoritative)
-    bastion_login = ""
-    if user_uuid and id_token:
+    # Resolve bastion_username: prefer hub-injected env var, fall back to UIS API
+    bastion_login = os.environ.get("FABRIC_BASTION_LOGIN", "")
+    if not bastion_login and user_uuid and id_token:
         try:
             from app.fabric_call_manager import get_call_manager
             cm = get_call_manager()
@@ -752,6 +767,25 @@ async def auto_setup(req: AutoSetupRequest):
     settings_manager.save_settings(settings)
     settings_manager.apply_env_vars(settings)
     _invalidate_tracking_cache()
+
+    # Refresh the token so it is scoped to the selected project.
+    # Must happen BEFORE key generation (bastion, LLM) which need a valid token.
+    reset_fablib()
+    try:
+        fablib = get_fablib()
+        mgr = fablib.get_manager()
+        mgr.project_id = req.project_id
+        refresh_token = mgr.get_refresh_token()
+        if refresh_token:
+            mgr.refresh_tokens(refresh_token=refresh_token)
+            logger.info("auto-setup: token refreshed for project %s", req.project_id)
+    except Exception as e:
+        logger.warning("auto-setup: token refresh for project failed (non-fatal): %s", e)
+
+    # Re-read token after refresh so CM calls use the fresh one
+    token_data = _read_token()
+    if token_data and "id_token" in token_data:
+        id_token = token_data["id_token"]
 
     config_dir = _ensure_config_dir()
     core_api_host = settings.get("fabric", {}).get("hosts", {}).get("core_api", "uis.fabric-testbed.net")
@@ -897,21 +931,6 @@ async def auto_setup(req: AutoSetupRequest):
         except Exception as e:
             llm_key_error = str(e)
             logger.warning("auto-setup: LLM key creation failed (non-fatal): %s", e)
-
-    reset_fablib()
-
-    # Refresh the token so it is scoped to the selected project.
-    # The OAuth callback token may be scoped to a different project.
-    try:
-        fablib = get_fablib()
-        mgr = fablib.get_manager()
-        mgr.project_id = req.project_id
-        refresh_token = mgr.get_refresh_token()
-        if refresh_token:
-            mgr.refresh_tokens(refresh_token=refresh_token)
-            logger.info("auto-setup: token refreshed for project %s", req.project_id)
-    except Exception as e:
-        logger.warning("auto-setup: token refresh for project failed (non-fatal): %s", e)
 
     return {
         "status": "ok",
@@ -2186,6 +2205,46 @@ _SETTING_TESTS = {
     "nrp_server": _test_nrp_server,
     "project": _test_project,
 }
+
+
+@router.post("/api/settings/test-custom-provider")
+async def test_custom_provider(request: Request):
+    """Test a custom LLM provider by pinging its /v1/models endpoint."""
+    body = await request.json()
+    base_url = (body.get("base_url") or "").rstrip("/")
+    api_key = body.get("api_key", "")
+
+    if not base_url:
+        return {"ok": False, "message": "No base URL provided"}
+
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        t0 = time.time()
+        resp = await fabric_client.get(
+            f"{base_url}/v1/models",
+            headers=headers,
+            timeout=10,
+        )
+        latency = int((time.time() - t0) * 1000)
+
+        if resp.status_code != 200:
+            return {"ok": False, "message": f"Server returned {resp.status_code}", "latency_ms": latency}
+
+        data = resp.json()
+        models = data.get("data", [])
+        model_count = len(models)
+        model_names = [m.get("id", "?") for m in models[:5]]
+        return {
+            "ok": True,
+            "message": f"Reachable ({model_count} models: {', '.join(model_names)})",
+            "latency_ms": latency,
+            "model_count": model_count,
+        }
+    except Exception as e:
+        return {"ok": False, "message": f"Connection failed: {e}"}
 
 
 @router.post("/api/settings/test/{setting_name}")

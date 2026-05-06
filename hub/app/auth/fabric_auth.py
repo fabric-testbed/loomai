@@ -19,18 +19,22 @@ def _tracked_headers(base: dict[str, str], username: str = "") -> dict[str, str]
     return {**base, **get_tracking_headers(username)}
 
 
-async def check_fabric_role(sub: str) -> tuple[bool, list[str], dict[str, Any]]:
+async def check_fabric_role(sub: str) -> tuple[bool, list[str], dict[str, Any], list[dict[str, str]]]:
     """Check if a CILogon subject has the required FABRIC role.
 
     Mirrors FabricAuthenticator.is_in_allowed_cou_core_api from JupyterHub config.
+    Also extracts project UUIDs from role names (pattern: ``{uuid}-{suffix}``).
 
     Args:
         sub: CILogon subject identifier (e.g. "http://cilogon.org/serverA/users/12345").
 
     Returns:
-        Tuple of (authorized, roles, user_info).
+        Tuple of (authorized, roles, user_info, projects).
         authorized is True if the user holds the required role.
+        projects is a list of {uuid, name} dicts for non-SERVICE projects.
     """
+    import re
+
     url = f"{settings.FABRIC_CORE_API_HOST}/people/services-auth"
     params = {"sub": sub}
     headers = _tracked_headers({
@@ -46,13 +50,13 @@ async def check_fabric_role(sub: str) -> tuple[bool, list[str], dict[str, Any]]:
                 resp.status_code,
                 resp.text,
             )
-            return False, [], {}
+            return False, [], {}, []
 
     data = resp.json()
     results = data.get("results", [])
     if not results:
         logger.warning("No FABRIC user found for sub=%s", sub)
-        return False, [], {}
+        return False, [], {}, []
 
     user_info = results[0]
     roles = user_info.get("roles", [])
@@ -69,7 +73,30 @@ async def check_fabric_role(sub: str) -> tuple[bool, list[str], dict[str, Any]]:
             role_names,
         )
 
-    return authorized, role_names, user_info
+    # Extract projects from role names: {uuid}-{suffix} where suffix is pm/po/pc/tk
+    uuid_pattern = re.compile(
+        r'^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-(?:pm|po|pc|tk)$'
+    )
+    seen_uuids: set[str] = set()
+    projects: list[dict[str, str]] = []
+    for role in (roles if isinstance(roles, list) else []):
+        name = role.get("name", "")
+        desc = role.get("description", "")
+        m = uuid_pattern.match(name)
+        if not m:
+            continue
+        project_uuid = m.group(1)
+        if project_uuid in seen_uuids:
+            continue
+        seen_uuids.add(project_uuid)
+        # Skip SERVICE projects
+        if re.match(r'^SERVICE\s*[-\u2013\u2014]', desc, re.IGNORECASE):
+            continue
+        projects.append({"uuid": project_uuid, "name": desc})
+
+    logger.info("Extracted %d projects from roles for sub=%s", len(projects), sub)
+
+    return authorized, role_names, user_info, projects
 
 
 async def get_fabric_username(sub: str) -> str:
@@ -109,84 +136,3 @@ async def get_fabric_username(sub: str) -> str:
         raise ValueError(f"FABRIC user has no UUID for sub={sub}")
 
     return uuid
-
-
-async def provision_fabric_tokens(
-    cilogon_id_token: str,
-    cilogon_refresh_token: str,
-    project_id: str = "",
-) -> dict[str, Any]:
-    """Call FABRIC Credential Manager to create FABRIC tokens.
-
-    Args:
-        cilogon_id_token: The CILogon ID token.
-        cilogon_refresh_token: The CILogon refresh token.
-        project_id: Optional FABRIC project ID to scope tokens.
-
-    Returns:
-        Dict with FABRIC token data (id_token, refresh_token, etc.).
-    """
-    cm_url = f"https://{settings.FABRIC_CM_HOST}/credmgr/tokens/create"
-    params: dict[str, Any] = {
-        "scope": settings.FABRIC_CM_SCOPE,
-        "lifetime": settings.FABRIC_CM_TOKEN_LIFETIME,
-    }
-    if project_id:
-        params["projectId"] = project_id
-
-    headers = _tracked_headers({
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    })
-
-    # The CM authenticates via cookie with the CILogon ID token
-    cookies = {"mod_auth_openidc_session": cilogon_id_token}
-
-    # The refresh token is sent in the request body
-    body = {
-        "refresh_token": cilogon_refresh_token,
-    }
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(cm_url, params=params, headers=headers, json=body, cookies=cookies)
-        if resp.status_code not in (200, 201):
-            logger.error(
-                "FABRIC CM token create failed: %s %s", resp.status_code, resp.text
-            )
-            raise ValueError(f"FABRIC CM token create failed: {resp.status_code}")
-
-    token_data = resp.json()
-    logger.info("FABRIC tokens provisioned successfully")
-    return token_data
-
-
-async def refresh_fabric_tokens(refresh_token: str) -> dict[str, Any]:
-    """Refresh FABRIC tokens using a refresh token.
-
-    Args:
-        refresh_token: The FABRIC refresh token.
-
-    Returns:
-        Dict with refreshed FABRIC token data.
-    """
-    cm_url = f"https://{settings.FABRIC_CM_HOST}/credmgr/tokens/refresh"
-    headers = _tracked_headers({
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    })
-    body = {
-        "refresh_token": refresh_token,
-        "scope": settings.FABRIC_CM_SCOPE,
-    }
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(cm_url, headers=headers, json=body)
-        if resp.status_code not in (200, 201):
-            logger.error(
-                "FABRIC CM token refresh failed: %s %s", resp.status_code, resp.text
-            )
-            raise ValueError(f"FABRIC CM token refresh failed: {resp.status_code}")
-
-    token_data = resp.json()
-    logger.info("FABRIC tokens refreshed successfully")
-    return token_data

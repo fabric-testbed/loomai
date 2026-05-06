@@ -13,11 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.cilogon import exchange_code, get_authorize_url, get_userinfo
-from app.auth.fabric_auth import (
-    check_fabric_role,
-    get_fabric_username,
-    provision_fabric_tokens,
-)
+from app.auth.fabric_auth import check_fabric_role
 from app.auth.session import COOKIE_NAME, create_session_cookie, get_current_user
 from app.config import settings
 from app.db.models import Server, TokenStore, User
@@ -105,8 +101,8 @@ async def oauth_callback(
     if not sub:
         raise HTTPException(status_code=403, detail="No 'sub' claim in userinfo")
 
-    # Step 3: Check FABRIC role
-    authorized, roles, fabric_user_info = await check_fabric_role(sub)
+    # Step 3: Check FABRIC role and extract projects from roles
+    authorized, roles, fabric_user_info, projects = await check_fabric_role(sub)
     if not authorized:
         raise HTTPException(
             status_code=403,
@@ -114,22 +110,20 @@ async def oauth_callback(
             "Please contact FABRIC support.",
         )
 
-    # Step 4: Get FABRIC UUID as username
-    try:
-        fabric_uuid = await get_fabric_username(sub)
-    except ValueError as e:
-        logger.error("FABRIC username lookup failed: %s", e)
-        raise HTTPException(status_code=403, detail=str(e))
+    # Step 4: Get FABRIC UUID as username (from the same API response)
+    fabric_uuid = fabric_user_info.get("uuid", "")
+    if not fabric_uuid:
+        raise HTTPException(status_code=403, detail="No FABRIC UUID found for user")
 
     username = fabric_uuid
+    bastion_login = fabric_user_info.get("bastion_login", "")
 
-    # Step 5: Provision FABRIC tokens
-    fabric_tokens = {}
-    try:
-        fabric_tokens = await provision_fabric_tokens(id_token, refresh_token)
-    except Exception as e:
-        logger.warning("FABRIC token provisioning failed (non-fatal): %s", e)
-        # Non-fatal — user can still log in, tokens will be provisioned later
+    # Step 5a: Pick the first provisionable project from roles
+    project_id = ""
+    if projects:
+        project_id = projects[0]["uuid"]
+        logger.info("Auto-selected project %s (%s) for user %s",
+                    projects[0]["name"], project_id, username)
 
     # Step 6: Create or update user in DB
     stmt = select(User).where(User.sub == sub)
@@ -144,19 +138,21 @@ async def oauth_callback(
             email=email,
             sub=sub,
             fabric_uuid=fabric_uuid,
+            bastion_login=bastion_login,
             roles_json=json.dumps(roles),
             admin=is_admin,
         )
         db.add(user)
         await db.flush()
-        logger.info("Created new user: %s (email=%s)", username, email)
+        logger.info("Created new user: %s (email=%s, bastion=%s)", username, email, bastion_login)
     else:
         user.email = email
         user.fabric_uuid = fabric_uuid
+        user.bastion_login = bastion_login
         user.roles_json = json.dumps(roles)
         user.admin = is_admin
         user.last_login = datetime.datetime.utcnow()
-        logger.info("Updated existing user: %s", username)
+        logger.info("Updated existing user: %s (bastion=%s)", username, bastion_login)
 
     # Store tokens
     stmt = select(TokenStore).where(TokenStore.user_id == user.id)
@@ -168,14 +164,17 @@ async def oauth_callback(
             user_id=user.id,
             id_token=id_token,
             refresh_token=refresh_token,
-            fabric_tokens_json=json.dumps(fabric_tokens) if fabric_tokens else None,
+            project_id=project_id or None,
+            projects_json=json.dumps(projects) if projects else None,
         )
         db.add(token_store)
     else:
         token_store.id_token = id_token
         token_store.refresh_token = refresh_token
-        if fabric_tokens:
-            token_store.fabric_tokens_json = json.dumps(fabric_tokens)
+        if project_id and not token_store.project_id:
+            token_store.project_id = project_id
+        if projects:
+            token_store.projects_json = json.dumps(projects)
         token_store.updated_at = datetime.datetime.utcnow()
 
     await db.commit()

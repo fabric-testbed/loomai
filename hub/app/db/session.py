@@ -35,8 +35,26 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Create all tables if they don't exist."""
+    """Create all tables if they don't exist, and migrate schema."""
     logger.info("Initializing database tables")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # Migrate: add columns if missing (SQLite create_all won't alter existing tables).
+        migrations = [
+            ("token_stores", "project_id", "VARCHAR(255)"),
+            ("token_stores", "projects_json", "TEXT"),
+            ("users", "bastion_login", "VARCHAR(255)"),
+        ]
+        for table, col, col_type in migrations:
+            try:
+                await conn.execute(
+                    __import__("sqlalchemy").text(
+                        f"ALTER TABLE {table} ADD COLUMN {col} {col_type}"
+                    )
+                )
+                logger.info("Migrated %s: added %s column", table, col)
+            except Exception:
+                pass  # Column already exists
+
     logger.info("Database tables ready")

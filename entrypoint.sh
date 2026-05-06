@@ -166,20 +166,120 @@ if os.path.exists(token_file):
         pass  # missing, corrupt, or no id_token — update
 
 if needs_update:
-    # Write only the refresh token; FABlib will use it to obtain a fresh id_token
+    # Write the refresh token; FABlib verify_and_configure will use it to obtain a fresh id_token
     with open(token_file, \"w\") as f:
         json.dump({\"refresh_token\": refresh_token}, f)
     os.chmod(token_file, 0o600)
     print(\"FABlib: wrote refresh token to id_token.json\")
 
+# Auto-set project_id from FABRIC_PROJECT_ID env var (injected by hub authenticator)
+storage_dir = os.environ.get(\"FABRIC_STORAGE_DIR\", \"/home/fabric/work\")
+settings_file = os.path.join(storage_dir, \".loomai\", \"settings.json\")
+fabric_rc_file = os.path.join(storage_dir, \"fabric_config\", \"fabric_rc\")
+hub_project_id = os.environ.get(\"FABRIC_PROJECT_ID\", \"\")
+
+settings = {}
+if os.path.exists(settings_file):
+    try:
+        with open(settings_file) as f:
+            settings = json.load(f)
+    except Exception:
+        pass
+
+current_project = settings.get(\"fabric\", {}).get(\"project_id\", \"\")
+
+if not current_project and hub_project_id:
+    # First launch — use the project_id injected by the hub authenticator
+    settings.setdefault(\"fabric\", {})[\"project_id\"] = hub_project_id
+    os.makedirs(os.path.dirname(settings_file), exist_ok=True)
+    with open(settings_file, \"w\") as f:
+        json.dump(settings, f, indent=2)
+
+    # Update fabric_rc
+    if os.path.exists(fabric_rc_file):
+        with open(fabric_rc_file) as f:
+            rc_lines = f.readlines()
+        found = False
+        for i, line in enumerate(rc_lines):
+            if line.startswith(\"export FABRIC_PROJECT_ID=\"):
+                rc_lines[i] = f\"export FABRIC_PROJECT_ID={hub_project_id}\\n\"
+                found = True
+                break
+        if not found:
+            rc_lines.append(f\"export FABRIC_PROJECT_ID={hub_project_id}\\n\")
+        with open(fabric_rc_file, \"w\") as f:
+            f.writelines(rc_lines)
+
+    print(f\"FABlib: set project_id from hub: {hub_project_id}\")
+elif current_project:
+    # Returning user — ensure env var matches persisted setting
+    os.environ[\"FABRIC_PROJECT_ID\"] = current_project
+    print(f\"FABlib: using existing project_id {current_project}\")
+
+# Auto-set bastion_username from FABRIC_BASTION_LOGIN env var (injected by hub)
+hub_bastion_login = os.environ.get(\"FABRIC_BASTION_LOGIN\", \"\")
+current_bastion = settings.get(\"fabric\", {}).get(\"bastion_username\", \"\")
+if not current_bastion and hub_bastion_login:
+    settings.setdefault(\"fabric\", {})[\"bastion_username\"] = hub_bastion_login
+    os.makedirs(os.path.dirname(settings_file), exist_ok=True)
+    with open(settings_file, \"w\") as f:
+        json.dump(settings, f, indent=2)
+
+    # Update fabric_rc
+    if os.path.exists(fabric_rc_file):
+        with open(fabric_rc_file) as f:
+            rc_lines = f.readlines()
+        found = False
+        for i, line in enumerate(rc_lines):
+            if line.startswith(\"export FABRIC_BASTION_USERNAME=\"):
+                rc_lines[i] = f\"export FABRIC_BASTION_USERNAME={hub_bastion_login}\\n\"
+                found = True
+                break
+        if not found:
+            rc_lines.append(f\"export FABRIC_BASTION_USERNAME={hub_bastion_login}\\n\")
+        with open(fabric_rc_file, \"w\") as f:
+            f.writelines(rc_lines)
+
+    print(f\"FABlib: set bastion_username from hub: {hub_bastion_login}\")
+elif current_bastion:
+    print(f\"FABlib: using existing bastion_username {current_bastion}\")
+
 try:
     from fabrictestbed_extensions.fablib.fablib import FablibManager as fablib_manager
     fablib = fablib_manager()
     fablib.verify_and_configure()
-    fablib.save_config()
     print(\"FABlib: verify_and_configure completed successfully\")
+    fablib.save_config()
+    print(\"FABlib: save_config completed\")
 except Exception as e:
-    print(f\"WARN: FABlib verify_and_configure failed: {e}\")
+    print(f\"WARN: FABlib verify_and_configure/save_config failed: {e}\")
+
+# Ensure id_token.json is valid JSON (FABlib may produce concatenated output)
+try:
+    with open(token_file) as f:
+        raw = f.read().strip()
+    # Try normal parse first
+    try:
+        json.loads(raw)
+    except json.JSONDecodeError:
+        # Find the last complete JSON object (FABlib appends a second one)
+        decoder = json.JSONDecoder()
+        pos = 0
+        last_obj = None
+        while pos < len(raw):
+            try:
+                obj, end = decoder.raw_decode(raw, pos)
+                last_obj = obj
+                pos = end
+            except json.JSONDecodeError:
+                pos += 1
+        if last_obj is not None:
+            with open(token_file, \"w\") as f:
+                json.dump(last_obj, f, indent=2)
+            os.chmod(token_file, 0o600)
+            print(\"FABlib: fixed concatenated JSON in id_token.json\")
+except Exception as e:
+    print(f\"WARN: token file validation failed: {e}\")
 "' fabric
 fi
 

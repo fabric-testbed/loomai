@@ -2169,9 +2169,9 @@ async def chat_stream(request: Request):
     slice_context = body.get("slice_context")
     request_id = body.get("request_id", "")
 
-    # Route to NRP server if model has "nrp:" prefix
-    use_nrp = model.startswith("nrp:")
-    if use_nrp:
+    # Route to the correct provider based on model prefix
+    # Formats: "nrp:model", "ProviderName:model", or bare "model" (FABRIC default)
+    if model.startswith("nrp:"):
         model = model[4:]  # strip prefix
         server_url = _nrp_server_url()
         api_key = _get_nrp_api_key()
@@ -2180,6 +2180,19 @@ async def chat_stream(request: Request):
                 iter([b'data: {"error": "NRP API key not configured"}\n\n']),
                 media_type="text/event-stream",
             )
+    elif ":" in model:
+        # Custom provider — look up base_url and api_key from settings
+        provider_name, _, model = model.partition(":")
+        from app.settings_manager import load_settings as _load_settings_route
+        _cp_list = _load_settings_route().get("ai", {}).get("custom_providers", [])
+        _cp_match = next((cp for cp in _cp_list if cp.get("name") == provider_name), None)
+        if not _cp_match or not _cp_match.get("base_url"):
+            return StreamingResponse(
+                iter([f'data: {{"error": "Custom provider \\"{provider_name}\\" not configured"}}\n\n'.encode()]),
+                media_type="text/event-stream",
+            )
+        server_url = _cp_match["base_url"].rstrip("/")
+        api_key = _cp_match.get("api_key", "")
     else:
         server_url = _ai_server_url()
         api_key = _get_ai_api_key()

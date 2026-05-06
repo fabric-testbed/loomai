@@ -107,6 +107,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   const [showKeyModal, setShowKeyModal] = useState<'fabric' | 'nrp' | null>(null);
   // Custom LLM providers
   const [customProviders, setCustomProviders] = useState<Array<{name: string; base_url: string; api_key: string}>>([]);
+  const [cpTestResults, setCpTestResults] = useState<Record<number, { testing: boolean; result?: SettingTestResult }>>({});
 
   // LLM key creation
   const [creatingLlmKey, setCreatingLlmKey] = useState(false);
@@ -1203,15 +1204,34 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
         <h3>Custom LLM Providers</h3>
         <p>Add custom OpenAI-compatible LLM providers (Ollama, vLLM, etc.).</p>
         {customProviders.map((cp, i) => (
-          <div key={i} style={{ display: 'flex', gap: 4, marginTop: 4, alignItems: 'center' }}>
+          <div key={i} style={{ display: 'flex', gap: 4, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
             <input type="text" placeholder="Name" value={cp.name} style={{ width: 80, fontSize: 12 }}
               onChange={e => { const next = [...customProviders]; next[i] = { ...cp, name: e.target.value }; setCustomProviders(next); }} />
-            <input type="text" placeholder="Base URL" value={cp.base_url} style={{ flex: 1, fontSize: 12 }}
+            <input type="text" placeholder="Base URL" value={cp.base_url} style={{ flex: 1, fontSize: 12, minWidth: 180 }}
               onChange={e => { const next = [...customProviders]; next[i] = { ...cp, base_url: e.target.value }; setCustomProviders(next); }} />
             <input type="password" placeholder="API Key" value={cp.api_key} style={{ width: 120, fontSize: 12 }}
               onChange={e => { const next = [...customProviders]; next[i] = { ...cp, api_key: e.target.value }; setCustomProviders(next); }} />
+            <button className="test-btn" disabled={!cp.base_url || cpTestResults[i]?.testing}
+              style={{ fontSize: 11, padding: '2px 8px' }}
+              onClick={async () => {
+                setCpTestResults(prev => ({ ...prev, [i]: { testing: true } }));
+                try {
+                  const result = await api.testCustomProvider(cp.base_url, cp.api_key);
+                  setCpTestResults(prev => ({ ...prev, [i]: { testing: false, result } }));
+                } catch {
+                  setCpTestResults(prev => ({ ...prev, [i]: { testing: false, result: { ok: false, message: 'Request failed' } } }));
+                }
+              }}>
+              {cpTestResults[i]?.testing ? <span className="test-spinner" /> : 'Test'}
+            </button>
             <button style={{ fontSize: 11, padding: '2px 6px', cursor: 'pointer', border: '1px solid var(--fabric-border)', borderRadius: 3, background: 'var(--fabric-bg-tint)', color: 'var(--fabric-text-muted)' }}
-              onClick={() => setCustomProviders(customProviders.filter((_, j) => j !== i))}>X</button>
+              onClick={() => { setCustomProviders(customProviders.filter((_, j) => j !== i)); setCpTestResults(prev => { const n = { ...prev }; delete n[i]; return n; }); }}>X</button>
+            {cpTestResults[i]?.result && (
+              <span className={`test-result ${cpTestResults[i].result!.ok ? 'test-ok' : 'test-fail'}`} style={{ fontSize: 11 }}>
+                {cpTestResults[i].result!.ok ? '\u2713' : '\u2717'} {cpTestResults[i].result!.message}
+                {cpTestResults[i].result!.latency_ms != null && <span className="test-latency"> ({cpTestResults[i].result!.latency_ms}ms)</span>}
+              </span>
+            )}
           </div>
         ))}
         <button className="btn" style={{ marginTop: 6, fontSize: 12, padding: '4px 12px' }}

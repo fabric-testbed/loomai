@@ -53,7 +53,7 @@ async def create_token_secret(username: str, token_data: dict[str, Any]) -> str:
 
     import base64
 
-    # Store id_token and refresh_token as separate secret keys
+    # Store tokens as separate secret keys
     secret_data = {}
     id_token = token_data.get("cilogon_id_token", "")
     refresh_token = token_data.get("cilogon_refresh_token", "")

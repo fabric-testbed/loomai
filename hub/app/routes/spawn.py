@@ -77,12 +77,21 @@ async def _do_spawn(username: str, db: AsyncSession) -> str:
 
     # Prepare token data for K8s secret
     token_data = {}
-    if token_store and token_store.fabric_tokens_json:
-        token_data = json.loads(token_store.fabric_tokens_json)
     if token_store and token_store.id_token:
         token_data["cilogon_id_token"] = token_store.id_token
     if token_store and token_store.refresh_token:
         token_data["cilogon_refresh_token"] = token_store.refresh_token
+
+    # Pass project_id, projects list, and user UUID as plain env vars
+    extra_env = {}
+    if token_store and token_store.project_id:
+        extra_env["FABRIC_PROJECT_ID"] = token_store.project_id
+    if token_store and token_store.projects_json:
+        extra_env["FABRIC_PROJECTS_JSON"] = token_store.projects_json
+    # Username IS the FABRIC UUID — pass it so backend can resolve bastion_login
+    extra_env["FABRIC_USER_UUID"] = username
+    if user.bastion_login:
+        extra_env["FABRIC_BASTION_LOGIN"] = user.bastion_login
 
     # Get or create server record
     server = await _get_or_create_server(db, user)
@@ -102,7 +111,7 @@ async def _do_spawn(username: str, db: AsyncSession) -> str:
         pod_name = await spawn_user_pod(
             username=username,
             token_secret_name=secret_name,
-            config={"pvc_name": pvc_name},
+            config={"pvc_name": pvc_name, "extra_env": extra_env},
         )
 
         server.pod_name = pod_name
@@ -274,16 +283,23 @@ async def spawn_progress(
 
             # Get token data
             token_data = {}
+            extra_env = {}
             if user:
                 stmt2 = select(TokenStore).where(TokenStore.user_id == user.id)
                 result2 = await db.execute(stmt2)
                 ts = result2.scalar_one_or_none()
-                if ts and ts.fabric_tokens_json:
-                    token_data = json.loads(ts.fabric_tokens_json)
                 if ts and ts.id_token:
                     token_data["cilogon_id_token"] = ts.id_token
                 if ts and ts.refresh_token:
                     token_data["cilogon_refresh_token"] = ts.refresh_token
+                if ts and ts.project_id:
+                    extra_env["FABRIC_PROJECT_ID"] = ts.project_id
+                if ts and ts.projects_json:
+                    extra_env["FABRIC_PROJECTS_JSON"] = ts.projects_json
+            # Username IS the FABRIC UUID — pass it so backend can resolve bastion_login
+            extra_env["FABRIC_USER_UUID"] = username
+            if user and user.bastion_login:
+                extra_env["FABRIC_BASTION_LOGIN"] = user.bastion_login
 
             secret_name = await create_token_secret(username, token_data)
 
@@ -302,7 +318,7 @@ async def spawn_progress(
             pod_name = await spawn_user_pod(
                 username=username,
                 token_secret_name=secret_name,
-                config={"pvc_name": pvc_name},
+                config={"pvc_name": pvc_name, "extra_env": extra_env},
             )
             server.pod_name = pod_name
             await db.commit()

@@ -29,6 +29,7 @@ class User(Base):
     email = Column(String(255), nullable=True)
     sub = Column(String(512), unique=True, nullable=False, index=True)
     fabric_uuid = Column(String(255), nullable=True)
+    bastion_login = Column(String(255), nullable=True)
     roles_json = Column(Text, default="[]")
     admin = Column(Boolean, default=False)
     created_at = Column(DateTime, server_default=func.now())
@@ -61,6 +62,8 @@ class TokenStore(Base):
     id_token = Column(Text, nullable=True)
     refresh_token = Column(Text, nullable=True)
     fabric_tokens_json = Column(Text, nullable=True)
+    project_id = Column(String(255), nullable=True)
+    projects_json = Column(Text, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, onupdate=func.now(), server_default=func.now())
 

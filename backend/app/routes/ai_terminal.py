@@ -169,13 +169,13 @@ def _check_model_health(server_url: str, api_key: str, model_id: str) -> bool:
     """Send a minimal completion to verify the model actually works.
 
     Returns True if the model responds successfully, False otherwise.
-    Uses max_tokens=1 to minimize cost/latency.
+    Uses max_tokens=16 (Azure minimum) to minimize cost/latency.
     """
     try:
         data = json.dumps({
             "model": model_id,
             "messages": [{"role": "user", "content": "hi"}],
-            "max_tokens": 1,
+            "max_tokens": 16,
         }).encode()
         req = urllib.request.Request(
             f"{server_url}/v1/chat/completions",
