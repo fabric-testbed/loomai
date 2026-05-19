@@ -165,31 +165,105 @@ def _fetch_fabric_model_info(api_key: str) -> list[dict]:
         return []
 
 
-def _check_model_health(server_url: str, api_key: str, model_id: str) -> bool:
-    """Send a minimal completion to verify the model actually works.
-
-    Returns True if the model responds successfully, False otherwise.
-    Uses max_tokens=16 (Azure minimum) to minimize cost/latency.
-    """
+def _try_chat_completions(server_url: str, headers: dict, model_id: str,
+                          timeout: int) -> tuple[bool, str, str]:
+    """Try the standard /v1/chat/completions endpoint.
+    Returns (success, error_body, err_code_str)."""
+    data = json.dumps({
+        "model": model_id,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16,
+    }).encode()
+    req = urllib.request.Request(
+        f"{server_url}/v1/chat/completions", data=data, headers=headers)
     try:
-        data = json.dumps({
-            "model": model_id,
-            "messages": [{"role": "user", "content": "hi"}],
-            "max_tokens": 16,
-        }).encode()
-        req = urllib.request.Request(
-            f"{server_url}/v1/chat/completions",
-            data=data,
-            headers=add_tracking_headers({
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            }),
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return resp.status == 200
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status == 200, "", ""
+    except urllib.error.HTTPError as e:
+        err_body = ""
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        return False, err_body, str(e.code)
     except Exception as e:
-        logger.debug("Model health check failed for %s: %s", model_id, e)
+        return False, str(e), "timeout"
+
+
+def _try_responses_api(server_url: str, headers: dict, model_id: str,
+                       timeout: int) -> bool:
+    """Try the OpenAI Responses API (/v1/responses) as a fallback.
+    Some newer models (e.g. gpt-5.5) use 'input' instead of 'messages'."""
+    data = json.dumps({
+        "model": model_id,
+        "input": "hi",
+        "max_output_tokens": 16,
+    }).encode()
+    req = urllib.request.Request(
+        f"{server_url}/v1/responses", data=data, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:
         return False
+
+
+def _check_model_health(server_url: str, api_key: str, model_id: str,
+                        timeout: int = 30) -> tuple[bool, str]:
+    """Verify a model is reachable.
+
+    Returns (healthy, model_type) where model_type is one of:
+    - "chat"      : model responded to /v1/chat/completions
+    - "responses" : model uses the OpenAI Responses API (/v1/responses)
+    - "non-chat"  : model is listed by the provider but doesn't support text
+                    generation (e.g. image, audio, embedding). Still healthy.
+    - "down"      : model is unreachable, timed out, or returned an auth error.
+
+    No model names are hard-coded; the type is inferred from the API response.
+    """
+    headers = add_tracking_headers({
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    })
+
+    # 1. Try standard chat completions
+    ok, err_body, err_code = _try_chat_completions(
+        server_url, headers, model_id, timeout)
+    if ok:
+        return True, "chat"
+
+    # 2. Auth errors — model is inaccessible for this user
+    if err_code in ("401", "403"):
+        logger.debug("Model %s returned HTTP %s (auth error): %s",
+                     model_id, err_code, err_body[:200])
+        return False, "down"
+
+    # 3. If the error mentions Responses API / 'input' parameter, try that
+    if err_code == "400" and ("responses" in err_body.lower()
+                              or "'input'" in err_body.lower()
+                              or '"input"' in err_body.lower()):
+        logger.info("Model %s rejected chat completions but hints at "
+                    "Responses API — retrying with /v1/responses", model_id)
+        if _try_responses_api(server_url, headers, model_id, timeout):
+            logger.info("Model %s is healthy via Responses API", model_id)
+            return True, "responses"
+        # Responses API also failed — could be down or misconfigured
+        logger.info("Model %s failed on both chat completions and "
+                    "Responses API — marking down", model_id)
+        return False, "down"
+
+    # 4. Other client errors (400 without Responses hint, 404, 405, 422)
+    #    indicate non-chat models (image generation, audio, embeddings)
+    if err_code.isdigit() and 400 <= int(err_code) < 500:
+        logger.info("Model %s returned HTTP %s on chat completions — "
+                     "non-chat model; marking healthy. Error: %s",
+                     model_id, err_code, err_body[:200])
+        return True, "non-chat"
+
+    # 5. Timeouts and server errors
+    logger.debug("Model health check failed for %s (code=%s): %s",
+                 model_id, err_code, err_body[:200])
+    return False, "down"
 
 
 def _model_ids(models: list) -> list[str]:
@@ -1293,11 +1367,12 @@ def _fetch_all_models() -> dict:
 
     fabric_entries = []
     for mid in ordered_fabric:
-        healthy = _check_model_health(fabric_server, fabric_key, mid)
+        healthy, model_type = _check_model_health(fabric_server, fabric_key, mid)
         ctx_val = ctx_map.get(mid) or _FABRIC_CONTEXT_DEFAULTS.get(mid) or 131072
         profile = get_model_profile(mid, context_length=ctx_val)
         fabric_entries.append({
             "id": mid, "name": mid, "healthy": healthy,
+            "model_type": model_type,
             "context_length": ctx_val,
             "tier": profile["tier"],
             "supports_tools": profile.get("supports_tools", True),
@@ -1315,10 +1390,11 @@ def _fetch_all_models() -> dict:
     for m in nrp_models_raw:
         mid = m["id"]
         ctx = m.get("context_length") or _NRP_CONTEXT_DEFAULTS.get(mid) or 131072
-        healthy = _check_model_health(nrp_server, nrp_key or "anonymous", mid)
+        healthy, model_type = _check_model_health(nrp_server, nrp_key or "anonymous", mid)
         profile = get_model_profile(mid, context_length=ctx)
         nrp_entries.append({
             "id": mid, "name": mid, "healthy": healthy,
+            "model_type": model_type,
             "context_length": ctx,
             "tier": profile["tier"],
             "supports_tools": profile.get("supports_tools", True),
@@ -1345,10 +1421,11 @@ def _fetch_all_models() -> dict:
             cp_models = []
             for m in body.get("data", []):
                 mid = m["id"]
-                healthy = _check_model_health(cp_url.rstrip("/"), cp_key, mid)
+                healthy, model_type = _check_model_health(cp_url.rstrip("/"), cp_key, mid)
                 cp_models.append({"id": mid, "name": mid, "healthy": healthy,
+                                  "model_type": model_type,
                                   "context_length": m.get("context_length")})
-                if healthy and not default:
+                if healthy and model_type == "chat" and not default:
                     default = f"{cp_name}:{mid}"
             custom_entries[cp_name] = cp_models
         except Exception as e:
@@ -1403,13 +1480,15 @@ def _find_first_healthy_model() -> dict:
     for pref in _PREFERRED_MODELS:
         for m in model_ids:
             if pref in m.lower():
-                if _check_model_health(server_url, api_key, m):
+                ok, mtype = _check_model_health(server_url, api_key, m)
+                if ok and mtype == "chat":
                     return {"default": m, "source": "fabric"}
                 break  # This preferred model failed, try next preference
 
     # Check remaining FABRIC models
     for m in model_ids:
-        if _check_model_health(server_url, api_key, m):
+        ok, mtype = _check_model_health(server_url, api_key, m)
+        if ok and mtype == "chat":
             return {"default": m, "source": "fabric"}
 
     # Try NRP
@@ -1417,7 +1496,8 @@ def _find_first_healthy_model() -> dict:
     if nrp_key:
         nrp_ids = _model_ids(_fetch_nrp_models(nrp_key))
         for m in nrp_ids:
-            if _check_model_health(_nrp_server_url(), nrp_key, m):
+            ok, mtype = _check_model_health(_nrp_server_url(), nrp_key, m)
+            if ok and mtype == "chat":
                 return {"default": m, "source": "nrp"}
 
     return {"default": "", "source": ""}
@@ -1474,10 +1554,40 @@ def _persist_discovered_context_lengths() -> None:
 
     try:
         settings = settings_manager.load_settings()
-        settings.setdefault("ai", {})["discovered_models"] = {
+
+        # Preserve model_type from previous full discovery (health checks).
+        # This lightweight startup path doesn't run health checks, so carry
+        # forward any model_type values that were set by _fetch_all_models.
+        old_discovered = settings.get("ai", {}).get("discovered_models", {})
+        _old_types: dict[str, str] = {}  # model_id → model_type
+        for _prov_key in ("fabric", "nrp"):
+            for _om in old_discovered.get(_prov_key, []):
+                if isinstance(_om, dict) and _om.get("model_type"):
+                    _old_types[_om["id"]] = _om["model_type"]
+        # Also check custom providers
+        _old_custom = old_discovered.get("custom", {})
+        if isinstance(_old_custom, dict):
+            for _cp_models in _old_custom.values():
+                if isinstance(_cp_models, list):
+                    for _om in _cp_models:
+                        if isinstance(_om, dict) and _om.get("model_type"):
+                            _old_types[_om["id"]] = _om["model_type"]
+
+        # Merge preserved model_type into the new lists
+        for _entry in fabric_list + nrp_list:
+            _mt = _old_types.get(_entry["id"])
+            if _mt:
+                _entry["model_type"] = _mt
+
+        new_discovered: dict = {
             "fabric": fabric_list,
             "nrp": nrp_list,
         }
+        # Preserve custom provider entries (this path doesn't re-fetch them)
+        if _old_custom:
+            new_discovered["custom"] = _old_custom
+
+        settings.setdefault("ai", {})["discovered_models"] = new_discovered
         settings_manager.save_settings(settings)
         logger.info(
             "Persisted discovered_models: fabric=%d nrp=%d (sample: %s)",

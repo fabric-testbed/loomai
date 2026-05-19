@@ -60,6 +60,154 @@ def _load_fablib_ref() -> str:
             _fablib_ref_cache = ""
     return _fablib_ref_cache
 
+
+def _get_model_type(model_key: str) -> str:
+    """Look up model_type ('chat', 'responses', 'non-chat') from cached model data.
+
+    Checks FABRIC, NRP, and custom provider entries in discovered_models.
+    Defaults to "chat" if not found (safe fallback).
+    """
+    from app.settings_manager import load_settings
+    try:
+        discovered = load_settings().get("ai", {}).get("discovered_models", {})
+        # Strip provider prefix to get bare model id
+        bare = model_key.split(":")[-1] if ":" in model_key else model_key
+        # Check fabric and nrp lists
+        for provider_key in ("fabric", "nrp"):
+            provider_models = discovered.get(provider_key, [])
+            if isinstance(provider_models, list):
+                for m in provider_models:
+                    if isinstance(m, dict) and m.get("id") == bare:
+                        return m.get("model_type", "chat")
+        # Check custom providers (dict of lists)
+        custom = discovered.get("custom", {})
+        if isinstance(custom, dict):
+            for cp_models in custom.values():
+                if isinstance(cp_models, list):
+                    for m in cp_models:
+                        if isinstance(m, dict) and m.get("id") == bare:
+                            return m.get("model_type", "chat")
+    except Exception:
+        pass
+    return "chat"
+
+
+def _build_responses_input(conversation: list[dict]) -> tuple[str, list[dict]]:
+    """Convert chat-completions messages into Responses API input items.
+
+    Returns (instructions, input_items) where instructions is extracted from
+    the system message and input_items are the remaining messages converted
+    to the Responses API format.
+    """
+    instructions = ""
+    input_items: list[dict] = []
+    for msg in conversation:
+        # Items already in Responses API format (have "type" but no "role",
+        # or have type=function_call/function_call_output) — pass through as-is.
+        msg_type = msg.get("type", "")
+        if msg_type in ("function_call", "function_call_output"):
+            input_items.append(msg)
+            continue
+        if msg_type == "message" and "role" in msg:
+            input_items.append(msg)
+            continue
+
+        # Convert chat-completions format messages
+        role = msg.get("role", "")
+        if role == "system":
+            instructions = msg.get("content", "")
+        elif role == "user":
+            input_items.append({
+                "type": "message",
+                "role": "user",
+                "content": msg.get("content", ""),
+            })
+        elif role == "assistant":
+            # Check for tool_calls in assistant message
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                # Emit text content first if present
+                text = msg.get("content")
+                if text:
+                    input_items.append({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": text,
+                    })
+                # Each tool call becomes a function_call item
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    input_items.append({
+                        "type": "function_call",
+                        "call_id": tc.get("id", ""),
+                        "name": fn.get("name", ""),
+                        "arguments": fn.get("arguments", "{}"),
+                    })
+            else:
+                input_items.append({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": msg.get("content", ""),
+                })
+        elif role == "tool":
+            input_items.append({
+                "type": "function_call_output",
+                "call_id": msg.get("tool_call_id", ""),
+                "output": msg.get("content", ""),
+            })
+    return instructions, input_items
+
+
+def _build_responses_body(
+    model: str,
+    conversation: list[dict],
+    profile: dict,
+    tools_for_model: list[dict],
+    tools_disabled: bool,
+    temperature_disabled: bool = False,
+) -> dict:
+    """Build request body for the OpenAI Responses API (/v1/responses)."""
+    instructions, input_items = _build_responses_input(conversation)
+    body: dict[str, Any] = {
+        "model": model,
+        "input": input_items,
+        "max_output_tokens": profile["max_output"],
+    }
+    if not temperature_disabled:
+        body["temperature"] = profile["temperature"]
+    if instructions:
+        body["instructions"] = instructions
+    if not tools_disabled and profile.get("supports_tools", True) and tools_for_model:
+        body["tools"] = tools_for_model
+    return body
+
+
+def _parse_responses_output(output_items: list[dict]) -> tuple[str, list[dict]]:
+    """Parse Responses API output into (text, tool_calls).
+
+    Returns text content and a list of tool_calls in chat-completions format
+    for compatibility with existing tool execution code.
+    """
+    text_parts: list[str] = []
+    tool_calls: list[dict] = []
+    for item in output_items:
+        item_type = item.get("type", "")
+        if item_type == "message":
+            for c in item.get("content", []):
+                if c.get("type") in ("output_text", "text"):
+                    text_parts.append(c.get("text", ""))
+        elif item_type == "function_call":
+            tool_calls.append({
+                "id": item.get("call_id", ""),
+                "type": "function",
+                "function": {
+                    "name": item.get("name", ""),
+                    "arguments": item.get("arguments", "{}"),
+                },
+            })
+    return "".join(text_parts), tool_calls
+
+
 # ---------------------------------------------------------------------------
 # Caches
 # ---------------------------------------------------------------------------
@@ -2171,10 +2319,13 @@ async def chat_stream(request: Request):
 
     # Route to the correct provider based on model prefix
     # Formats: "nrp:model", "ProviderName:model", or bare "model" (FABRIC default)
+    original_model_key = model  # preserve for model_type lookup
+    use_nrp = False
     if model.startswith("nrp:"):
         model = model[4:]  # strip prefix
         server_url = _nrp_server_url()
         api_key = _get_nrp_api_key()
+        use_nrp = True
         if not api_key:
             return StreamingResponse(
                 iter([b'data: {"error": "NRP API key not configured"}\n\n']),
@@ -2196,6 +2347,10 @@ async def chat_stream(request: Request):
     else:
         server_url = _ai_server_url()
         api_key = _get_ai_api_key()
+
+    # Determine whether this model uses the Responses API or Chat Completions
+    model_api_type = _get_model_type(original_model_key)
+    logger.info("Model API type for %s: %s", original_model_key, model_api_type)
 
     # Build system prompt with model-aware context management
     from app.chat_context import (
@@ -2583,9 +2738,10 @@ async def chat_stream(request: Request):
     system_token_estimate = estimate_tokens(system_message["content"])
 
     tools_disabled = False  # Set True if model can't do tool calling
+    temperature_disabled = False  # Set True if model rejects temperature param
 
     async def generate():
-        nonlocal tools_disabled, model
+        nonlocal tools_disabled, temperature_disabled, model, model_api_type, server_url, api_key
         import time as _time
         _start_time = _time.time()
         _tool_call_count = len(prefetched_tools)
@@ -2621,19 +2777,34 @@ async def chat_stream(request: Request):
                         break
 
                 # Make LLM call (non-streaming for tool rounds, streaming for final)
-                llm_body: dict[str, Any] = {
-                    "model": model,
-                    "messages": conversation,
-                    "temperature": profile["temperature"],
-                    "max_tokens": profile["max_output"],
-                }
-                # Only include tools if model supports them and they haven't been disabled
-                if not tools_disabled and profile.get("supports_tools", True):
-                    llm_body["tools"] = tools_for_model
+                # Build request body based on API type
+                if model_api_type == "responses":
+                    llm_body = _build_responses_body(
+                        model, conversation, profile, tools_for_model, tools_disabled,
+                        temperature_disabled,
+                    )
+                else:
+                    llm_body: dict[str, Any] = {
+                        "model": model,
+                        "messages": conversation,
+                        "max_tokens": profile["max_output"],
+                    }
+                    if not temperature_disabled:
+                        llm_body["temperature"] = profile["temperature"]
+                    # Only include tools if model supports them and they haven't been disabled
+                    if not tools_disabled and profile.get("supports_tools", True):
+                        llm_body["tools"] = tools_for_model
+
+                # Determine endpoint
+                _endpoint = (
+                    f"{server_url}/v1/responses"
+                    if model_api_type == "responses"
+                    else f"{server_url}/v1/chat/completions"
+                )
 
                 # Try non-streaming first to detect tool calls
                 resp = await ai_client.post(
-                    f"{server_url}/v1/chat/completions",
+                    _endpoint,
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
@@ -2643,6 +2814,7 @@ async def chat_stream(request: Request):
                 )
 
                 # On server error or model-not-found, try fallbacks
+                # Fallbacks always use chat/completions (confirmed chat-type models)
                 if resp.status_code >= 400 and resp.status_code != 200:
                     # On 404 (model not found), retry with default model
                     if resp.status_code == 404 and not use_nrp:
@@ -2651,70 +2823,148 @@ async def chat_stream(request: Request):
                         if fallback_model and fallback_model != model:
                             logger.info("Model %s returned 404, retrying with default %s", model, fallback_model)
                             yield f"data: {json.dumps({'content': f'[Model {model} unavailable, switching to {fallback_model}...] '})}\n\n"
-                            llm_body["model"] = fallback_model
                             model = fallback_model
-                            resp = await ai_client.post(
-                                f"{server_url}/v1/chat/completions",
-                                headers={
-                                    "Authorization": f"Bearer {api_key}",
-                                    "Content-Type": "application/json",
-                                },
-                                json={**llm_body, "stream": False},
-                                timeout=300.0,
-                            )
+                            # Re-detect API type for fallback model
+                            model_api_type = _get_model_type(fallback_model)
+                            if model_api_type == "responses":
+                                llm_body = _build_responses_body(
+                                    model, conversation, profile, tools_for_model, tools_disabled,
+                                    temperature_disabled,
+                                )
+                                _endpoint = f"{server_url}/v1/responses"
+                                resp = await ai_client.post(
+                                    _endpoint,
+                                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                                    json={**llm_body, "stream": False},
+                                    timeout=300.0,
+                                )
+                            else:
+                                llm_body = {
+                                    "model": model,
+                                    "messages": conversation,
+                                    "max_tokens": profile["max_output"],
+                                }
+                                if not temperature_disabled:
+                                    llm_body["temperature"] = profile["temperature"]
+                                if not tools_disabled and profile.get("supports_tools", True):
+                                    llm_body["tools"] = tools_for_model
+                                _endpoint = f"{server_url}/v1/chat/completions"
+                                resp = await ai_client.post(
+                                    _endpoint,
+                                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                                    json={**llm_body, "stream": False},
+                                    timeout=300.0,
+                                )
 
-                    # On 5xx, fallback to NRP
+                    # On 5xx, fallback to NRP (always chat/completions)
                     if resp.status_code >= 500 and not use_nrp:
                         nrp_key = _get_nrp_api_key()
                         if nrp_key:
                             logger.info("Primary AI server returned %s, falling back to NRP", resp.status_code)
                             yield f"data: {json.dumps({'content': '[Falling back to NRP server...] '})}\n\n"
+                            # NRP fallback always uses chat/completions
+                            # NRP models support temperature, so reset the flag
+                            temperature_disabled = False
+                            llm_body = {
+                                "model": model,
+                                "messages": conversation,
+                                "temperature": profile["temperature"],
+                                "max_tokens": profile["max_output"],
+                            }
+                            if not tools_disabled and profile.get("supports_tools", True):
+                                llm_body["tools"] = tools_for_model
+                            _endpoint = f"{_nrp_server_url()}/v1/chat/completions"
                             resp = await ai_client.post(
-                                f"{_nrp_server_url()}/v1/chat/completions",
-                                headers={
-                                    "Authorization": f"Bearer {nrp_key}",
-                                    "Content-Type": "application/json",
-                                },
+                                _endpoint,
+                                headers={"Authorization": f"Bearer {nrp_key}", "Content-Type": "application/json"},
                                 json={**llm_body, "stream": False},
                                 timeout=300.0,
                             )
+                            # Switch to chat API type for NRP
+                            model_api_type = "chat"
+                            server_url = _nrp_server_url()
+                            api_key = nrp_key
 
                 if resp.status_code != 200:
                     error_text = resp.text[:300]
+                    _err_lower = error_text.lower()
+                    # Check if error indicates this model requires the Responses API
+                    if model_api_type != "responses" and (
+                        "responses api" in _err_lower
+                        or "moved to 'input'" in _err_lower
+                        or ("'input'" in _err_lower and "'messages'" in _err_lower)
+                    ):
+                        logger.info("Model %s requires Responses API, switching from chat completions", model)
+                        model_api_type = "responses"
+                        continue  # Retry with Responses API format
+                    # Check if error is due to temperature not being supported
+                    if not temperature_disabled and "temperature" in _err_lower and (
+                        "not supported" in _err_lower or "unsupported" in _err_lower
+                    ):
+                        logger.info("Model %s does not support temperature, retrying without", model)
+                        temperature_disabled = True
+                        continue  # Retry without temperature
                     # Check if error is due to tools not being supported
-                    if "tool" in error_text.lower() and not tools_disabled and "tools" in llm_body:
+                    if "tool" in _err_lower and not tools_disabled and "tools" in llm_body:
                         logger.info("Model %s may not support tools, retrying without", model)
                         tools_disabled = True
-                        del llm_body["tools"]
                         no_tools_msg = '[This model does not support tool calling. I will suggest loomai CLI commands instead.]\n\n'
                         yield f"data: {json.dumps({'content': no_tools_msg})}\n\n"
                         continue  # Retry without tools
                     yield f"data: {json.dumps({'error': f'LLM error {resp.status_code}: {error_text}'})}\n\n"
                     return
 
-                result = resp.json()
-                choices = result.get("choices") or [{}]
-                if not choices:
-                    choices = [{}]
-                choice = choices[0]
-                msg = choice.get("message", {})
-                finish = choice.get("finish_reason", "")
+                # Parse response based on API type
+                if model_api_type == "responses":
+                    result = resp.json()
+                    output_items = result.get("output", [])
+                    resp_text, tool_calls = _parse_responses_output(output_items)
+                    # Build a compatible msg dict for downstream code
+                    msg = {"role": "assistant", "content": resp_text}
+                    if tool_calls:
+                        msg["tool_calls"] = tool_calls
+                    finish = "tool_calls" if tool_calls else "stop"
+                else:
+                    result = resp.json()
+                    choices = result.get("choices") or [{}]
+                    if not choices:
+                        choices = [{}]
+                    choice = choices[0]
+                    msg = choice.get("message", {})
+                    finish = choice.get("finish_reason", "")
 
                 # Check for tool calls (handle both finish_reason="tool_calls" and "length")
                 tool_calls = msg.get("tool_calls")
                 if tool_calls and finish in ("tool_calls", "length", "stop"):
                     # Append assistant message with tool calls to conversation.
-                    # Strip reasoning_content / reasoning fields (NVIDIA Nemotron-style
-                    # reasoning models return these as a separate channel — we never
-                    # want them re-sent on subsequent turns because: (a) the server
-                    # usually rejects unknown fields; (b) they inflate conversation
-                    # tokens without contributing visible content; (c) the estimator
-                    # wouldn't count them anyway, making budget math wrong.
-                    clean_msg = {
-                        k: v for k, v in msg.items()
-                        if k in ("role", "content", "tool_calls", "tool_call_id", "name")
-                    }
-                    conversation.append(clean_msg)
+                    if model_api_type == "responses":
+                        # For Responses API, append text + function_call items
+                        if msg.get("content"):
+                            conversation.append({
+                                "type": "message",
+                                "role": "assistant",
+                                "content": msg["content"],
+                            })
+                        for tc in tool_calls:
+                            fn = tc.get("function", {})
+                            conversation.append({
+                                "type": "function_call",
+                                "call_id": tc.get("id", ""),
+                                "name": fn.get("name", ""),
+                                "arguments": fn.get("arguments", "{}"),
+                            })
+                    else:
+                        # Strip reasoning_content / reasoning fields (NVIDIA Nemotron-style
+                        # reasoning models return these as a separate channel — we never
+                        # want them re-sent on subsequent turns because: (a) the server
+                        # usually rejects unknown fields; (b) they inflate conversation
+                        # tokens without contributing visible content; (c) the estimator
+                        # wouldn't count them anyway, making budget math wrong.
+                        clean_msg = {
+                            k: v for k, v in msg.items()
+                            if k in ("role", "content", "tool_calls", "tool_call_id", "name")
+                        }
+                        conversation.append(clean_msg)
 
                     consecutive_errors = 0
                     for tc in tool_calls:
@@ -2801,11 +3051,18 @@ async def chat_stream(request: Request):
                             tool_max = max(tool_max, 6000)  # examples need room for code
                         tool_result = tool_result or ""
                         trimmed_result = tool_result[:tool_max] if len(tool_result) > tool_max else tool_result
-                        conversation.append({
-                            "role": "tool",
-                            "tool_call_id": tc_id,
-                            "content": trimmed_result,
-                        })
+                        if model_api_type == "responses":
+                            conversation.append({
+                                "type": "function_call_output",
+                                "call_id": tc_id,
+                                "output": trimmed_result,
+                            })
+                        else:
+                            conversation.append({
+                                "role": "tool",
+                                "tool_call_id": tc_id,
+                                "content": trimmed_result,
+                            })
 
                     tool_round += 1
                     _tool_call_count += len(tool_calls)
@@ -2820,9 +3077,14 @@ async def chat_stream(request: Request):
 
                 # No tool calls — stream the final text response
                 # Re-do the call with streaming for smooth output
+                _stream_endpoint = (
+                    f"{server_url}/v1/responses"
+                    if model_api_type == "responses"
+                    else f"{server_url}/v1/chat/completions"
+                )
                 async with ai_client.stream(
                     "POST",
-                    f"{server_url}/v1/chat/completions",
+                    _stream_endpoint,
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
@@ -2848,19 +3110,37 @@ async def chat_stream(request: Request):
                             break
                         try:
                             chunk = json.loads(data)
-                            chunk_choices = chunk.get("choices") or [{}]
-                            delta = (chunk_choices[0] if chunk_choices else {}).get("delta", {})
+                            if model_api_type == "responses":
+                                # Responses API SSE events
+                                event_type = chunk.get("type", "")
+                                if event_type == "response.output_text.delta":
+                                    content = chunk.get("delta", "")
+                                    if content:
+                                        yield f"data: {json.dumps({'content': content})}\n\n"
+                                elif event_type in ("response.completed", "response.done"):
+                                    break
+                                elif event_type == "response.error":
+                                    err = chunk.get("error", {})
+                                    yield f"data: {json.dumps({'error': err.get('message', 'Responses API error')})}\n\n"
+                                    return
+                                elif event_type == "response.function_call_arguments.done":
+                                    # Tool call detected in streaming — break to
+                                    # let the non-streaming loop handle it
+                                    break
+                            else:
+                                chunk_choices = chunk.get("choices") or [{}]
+                                delta = (chunk_choices[0] if chunk_choices else {}).get("delta", {})
 
-                            # Check for tool calls in streaming response too
-                            if delta.get("tool_calls"):
-                                # Fall back to non-streaming for tool handling
-                                # This shouldn't normally happen since we already
-                                # checked non-streaming, but handle gracefully
-                                break
+                                # Check for tool calls in streaming response too
+                                if delta.get("tool_calls"):
+                                    # Fall back to non-streaming for tool handling
+                                    # This shouldn't normally happen since we already
+                                    # checked non-streaming, but handle gracefully
+                                    break
 
-                            content = delta.get("content")
-                            if content:
-                                yield f"data: {json.dumps({'content': content})}\n\n"
+                                content = delta.get("content")
+                                if content:
+                                    yield f"data: {json.dumps({'content': content})}\n\n"
                         except json.JSONDecodeError:
                             continue
 
@@ -2874,25 +3154,42 @@ async def chat_stream(request: Request):
 
             # Exhausted tool rounds — ask LLM to summarize progress for continuity
             # Append a system nudge so the LLM wraps up gracefully
-            conversation.append({
-                "role": "user",
-                "content": (
-                    "[System: Tool call limit reached. Please summarize what you've accomplished so far "
-                    "and what steps remain. The user can click 'Continue' to resume.]"
-                ),
-            })
+            _nudge_msg = (
+                "[System: Tool call limit reached. Please summarize what you've accomplished so far "
+                "and what steps remain. The user can click 'Continue' to resume.]"
+            )
+            if model_api_type == "responses":
+                conversation.append({"type": "message", "role": "user", "content": _nudge_msg})
+            else:
+                conversation.append({"role": "user", "content": _nudge_msg})
             # Make one final LLM call (without tools) to get a summary
             try:
-                summary_body = {
-                    "model": model,
-                    "messages": conversation,
-                    "temperature": profile["temperature"],
-                    "max_tokens": min(profile["max_output"], 1024),
-                    "stream": True,
-                }
+                if model_api_type == "responses":
+                    _sum_instructions, _sum_input = _build_responses_input(conversation)
+                    summary_body = {
+                        "model": model,
+                        "input": _sum_input,
+                        "max_output_tokens": min(profile["max_output"], 1024),
+                        "stream": True,
+                    }
+                    if not temperature_disabled:
+                        summary_body["temperature"] = profile["temperature"]
+                    if _sum_instructions:
+                        summary_body["instructions"] = _sum_instructions
+                    _sum_endpoint = f"{server_url}/v1/responses"
+                else:
+                    summary_body = {
+                        "model": model,
+                        "messages": conversation,
+                        "max_tokens": min(profile["max_output"], 1024),
+                        "stream": True,
+                    }
+                    if not temperature_disabled:
+                        summary_body["temperature"] = profile["temperature"]
+                    _sum_endpoint = f"{server_url}/v1/chat/completions"
                 async with ai_client.stream(
                     "POST",
-                    f"{server_url}/v1/chat/completions",
+                    _sum_endpoint,
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                     json=summary_body,
                 ) as summary_resp:
@@ -2905,10 +3202,18 @@ async def chat_stream(request: Request):
                                 break
                             try:
                                 chunk = json.loads(data)
-                                delta = (chunk.get("choices") or [{}])[0].get("delta", {})
-                                content = delta.get("content")
-                                if content:
-                                    yield f"data: {json.dumps({'content': content})}\n\n"
+                                if model_api_type == "responses":
+                                    if chunk.get("type") == "response.output_text.delta":
+                                        content = chunk.get("delta", "")
+                                        if content:
+                                            yield f"data: {json.dumps({'content': content})}\n\n"
+                                    elif chunk.get("type") in ("response.completed", "response.done"):
+                                        break
+                                else:
+                                    delta = (chunk.get("choices") or [{}])[0].get("delta", {})
+                                    content = delta.get("content")
+                                    if content:
+                                        yield f"data: {json.dumps({'content': content})}\n\n"
                             except json.JSONDecodeError:
                                 continue
             except Exception:
