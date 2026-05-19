@@ -13,6 +13,10 @@ AI-assisted browser-based sandbox for designing, deploying, and managing experim
 - **Monitoring** — Live CPU and network metrics from deployed VMs
 - **AI Companion** — AI-powered coding assistants (Aider, OpenCode, Claude Code)
 
+## Video Tutorials
+
+Watch the [LoomAI video tutorials](https://www.youtube.com/playlist?list=PL64VqyRjOwSEPi1EtjmpKXEk1SzpzSCil) for step-by-step walkthroughs.
+
 ## Quick Install
 
 ### One-Line Install
