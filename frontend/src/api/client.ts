@@ -1246,13 +1246,37 @@ export function installTool(toolId: string): Promise<{ status: string; tool: str
   return fetchJson(`/ai/tools/${encodeURIComponent(toolId)}/install`, { method: 'POST' });
 }
 
+export function uninstallTool(toolId: string): Promise<{ status: string; tool: string; output?: string; error?: string }> {
+  return fetchJson(`/ai/tools/${encodeURIComponent(toolId)}/uninstall`, { method: 'POST' });
+}
+
 export interface InstallStreamEvent {
-  type: 'start' | 'output' | 'done' | 'error';
+  type: 'start' | 'output' | 'done' | 'error' | 'disk_check';
   tool?: string;
   display_name?: string;
   size_estimate?: string;
   message?: string;
   status?: string;
+  // disk_check fields
+  disk_ok?: boolean;
+  required_mb?: number;
+  available_mb?: number;
+}
+
+// --- Disk Space ---
+
+export interface DiskSpaceInfo {
+  ok: boolean;
+  required_mb: number;
+  available_mb: number;
+  total_mb: number;
+  used_mb: number;
+  message: string;
+}
+
+export function getDiskSpace(toolId?: string): Promise<DiskSpaceInfo> {
+  const params = toolId ? `?tool_id=${encodeURIComponent(toolId)}` : '';
+  return fetchJson(`/ai/tools/disk-space${params}`);
 }
 
 export async function installToolStream(
@@ -2478,13 +2502,14 @@ export interface TunnelInfo {
   created_at: number;
   last_connection_at: number;
   status: string;
+  protocol: string;
   error: string | null;
 }
 
-export function createTunnel(sliceName: string, nodeName: string, port: number): Promise<TunnelInfo> {
+export function createTunnel(sliceName: string, nodeName: string, port: number, protocol: string = 'http'): Promise<TunnelInfo> {
   return fetchJson('/tunnels', {
     method: 'POST',
-    body: JSON.stringify({ slice_name: sliceName, node_name: nodeName, port }),
+    body: JSON.stringify({ slice_name: sliceName, node_name: nodeName, port, protocol }),
   });
 }
 

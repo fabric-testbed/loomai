@@ -475,7 +475,7 @@ export interface LoomAISettings {
     nrp_api_key: string;
     ai_server_url: string;
     nrp_server_url: string;
-    custom_providers?: Array<{name: string; base_url: string; api_key: string}>;
+    custom_providers?: Array<{name: string; base_url: string; api_key: string; codex_provider?: boolean}>;
     tools: Record<string, boolean>;
   };
   chameleon?: {

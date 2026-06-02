@@ -38,6 +38,25 @@
   margin-bottom: 12px;
 }
 
+.tool-install-disk {
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+}
+.tool-install-disk.ok {
+  color: #4caf6a;
+  background: rgba(76, 175, 106, 0.1);
+}
+.tool-install-disk.error {
+  color: #ef5350;
+  background: rgba(239, 83, 80, 0.1);
+}
+.tool-install-disk-error {
+  font-weight: 600;
+  margin-top: 4px;
+}
+
 /* Spinner — same as template loading */
 .tool-install-spinner {
   width: 32px;

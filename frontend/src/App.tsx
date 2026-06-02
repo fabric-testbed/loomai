@@ -149,6 +149,7 @@ export default function App() {
   const [jupyterMounted, setJupyterMounted] = useState(false);
   const [selectedAiTool, setSelectedAiTool] = useState<string | null>(null);
   const [enabledAiTools, setEnabledAiTools] = useState<Record<string, boolean>>({});
+  const [aiToolInstallStatus, setAiToolInstallStatus] = useState<Record<string, import('./api/client').ToolInstallInfo>>({});
   const [clientTarget, setClientTarget] = useState<ClientTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
@@ -402,6 +403,7 @@ export default function App() {
     api.listComponentModels().then(setComponentModels).catch(() => {});
     api.listVmTemplates().then(setVmTemplates).catch(() => {});
     api.getAiTools().then(setEnabledAiTools).catch(() => {});
+    api.getToolInstallStatus().then(setAiToolInstallStatus).catch(() => {});
     api.listRecipes().then(setRecipes).catch(() => {});
   }, []);
 
@@ -3509,14 +3511,22 @@ export default function App() {
 
   const AI_TOOL_INFO = [
     { id: 'loomai', name: 'LoomAI', icon: '__loomai_icon__' },
+    { id: 'antigravity', name: 'Antigravity', icon: 'AG' },
+    { id: 'codex', name: 'Codex', icon: 'Cx' },
     { id: 'aider', name: 'Aider', icon: 'Ai' },
     { id: 'opencode', name: 'OpenCode', icon: 'OC' },
     { id: 'crush', name: 'Crush', icon: 'Cr' },
     { id: 'deepagents', name: 'Deep Agents', icon: 'DA' },
     { id: 'claude', name: 'Claude Code', icon: 'CC' },
   ];
-  // LoomAI is always visible; other tools filtered by settings
-  const visibleAiTools = AI_TOOL_INFO.filter((t) => t.id === 'loomai' || enabledAiTools[t.id] !== false);
+  // LoomAI is always visible; other tools filtered by enabled settings + install status
+  const visibleAiTools = AI_TOOL_INFO.filter((t) => {
+    if (t.id === 'loomai') return true;
+    if (enabledAiTools[t.id] === false) return false;
+    const info = aiToolInstallStatus[t.id];
+    if (info && !info.installed) return false;
+    return true;
+  });
 
   // Auth gate — show login page before anything else
   if (!authChecked) return null;
@@ -3607,6 +3617,9 @@ export default function App() {
               setSettingsOpen(false);
               setListLoaded(false);
               infraRequestedRef.current = false; sitesRequestedRef.current = false; // re-fetch infra on next tab visit
+              // Refresh AI tool settings in case tools were installed/uninstalled/toggled
+              api.getAiTools().then(setEnabledAiTools).catch(() => {});
+              api.getToolInstallStatus().then(setAiToolInstallStatus).catch(() => {});
             }}
           />
         </div>
@@ -3633,7 +3646,7 @@ export default function App() {
               { key: 'topology' as InfraSubView, label: 'Topology', needsSlice: true },
               { key: 'storage' as InfraSubView, label: 'Storage', needsSlice: true },
               { key: 'map' as InfraSubView, label: 'Map', needsSlice: false },
-              { key: 'apps' as InfraSubView, label: 'Apps', needsSlice: true },
+              { key: 'apps' as InfraSubView, label: 'Tunnels', needsSlice: false },
               { key: 'resources' as InfraSubView, label: 'Resources', needsSlice: false },
               { key: 'calendar' as InfraSubView, label: 'Calendar', needsSlice: false },
             ]).map(t => (
@@ -3781,7 +3794,7 @@ export default function App() {
               { key: 'topology' as SlicesSubView, label: 'Topology' },
               { key: 'storage' as SlicesSubView, label: 'Storage' },
               { key: 'map' as SlicesSubView, label: 'Map' },
-              { key: 'apps' as SlicesSubView, label: 'Apps' },
+              { key: 'apps' as SlicesSubView, label: 'Tunnels' },
               { key: 'calendar' as SlicesSubView, label: 'Calendar' },
             ]).map(t => (
               <button

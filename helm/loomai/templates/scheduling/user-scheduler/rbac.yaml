@@ -1,0 +1,127 @@
+{{- if .Values.scheduling.userScheduler.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "loomai.fullname" . }}-user-scheduler
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: user-scheduler
+rules:
+  # Core scheduling permissions
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/binding"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/status"]
+    verbs: ["patch", "update"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["nodes/status"]
+    verbs: ["patch"]
+  # Events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch", "update"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch", "update"]
+  # Leader election (read-only at cluster level; write scoped to namespace via Role below)
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch"]
+  # Namespaces, services, replication controllers
+  - apiGroups: [""]
+    resources: ["namespaces", "services", "replicationcontrollers"]
+    verbs: ["get", "list", "watch"]
+  # ReplicaSets, StatefulSets
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  # PDBs
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch"]
+  # ConfigMaps (extension-apiserver-authentication in kube-system)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  # Storage
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims", "persistentvolumes"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "csinodes", "csidrivers", "csistoragecapacities", "volumeattachments"]
+    verbs: ["get", "list", "watch"]
+  # Scheduling
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["priorityclasses"]
+    verbs: ["get", "list", "watch"]
+  # Resource claims (K8s 1.26+)
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims", "resourceslices", "resourceclaimtemplates"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims/status"]
+    verbs: ["patch", "update"]
+---
+# Namespace-scoped Role for leader election writes (least privilege)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "loomai.fullname" . }}-user-scheduler
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: user-scheduler
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "loomai.fullname" . }}-user-scheduler
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: user-scheduler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "loomai.fullname" . }}-user-scheduler
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "loomai.fullname" . }}-user-scheduler
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "loomai.fullname" . }}-user-scheduler
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: user-scheduler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "loomai.fullname" . }}-user-scheduler
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "loomai.fullname" . }}-user-scheduler
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -31,6 +31,27 @@ _LOCK_DIR = os.path.join(AI_TOOLS_DIR, ".locks")
 
 # Tool registry — defines what to install for each tool
 TOOL_REGISTRY: dict[str, dict] = {
+    "antigravity": {
+        "type": "shell",
+        "install_cmd": "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+        "binary": "agy",
+        "display_name": "Antigravity",
+        "size_estimate": "~500 MB",
+    },
+    "codex": {
+        "type": "npm",
+        "packages": ["@openai/codex"],
+        "binary": "codex",
+        "display_name": "Codex",
+        "size_estimate": "~300 MB",
+    },
+    "claude": {
+        "type": "npm",
+        "packages": ["@anthropic-ai/claude-code"],
+        "binary": "claude",
+        "display_name": "Claude Code",
+        "size_estimate": "~1 GB",
+    },
     "aider": {
         "type": "pip",
         "packages": ["aider-chat", "streamlit"],
@@ -52,13 +73,6 @@ TOOL_REGISTRY: dict[str, dict] = {
         "display_name": "Crush",
         "size_estimate": "~150 MB",
     },
-    "claude": {
-        "type": "npm",
-        "packages": ["@anthropic-ai/claude-code"],
-        "binary": "claude",
-        "display_name": "Claude Code",
-        "size_estimate": "~1 GB",
-    },
     "deepagents": {
         "type": "pip",
         "packages": ["deepagents-cli[anthropic]"],
@@ -75,6 +89,18 @@ TOOL_REGISTRY: dict[str, dict] = {
         "display_name": "JupyterLab",
         "size_estimate": "~250 MB",
     },
+}
+
+# Estimated disk space requirements in MB per tool (used for pre-flight checks)
+_SIZE_MB: dict[str, int] = {
+    "antigravity": 500,
+    "codex": 300,
+    "claude": 1000,
+    "aider": 900,
+    "opencode": 200,
+    "crush": 150,
+    "deepagents": 500,
+    "jupyterlab": 250,
 }
 
 
@@ -114,6 +140,10 @@ def _ensure_npm_prefix() -> None:
     os.makedirs(_NPM_DIR, exist_ok=True)
 
 
+def _local_bin() -> str:
+    return os.path.join(os.path.expanduser("~"), ".local", "bin")
+
+
 def get_tool_binary_path(tool_id: str) -> str | None:
     """Return the full path to a tool's binary, or None if not found."""
     info = TOOL_REGISTRY.get(tool_id)
@@ -122,6 +152,9 @@ def get_tool_binary_path(tool_id: str) -> str | None:
     binary = info["binary"]
     if info["type"] == "pip":
         path = os.path.join(_venv_bin(), binary)
+    elif info["type"] == "shell":
+        # Shell-installed tools typically land in ~/.local/bin
+        path = os.path.join(_local_bin(), binary)
     else:
         path = os.path.join(_npm_bin(), binary)
     if os.path.isfile(path):
@@ -143,6 +176,8 @@ def get_tool_env() -> dict[str, str]:
         extra_paths.append(_venv_bin())
     if os.path.isdir(_npm_bin()):
         extra_paths.append(_npm_bin())
+    if os.path.isdir(_local_bin()):
+        extra_paths.append(_local_bin())
     if extra_paths:
         env["PATH"] = ":".join(extra_paths) + ":" + env.get("PATH", "")
     return env
@@ -196,6 +231,40 @@ class _ToolLock:
                 pass
 
 
+def check_disk_space(tool_id: str) -> dict:
+    """Check if enough disk space is available for a tool install."""
+    required_mb = _SIZE_MB.get(tool_id, 500)
+    storage_dir = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    try:
+        usage = shutil.disk_usage(storage_dir)
+        available_mb = usage.free // (1024 * 1024)
+        total_mb = usage.total // (1024 * 1024)
+        used_mb = usage.used // (1024 * 1024)
+        # Require 20% buffer beyond the estimate
+        needed_mb = int(required_mb * 1.2)
+        return {
+            "ok": available_mb >= needed_mb,
+            "required_mb": required_mb,
+            "available_mb": available_mb,
+            "total_mb": total_mb,
+            "used_mb": used_mb,
+            "message": (
+                f"{available_mb} MB available, {required_mb} MB required"
+                if available_mb >= needed_mb
+                else f"Insufficient disk space: {available_mb} MB available, need ~{needed_mb} MB"
+            ),
+        }
+    except Exception as e:
+        return {
+            "ok": True,
+            "required_mb": required_mb,
+            "available_mb": -1,
+            "total_mb": -1,
+            "used_mb": -1,
+            "message": f"Could not check disk space: {e}",
+        }
+
+
 async def install_tool(
     tool_id: str,
     progress_callback=None,
@@ -215,6 +284,15 @@ async def install_tool(
         if progress_callback:
             await progress_callback(f"{info['display_name']} is already installed.\r\n")
         return True
+
+    # Pre-flight disk space check
+    space = check_disk_space(tool_id)
+    if not space["ok"]:
+        if progress_callback:
+            await progress_callback(
+                f"\x1b[31m{space['message']}\x1b[0m\r\n"
+            )
+        return False
 
     lock = _ToolLock(tool_id)
     if not lock.acquire():
@@ -242,6 +320,8 @@ async def install_tool(
 
         if info["type"] == "pip":
             success = await _install_pip(info["packages"], progress_callback)
+        elif info["type"] == "shell":
+            success = await _install_shell(info["install_cmd"], info["binary"], progress_callback)
         else:
             success = await _install_npm(info["packages"], progress_callback)
 
@@ -280,15 +360,53 @@ async def _install_npm(packages: list[str], progress_callback=None) -> bool:
     return await _run_install_cmd(cmd, progress_callback)
 
 
-async def _run_install_cmd(cmd: list[str], progress_callback=None) -> bool:
+async def _install_shell(install_cmd: str, binary: str, progress_callback=None) -> bool:
+    """Install a tool via a shell script (e.g. curl | bash).
+
+    The binary is expected to end up in ~/.local/bin/ or somewhere on PATH.
+    """
+    if progress_callback:
+        await progress_callback(f"Running: {install_cmd}\r\n")
+
+    # Ensure ~/.local/bin exists and is on PATH for the install script
+    local_bin = _local_bin()
+    os.makedirs(local_bin, exist_ok=True)
+
+    env = get_tool_env()
+    if local_bin not in env.get("PATH", ""):
+        env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
+
+    success = await _run_install_cmd(
+        ["bash", "-c", install_cmd],
+        progress_callback,
+        extra_env=env,
+    )
+
+    if success:
+        # Verify the binary is actually available
+        found = shutil.which(binary, path=env["PATH"])
+        if not found:
+            if progress_callback:
+                await progress_callback(
+                    f"\x1b[33mWarning: {binary} not found on PATH after install. "
+                    f"Checked: {local_bin}\x1b[0m\r\n"
+                )
+            return False
+        if progress_callback:
+            await progress_callback(f"Binary found at: {found}\r\n")
+    return success
+
+
+async def _run_install_cmd(cmd: list[str], progress_callback=None, extra_env: dict | None = None) -> bool:
     """Run an install command, streaming output line-by-line."""
     logger.info("Running install: %s", " ".join(cmd))
     try:
+        env = extra_env if extra_env is not None else get_tool_env()
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env=get_tool_env(),
+            env=env,
         )
         while True:
             line = await proc.stdout.readline()
@@ -319,7 +437,7 @@ def _update_manifest(tool_id: str, info: dict) -> None:
         except Exception:
             pass
     manifest[tool_id] = {
-        "packages": info["packages"],
+        "packages": info.get("packages", []),
         "type": info["type"],
         "installed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
@@ -356,6 +474,92 @@ def _setup_jupyter_config() -> None:
     }
     with open(os.path.join(kernel_dir, "kernel.json"), "w") as f:
         json.dump(kernel_spec, f, indent=2)
+
+
+async def uninstall_tool(
+    tool_id: str,
+    progress_callback=None,
+) -> bool:
+    """Uninstall a tool by removing its packages.
+
+    progress_callback(line: str) is called for each line of output.
+    Returns True on success.
+    """
+    info = TOOL_REGISTRY.get(tool_id)
+    if not info:
+        if progress_callback:
+            await progress_callback(f"Unknown tool: {tool_id}\r\n")
+        return False
+
+    if not is_tool_installed(tool_id):
+        if progress_callback:
+            await progress_callback(f"{info['display_name']} is not installed.\r\n")
+        return True
+
+    lock = _ToolLock(tool_id)
+    if not lock.acquire():
+        if progress_callback:
+            await progress_callback(
+                f"{info['display_name']} is being modified by another process.\r\n"
+            )
+        return False
+
+    try:
+        if progress_callback:
+            await progress_callback(
+                f"\x1b[36mUninstalling {info['display_name']}...\x1b[0m\r\n"
+            )
+
+        success = False
+        if info["type"] == "pip":
+            pip = os.path.join(_venv_bin(), "pip")
+            if os.path.isfile(pip):
+                cmd = [pip, "uninstall", "-y"] + info["packages"]
+                success = await _run_install_cmd(cmd, progress_callback)
+            else:
+                success = True  # venv gone, nothing to uninstall
+        elif info["type"] == "npm":
+            cmd = ["npm", "uninstall", "-g", f"--prefix={_NPM_DIR}"] + info["packages"]
+            success = await _run_install_cmd(cmd, progress_callback)
+        elif info["type"] == "shell":
+            # Shell-installed tools: remove the binary
+            binary = info["binary"]
+            for d in [_local_bin(), _npm_bin(), _venv_bin()]:
+                path = os.path.join(d, binary)
+                if os.path.isfile(path):
+                    os.remove(path)
+                    if progress_callback:
+                        await progress_callback(f"Removed {path}\r\n")
+            success = True
+
+        if success:
+            _remove_from_manifest(tool_id)
+            if progress_callback:
+                await progress_callback(
+                    f"\x1b[32m{info['display_name']} uninstalled successfully.\x1b[0m\r\n"
+                )
+        else:
+            if progress_callback:
+                await progress_callback(
+                    f"\x1b[31mFailed to uninstall {info['display_name']}.\x1b[0m\r\n"
+                )
+        return success
+    finally:
+        lock.release()
+
+
+def _remove_from_manifest(tool_id: str) -> None:
+    """Remove a tool from the installed tools manifest."""
+    if not os.path.isfile(_MANIFEST_PATH):
+        return
+    try:
+        with open(_MANIFEST_PATH) as f:
+            manifest = json.load(f)
+        manifest.pop(tool_id, None)
+        with open(_MANIFEST_PATH, "w") as f:
+            json.dump(manifest, f, indent=2)
+    except Exception:
+        pass
 
 
 def fixup_jupyter_kernel() -> None:

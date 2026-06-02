@@ -416,6 +416,11 @@ def get_nrp_server_url() -> str:
     return _get_settings()["ai"]["nrp_server_url"]
 
 
+def get_custom_providers() -> list:
+    """Return ``ai.custom_providers`` list."""
+    return _get_settings()["ai"].get("custom_providers", [])
+
+
 def get_default_model() -> str:
     """Return ``ai.default_model``."""
     return _get_settings()["ai"].get("default_model", "")

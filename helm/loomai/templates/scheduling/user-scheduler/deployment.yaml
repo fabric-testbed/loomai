@@ -1,0 +1,83 @@
+{{- if .Values.scheduling.userScheduler.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "loomai.fullname" . }}-user-scheduler
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: user-scheduler
+spec:
+  replicas: {{ .Values.scheduling.userScheduler.replicas }}
+  selector:
+    matchLabels:
+      {{- include "loomai.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: user-scheduler
+  template:
+    metadata:
+      labels:
+        {{- include "loomai.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: user-scheduler
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/scheduling/user-scheduler/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "loomai.fullname" . }}-user-scheduler
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 65534
+        runAsNonRoot: true
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "loomai.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: user-scheduler
+      containers:
+        - name: kube-scheduler
+          image: "{{ .Values.scheduling.userScheduler.image.name }}:{{ .Values.scheduling.userScheduler.image.tag }}"
+          command:
+            - /usr/local/bin/kube-scheduler
+            - --config=/etc/kubernetes/scheduler/config.yaml
+            - --authentication-kubeconfig=
+            - --authorization-kubeconfig=
+            - -v={{ .Values.scheduling.userScheduler.logLevel }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kubernetes/scheduler
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 10259
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 10259
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "loomai.fullname" . }}-user-scheduler
+{{- end }}

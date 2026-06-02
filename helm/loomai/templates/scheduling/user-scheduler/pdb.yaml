@@ -1,0 +1,15 @@
+{{- if and .Values.scheduling.userScheduler.enabled .Values.scheduling.userScheduler.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "loomai.fullname" . }}-user-scheduler
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: user-scheduler
+spec:
+  maxUnavailable: {{ .Values.scheduling.userScheduler.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "loomai.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: user-scheduler
+{{- end }}

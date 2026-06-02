@@ -21,8 +21,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.settings_manager import get_fabric_api_key as _get_ai_api_key, get_nrp_api_key as _get_nrp_api_key
 from app.tracking_headers import add_tracking_headers, get_tracking_headers
 from app.tool_installer import (
-    is_tool_installed, install_tool, get_tool_binary_path,
+    is_tool_installed, install_tool, uninstall_tool, get_tool_binary_path,
     get_tool_env, get_all_tool_status, TOOL_REGISTRY,
+    check_disk_space,
 )
 
 logger = logging.getLogger(__name__)
@@ -497,6 +498,44 @@ loomai sites find --cores 16 --ram 64             # Find matching sites
 ---
 
 """,
+    "antigravity": """\
+# How to Execute FABRIC Operations (Antigravity)
+
+You are running inside the LoomAI container. **Use the `loomai` CLI** as your primary
+tool for managing FABRIC slices, SSH, file transfers, and resource queries.
+
+```bash
+loomai slices list                                # List slices
+loomai slices create my-exp                       # Create draft
+loomai nodes add my-exp node1 --site auto --cores 4 --ram 16 --disk 50
+loomai slices submit my-exp --wait                # Submit and wait
+loomai exec my-exp "apt update" --all --parallel  # Multi-node parallel exec
+loomai scp my-exp ./data.tar.gz /tmp/ --all       # Upload to all nodes
+loomai sites find --cores 16 --ram 64             # Find matching sites
+```
+
+---
+
+""",
+    "codex": """\
+# How to Execute FABRIC Operations (Codex)
+
+You are running inside the LoomAI container. **Use the `loomai` CLI** as your primary
+tool for managing FABRIC slices, SSH, file transfers, and resource queries.
+
+```bash
+loomai slices list                                # List slices
+loomai slices create my-exp                       # Create draft
+loomai nodes add my-exp node1 --site auto --cores 4 --ram 16 --disk 50
+loomai slices submit my-exp --wait                # Submit and wait
+loomai exec my-exp "apt update" --all --parallel  # Multi-node parallel exec
+loomai scp my-exp ./data.tar.gz /tmp/ --all       # Upload to all nodes
+loomai sites find --cores 16 --ram 64             # Find matching sites
+```
+
+---
+
+""",
 }
 
 
@@ -890,6 +929,124 @@ def _setup_deepagents_workspace(cwd: str, api_key: str = "", model_override: str
                 len(providers), default_model)
 
 
+def _setup_antigravity_workspace(cwd: str) -> None:
+    """Seed Antigravity CLI configuration and FABRIC context into the workspace.
+
+    Copies AGENTS.md (shared FABRIC context) so the tool has domain knowledge.
+    """
+    _write_agents_md(cwd, "antigravity")
+    logger.info("Set up Antigravity workspace at %s", cwd)
+
+
+def _toml_safe_id(name: str) -> str:
+    """Convert a provider display name to a TOML-safe bare key (lowercase, hyphens)."""
+    import re
+    safe = re.sub(r'[^a-zA-Z0-9-]', '-', name.strip().lower())
+    safe = re.sub(r'-+', '-', safe).strip('-')
+    return safe or "custom"
+
+
+# Preferred model patterns for Codex (in priority order).
+# Matches are checked as substrings against model IDs.
+_CODEX_MODEL_PREFERENCES = [
+    "codex",       # purpose-built for Codex
+    "gpt-5",       # latest GPT
+    "gpt-4",       # GPT-4 family
+    "claude",      # Anthropic
+    "qwen",        # Qwen family
+    "llama",       # Meta Llama
+    "deepseek",    # DeepSeek
+]
+
+
+def _discover_codex_model(base_url: str, api_key: str) -> str:
+    """Query a provider's /models endpoint and pick the best model for Codex.
+
+    Returns the model ID string. Falls back to the first available model,
+    or a generic default if discovery fails.
+    """
+    try:
+        url = f"{base_url.rstrip('/')}/models"
+        headers: dict[str, str] = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read())
+        model_ids = [m["id"] for m in body.get("data", []) if m.get("id")]
+        if not model_ids:
+            return "gpt-4o"
+
+        # Pick the best model by preference order
+        for pref in _CODEX_MODEL_PREFERENCES:
+            for mid in model_ids:
+                if pref in mid.lower():
+                    return mid
+
+        # No preference matched — return the first model
+        return model_ids[0]
+    except Exception as e:
+        logger.warning("Failed to discover models from %s: %s", base_url, e)
+        return "gpt-4o"
+
+
+def _setup_codex_workspace(cwd: str) -> None:
+    """Seed Codex CLI configuration and FABRIC context into the workspace.
+
+    If a custom provider is flagged with codex_provider=true, writes
+    ~/.codex/config.toml pointing Codex to that provider.
+    Copies AGENTS.md (shared FABRIC context) so the tool has domain knowledge.
+    """
+    _write_agents_md(cwd, "codex")
+
+    # Check if any custom provider is flagged for Codex
+    from app.settings_manager import get_custom_providers
+    codex_provider = None
+    for p in get_custom_providers():
+        if p.get("codex_provider") and p.get("base_url"):
+            codex_provider = p
+            break
+
+    codex_dir = os.path.join(os.path.expanduser("~"), ".codex")
+    os.makedirs(codex_dir, exist_ok=True)
+    config_path = os.path.join(codex_dir, "config.toml")
+
+    if codex_provider:
+        base_url = codex_provider["base_url"].rstrip("/")
+        if not base_url.endswith("/v1"):
+            base_url += "/v1"
+        provider_name = codex_provider.get("name") or "Custom"
+        api_key = codex_provider.get("api_key", "")
+
+        # Discover the best model from the provider
+        model_id = _discover_codex_model(base_url, api_key)
+
+        toml_lines = [
+            f'model = "{model_id}"',
+            f'model_provider = "{_toml_safe_id(provider_name)}"',
+            'model_reasoning_effort = "medium"',
+            "",
+            f"[model_providers.{_toml_safe_id(provider_name)}]",
+            f'name = "{provider_name}"',
+            f'base_url = "{base_url}"',
+            'wire_api = "responses"',
+        ]
+        if api_key:
+            toml_lines.append(f'experimental_bearer_token = "{api_key}"')
+
+        with open(config_path, "w") as f:
+            f.write("\n".join(toml_lines) + "\n")
+        logger.info("Wrote Codex config.toml: provider=%s model=%s url=%s",
+                     provider_name, model_id, base_url)
+    else:
+        # No provider flagged — remove config.toml if it exists so Codex uses its default
+        if os.path.isfile(config_path):
+            os.remove(config_path)
+            logger.info("Removed Codex config.toml — using default OpenAI config")
+
+    logger.info("Set up Codex workspace at %s", cwd)
+
+
 def _start_model_proxy(
     api_key: str, default_model: str, allowed_models: list[str], env: dict,
 ) -> subprocess.Popen | None:
@@ -924,8 +1081,32 @@ def _start_model_proxy(
         logger.exception("Failed to start model proxy")
         return None
 
+def _codex_env(fabric_key: str) -> dict[str, str]:
+    """Build env vars for Codex CLI.
+
+    Auth is handled via experimental_bearer_token in config.toml,
+    so no env vars are needed.
+    """
+    return {}
+
+
 # Tool definitions: env setup and command for each AI tool
 TOOL_CONFIGS = {
+    "antigravity": {
+        "env": lambda key: {},
+        "cmd": ["agy"],
+        "needs_key": False,
+    },
+    "codex": {
+        "env": lambda key: _codex_env(key),
+        "cmd": ["codex"],
+        "needs_key": False,
+    },
+    "claude": {
+        "env": lambda key: {"NODE_OPTIONS": "--dns-result-order=ipv4first"},
+        "cmd": ["claude"],
+        "needs_key": False,
+    },
     "aider": {
         "env": lambda key: {
             "OPENAI_API_KEY": key,
@@ -958,11 +1139,6 @@ TOOL_CONFIGS = {
         "cmd": ["crush"],
         "needs_key": True,
     },
-    "claude": {
-        "env": lambda key: {"NODE_OPTIONS": "--dns-result-order=ipv4first"},
-        "cmd": ["claude"],
-        "needs_key": False,
-    },
     "deepagents": {
         "env": lambda key: {
             "OPENAI_API_KEY": key,
@@ -985,6 +1161,15 @@ _opencode_web_proxy: subprocess.Popen | None = None
 async def tool_install_status():
     """Return install status of all lazy-installed AI tools."""
     return get_all_tool_status()
+
+
+@router.get("/api/ai/tools/disk-space")
+async def get_disk_space(tool_id: str = ""):
+    """Return disk usage info, optionally checking if a specific tool can be installed."""
+    if tool_id:
+        return check_disk_space(tool_id)
+    # General disk space info
+    return check_disk_space("__general__")
 
 
 @router.post("/api/ai/tools/{tool_id}/install")
@@ -1023,6 +1208,15 @@ async def trigger_tool_install_stream(tool_id: str):
     async def _stream():
         queue: asyncio.Queue[str | None] = asyncio.Queue()
 
+        # Emit disk space check as the first event
+        space = check_disk_space(tool_id)
+        yield f"data: {json.dumps({'type': 'disk_check', **space})}\n\n"
+
+        if not space["ok"]:
+            yield f"data: {json.dumps({'type': 'error', 'message': space['message']})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'status': 'error', 'tool': tool_id})}\n\n"
+            return
+
         async def progress_cb(line: str):
             await queue.put(line)
 
@@ -1038,7 +1232,7 @@ async def trigger_tool_install_stream(tool_id: str):
 
         task = asyncio.create_task(run_install())
 
-        # Emit tool info as the first event
+        # Emit tool info
         yield f"data: {json.dumps({'type': 'start', 'tool': tool_id, 'display_name': info['display_name'], 'size_estimate': info['size_estimate']})}\n\n"
 
         while True:
@@ -1057,6 +1251,26 @@ async def trigger_tool_install_stream(tool_id: str):
         yield f"data: {json.dumps({'type': 'done', 'status': status, 'tool': tool_id})}\n\n"
 
     return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+@router.post("/api/ai/tools/{tool_id}/uninstall")
+async def trigger_tool_uninstall(tool_id: str):
+    """Uninstall an AI tool. Returns when complete."""
+    if tool_id not in TOOL_REGISTRY:
+        return {"error": f"Unknown tool: {tool_id}", "status": "error"}
+    if not is_tool_installed(tool_id):
+        return {"status": "not_installed", "tool": tool_id}
+    lines: list[str] = []
+
+    async def collect(line: str):
+        lines.append(line)
+
+    success = await uninstall_tool(tool_id, progress_callback=collect)
+    return {
+        "status": "uninstalled" if success else "error",
+        "tool": tool_id,
+        "output": "".join(lines),
+    }
 
 
 @router.post("/api/ai/opencode-web/start")
@@ -1886,7 +2100,11 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = "", cwd: 
             tool_env["NRP_API_KEY"] = nrp_key
 
         # Tool-specific workspace setup
-        if tool == "aider":
+        if tool == "antigravity":
+            _setup_antigravity_workspace(cwd)
+        elif tool == "codex":
+            _setup_codex_workspace(cwd)
+        elif tool == "aider":
             _ensure_git_ready(cwd)
             _setup_aider_workspace(cwd)
         elif tool == "claude":
@@ -2280,6 +2498,18 @@ def seed_ai_tool_defaults() -> None:
     except Exception as e:
         logger.warning("Could not seed Deep Agents config: %s", e)
 
+    # --- Antigravity: AGENTS.md ---
+    try:
+        _setup_antigravity_workspace(cwd)
+    except Exception as e:
+        logger.warning("Could not seed Antigravity workspace: %s", e)
+
+    # --- Codex: AGENTS.md ---
+    try:
+        _setup_codex_workspace(cwd)
+    except Exception as e:
+        logger.warning("Could not seed Codex workspace: %s", e)
+
     # --- Git setup (needed by Aider, OpenCode, Crush, Deep Agents) ---
     _ensure_git_ready(cwd)
 
@@ -2375,6 +2605,22 @@ def propagate_ai_configs() -> dict:
     except Exception as e:
         logger.warning("Failed to propagate Deep Agents config: %s", e)
         results["deepagents"] = f"error: {e}"
+
+    # --- Antigravity: re-seed workspace context ---
+    try:
+        _setup_antigravity_workspace(cwd)
+        results["antigravity"] = "ok"
+    except Exception as e:
+        logger.warning("Failed to propagate Antigravity config: %s", e)
+        results["antigravity"] = f"error: {e}"
+
+    # --- Codex: re-seed workspace context ---
+    try:
+        _setup_codex_workspace(cwd)
+        results["codex"] = "ok"
+    except Exception as e:
+        logger.warning("Failed to propagate Codex config: %s", e)
+        results["codex"] = f"error: {e}"
 
     # --- Jupyter AI: reconfigure with current providers ---
     try:

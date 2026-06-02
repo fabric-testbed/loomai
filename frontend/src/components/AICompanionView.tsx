@@ -56,6 +56,33 @@ const TOOLS: ToolDef[] = [
     needsKey: true,
   },
   {
+    id: 'antigravity',
+    name: 'Antigravity',
+    desc: 'Google\'s agentic coding CLI (successor to Gemini CLI). Free with a Google account. No API key required.',
+    icon: 'AG',
+    iconClass: 'antigravity',
+    needsKey: false,
+    warning: 'Antigravity requires a Google account for authentication. You will be prompted to sign in on first launch. Continue?',
+  },
+  {
+    id: 'codex',
+    name: 'Codex',
+    desc: 'OpenAI\'s open-source coding agent CLI. Free with an OpenAI account. No API key required.',
+    icon: 'Cx',
+    iconClass: 'codex',
+    needsKey: false,
+    warning: 'Codex requires an OpenAI account for authentication. You will be prompted to sign in on first launch. Continue?',
+  },
+  {
+    id: 'claude',
+    name: 'Claude Code',
+    desc: 'Anthropic\'s most powerful agentic coding CLI. Requires your own paid Anthropic subscription (Max or API).',
+    icon: 'CC',
+    iconClass: 'claude',
+    needsKey: false,
+    warning: 'Claude Code requires a paid Anthropic account (Max or API). Charges will apply to your account. Continue?',
+  },
+  {
     id: 'aider',
     name: 'Aider',
     desc: 'AI pair programming — edit files, generate scripts, and refactor code. Powered by FABRIC-hosted LLMs. Requires a free FABRIC API key.',
@@ -86,15 +113,6 @@ const TOOLS: ToolDef[] = [
     icon: 'DA',
     iconClass: 'deepagents',
     needsKey: true,
-  },
-  {
-    id: 'claude',
-    name: 'Claude Code',
-    desc: 'Anthropic\'s most powerful agentic coding CLI. Requires your own paid Anthropic subscription (Max or API).',
-    icon: 'CC',
-    iconClass: 'claude',
-    needsKey: false,
-    warning: 'Claude Code requires a paid Anthropic account (Max or API). Charges will apply to your account. Continue?',
   },
 ];
 
@@ -129,9 +147,24 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
     getToolInstallStatus().then(setInstallStatus).catch(() => {});
   }, []);
 
+  // Re-fetch enabled tools & install status when the view becomes visible
+  // (e.g. user returns from Settings after installing/enabling a tool)
+  useEffect(() => {
+    if (visible) {
+      getAiTools().then(setEnabledTools).catch(() => {});
+      getToolInstallStatus().then(setInstallStatus).catch(() => {});
+    }
+  }, [visible]);
+
   const isHubMode = typeof window !== 'undefined' && !!(window as any).__LOOMAI_BASE_PATH;
 
-  const visibleTools = TOOLS.filter((t) => enabledTools[t.id] !== false);
+  const visibleTools = TOOLS.filter((t) => {
+    if (enabledTools[t.id] === false) return false;
+    // Hide tools that are known to be not-installed
+    const info = installStatus[t.id];
+    if (info && !info.installed) return false;
+    return true;
+  });
 
   const launchTool = useCallback((tool: ToolDef) => {
     const tabId = `${tool.id}-${Date.now()}`;
@@ -218,17 +251,22 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
             const ready = tool.needsKey ? hasKey : true;
             const toolStatus = installStatus[tool.id];
             const isInstalled = !toolStatus || toolStatus.installed;
+            const isCommercialBYOA = tool.id === 'claude' || tool.id === 'antigravity' || tool.id === 'codex';
             const badge = hubDisabled
-              ? (tool.id === 'claude'
-                ? { cls: 'your-account', text: 'Paid \u2022 Local Only' }
+              ? (isCommercialBYOA
+                ? { cls: 'your-account', text: (tool.id === 'claude' ? 'Paid' : 'Free') + ' \u2022 Local Only' }
                 : { cls: 'local-only', text: 'Local Install Only' })
               : tool.id === 'claude'
                 ? { cls: 'your-account', text: 'Paid Subscription' }
-                : tool.id === 'loomai'
-                  ? (ready ? { cls: 'free', text: 'Free \u2022 API Key Required' } : { cls: 'key-required', text: 'API Key Required' })
-                  : ready
-                    ? { cls: 'free', text: 'Free \u2022 API Key Required' }
-                    : { cls: 'key-required', text: 'API Key Required' };
+                : tool.id === 'antigravity'
+                  ? { cls: 'free', text: 'Free \u2022 Google Account' }
+                  : tool.id === 'codex'
+                    ? { cls: 'free', text: 'Free \u2022 OpenAI Account' }
+                    : tool.id === 'loomai'
+                      ? (ready ? { cls: 'free', text: 'Free \u2022 API Key Required' } : { cls: 'key-required', text: 'API Key Required' })
+                      : ready
+                        ? { cls: 'free', text: 'Free \u2022 API Key Required' }
+                        : { cls: 'key-required', text: 'API Key Required' };
             const installBadge = !hubDisabled && toolStatus && !toolStatus.installed
               ? { cls: 'not-installed', text: `Install \u2022 ${toolStatus.size_estimate}` }
               : null;

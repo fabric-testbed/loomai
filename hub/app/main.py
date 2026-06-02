@@ -18,7 +18,7 @@ from app.config import settings
 from app.culler.idle_culler import start_culler, stop_culler
 from app.db.session import async_session_maker, init_db
 from app.proxy.chp_client import add_route
-from app.routes import admin, health, login, spawn
+from app.routes import admin, auth_check, health, login, spawn
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="LoomAI Hub",
     description="Multi-user hub for LoomAI on Kubernetes",
-    version="0.2.0",
+    version="0.6.0",
     lifespan=lifespan,
 )
 
@@ -77,6 +77,7 @@ app.mount("/hub/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 # Mount route modules
 app.include_router(health.router)
+app.include_router(auth_check.router)
 app.include_router(login.router)
 app.include_router(spawn.router)
 app.include_router(admin.router)
@@ -85,6 +86,17 @@ app.include_router(admin.router)
 @app.get("/")
 async def root_redirect():
     """Redirect root to hub login."""
+    from fastapi.responses import RedirectResponse
+
+    return RedirectResponse(url=f"{settings.HUB_PREFIX}/login", status_code=302)
+
+
+# Catch-all for /user/* when the proxy route has been removed (pod died).
+# CHP falls back to the hub default target for paths with no matching route,
+# so the browser lands here after the 503 handler cleans up the stale route.
+@app.get("/user/{path:path}")
+async def user_catch_all(path: str):
+    """Redirect stale /user/* requests to the hub home page."""
     from fastapi.responses import RedirectResponse
 
     return RedirectResponse(url=f"{settings.HUB_PREFIX}/login", status_code=302)

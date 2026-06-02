@@ -13,6 +13,7 @@ class TunnelCreateRequest(BaseModel):
     slice_name: str
     node_name: str
     port: int
+    protocol: str = "http"
 
 
 @router.post("/api/tunnels")
@@ -20,7 +21,7 @@ def create_tunnel(req: TunnelCreateRequest):
     """Create (or reuse) an SSH tunnel to a VM service."""
     mgr = get_tunnel_manager()
     try:
-        info = mgr.create_tunnel(req.slice_name, req.node_name, req.port)
+        info = mgr.create_tunnel(req.slice_name, req.node_name, req.port, req.protocol)
         return info.to_dict()
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))

@@ -645,6 +645,83 @@
   color: var(--fabric-text-muted);
 }
 
+.ai-tool-toggle-row.not-installed {
+  opacity: 0.7;
+}
+
+.ai-tool-toggle-row.not-installed input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
+.ai-tool-install-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border: 1px solid var(--fabric-primary, #5798bc);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fabric-primary, #5798bc);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.ai-tool-install-btn:hover {
+  background: var(--fabric-primary, #5798bc);
+  color: #fff;
+}
+
+.ai-tool-status-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.ai-tool-installed-badge {
+  color: #4caf6a;
+  font-size: 14px;
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.ai-tool-uninstall-btn {
+  font-size: 10px;
+  padding: 2px 6px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fabric-text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.ai-tool-toggle-row:hover .ai-tool-uninstall-btn {
+  opacity: 1;
+}
+
+.ai-tool-uninstall-btn:hover {
+  border-color: #e25241;
+  color: #e25241;
+  background: rgba(226, 82, 65, 0.08);
+}
+
+.ai-tool-uninstall-btn:disabled {
+  opacity: 0.5 !important;
+  cursor: not-allowed;
+}
+
+/* Codex provider toggle on custom provider row */
+.test-btn.codex-active {
+  background: rgba(0, 142, 122, 0.15);
+  border-color: #008e7a;
+  color: #008e7a;
+}
+
 /* User Accounts */
 .user-account-list {
   display: flex;

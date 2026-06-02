@@ -23,7 +23,12 @@ if [ -n "$LOOMAI_BASE_PATH" ]; then
         -e "s|src=\"/env-config.js\"|src=\"${LOOMAI_BASE_PATH}/env-config.js\"|g" \
         {} +
 
-    # Rewrite nginx config for sub-path routing
+    # Extract the username (UUID) from LOOMAI_BASE_PATH (/user/{uuid})
+    LOOMAI_USER=$(echo "$LOOMAI_BASE_PATH" | sed 's|^/user/||')
+    # Hub internal URL for auth subrequests (default to K8s service name)
+    LOOMAI_HUB="${LOOMAI_HUB_URL:-http://loomai-hub:8081}"
+
+    # Rewrite nginx config for sub-path routing with auth
     cat > /etc/nginx/conf.d/default.conf <<NGINX
 map \$http_upgrade \$connection_upgrade {
     default upgrade;
@@ -37,15 +42,35 @@ server {
 
     client_max_body_size 500m;
 
+    # --- Auth subrequest: validates session cookie via hub ---
+    location = /_auth_check {
+        internal;
+        proxy_pass ${LOOMAI_HUB}/hub/api/auth/check?user=${LOOMAI_USER};
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header X-Original-URI \$request_uri;
+        proxy_set_header Cookie \$http_cookie;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
+    }
+
+    # On 401 (no session) redirect to hub login
+    error_page 401 = @login_redirect;
+    location @login_redirect {
+        return 302 /hub/login;
+    }
+
     # Serve the app under the base path (CHP routes /user/{uuid}/* here)
     # Rewrite strips the base path so root-relative files resolve correctly.
     location ${LOOMAI_BASE_PATH}/ {
+        auth_request /_auth_check;
         rewrite ^${LOOMAI_BASE_PATH}/(.*)\$ /\$1 break;
         root /usr/share/nginx/html;
         try_files \$uri \$uri/ /index.html;
     }
 
     location ${LOOMAI_BASE_PATH}/api/ {
+        auth_request /_auth_check;
         proxy_pass http://127.0.0.1:8000/api/;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -55,6 +80,7 @@ server {
     }
 
     location ${LOOMAI_BASE_PATH}/jupyter/ {
+        auth_request /_auth_check;
         set \$jupyter_upstream http://127.0.0.1:8889;
         proxy_pass \$jupyter_upstream;
         proxy_http_version 1.1;
@@ -70,6 +96,7 @@ server {
     }
 
     location ${LOOMAI_BASE_PATH}/aider/ {
+        auth_request /_auth_check;
         proxy_pass http://127.0.0.1:9197/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
@@ -84,6 +111,7 @@ server {
     }
 
     location ${LOOMAI_BASE_PATH}/opencode/ {
+        auth_request /_auth_check;
         proxy_pass http://127.0.0.1:9198/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
@@ -98,6 +126,7 @@ server {
     }
 
     location ~ ^${LOOMAI_BASE_PATH}/tunnel/(91[0-9][0-9])/(.*) {
+        auth_request /_auth_check;
         proxy_pass http://127.0.0.1:\$1/\$2\$is_args\$args;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
@@ -112,6 +141,7 @@ server {
     }
 
     location ${LOOMAI_BASE_PATH}/ws/ {
+        auth_request /_auth_check;
         proxy_pass http://127.0.0.1:8000/ws/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
@@ -333,5 +363,38 @@ os.chmod(path, 0o600)
         echo "=========================================="
     fi
 fi
+
+# ---------------------------------------------------------------------------
+# Add JupyterLab to supervisord so it auto-restarts on crash
+# ---------------------------------------------------------------------------
+if [ -n "$LOOMAI_BASE_PATH" ]; then
+    JUPYTER_BASE_URL="${LOOMAI_BASE_PATH}/jupyter/"
+else
+    JUPYTER_BASE_URL="/jupyter/"
+fi
+
+cat >> /etc/supervisor/conf.d/fabric-webui.conf <<JLAB
+
+[program:jupyterlab]
+command=jupyter lab --no-browser --ip=0.0.0.0 --port=8889
+    --ServerApp.token=
+    --ServerApp.password=
+    --ServerApp.disable_check_xsrf=True
+    --ServerApp.allow_origin=*
+    --ServerApp.allow_remote_access=True
+    --ServerApp.base_url=${JUPYTER_BASE_URL}
+    --ServerApp.root_dir=/home/fabric/work
+    --ServerApp.terminado_settings={'shell_command': ['/bin/bash']}
+directory=/home/fabric/work
+user=fabric
+autostart=true
+autorestart=true
+startretries=5
+startsecs=10
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+JLAB
 
 exec supervisord -c /etc/supervisor/supervisord.conf

@@ -40,6 +40,18 @@ def _jupyter_base_url() -> str:
 _jupyter_proc: subprocess.Popen | None = None
 
 
+def _is_jupyter_listening(port: int | None = None) -> bool:
+    """Check if JupyterLab is already listening (e.g. managed by supervisord)."""
+    import socket
+    if port is None:
+        port = _jupyter_port()
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return True
+    except (ConnectionRefusedError, OSError, socket.timeout):
+        return False
+
+
 def _workdir() -> str:
     """Return the JupyterLab root directory.
 
@@ -382,6 +394,11 @@ async def start_jupyter():
     if _jupyter_proc and _jupyter_proc.poll() is None:
         return {"port": port, "status": "running"}
 
+    # JupyterLab may already be running via supervisord — check the port
+    if _is_jupyter_listening(port):
+        logger.info("JupyterLab already listening on :%d (managed externally)", port)
+        return {"port": port, "status": "running"}
+
     workdir = _workdir()
 
     if not is_tool_installed("jupyterlab"):
@@ -464,17 +481,17 @@ async def stop_jupyter():
 @router.get("/api/jupyter/status")
 async def jupyter_status():
     """Check JupyterLab server status and readiness."""
-    import socket
-    running = _jupyter_proc is not None and _jupyter_proc.poll() is None
-    if not running:
-        return {"port": None, "status": "stopped"}
     port = _jupyter_port()
-    # Check if actually listening (not just process alive)
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1):
-            return {"port": port, "status": "running", "ready": True}
-    except (ConnectionRefusedError, OSError, socket.timeout):
+    proc_running = _jupyter_proc is not None and _jupyter_proc.poll() is None
+
+    # Check if JupyterLab is listening (covers both self-managed and supervisord)
+    if _is_jupyter_listening(port):
+        return {"port": port, "status": "running", "ready": True}
+
+    if proc_running:
         return {"port": port, "status": "starting", "ready": False}
+
+    return {"port": None, "status": "stopped"}
 
 
 class ThemeRequest(BaseModel):
@@ -484,7 +501,7 @@ class ThemeRequest(BaseModel):
 @router.post("/api/jupyter/theme")
 async def set_jupyter_theme(req: ThemeRequest):
     """Set JupyterLab theme via its settings API."""
-    running = _jupyter_proc is not None and _jupyter_proc.poll() is None
+    running = (_jupyter_proc is not None and _jupyter_proc.poll() is None) or _is_jupyter_listening()
     if not running:
         return {"status": "not_running"}
 

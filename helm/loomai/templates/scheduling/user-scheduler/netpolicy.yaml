@@ -1,0 +1,35 @@
+{{- if .Values.scheduling.userScheduler.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "loomai.fullname" . }}-user-scheduler
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: user-scheduler
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "loomai.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: user-scheduler
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Deny all inbound — the HTTPS health endpoint (:10259) has authn/authz
+    # disabled; only allow kubelet probes (which bypass NetworkPolicy by default
+    # on most CNIs). No explicit ingress rules needed.
+    []
+  egress:
+    # DNS resolution
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # HTTPS to kube-apiserver (scheduling API, leader election)
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+{{- end }}

@@ -6,18 +6,25 @@ import re
 from typing import Any
 
 from kubernetes_asyncio.client import (
+    V1Affinity,
     V1Container,
     V1ContainerPort,
     V1EnvVar,
     V1EnvVarSource,
     V1HTTPGetAction,
+    V1NodeAffinity,
+    V1NodeSelector,
+    V1NodeSelectorRequirement,
+    V1NodeSelectorTerm,
     V1ObjectMeta,
     V1Pod,
     V1PodSpec,
+    V1PreferredSchedulingTerm,
     V1Probe,
     V1ResourceRequirements,
     V1SecretKeySelector,
     V1SecurityContext,
+    V1Toleration,
     V1Volume,
     V1VolumeMount,
     V1PersistentVolumeClaimVolumeSource,
@@ -78,6 +85,7 @@ def build_pod_manifest(
         V1EnvVar(name="FABRIC_CONFIG_DIR", value="/home/fabric/work/fabric_config"),
         V1EnvVar(name="FABRIC_TOKEN_LOCATION", value="/home/fabric/work/fabric_config/id_token.json"),
         V1EnvVar(name="LOOMAI_BASE_PATH", value=base_path),
+        V1EnvVar(name="LOOMAI_HUB_URL", value=settings.HUB_BASE_URL),
         # CILogon tokens injected from K8s Secret
         V1EnvVar(
             name="CILOGON_ID_TOKEN",
@@ -157,6 +165,39 @@ def build_pod_manifest(
         ),
     )
 
+    # Use custom scheduler if configured (user-scheduler packs pods for autoscaling)
+    scheduler_name = settings.LOOMAI_USER_SCHEDULER or None
+
+    # Tolerate the user-pool taint so pods can land on dedicated user nodes
+    tolerations = [
+        V1Toleration(
+            key="hub.jupyter.org/dedicated",
+            operator="Equal",
+            value="user",
+            effect="NoSchedule",
+        ),
+    ]
+
+    # Prefer (soft) scheduling on nodes labeled for user workloads
+    affinity = V1Affinity(
+        node_affinity=V1NodeAffinity(
+            preferred_during_scheduling_ignored_during_execution=[
+                V1PreferredSchedulingTerm(
+                    weight=100,
+                    preference=V1NodeSelectorTerm(
+                        match_expressions=[
+                            V1NodeSelectorRequirement(
+                                key="hub.jupyter.org/node-purpose",
+                                operator="In",
+                                values=["user"],
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        ),
+    )
+
     pod = V1Pod(
         api_version="v1",
         kind="Pod",
@@ -170,6 +211,9 @@ def build_pod_manifest(
             volumes=volumes,
             restart_policy="Never",
             automount_service_account_token=False,
+            scheduler_name=scheduler_name,
+            tolerations=tolerations,
+            affinity=affinity,
         ),
     )
 

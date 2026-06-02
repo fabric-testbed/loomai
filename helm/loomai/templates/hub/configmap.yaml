@@ -50,6 +50,11 @@ data:
   CULL_EVERY: {{ .Values.cull.every | quote }}
   CULL_MAX_AGE: {{ .Values.cull.maxAge | quote }}
 
+  # User scheduler (set when scheduling.userScheduler is enabled)
+  {{- if .Values.scheduling.userScheduler.enabled }}
+  LOOMAI_USER_SCHEDULER: {{ printf "%s-user-scheduler" (include "loomai.fullname" .) | quote }}
+  {{- end }}
+
   # Proxy API URL (for Hub to manage CHP routes)
   PROXY_API_URL: "http://{{ include "loomai.proxy.fullname" . }}-api:8001"
 

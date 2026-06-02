@@ -2,7 +2,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../api/client';
 import type { ConfigStatus, ProjectInfo, SliceKeySet, LoomAISettings, ToolConfigStatus, UserInfo } from '../types/fabric';
-import type { SettingTestResult } from '../api/client';
+import type { SettingTestResult, ToolInstallInfo } from '../api/client';
+import ToolInstallOverlay from './ToolInstallOverlay';
 import '../styles/configure.css';
 
 /* ---------- Section definitions ---------- */
@@ -71,8 +72,14 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   const [litellmApiKey, setLitellmApiKey] = useState('');
   const [nrpApiKey, setNrpApiKey] = useState('');
   const [aiTools, setAiTools] = useState<Record<string, boolean>>({
-    aider: true, opencode: true, crush: true, claude: false, deepagents: true,
+    antigravity: false, codex: false, claude: false,
+    aider: true, opencode: true, crush: true, deepagents: true,
   });
+
+  // Tool install status & overlay
+  const [installStatus, setInstallStatus] = useState<Record<string, ToolInstallInfo> | null>(null);
+  const [installingToolId, setInstallingToolId] = useState<string | null>(null);
+  const [uninstallingToolId, setUninstallingToolId] = useState<string | null>(null);
 
   // Multi-user state
   const [registeredUsers, setRegisteredUsers] = useState<UserInfo[]>([]);
@@ -106,7 +113,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   const [aiModels, setAiModels] = useState<api.AIModelsResponse | null>(null);
   const [showKeyModal, setShowKeyModal] = useState<'fabric' | 'nrp' | null>(null);
   // Custom LLM providers
-  const [customProviders, setCustomProviders] = useState<Array<{name: string; base_url: string; api_key: string}>>([]);
+  const [customProviders, setCustomProviders] = useState<Array<{name: string; base_url: string; api_key: string; codex_provider?: boolean}>>([]);
   const [cpTestResults, setCpTestResults] = useState<Record<number, { testing: boolean; result?: SettingTestResult }>>({});
 
   // LLM key creation
@@ -244,6 +251,10 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     try { setSkillsList(await api.getSkills()); } catch { /* ignore */ }
   }, []);
 
+  const loadInstallStatus = useCallback(async () => {
+    try { setInstallStatus(await api.getToolInstallStatus()); } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     loadStatus();
     loadKeySets();
@@ -253,7 +264,8 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     loadModels();
     loadAgents();
     loadSkills();
-  }, [loadStatus, loadKeySets, loadSettings, loadToolConfigs, loadUsers, loadModels, loadAgents, loadSkills]);
+    loadInstallStatus();
+  }, [loadStatus, loadKeySets, loadSettings, loadToolConfigs, loadUsers, loadModels, loadAgents, loadSkills, loadInstallStatus]);
 
   // Load projects when token is available
   const loadProjects = useCallback(async () => {
@@ -1224,6 +1236,20 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
               }}>
               {cpTestResults[i]?.testing ? <span className="test-spinner" /> : 'Test'}
             </button>
+            <button
+              className={`test-btn${cp.codex_provider ? ' codex-active' : ''}`}
+              style={{ fontSize: 10, padding: '2px 6px' }}
+              title={cp.codex_provider ? 'This provider is used by Codex CLI. Click to remove.' : 'Use this provider for Codex CLI'}
+              onClick={() => {
+                const next = customProviders.map((p, j) => ({
+                  ...p,
+                  codex_provider: j === i ? !p.codex_provider : false,
+                }));
+                setCustomProviders(next);
+              }}
+            >
+              Codex{cp.codex_provider ? ' \u2713' : ''}
+            </button>
             <button style={{ fontSize: 11, padding: '2px 6px', cursor: 'pointer', border: '1px solid var(--fabric-border)', borderRadius: 3, background: 'var(--fabric-bg-tint)', color: 'var(--fabric-text-muted)' }}
               onClick={() => { setCustomProviders(customProviders.filter((_, j) => j !== i)); setCpTestResults(prev => { const n = { ...prev }; delete n[i]; return n; }); }}>X</button>
             {cpTestResults[i]?.result && (
@@ -1235,7 +1261,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           </div>
         ))}
         <button className="btn" style={{ marginTop: 6, fontSize: 12, padding: '4px 12px' }}
-          onClick={() => setCustomProviders([...customProviders, { name: '', base_url: '', api_key: '' }])}>
+          onClick={() => setCustomProviders([...customProviders, { name: '', base_url: '', api_key: '', codex_provider: false }])}>
           + Add Provider
         </button>
       </div>
@@ -1249,31 +1275,97 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     </>
   );
 
+  const handleUninstall = async (toolId: string) => {
+    if (!confirm(`Uninstall ${installStatus?.[toolId]?.display_name || toolId}? This will remove the tool and free disk space.`)) return;
+    setUninstallingToolId(toolId);
+    try {
+      const result = await api.uninstallTool(toolId);
+      if (result.status === 'uninstalled' || result.status === 'not_installed') {
+        setAiTools((prev) => ({ ...prev, [toolId]: false }));
+        setMessage({ text: `${installStatus?.[toolId]?.display_name || toolId} uninstalled`, type: 'success' });
+      } else {
+        setMessage({ text: `Failed to uninstall ${toolId}`, type: 'error' });
+      }
+      await loadInstallStatus();
+    } catch (err: any) {
+      setMessage({ text: `Uninstall failed: ${err.message}`, type: 'error' });
+    } finally {
+      setUninstallingToolId(null);
+    }
+  };
+
   const renderAITools = () => (
     <>
+      {installingToolId && (
+        <ToolInstallOverlay
+          toolId={installingToolId}
+          onComplete={() => {
+            const justInstalled = installingToolId;
+            setInstallingToolId(null);
+            loadInstallStatus();
+            setAiTools((prev) => ({ ...prev, [justInstalled]: true }));
+          }}
+          onError={(msg) => {
+            setInstallingToolId(null);
+            setMessage({ text: msg, type: 'error' });
+          }}
+        />
+      )}
       <div className="configure-section">
         <h3 data-help-id="settings.ai-tools">Enabled Tools</h3>
         <p>Choose which AI tools appear in the AI Companion launcher.</p>
         <div className="ai-tool-toggles">
           {([
+            { id: 'antigravity', label: 'Antigravity', desc: 'Google agentic coding CLI (free with Google account)' },
+            { id: 'codex', label: 'Codex', desc: 'OpenAI coding agent CLI (free with OpenAI account)' },
+            { id: 'claude', label: 'Claude Code', desc: 'Anthropic CLI (requires your own account)' },
             { id: 'aider', label: 'Aider', desc: 'AI pair programming terminal' },
             { id: 'opencode', label: 'OpenCode', desc: 'Terminal-based AI coding assistant' },
             { id: 'crush', label: 'Crush', desc: 'Terminal AI assistant (Charm)' },
             { id: 'deepagents', label: 'Deep Agents', desc: 'LangChain coding agent with planning and memory' },
-            { id: 'claude', label: 'Claude Code', desc: 'Anthropic CLI (requires your own account)' },
-          ] as const).map((tool) => (
-            <label key={tool.id} className="ai-tool-toggle-row">
-              <input
-                type="checkbox"
-                checked={aiTools[tool.id] ?? false}
-                onChange={(e) => setAiTools((prev) => ({ ...prev, [tool.id]: e.target.checked }))}
-              />
-              <span className="ai-tool-toggle-info">
-                <span className="ai-tool-toggle-name">{tool.label}</span>
-                <span className="ai-tool-toggle-desc">{tool.desc}</span>
-              </span>
-            </label>
-          ))}
+          ] as const).map((tool) => {
+            const info = installStatus?.[tool.id];
+            // Only show as installed if we have status data confirming it
+            const statusLoaded = installStatus !== null;
+            const isInstalled = statusLoaded ? (!info || info.installed) : true;
+            const sizeEst = info?.size_estimate || '';
+            const isUninstalling = uninstallingToolId === tool.id;
+
+            return (
+              <label key={tool.id} className={`ai-tool-toggle-row${statusLoaded && !isInstalled ? ' not-installed' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={aiTools[tool.id] ?? false}
+                  disabled={statusLoaded && !isInstalled}
+                  onChange={(e) => setAiTools((prev) => ({ ...prev, [tool.id]: e.target.checked }))}
+                />
+                <span className="ai-tool-toggle-info">
+                  <span className="ai-tool-toggle-name">{tool.label}</span>
+                  <span className="ai-tool-toggle-desc">{tool.desc}</span>
+                </span>
+                {!statusLoaded ? null : isInstalled ? (
+                  <span className="ai-tool-status-actions">
+                    <span className="ai-tool-installed-badge">{'\u2713'}</span>
+                    <button
+                      className="ai-tool-uninstall-btn"
+                      disabled={isUninstalling}
+                      onClick={(e) => { e.preventDefault(); handleUninstall(tool.id); }}
+                      title="Uninstall this tool"
+                    >
+                      {isUninstalling ? 'Removing...' : 'Uninstall'}
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    className="ai-tool-install-btn"
+                    onClick={(e) => { e.preventDefault(); setInstallingToolId(tool.id); }}
+                  >
+                    Install{sizeEst ? ` (${sizeEst})` : ''}
+                  </button>
+                )}
+              </label>
+            );
+          })}
         </div>
       </div>
 

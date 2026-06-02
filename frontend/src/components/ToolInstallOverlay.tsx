@@ -10,6 +10,22 @@ interface ToolInstallOverlayProps {
 }
 
 const INSTALL_STEPS: Record<string, string[]> = {
+  antigravity: [
+    'Checking disk space...',
+    'Preparing environment...',
+    'Downloading Antigravity CLI...',
+    'Running install script...',
+    'Verifying binary...',
+    'Finalizing...',
+  ],
+  codex: [
+    'Checking disk space...',
+    'Preparing environment...',
+    'Setting up npm prefix...',
+    'Downloading Codex packages...',
+    'Installing dependencies...',
+    'Finalizing...',
+  ],
   jupyterlab: [
     'Preparing environment...',
     'Creating virtual environment...',
@@ -35,6 +51,7 @@ const INSTALL_STEPS: Record<string, string[]> = {
     'Finalizing...',
   ],
   default: [
+    'Checking disk space...',
     'Preparing environment...',
     'Downloading packages...',
     'Installing dependencies...',
@@ -46,6 +63,7 @@ const INSTALL_STEPS: Record<string, string[]> = {
 export default function ToolInstallOverlay({ toolId, onComplete, onError }: ToolInstallOverlayProps) {
   const [displayName, setDisplayName] = useState(toolId);
   const [sizeEstimate, setSizeEstimate] = useState('');
+  const [diskInfo, setDiskInfo] = useState<{ ok: boolean; required_mb: number; available_mb: number } | null>(null);
   const [currentStep, setCurrentStep] = useState(0);
   const [outputLines, setOutputLines] = useState<string[]>([]);
   const [done, setDone] = useState(false);
@@ -71,7 +89,13 @@ export default function ToolInstallOverlay({ toolId, onComplete, onError }: Tool
 
     try {
       const result = await installToolStream(toolId, (event: InstallStreamEvent) => {
-        if (event.type === 'start') {
+        if (event.type === 'disk_check') {
+          setDiskInfo({
+            ok: event.disk_ok ?? true,
+            required_mb: event.required_mb ?? 0,
+            available_mb: event.available_mb ?? -1,
+          });
+        } else if (event.type === 'start') {
           if (event.display_name) setDisplayName(event.display_name);
           if (event.size_estimate) setSizeEstimate(event.size_estimate);
         } else if (event.type === 'output' && event.message) {
@@ -114,6 +138,14 @@ export default function ToolInstallOverlay({ toolId, onComplete, onError }: Tool
         <div className="tool-install-spinner" />
         <h4>Installing {displayName}</h4>
         {sizeEstimate && <div className="tool-install-size">{sizeEstimate}</div>}
+        {diskInfo && (
+          <div className={`tool-install-disk ${diskInfo.ok ? 'ok' : 'error'}`}>
+            {diskInfo.available_mb >= 0
+              ? `Disk: ${(diskInfo.available_mb / 1024).toFixed(1)} GB available, ${(diskInfo.required_mb / 1024).toFixed(1)} GB required`
+              : 'Disk space check unavailable'}
+            {!diskInfo.ok && <div className="tool-install-disk-error">Insufficient disk space. Free up space and try again.</div>}
+          </div>
+        )}
 
         <div className="tool-install-steps">
           {steps.map((msg, i) => (

@@ -307,13 +307,18 @@ class TestToolRegistry:
     def test_all_tools_have_required_fields(self):
         for tool_id, info in ti.TOOL_REGISTRY.items():
             assert "type" in info, f"{tool_id} missing type"
-            assert "packages" in info, f"{tool_id} missing packages"
             assert "binary" in info, f"{tool_id} missing binary"
             assert "display_name" in info, f"{tool_id} missing display_name"
-            assert info["type"] in ("pip", "npm"), f"{tool_id} has invalid type"
+            assert info["type"] in ("pip", "npm", "shell"), f"{tool_id} has invalid type"
+            if info["type"] == "shell":
+                assert "install_cmd" in info, f"{tool_id} missing install_cmd"
+            else:
+                assert "packages" in info, f"{tool_id} missing packages"
 
     def test_known_tools_exist(self):
         assert "aider" in ti.TOOL_REGISTRY
         assert "opencode" in ti.TOOL_REGISTRY
         assert "claude" in ti.TOOL_REGISTRY
         assert "jupyterlab" in ti.TOOL_REGISTRY
+        assert "antigravity" in ti.TOOL_REGISTRY
+        assert "codex" in ti.TOOL_REGISTRY

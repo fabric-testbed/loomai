@@ -63,10 +63,12 @@
 }
 
 .ai-card-icon.loomai { background: linear-gradient(135deg, #5798bc, #1f6a8c); color: #fff; }
+.ai-card-icon.antigravity { background: linear-gradient(135deg, #4285f4, #34a853); color: #fff; }
+.ai-card-icon.codex { background: linear-gradient(135deg, #10a37f, #1a7f64); color: #fff; }
+.ai-card-icon.claude { background: linear-gradient(135deg, #d4a574, #c4956a); color: #fff; }
 .ai-card-icon.aider { background: linear-gradient(135deg, #008e7a, #006b5a); color: #fff; }
 .ai-card-icon.opencode { background: linear-gradient(135deg, #6c5ce7, #a29bfe); color: #fff; }
 .ai-card-icon.crush { background: linear-gradient(135deg, #e25241, #ff8542); color: #fff; }
-.ai-card-icon.claude { background: linear-gradient(135deg, #d4a574, #c4956a); color: #fff; }
 .ai-card-icon.deepagents { background: linear-gradient(135deg, #1a8870, #2cb67d); color: #fff; }
 
 .ai-card-name {

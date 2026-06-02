@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import http.client
 import http.server
+import io
 import logging
 import os
 import re
 import socket
+import ssl
 import threading
 import time
 import uuid
@@ -134,6 +136,7 @@ class TunnelInfo:
     created_at: float
     last_connection_at: float
     status: str  # "connecting", "active", "closed", "error"
+    protocol: str = "http"  # "http" or "https" — affects proxy-to-VM connection
     error: Optional[str] = None
     # Internal — not serialised
     _bastion: Optional[paramiko.SSHClient] = field(default=None, repr=False)
@@ -152,6 +155,7 @@ class TunnelInfo:
             "created_at": self.created_at,
             "last_connection_at": self.last_connection_at,
             "status": self.status,
+            "protocol": self.protocol,
             "error": self.error,
         }
 
@@ -177,6 +181,124 @@ class _ChannelSocket:
 
     def settimeout(self, timeout):
         self._chan.settimeout(timeout)
+
+
+class _SSLChannelSocket:
+    """TLS-over-SSH-channel wrapper using MemoryBIO.
+
+    ssl.wrap_socket requires a real OS socket fd, which paramiko channels
+    don't have.  Instead we do TLS in userspace: ssl.MemoryBIO buffers
+    shuttle encrypted bytes between the SSL object and the paramiko channel.
+    The class exposes the same interface as _ChannelSocket so http.client
+    can use it transparently.
+    """
+
+    def __init__(self, channel: paramiko.Channel, ssl_ctx: ssl.SSLContext,
+                 server_hostname: str = "127.0.0.1"):
+        self._chan = channel
+        self._in_bio = ssl.MemoryBIO()   # encrypted data FROM the network
+        self._out_bio = ssl.MemoryBIO()  # encrypted data TO the network
+        self._ssl = ssl_ctx.wrap_bio(
+            self._in_bio, self._out_bio,
+            server_side=False, server_hostname=server_hostname,
+        )
+        self._do_handshake()
+
+    # -- internal helpers --------------------------------------------------
+
+    def _flush_out(self):
+        """Send any pending outbound TLS bytes through the channel."""
+        data = self._out_bio.read()
+        if data:
+            self._chan.sendall(data)
+
+    def _pull_in(self, nbytes: int = 16384):
+        """Read encrypted bytes from channel into the incoming BIO."""
+        data = self._chan.recv(nbytes)
+        if data:
+            self._in_bio.write(data)
+        return len(data) if data else 0
+
+    def _do_handshake(self):
+        while True:
+            try:
+                self._ssl.do_handshake()
+                self._flush_out()
+                return
+            except ssl.SSLWantReadError:
+                self._flush_out()
+                self._pull_in()
+
+    # -- socket-like API for http.client -----------------------------------
+
+    def sendall(self, data: bytes):
+        view = memoryview(data)
+        sent = 0
+        while sent < len(view):
+            try:
+                n = self._ssl.write(view[sent:])
+                sent += n
+                self._flush_out()
+            except ssl.SSLWantReadError:
+                self._flush_out()
+                self._pull_in()
+
+    def recv(self, nbytes: int) -> bytes:
+        while True:
+            try:
+                return self._ssl.read(nbytes)
+            except ssl.SSLWantReadError:
+                self._flush_out()
+                if self._pull_in() == 0:
+                    return b""
+
+    def makefile(self, mode="r", buffering=-1):
+        if "b" in mode:
+            raw = _BIOFileObj(self)
+            if buffering <= 0:
+                buffering = 8192
+            return io.BufferedReader(raw, buffering) if "r" in mode else io.BufferedWriter(raw, buffering)
+        raw = _BIOFileObj(self)
+        buf = io.BufferedReader(raw, 8192 if buffering <= 0 else buffering)
+        return io.TextIOWrapper(buf)
+
+    def close(self):
+        try:
+            self._ssl.unwrap()
+            self._flush_out()
+        except Exception:
+            pass
+        self._chan.close()
+
+    def settimeout(self, timeout):
+        self._chan.settimeout(timeout)
+
+
+class _BIOFileObj(io.RawIOBase):
+    """RawIOBase wrapper over _SSLChannelSocket for makefile() compatibility.
+
+    Inheriting from io.RawIOBase provides all standard file-object attributes
+    (closed, readable, writable, seekable, etc.) that http.client expects.
+    """
+
+    def __init__(self, sock: _SSLChannelSocket):
+        self._sock = sock
+
+    def readinto(self, b):
+        data = self._sock.recv(len(b))
+        n = len(data)
+        b[:n] = data
+        return n
+
+    def readable(self) -> bool:
+        return True
+
+    def write(self, b: bytes) -> int:
+        self._sock.sendall(bytes(b))
+        return len(b)
+
+    def writable(self) -> bool:
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -213,14 +335,16 @@ class TunnelManager:
 
     # -- Public API ---------------------------------------------------------
 
-    def create_tunnel(self, slice_name: str, node_name: str, remote_port: int) -> TunnelInfo:
+    def create_tunnel(self, slice_name: str, node_name: str, remote_port: int,
+                       protocol: str = "http") -> TunnelInfo:
         """Create and start a new SSH tunnel."""
         with self._lock:
             # Clean out dead tunnels to the same target
             dead = [
                 tid for tid, t in self._tunnels.items()
                 if (t.slice_name == slice_name and t.node_name == node_name
-                    and t.remote_port == remote_port and t.status in ("error", "closed"))
+                    and t.remote_port == remote_port and t.protocol == protocol
+                    and t.status in ("error", "closed"))
             ]
             for tid in dead:
                 old = self._tunnels.pop(tid, None)
@@ -230,7 +354,8 @@ class TunnelManager:
             # Reuse existing active/connecting tunnel
             for t in self._tunnels.values():
                 if (t.slice_name == slice_name and t.node_name == node_name
-                        and t.remote_port == remote_port and t.status in ("connecting", "active")):
+                        and t.remote_port == remote_port and t.protocol == protocol
+                        and t.status in ("connecting", "active")):
                     return t
             local_port = self._alloc_port()
 
@@ -245,6 +370,7 @@ class TunnelManager:
             created_at=now,
             last_connection_at=now,
             status="connecting",
+            protocol=protocol,
         )
 
         with self._lock:
@@ -363,7 +489,21 @@ class TunnelManager:
             )
             info._vm_ssh = vm_ssh
 
-            # 5. Start HTTP proxy server
+            # 5. Verify remote port is reachable before marking active
+            try:
+                vm_transport = vm_ssh.get_transport()
+                probe = vm_transport.open_channel(
+                    "direct-tcpip",
+                    ("127.0.0.1", info.remote_port),
+                    ("127.0.0.1", 0),
+                )
+                probe.close()
+            except Exception as probe_err:
+                raise ConnectionRefusedError(
+                    f"Port {info.remote_port} is not reachable on {info.node_name}: {probe_err}"
+                )
+
+            # 6. Start HTTP proxy server
             handler_class = _make_handler(info)
             srv = http.server.ThreadingHTTPServer(
                 ("0.0.0.0", info.local_port), handler_class
@@ -419,8 +559,15 @@ def _make_handler(tunnel_info: TunnelInfo):
                 return
 
             try:
+                if tunnel_info.protocol == "https":
+                    ssl_ctx = ssl.create_default_context()
+                    ssl_ctx.check_hostname = False
+                    ssl_ctx.verify_mode = ssl.CERT_NONE  # VMs use self-signed certs
+                    sock = _SSLChannelSocket(channel, ssl_ctx)
+                else:
+                    sock = _ChannelSocket(channel)
                 conn = http.client.HTTPConnection("127.0.0.1", tunnel_info.remote_port)
-                conn.sock = _ChannelSocket(channel)
+                conn.sock = sock
 
                 # Forward headers, stripping hop-by-hop and accept-encoding
                 fwd_headers = {}

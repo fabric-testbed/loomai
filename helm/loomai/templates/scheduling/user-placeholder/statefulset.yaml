@@ -1,0 +1,72 @@
+{{- if .Values.scheduling.placeholders.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "loomai.fullname" . }}-user-placeholder
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: user-placeholder
+spec:
+  clusterIP: None
+  selector:
+    {{- include "loomai.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: user-placeholder
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "loomai.fullname" . }}-user-placeholder
+  labels:
+    {{- include "loomai.labels" . | nindent 4 }}
+    app.kubernetes.io/component: user-placeholder
+spec:
+  replicas: {{ .Values.scheduling.placeholders.replicas }}
+  podManagementPolicy: Parallel
+  serviceName: {{ include "loomai.fullname" . }}-user-placeholder
+  selector:
+    matchLabels:
+      {{- include "loomai.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: user-placeholder
+  template:
+    metadata:
+      labels:
+        {{- include "loomai.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: user-placeholder
+    spec:
+      terminationGracePeriodSeconds: 0
+      automountServiceAccountToken: false
+      {{- if .Values.scheduling.userScheduler.enabled }}
+      schedulerName: {{ include "loomai.fullname" . }}-user-scheduler
+      {{- end }}
+      priorityClassName: {{ include "loomai.fullname" . }}-placeholder
+      {{- with .Values.scheduling.userPods.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: hub.jupyter.org/node-purpose
+                    operator: In
+                    values:
+                      - user
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 65534
+        runAsNonRoot: true
+      containers:
+        - name: pause
+          image: "{{ .Values.scheduling.placeholders.image.name }}:{{ .Values.scheduling.placeholders.image.tag }}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: {{ .Values.singleuser.resources.requests.cpu }}
+              memory: {{ .Values.singleuser.resources.requests.memory }}
+{{- end }}

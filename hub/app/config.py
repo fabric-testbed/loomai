@@ -57,6 +57,7 @@ class HubSettings(BaseSettings):
 
     # ---------- Kubernetes ----------
     K8S_NAMESPACE: str = "default"
+    LOOMAI_USER_SCHEDULER: str = ""  # Custom scheduler name (set by helm when userScheduler is enabled)
 
     # ---------- Idle culler ----------
     CULL_ENABLED: bool = True

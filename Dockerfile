@@ -27,7 +27,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies (separate RUN so failures are not masked)
-RUN pip install --no-cache-dir -r requirements.txt \
+# CFLAGS=-O0 avoids gcc SIGSEGV under QEMU when cross-compiling C extensions
+# like recordclass (transitive dep of fabrictestbed-extensions)
+RUN CFLAGS="-O0" pip install --no-cache-dir -r requirements.txt \
     && (pip uninstall -y jupyter-collaboration jupyter-collaboration-ui jupyter-docprovider jupyter-server-ydoc jupyter-server-documents 2>/dev/null || true) \
     && (rm -f /usr/local/etc/jupyter/jupyter_server_config.d/jupyter_server_documents.json \
        /usr/local/etc/jupyter/jupyter_server_config.d/jupyter_collaboration.json 2>/dev/null || true)

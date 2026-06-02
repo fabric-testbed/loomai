@@ -36,7 +36,7 @@
 }
 
 .client-toolbar select {
-  min-width: 140px;
+  min-width: 100px;
 }
 
 .client-toolbar input[type="number"] {
@@ -58,48 +58,15 @@
   background: var(--fabric-primary-dark);
 }
 
+.client-toolbar button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .client-toolbar .client-sep {
   width: 1px;
   height: 20px;
   background: var(--fabric-border);
-}
-
-.client-toolbar .client-url {
-  flex: 1;
-  font-size: 12px;
-  color: var(--fabric-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.client-open-tab-btn {
-  padding: 4px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  border: 1px solid var(--fabric-primary, #5798bc);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--fabric-primary, #5798bc);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.client-open-tab-btn:hover {
-  background: var(--fabric-primary, #5798bc);
-  color: #fff;
-}
-
-.client-iframe-wrap {
-  flex: 1;
-  position: relative;
-  overflow: hidden;
-}
-
-.client-iframe-wrap iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
 }
 
 .client-placeholder {
@@ -112,41 +79,157 @@
   background: var(--fabric-white);
 }
 
-.client-disconnect-btn {
-  background: var(--fabric-danger) !important;
-  border-color: var(--fabric-danger) !important;
-}
-
-.client-disconnect-btn:hover {
-  opacity: 0.85;
-}
-
-.client-toolbar button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.client-status {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.client-status-connecting {
-  color: var(--fabric-warning);
-}
-
-.client-status-active {
-  color: var(--fabric-success);
-}
-
-.client-status-error {
-  color: var(--fabric-danger);
-}
-
 .client-error {
   padding: 8px 12px;
   background: var(--state-error-bg);
   border-bottom: 1px solid var(--fabric-danger);
   color: var(--fabric-danger);
   font-size: 13px;
+}
+
+/* --- Tunnel list --- */
+
+.tunnel-list {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--fabric-white);
+  padding: 8px 12px;
+}
+
+.tunnel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  background: var(--fabric-light);
+  gap: 12px;
+}
+
+.tunnel-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.tunnel-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.tunnel-detail {
+  color: var(--fabric-text-muted);
+  font-size: 12px;
+}
+
+.tunnel-row-url {
+  font-size: 12px;
+  color: var(--fabric-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tunnel-row-error {
+  font-size: 12px;
+  color: var(--fabric-danger);
+}
+
+.tunnel-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Status dot */
+.tunnel-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tunnel-dot-active {
+  background: var(--fabric-success, #28a745);
+}
+
+.tunnel-dot-connecting {
+  background: var(--fabric-warning, #ffc107);
+  animation: tunnel-pulse 1.2s ease-in-out infinite;
+}
+
+.tunnel-dot-error {
+  background: var(--fabric-danger, #e25241);
+}
+
+.tunnel-dot-closed {
+  background: var(--fabric-text-muted, #999);
+}
+
+@keyframes tunnel-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* Status label */
+.tunnel-status-label {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 80px;
+  text-align: right;
+}
+
+.tunnel-status-active {
+  color: var(--fabric-success, #28a745);
+}
+
+.tunnel-status-connecting {
+  color: var(--fabric-warning, #e6a800);
+}
+
+.tunnel-status-error {
+  color: var(--fabric-danger, #e25241);
+}
+
+/* Buttons */
+.tunnel-open-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--fabric-primary, #5798bc);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fabric-primary, #5798bc);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tunnel-open-btn:hover {
+  background: var(--fabric-primary, #5798bc);
+  color: #fff;
+}
+
+.tunnel-stop-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--fabric-danger, #e25241);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fabric-danger, #e25241);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tunnel-stop-btn:hover {
+  background: var(--fabric-danger, #e25241);
+  color: #fff;
 }
