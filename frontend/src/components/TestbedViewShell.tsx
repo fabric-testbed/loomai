@@ -34,12 +34,12 @@ export const CHAMELEON_THEME: TestbedTheme = {
 };
 
 export const COMPOSITE_THEME: TestbedTheme = {
-  name: 'Composite Slices',
+  name: 'Federated Slices',
   primary: '#27aae1',
   dark: '#1c2e4a',
   light: '#e8f4fc',
-  logo: '/composite-slice-icon-transparent.svg',
-  logoAlt: 'Composite Slices',
+  logo: '/loomai-icon-transparent.svg',
+  logoAlt: 'Federated Slices',
 };
 
 /* ── Tab definition ────────────────────────────────────────────── */
@@ -63,6 +63,10 @@ interface TestbedViewShellProps {
 
 /* ── Component ─────────────────────────────────────────────────── */
 
+function testIdPart(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+
 export default function TestbedViewShell({
   theme,
   tabs,
@@ -71,9 +75,12 @@ export default function TestbedViewShell({
   toolbarContent,
   children,
 }: TestbedViewShellProps) {
+  const shellTestId = `${testIdPart(theme.name)}-view`;
   return (
     <div
       className="testbed-shell"
+      data-testid={shellTestId}
+      data-testbed={theme.name}
       style={{
         '--testbed-primary': theme.primary,
         '--testbed-dark': theme.dark,
@@ -81,8 +88,8 @@ export default function TestbedViewShell({
       } as React.CSSProperties}
     >
       {/* Header */}
-      <div className="testbed-header">
-        <div className="testbed-header-brand">
+      <div className="testbed-header" data-testid={`${shellTestId}-header`}>
+        <div className="testbed-header-brand" data-testid={`${shellTestId}-brand`}>
           {theme.logoDark ? (
             <>
               <img
@@ -107,12 +114,15 @@ export default function TestbedViewShell({
         </div>
 
         {/* Tabs */}
-        <div className="testbed-tabs">
+        <div className="testbed-tabs" data-testid={`${shellTestId}-tabs`}>
           {tabs.map((tab) => (
             <button
               key={tab.id}
               className={`testbed-tab${activeTab === tab.id ? ' active' : ''}`}
               onClick={() => onTabChange(tab.id)}
+              data-testid={`${shellTestId}-tab`}
+              data-tab-id={tab.id}
+              aria-current={activeTab === tab.id ? 'page' : undefined}
             >
               {tab.label}
               {tab.badge != null && tab.badge > 0 && (

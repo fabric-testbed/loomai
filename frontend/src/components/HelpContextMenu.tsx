@@ -55,12 +55,13 @@ export default function HelpContextMenu({ onOpenHelp }: HelpContextMenuProps) {
 
   return (
     <div
-      className="graph-context-menu"
+      className="help-context-menu"
+      data-testid="help-context-menu"
       style={{ left: menu.x, top: menu.y }}
       onMouseDown={(e) => e.stopPropagation()}
     >
       <button
-        className="graph-context-menu-item"
+        className="help-context-menu-item"
         onClick={() => {
           onOpenHelp(menu.helpId);
           setMenu(null);

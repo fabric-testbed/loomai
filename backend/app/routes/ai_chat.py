@@ -12,6 +12,7 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from app.ai_assets import parse_markdown_asset
 from app.http_pool import ai_client
 from app.settings_manager import get_fabric_api_key as _get_ai_api_key, get_nrp_api_key as _get_nrp_api_key
 
@@ -237,18 +238,12 @@ def _parse_agent_file(fpath: str) -> dict[str, str] | None:
     try:
         with open(fpath, "r") as f:
             content = f.read()
-        if not content.startswith("name:"):
+        parsed = parse_markdown_asset(content)
+        name = str(parsed.metadata.get("name", ""))
+        desc = str(parsed.metadata.get("description", ""))
+        if not name and not desc:
             return None
-        parts = content.split("---", 1)
-        header = parts[0]
-        body = parts[1].strip() if len(parts) > 1 else ""
-        name = desc = ""
-        for line in header.strip().splitlines():
-            if line.startswith("name:"):
-                name = line.split(":", 1)[1].strip()
-            elif line.startswith("description:"):
-                desc = line.split(":", 1)[1].strip()
-        return {"name": name, "description": desc, "prompt": body}
+        return {"name": name, "description": desc, "prompt": parsed.body}
     except Exception:
         return None
 
@@ -646,7 +641,26 @@ TOOL_SCHEMAS: list[dict] = [
                     "dir_name": {"type": "string", "description": "Directory name of the local artifact to publish"},
                     "title": {"type": "string", "description": "Human-readable title for the artifact"},
                     "description": {"type": "string", "description": "Description of the artifact", "default": ""},
-                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags for discovery (e.g. ['networking', 'L2'])", "default": []},
+                    "tags": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": [
+                                "chameleon",
+                                "education",
+                                "example",
+                                "experiment",
+                                "experiment pattern",
+                                "loomai:recipe",
+                                "loomai:vm",
+                                "loomai:weave",
+                                "reproducible research",
+                                "tutorial",
+                            ],
+                        },
+                        "description": "Artifact Manager tags. Use only values returned by /api/artifacts/valid-tags.",
+                        "default": [],
+                    },
                     "visibility": {"type": "string", "enum": ["author", "project", "public"], "description": "Who can see the artifact (default: author)", "default": "author"},
                 },
                 "required": ["dir_name", "title"],
@@ -2630,11 +2644,7 @@ async def chat_stream(request: Request):
             try:
                 with open(_skill_path) as _sf:
                     _skill = _sf.read()
-                # Strip frontmatter
-                if _skill.startswith("---"):
-                    _end = _skill.find("---", 3)
-                    if _end > 0:
-                        _skill = _skill[_end + 3:].strip()
+                _skill = parse_markdown_asset(_skill).body.strip()
                 system_parts.append(f"\n\n## Weave Creation Guide\n\n{_skill}\n")
             except Exception:
                 pass
@@ -2647,10 +2657,7 @@ async def chat_stream(request: Request):
             try:
                 with open(_bench_path) as _bf:
                     _bench = _bf.read()
-                if _bench.startswith("---"):
-                    _end = _bench.find("---", 3)
-                    if _end > 0:
-                        _bench = _bench[_end + 3:].strip()
+                _bench = parse_markdown_asset(_bench).body.strip()
                 system_parts.append(f"\n\n## Benchmark Guide\n\n{_bench}\n")
             except Exception:
                 pass

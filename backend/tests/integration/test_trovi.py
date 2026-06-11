@@ -284,9 +284,11 @@ class TestDownloadTroviArtifact:
         assert "clone" in call_args[0][0]
 
     def test_download_api_error(self, client):
-        """POST /api/trovi/artifacts/{uuid}/get with API error returns 400."""
+        """POST /api/trovi/artifacts/{uuid}/get returns a structured UI error."""
         with patch("app.routes.trovi.urllib.request.urlopen",
                     side_effect=Exception("Not found")):
             resp = client.post("/api/trovi/artifacts/bad-uuid/get")
-        assert resp.status_code == 400
-        assert "error" in resp.json()
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "error"
+        assert resp.json()["content_status"] == "error"
+        assert "Not found" in resp.json()["error_message"]

@@ -45,7 +45,7 @@ const discoverLoomai: TourDef = {
       id: 'dl-welcome',
       title: 'Welcome to LoomAI',
       content:
-        'LoomAI is FABRIC\u2019s AI-powered loom for weaving custom network fabrics.\n\nFABRIC is a global research infrastructure with 35 sites offering programmable networking, bare-metal VMs, GPUs, FPGAs, SmartNICs, and high-speed optical links. LoomAI gives you a visual, browser-based sandbox to design, deploy, and manage experiments \u2014 aided by embedded AI coding assistants.\n\nLoomAI provides dedicated views for FABRIC and Chameleon Cloud testbeds, a powerful `loomai` CLI with 65+ commands, and six AI tools for natural language experiment management.\n\nLet\u2019s take a quick look at what LoomAI can do.',
+        'LoomAI is FABRIC\u2019s AI-powered loom for weaving custom network fabrics.\n\nFABRIC is a global research infrastructure with 35 sites offering programmable networking, bare-metal VMs, GPUs, FPGAs, SmartNICs, and high-speed optical links. LoomAI gives you a visual, browser-based sandbox to design, deploy, and manage experiments \u2014 aided by embedded AI coding assistants.\n\nLoomAI provides dedicated views for FABRIC and Chameleon Cloud testbeds, a powerful `loomai` CLI with 65+ commands, eight launchable AI tools for natural language experiment management, and Jupyter AI for notebook assistance.\n\nLet\u2019s take a quick look at what LoomAI can do.',
       targetSelector: '_fullscreen',
       requiredView: 'landing',
       tooltipPosition: 'bottom',
@@ -76,7 +76,7 @@ const discoverLoomai: TourDef = {
       id: 'dl-ai-tools',
       title: 'AI-Powered Development',
       content:
-        'Six AI coding assistants are embedded directly into LoomAI, each pre-configured with FABRIC domain knowledge and direct access to testbed operations:\n\n\u2022 LoomAI \u2014 Chat-based FABRIC assistant with tool calling and multi-conversation support\n\u2022 Aider \u2014 AI pair programming for editing deployment scripts\n\u2022 OpenCode \u2014 Full-featured coding assistant with FABRIC-specific skills and agents\n\u2022 Crush \u2014 Elegant terminal AI from Charm with FABRIC and NRP model support\n\u2022 Deep Agents \u2014 LangChain coding agent with planning, memory, and skills\n\u2022 Claude Code \u2014 Anthropic\u2019s CLI with deep FABRIC MCP integration\n\nPlus Jupyter AI integrated into JupyterLab for notebook-based AI assistance.\n\nFree tools use FABRIC AI (ai.fabric-testbed.net). Use natural language to create topologies, generate scripts, debug networking, and automate experiment workflows.',
+        'Eight launchable AI coding tools are embedded directly into LoomAI, with FABRIC domain knowledge and tool-specific context:\n\n\u2022 LoomAI \u2014 Chat-based FABRIC assistant with tool calling, RAG, and multi-conversation support\n\u2022 Antigravity \u2014 Google agentic coding CLI with workspace AGENTS.md context\n\u2022 Codex \u2014 OpenAI coding agent CLI with workspace AGENTS.md context\n\u2022 Aider \u2014 AI pair programming for editing deployment scripts\n\u2022 OpenCode \u2014 Full-featured coding assistant with FABRIC-specific skills, agents, and MCP tools\n\u2022 Crush \u2014 Elegant terminal AI from Charm with FABRIC and NRP model support\n\u2022 Deep Agents \u2014 LangChain coding agent with planning, memory, and skills\n\u2022 Claude Code \u2014 Anthropic\u2019s CLI with shared skills exposed as slash commands\n\nPlus Jupyter AI integrated into JupyterLab for notebook-based AI assistance.\n\nFABRIC-backed tools use FABRIC AI (ai.fabric-testbed.net); account-based tools use their own provider accounts. Use natural language to create topologies, generate scripts, debug networking, and automate experiment workflows.',
       targetSelector: '_fullscreen',
       requiredView: 'landing',
       tooltipPosition: 'bottom',
@@ -120,7 +120,7 @@ const discoverLoomai: TourDef = {
       id: 'dl-fabric-view',
       title: 'Dedicated Testbed Views',
       content:
-        'LoomAI provides dedicated, branded views for each testbed:\n\n\u2022 **FABRIC View** \u2014 A complete FABRIC-only slice editor with sub-tabs: Topology, Table, Map, Storage, Apps, Slices, Browse, and Facility Ports. Everything you need to manage FABRIC experiments in one place.\n\n\u2022 **Chameleon View** \u2014 Manage Chameleon Cloud leases and bare-metal instances. Configure Chameleon credentials in Settings to enable this view.\n\n\u2022 **Composite Slice** \u2014 Build experiments that may span multiple testbeds with a unified editor.',
+        'LoomAI provides dedicated, branded views for each testbed:\n\n\u2022 **FABRIC View** \u2014 A complete FABRIC-only slice editor with sub-tabs: Topology, Table, Map, Storage, Apps, Slices, Browse, and Facility Ports. Everything you need to manage FABRIC experiments in one place.\n\n\u2022 **Chameleon View** \u2014 Manage Chameleon Cloud leases and bare-metal instances. Configure Chameleon credentials in Settings to enable this view.\n\n\u2022 **Federated Slice** \u2014 Build experiments that may span multiple testbeds with a unified editor.',
       targetSelector: '_fullscreen',
       requiredView: 'landing',
       tooltipPosition: 'bottom',

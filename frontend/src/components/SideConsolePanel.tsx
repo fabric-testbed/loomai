@@ -7,11 +7,10 @@ import { RecipeConsoleView, SingleSliceBootLogView, SliceErrorsView, ValidationV
 
 const LogView = React.lazy(() => import('./LogView'));
 const TerminalHost = React.lazy(() => import('./TerminalHost'));
-import { destroyTerminalSession } from '../utils/terminalStore';
 import {
   type SplitDirection, type SplitNode, type LeafNode, type LayoutNode,
   type DropZone, type DragState, type ConsoleDragData,
-  CONSOLE_DRAG_TYPE, nextNodeId,
+  CONSOLE_DRAG_TYPE, nextNodeId, loadPersistedLayout,
   findLeaf, findLeafByTab, collectAllLeaves,
   updateLeaf, splitLeaf, removeTabFromTree,
   addTabToFirstLeaf, addTabToLeafAtPosition, updateSplitSizes, computeDropZone,
@@ -38,6 +37,7 @@ interface SideConsolePanelProps {
   sliceBootLogs: Record<string, BootConsoleLine[]>;
   sliceBootRunning: Record<string, boolean>;
   onClearSliceBootLog: (sliceName: string) => void;
+  onCloseBootLog: (sliceName: string) => void;
   containerTermActive: boolean;
   // Cross-panel
   onReceiveExternalTab?: (tabId: string, fromPanel: string) => void;
@@ -51,24 +51,27 @@ interface SideConsolePanelProps {
 const PANEL_ID = 'side';
 
 export default React.memo(function SideConsolePanel({
-  tabIds, terminals, onCloseTerminal, validationIssues, validationValid,
+  tabIds, terminals, onCloseTerminal: _onCloseTerminal, validationIssues, validationValid,
   sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors,
   onClearBootConfigErrors, recipeConsole, recipeRunning, onClearRecipeConsole,
-  sliceBootLogs, sliceBootRunning, onClearSliceBootLog, containerTermActive,
+  sliceBootLogs, sliceBootRunning, onClearSliceBootLog, onCloseBootLog, containerTermActive,
   onReceiveExternalTab, onTabMovedOut, onCollapse, dragHandleProps, panelIcon,
 }: SideConsolePanelProps) {
 
-  // --- Layout tree state ---
-  const [layout, setLayout] = useState<LayoutNode>(() => ({
-    type: 'leaf',
-    id: nextNodeId(),
-    tabIds: [],
-    activeTabId: '',
-  }));
+  // --- Layout tree state (restored across browser reloads) ---
+  const [layout, setLayout] = useState<LayoutNode>(() => loadPersistedLayout(PANEL_ID));
   const [dragState, setDragState] = useState<DragState | null>(null);
 
+  // Persist the layout so tabs keep their split positions after a reload.
+  useEffect(() => {
+    try { localStorage.setItem(`fabric-console-layout-${PANEL_ID}`, JSON.stringify(layout)); }
+    catch { /* ignore */ }
+  }, [layout]);
+
   // --- Sync tabIds prop into layout tree ---
-  const prevTabIds = useRef<string[]>([]);
+  // Seed from the restored layout's tabs so the first reconcile only adds
+  // genuinely-new tabs and prunes ones that no longer exist.
+  const prevTabIds = useRef<string[]>(collectAllLeaves(layout).flatMap(l => l.tabIds));
   useEffect(() => {
     const added = tabIds.filter(id => !prevTabIds.current.includes(id));
     const removed = prevTabIds.current.filter(id => !tabIds.includes(id));
@@ -239,6 +242,18 @@ export default React.memo(function SideConsolePanel({
     });
   }, [dragState, onReceiveExternalTab]);
 
+  const closeTab = useCallback((tabId: string) => {
+    if (tabId.startsWith('boot:')) {
+      onCloseBootLog(tabId.slice(5));
+    }
+    onTabMovedOut?.(tabId);
+    setLayout(prev => removeTabFromTree(prev, tabId) || {
+      type: 'leaf',
+      id: nextNodeId(),
+      tabIds: [],
+      activeTabId: '',
+    });
+  }, [onCloseBootLog, onTabMovedOut]);
 
   // --- Tab helpers ---
   function getTabLabel(tabId: string): string {
@@ -259,7 +274,8 @@ export default React.memo(function SideConsolePanel({
   }
 
   function isTabCloseable(tabId: string): boolean {
-    // All tabs in the side panel are closeable (sends them back to bottom panel)
+    // Side-panel tabs can be dismissed from this panel. Runtime log tabs close
+    // completely; fixed and terminal tabs move back to the bottom console.
     return true;
   }
 
@@ -351,9 +367,21 @@ export default React.memo(function SideConsolePanel({
         }
         const term = terminals.find(t => t.id === tabId);
         if (term) {
+          const type = term.chameleonInstanceId ? 'chameleon' : 'ssh';
           return (
             <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-              <React.Suspense fallback={null}><TerminalHost sessionId={tabId} type="ssh" sliceName={term.sliceName} nodeName={term.nodeName} managementIp={term.managementIp} /></React.Suspense>
+              <React.Suspense fallback={null}>
+                <TerminalHost
+                  sessionId={tabId}
+                  type={type}
+                  sliceName={term.sliceName}
+                  nodeName={term.nodeName}
+                  managementIp={term.managementIp}
+                  chameleonInstanceId={term.chameleonInstanceId}
+                  chameleonSite={term.chameleonSite}
+                  chameleonName={term.label}
+                />
+              </React.Suspense>
             </div>
           );
         }
@@ -442,14 +470,7 @@ export default React.memo(function SideConsolePanel({
                   className="bp-tab-close"
                   onClick={(e) => {
                     e.stopPropagation();
-                    // Close = move back to bottom panel
-                    if (tabId.startsWith('local-term-') || terminals.find(t => t.id === tabId)) {
-                      // Terminal tabs: just move back to bottom
-                      onTabMovedOut?.(tabId);
-                    } else {
-                      // Fixed tabs: move back to bottom
-                      onTabMovedOut?.(tabId);
-                    }
+                    closeTab(tabId);
                   }}
                 >
                   ✕

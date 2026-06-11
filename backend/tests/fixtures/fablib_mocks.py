@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, Optional
 from unittest.mock import MagicMock
 
@@ -45,9 +46,13 @@ class MockInterface:
 
     def set_mode(self, mode: str):
         self._mode = mode
+        self._fablib_data["mode"] = mode
 
     def set_ip_addr(self, addr: str):
         self._ip_addr = addr
+
+    def set_vlan(self, vlan: str):
+        self._vlan = vlan
 
 
 class MockComponent:
@@ -95,8 +100,11 @@ class MockNode:
         self._reservation_state = reservation_state
         self._components = components or []
         self._interfaces = interfaces or []
+        self._slice = None
         self._user_data: dict = {}
         self._error_message: str = ""
+        for iface in self._interfaces:
+            iface._node = self
 
     def get_name(self) -> str:
         return self._name
@@ -193,6 +201,14 @@ class MockNode:
     def set_instance_type(self, instance_type: str):
         pass
 
+    def add_fabnet(self, net_type: str = "IPv4"):
+        comp = self.add_component(model="NIC_Basic", name=f"fabnet-{net_type.lower()}")
+        iface = comp.get_interfaces()[0]
+        iface.set_mode("auto")
+        if self._slice is not None:
+            net_name = f"fabnetv4-{self._name}" if net_type in ("IPv4", "FABNetv4") else f"fabnetv6-{self._name}"
+            self._slice.add_l3network(name=net_name, interfaces=[iface], type=net_type)
+
     def set_user_data(self, data: dict):
         self._user_data = data
 
@@ -211,6 +227,8 @@ class MockNetworkService:
         self._interfaces = interfaces or []
         self._subnet = subnet
         self._gateway = gateway
+        for iface in self._interfaces:
+            iface._network = self
 
     def get_name(self) -> str:
         return self._name
@@ -220,6 +238,16 @@ class MockNetworkService:
 
     def get_interfaces(self) -> list:
         return self._interfaces
+
+    def add_interface(self, interface):
+        if interface not in self._interfaces:
+            self._interfaces.append(interface)
+        interface._network = self
+
+    def remove_interface(self, interface):
+        self._interfaces = [i for i in self._interfaces if i is not interface]
+        if getattr(interface, "_network", None) is self:
+            interface._network = None
 
     def get_subnet(self) -> str:
         return self._subnet
@@ -237,6 +265,69 @@ class MockNetworkService:
         pass
 
 
+class MockFacilityPort:
+    """Mock FABlib FacilityPort."""
+
+    def __init__(self, name: str, site: str, vlan: str = "", bandwidth: int = 10, parent: Any = None):
+        self._name = name
+        self._site = site
+        self._vlan = vlan
+        self._bandwidth = bandwidth
+        self._parent = parent
+        self._interfaces = [
+            MockInterface(name=f"{name}-p1", node=None, vlan=vlan, bandwidth=str(bandwidth))
+        ]
+
+    def get_name(self) -> str:
+        return self._name
+
+    def get_site(self) -> str:
+        return self._site
+
+    def get_vlan(self) -> str:
+        return self._vlan
+
+    def get_bandwidth(self) -> str:
+        return str(self._bandwidth)
+
+    def get_interfaces(self) -> list:
+        return self._interfaces
+
+    def delete(self):
+        if self._parent is not None:
+            self._parent._facility_ports = [fp for fp in self._parent._facility_ports if fp is not self]
+
+
+class MockPortMirror:
+    """Mock FABlib PortMirror service."""
+
+    def __init__(self, name: str, mirror_interface_name: str, receive_interface_name: str, direction: str, parent: Any = None):
+        self._name = name
+        self._mirror_interface_name = mirror_interface_name
+        self._receive_interface_name = receive_interface_name
+        self._direction = direction
+        self._parent = parent
+
+    def get_name(self) -> str:
+        return self._name
+
+    def get_type(self) -> str:
+        return "PortMirror"
+
+    def get_mirror_interface_name(self) -> str:
+        return self._mirror_interface_name
+
+    def get_receive_interface_name(self) -> str:
+        return self._receive_interface_name
+
+    def get_mirror_direction(self) -> str:
+        return self._direction
+
+    def delete(self):
+        if self._parent is not None:
+            self._parent._port_mirrors = [pm for pm in self._parent._port_mirrors if pm is not self]
+
+
 class MockSlice:
     """Mock FABlib Slice."""
 
@@ -249,7 +340,13 @@ class MockSlice:
         self._nodes = nodes or []
         self._networks = networks or []
         self._facility_ports: list = []
+        self._port_mirrors: list = []
         self._error_messages: list = []
+        for node in self._nodes:
+            node._slice = self
+        for net in self._networks:
+            for iface in net.get_interfaces():
+                iface._network = net
 
     def get_name(self) -> str:
         return self._name
@@ -269,6 +366,9 @@ class MockSlice:
     def get_facility_ports(self) -> list:
         return self._facility_ports
 
+    def get_port_mirror_services(self) -> list:
+        return self._port_mirrors
+
     def get_error_messages(self) -> list:
         return self._error_messages
 
@@ -283,6 +383,7 @@ class MockSlice:
                  host: str = None, image_type: str = None) -> MockNode:
         node = MockNode(name=name, site=site, cores=cores, ram=ram,
                         disk=disk, image=image)
+        node._slice = self
         self._nodes.append(node)
         return node
 
@@ -300,7 +401,16 @@ class MockSlice:
 
     def add_facility_port(self, name: str, site: str, vlan: str = "",
                           bandwidth: int = 10):
-        pass
+        fp = MockFacilityPort(name=name, site=site, vlan=vlan, bandwidth=bandwidth, parent=self)
+        self._facility_ports.append(fp)
+        return fp
+
+    def add_port_mirror_service(self, name: str, mirror_interface_name: str,
+                                receive_interface, mirror_direction: str = "both"):
+        receive_name = receive_interface.get_name() if hasattr(receive_interface, "get_name") else str(receive_interface)
+        pm = MockPortMirror(name, mirror_interface_name, receive_name, mirror_direction, parent=self)
+        self._port_mirrors.append(pm)
+        return pm
 
     def get_node(self, name: str) -> MockNode:
         for n in self._nodes:
@@ -345,14 +455,43 @@ class MockResources:
         return {}
 
 
+class MockCoreManager:
+    """Mock FABRIC core manager used by fast slice listing."""
+
+    def __init__(self, fablib_manager: "MockFablibManager"):
+        self._fablib_manager = fablib_manager
+
+    def list_slices(self, exclude_states: list[str] | None = None, **kwargs) -> list:
+        excluded = set(exclude_states or [])
+        dtos = []
+        for slice_obj in self._fablib_manager.get_slices():
+            slice_id = slice_obj.get_slice_id()
+            state = slice_obj.get_state()
+            if not slice_id or state in excluded:
+                continue
+            dtos.append(SimpleNamespace(
+                name=slice_obj.get_name(),
+                slice_id=slice_id,
+                state=state,
+                lease_end_time="",
+                project_id=slice_obj.get_project_id() or self._fablib_manager.get_project_id(),
+            ))
+        return dtos
+
+
 class MockFablibManager:
     """Mock FablibManager — replaces get_fablib() return value."""
+
+    FABNETV4_SUBNET = "10.128.0.0/10"
+    FABNETV6_SUBNET = "2602:fcfb::/40"
 
     def __init__(self, slices: list[MockSlice] | None = None,
                  sites: list[dict] | None = None):
         self._slices = {s.get_name(): s for s in (slices or [])}
         self._sites = sites or []
         self._resources = MockResources(self._sites)
+        self._project_id = "test-project-id"
+        self._manager = MockCoreManager(self)
 
     def new_slice(self, name: str) -> MockSlice:
         # Return empty slice_id — the route will assign a draft UUID via the registry
@@ -375,5 +514,14 @@ class MockFablibManager:
     def get_resources(self):
         return self._resources
 
+    def get_manager(self):
+        return self._manager
+
     def show_config(self) -> dict:
-        return {"project_id": "test-project-id"}
+        return {"project_id": self._project_id}
+
+    def set_project_id(self, project_id: str) -> None:
+        self._project_id = project_id
+
+    def get_project_id(self) -> str:
+        return self._project_id

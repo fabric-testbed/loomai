@@ -292,7 +292,7 @@ def detect_intent(message: str) -> tuple[str, dict, str]:
         - arguments: dict of arguments for the tool
         - confidence: "high", "medium", or "low"
     """
-    message = message.strip()
+    message = message.strip().rstrip(" .?!")
     if not message:
         return ("", {}, "low")
 

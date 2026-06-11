@@ -117,6 +117,39 @@ def _host_dict_to_detail(host: dict) -> dict[str, Any]:
     }
 
 
+def _safe_attr(obj: Any, method_name: str, default: Any = None) -> Any:
+    """Call a zero-argument method and return default on missing/error."""
+    method = getattr(obj, method_name, None)
+    if not callable(method):
+        return default
+    try:
+        value = method()
+        return default if value is None else value
+    except Exception:
+        return default
+
+
+def _safe_count(obj: Any, method_name: str) -> int:
+    """Return len(method()) or zero if the method is missing/fails."""
+    value = _safe_attr(obj, method_name, [])
+    try:
+        return len(value)
+    except Exception:
+        return 0
+
+
+def _fetch_host_details_v2(resources: Any, site_name: str) -> list[dict[str, Any]]:
+    """Fetch host details from ResourcesV2-style get_hosts_by_site data."""
+    try:
+        hosts_map = resources.get_hosts_by_site(site_name)
+        if not hosts_map:
+            return []
+        host_dicts = hosts_map.values() if isinstance(hosts_map, dict) else hosts_map
+        return [_host_dict_to_detail(h) for h in host_dicts if isinstance(h, dict)]
+    except Exception:
+        return []
+
+
 def _site_dict_to_api(site: dict, hosts_data: list[dict]) -> dict[str, Any]:
     """Convert a ResourcesV2 site dict + its hosts to our API site format."""
     site_name = site.get("name", "")
@@ -556,5 +589,4 @@ async def list_images() -> list[str]:
 async def list_component_models() -> list[dict[str, str]]:
     """List available component models."""
     return COMPONENT_MODELS
-
 

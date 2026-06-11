@@ -64,6 +64,7 @@ def _atomic_write_json(path: str, data: dict) -> None:
     with open(tmp_path, "w") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
+    os.chmod(tmp_path, 0o600)
     os.replace(tmp_path, path)
 
 
@@ -174,30 +175,70 @@ def get_default_settings() -> dict:
             "enabled": False,
             "default_site": "CHI@TACC",
             "ssh_key_file": "",  # Chameleon SSH key; falls back to FABRIC slice key if empty
+            "password_auth": {
+                "username": "",
+                "password": "",
+            },
             "sites": {
                 "CHI@TACC": {
+                    "auth_type": "application_credential",
                     "auth_url": "https://chi.tacc.chameleoncloud.org:5000/v3",
+                    "default_key_name": "",
                     "app_credential_id": "",
                     "app_credential_secret": "",
                     "project_id": "",
+                    "identity_provider": "chameleon",
+                    "protocol": "openid",
+                    "discovery_endpoint": "https://auth.chameleoncloud.org/auth/realms/chameleon/.well-known/openid-configuration",
+                    "client_id": "keystone-tacc-prod",
+                    "client_secret": "none",
+                    "access_token_type": "access_token",
+                    "openid_scope": "openid profile",
                 },
                 "CHI@UC": {
+                    "auth_type": "application_credential",
                     "auth_url": "https://chi.uc.chameleoncloud.org:5000/v3",
+                    "default_key_name": "",
                     "app_credential_id": "",
                     "app_credential_secret": "",
                     "project_id": "",
+                    "identity_provider": "chameleon",
+                    "protocol": "openid",
+                    "discovery_endpoint": "https://auth.chameleoncloud.org/auth/realms/chameleon/.well-known/openid-configuration",
+                    "client_id": "keystone-uc-prod",
+                    "client_secret": "none",
+                    "access_token_type": "access_token",
+                    "openid_scope": "openid profile",
                 },
                 "CHI@Edge": {
+                    "auth_type": "application_credential",
                     "auth_url": "https://chi.edge.chameleoncloud.org:5000/v3",
+                    "default_key_name": "",
                     "app_credential_id": "",
                     "app_credential_secret": "",
                     "project_id": "",
+                    "identity_provider": "chameleon",
+                    "protocol": "openid",
+                    "discovery_endpoint": "https://auth.chameleoncloud.org/auth/realms/chameleon/.well-known/openid-configuration",
+                    "client_id": "keystone-edge-prod",
+                    "client_secret": "none",
+                    "access_token_type": "access_token",
+                    "openid_scope": "openid profile",
                 },
                 "KVM@TACC": {
+                    "auth_type": "application_credential",
                     "auth_url": "https://kvm.tacc.chameleoncloud.org:5000/v3",
+                    "default_key_name": "",
                     "app_credential_id": "",
                     "app_credential_secret": "",
                     "project_id": "",
+                    "identity_provider": "chameleon",
+                    "protocol": "openid",
+                    "discovery_endpoint": "https://auth.chameleoncloud.org/auth/realms/chameleon/.well-known/openid-configuration",
+                    "client_id": "keystone-tacc-prod",
+                    "client_secret": "none",
+                    "access_token_type": "access_token",
+                    "openid_scope": "openid profile",
                 },
             },
         },
@@ -279,30 +320,45 @@ def invalidate_settings_cache() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _live_config_dir() -> str:
+    """The active FABRIC config dir.
+
+    Always the flat root ``/home/fabric/work/fabric_config`` — a symlink to the
+    active user's folder in multi-user mode, a real directory otherwise. Computed
+    fresh (like ``get_artifacts_dir``) rather than read from ``settings.json`` so
+    it stays correct across user switches and the ``users/`` → ``.loomai/users/``
+    relocation, instead of pinning a stale per-user absolute path.
+    """
+    return os.path.join(get_root_storage_dir(), "fabric_config")
+
+
 def get_config_dir() -> str:
-    """Return ``paths.config_dir``, creating it if needed."""
-    d: str = _get_settings()["paths"]["config_dir"]
+    """Return the active config dir (root ``fabric_config`` symlink), creating it if needed."""
+    d = _live_config_dir()
     os.makedirs(d, exist_ok=True)
     return d
 
 
 def get_artifacts_dir() -> str:
-    """Return ``paths.artifacts_dir``, creating it if needed."""
-    d: str = _get_settings()["paths"]["artifacts_dir"]
+    """Artifacts live at the flat ``/home/fabric/work/my_artifacts`` — a symlink
+    to the active user's folder. Computed fresh (not the saved settings path) so
+    it's stable across user switches and the storage relocation."""
+    d = os.path.join(get_root_storage_dir(), "my_artifacts")
     os.makedirs(d, exist_ok=True)
     return d
 
 
 def get_slices_dir() -> str:
-    """Return ``paths.slices_dir``, creating it if needed."""
-    d: str = _get_settings()["paths"]["slices_dir"]
+    """Slices live in the active user's per-user folder (no root mount)."""
+    d = os.path.join(get_storage_dir(), "my_slices")
     os.makedirs(d, exist_ok=True)
     return d
 
 
 def get_notebooks_dir() -> str:
-    """Return ``paths.notebooks_dir``, creating it if needed."""
-    d: str = _get_settings()["paths"]["notebooks_dir"]
+    """Notebooks live at the flat ``/home/fabric/work/notebooks`` (shared) —
+    that's JupyterLab's root dir, and they need no per-user mount."""
+    d = os.path.join(get_root_storage_dir(), "notebooks")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -328,22 +384,22 @@ def get_token_path() -> str:
     if os.path.isfile(home_tokens):
         return home_tokens
 
-    return _get_settings()["paths"]["token_file"]
+    return os.path.join(_live_config_dir(), "id_token.json")
 
 
 def get_bastion_key_path() -> str:
-    """Return ``paths.bastion_key_file``."""
-    return _get_settings()["paths"]["bastion_key_file"]
+    """Return the active bastion key path (under the root ``fabric_config`` symlink)."""
+    return os.path.join(_live_config_dir(), "fabric_bastion_key")
 
 
 def get_slice_keys_dir() -> str:
-    """Return ``paths.slice_keys_dir``."""
-    return _get_settings()["paths"]["slice_keys_dir"]
+    """Return the active slice-keys dir (under the root ``fabric_config`` symlink)."""
+    return os.path.join(_live_config_dir(), "slice_keys")
 
 
 def get_ssh_config_path() -> str:
-    """Return ``paths.ssh_config_file``."""
-    return _get_settings()["paths"]["ssh_config_file"]
+    """Return the active ssh_config path (under the root ``fabric_config`` symlink)."""
+    return os.path.join(_live_config_dir(), "ssh_config")
 
 
 def get_log_file() -> str:
@@ -479,9 +535,34 @@ def get_chameleon_site_config(site: str) -> dict:
     return get_chameleon_sites().get(site, {})
 
 
+def get_chameleon_password_auth() -> dict:
+    """Return shared Chameleon password-auth credentials."""
+    return _get_settings().get("chameleon", {}).get("password_auth", {})
+
+
 def get_chameleon_default_site() -> str:
     """Return ``chameleon.default_site``."""
     return _get_settings().get("chameleon", {}).get("default_site", "CHI@TACC")
+
+
+def get_chameleon_default_key_name(site: str) -> str:
+    """Return the configured default Nova keypair name for a Chameleon site."""
+    return str(get_chameleon_site_config(site).get("default_key_name", "") or "").strip()
+
+
+def resolve_chameleon_key_name(site: str, node: dict | None = None, fallback: str = "loomai-key") -> str:
+    """Resolve the Nova keypair name for a Chameleon server.
+
+    Per-node overrides win over the per-site default. If neither is set, the
+    LoomAI-managed keypair remains the compatibility fallback.
+    """
+    node_key = str((node or {}).get("key_name", "") or "").strip()
+    if node_key:
+        return node_key
+    site_key = get_chameleon_default_key_name(site)
+    if site_key:
+        return site_key
+    return fallback
 
 
 def get_chameleon_ssh_key() -> str:
@@ -508,6 +589,19 @@ def get_chameleon_ssh_key() -> str:
 def is_chameleon_site_configured(site: str) -> bool:
     """Check if a Chameleon site has credentials configured."""
     cfg = get_chameleon_site_config(site)
+    auth_type = cfg.get("auth_type", "application_credential")
+    if auth_type == "password":
+        password_auth = get_chameleon_password_auth()
+        username = password_auth.get("username") or cfg.get("username", "")
+        password = password_auth.get("password") or cfg.get("password", "")
+        project_id = cfg.get("project_id", "") or password_auth.get("project_id", "")
+        return bool(
+            cfg.get("auth_url")
+            and username
+            and password
+            and project_id
+            and cfg.get("client_id")
+        )
     return bool(cfg.get("app_credential_id") and cfg.get("app_credential_secret"))
 
 
@@ -524,7 +618,8 @@ def generate_fabric_rc(settings: dict) -> None:
     fabric = settings["fabric"]
     hosts = fabric["hosts"]
     ai = settings["ai"]
-    config_dir = paths["config_dir"]
+    # Live root config dir (symlink to active user), not the stale stored path.
+    config_dir = _live_config_dir()
 
     # Resolve actual default slice key paths (handles key set default logic)
     try:
@@ -545,11 +640,11 @@ def generate_fabric_rc(settings: dict) -> None:
         f"export FABRIC_ORCHESTRATOR_HOST={hosts.get('orchestrator', 'orchestrator.fabric-testbed.net')}",
         f"export FABRIC_CORE_API_HOST={hosts.get('core_api', 'uis.fabric-testbed.net')}",
         f"export FABRIC_AM_HOST={hosts.get('artifact_manager', 'artifacts.fabric-testbed.net')}",
-        f"export FABRIC_TOKEN_LOCATION={paths['token_file']}",
+        f"export FABRIC_TOKEN_LOCATION={os.path.join(config_dir, 'id_token.json')}",
         f"export FABRIC_BASTION_HOST={hosts.get('bastion', 'bastion.fabric-testbed.net')}",
         f"export FABRIC_BASTION_USERNAME={fabric.get('bastion_username', '')}",
-        f"export FABRIC_BASTION_KEY_LOCATION={paths['bastion_key_file']}",
-        f"export FABRIC_BASTION_SSH_CONFIG_FILE={paths['ssh_config_file']}",
+        f"export FABRIC_BASTION_KEY_LOCATION={os.path.join(config_dir, 'fabric_bastion_key')}",
+        f"export FABRIC_BASTION_SSH_CONFIG_FILE={os.path.join(config_dir, 'ssh_config')}",
         f"export FABRIC_SLICE_PUBLIC_KEY_FILE={pub_key_path}",
         f"export FABRIC_SLICE_PRIVATE_KEY_FILE={priv_key_path}",
         f"export FABRIC_PROJECT_ID={fabric.get('project_id', '')}",
@@ -570,11 +665,10 @@ def generate_fabric_rc(settings: dict) -> None:
 
 def generate_ssh_config(settings: dict) -> None:
     """Write ``ssh_config`` into the config directory from *settings*."""
-    paths = settings["paths"]
     fabric = settings["fabric"]
-    config_dir = paths["config_dir"]
+    config_dir = _live_config_dir()
     bastion_username = fabric.get("bastion_username", "")
-    bastion_key_file = paths["bastion_key_file"]
+    bastion_key_file = os.path.join(config_dir, "fabric_bastion_key")
 
     content = f"""\
 UserKnownHostsFile /dev/null
@@ -604,9 +698,18 @@ def apply_env_vars(settings: dict) -> None:
     fabric = settings["fabric"]
     ai = settings["ai"]
 
+    # Config-derived paths are computed from the live root ``fabric_config``
+    # symlink, NOT the (possibly stale) per-user absolute paths stored in
+    # settings.json — those go stale across user switches / storage relocation.
+    live_config = _live_config_dir()
+
     env_map = {
-        "FABRIC_STORAGE_DIR": paths.get("storage_dir", ""),
-        "FABRIC_CONFIG_DIR": paths.get("config_dir", ""),
+        # NOTE: FABRIC_STORAGE_DIR is deliberately NOT set here. It is the flat
+        # root (set once by the container) and must never be overwritten with a
+        # per-user path — doing so makes users_base_dir()/get_root_storage_dir()
+        # resolve under the active user's folder and recursively nest per-user
+        # storage. Per-user resolution happens via the registry + root symlinks.
+        "FABRIC_CONFIG_DIR": live_config,
         "FABRIC_PROJECT_ID": fabric.get("project_id", ""),
         "FABRIC_BASTION_USERNAME": fabric.get("bastion_username", ""),
         "FABRIC_BASTION_HOST": fabric.get("hosts", {}).get("bastion", ""),
@@ -614,9 +717,9 @@ def apply_env_vars(settings: dict) -> None:
         "FABRIC_ORCHESTRATOR_HOST": fabric.get("hosts", {}).get("orchestrator", ""),
         "FABRIC_CORE_API_HOST": fabric.get("hosts", {}).get("core_api", ""),
         "FABRIC_AM_HOST": fabric.get("hosts", {}).get("artifact_manager", ""),
-        "FABRIC_TOKEN_LOCATION": paths.get("token_file", ""),
-        "FABRIC_BASTION_KEY_LOCATION": paths.get("bastion_key_file", ""),
-        "FABRIC_BASTION_SSH_CONFIG_FILE": paths.get("ssh_config_file", ""),
+        "FABRIC_TOKEN_LOCATION": os.path.join(live_config, "id_token.json"),
+        "FABRIC_BASTION_KEY_LOCATION": os.path.join(live_config, "fabric_bastion_key"),
+        "FABRIC_BASTION_SSH_CONFIG_FILE": os.path.join(live_config, "ssh_config"),
         "FABRIC_LOG_LEVEL": fabric.get("logging", {}).get("level", "INFO"),
         "FABRIC_LOG_FILE": paths.get("log_file", ""),
         "FABRIC_AVOID": ",".join(fabric.get("avoid_sites", [])),
@@ -626,8 +729,7 @@ def apply_env_vars(settings: dict) -> None:
 
     ssh_cmd = fabric.get("ssh_command_line", "")
     if ssh_cmd:
-        config_dir = paths.get("config_dir", "")
-        env_map["FABRIC_SSH_COMMAND_LINE"] = ssh_cmd.replace("{config_dir}", config_dir)
+        env_map["FABRIC_SSH_COMMAND_LINE"] = ssh_cmd.replace("{config_dir}", live_config)
 
     for key, value in env_map.items():
         if value:

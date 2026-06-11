@@ -1,0 +1,111 @@
+{
+  "name": "Chameleon SSH Slice",
+  "description": "Deploys a single Chameleon bare-metal node with a floating IP for direct SSH access.",
+  "description_short": "Deploys a single Chameleon bare-metal node with a floating IP for direct SSH access.",
+  "description_long": "<p>This weave creates a LoomAI Chameleon slice record, deploys one Chameleon bare-metal node, and prepares it for direct SSH access.</p><p>When run, it uses Chameleon OpenStack APIs directly: Keystone for authentication, Blazar for the lease and physical-host reservation, Nova for the bare-metal instance, and Neutron for networks, ports, and floating IP association. As each OpenStack resource is created, the weave attaches its ID to the Chameleon slice record so the resources are visible and manageable from the slice view.</p><p>The default target is automatic site and node-type selection across common Chameleon bare-metal compute pools. You can still pin a specific site or node type if needed. The SSH username for standard Chameleon images is cc. Click Stop in LoomAI to terminate the instance, release the floating IP, delete the lease, remove the slice record, and remove the local state.</p>",
+  "run_script": "weave.sh",
+  "log_file": "weave.log",
+  "format": "chameleon-slice-v1",
+  "tags": [
+    "loomai:weave",
+    "chameleon",
+    "example",
+    "experiment pattern"
+  ],
+  "args": [
+    {
+      "name": "SLICE_NAME",
+      "label": "Slice Name",
+      "type": "string",
+      "required": true,
+      "default": "chameleon-ssh",
+      "placeholder": "chameleon-ssh",
+      "description": "Name prefix for the Chameleon lease and node"
+    },
+    {
+      "name": "SITE",
+      "label": "Chameleon Site",
+      "type": "string",
+      "required": true,
+      "default": "auto",
+      "placeholder": "auto",
+      "description": "Chameleon site to deploy at, or auto to try available bare-metal sites"
+    },
+    {
+      "name": "NODE_TYPE",
+      "label": "Node Type",
+      "type": "string",
+      "required": true,
+      "default": "auto",
+      "placeholder": "auto",
+      "description": "Chameleon node type to reserve, or auto to try Cascade Lake first and then other common compute pools"
+    },
+    {
+      "name": "IMAGE",
+      "label": "Image",
+      "type": "string",
+      "required": true,
+      "default": "CC-Ubuntu22.04",
+      "placeholder": "CC-Ubuntu22.04",
+      "description": "Chameleon image name or ID"
+    },
+    {
+      "name": "LEASE_HOURS",
+      "label": "Lease Hours",
+      "type": "number",
+      "required": true,
+      "default": 4,
+      "description": "Lease duration in hours"
+    },
+    {
+      "name": "FLOATING_NETWORK",
+      "label": "Floating IP Network",
+      "type": "string",
+      "required": true,
+      "default": "public",
+      "placeholder": "public",
+      "description": "External network used to allocate the floating IP"
+    },
+    {
+      "name": "MANAGEMENT_NETWORK",
+      "label": "Management Network",
+      "type": "string",
+      "required": true,
+      "default": "sharednet1",
+      "placeholder": "sharednet1",
+      "description": "Chameleon network used to boot the instance before floating IP association"
+    },
+    {
+      "name": "SSH_USER",
+      "label": "SSH User",
+      "type": "string",
+      "required": true,
+      "default": "cc",
+      "placeholder": "cc",
+      "description": "SSH username for the selected image"
+    },
+    {
+      "name": "MONITOR_INTERVAL",
+      "label": "Monitor Interval",
+      "type": "number",
+      "required": true,
+      "default": 60,
+      "description": "Seconds between health checks while the weave is running"
+    }
+  ],
+  "chameleon": {
+    "site": "auto",
+    "nodes": [
+      {
+        "name": "node1",
+        "node_type": "auto",
+        "image": "CC-Ubuntu22.04",
+        "networks": [
+          "sharednet1"
+        ],
+        "floating_ip": true,
+        "ssh_user": "cc"
+      }
+    ]
+  }
+}

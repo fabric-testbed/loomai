@@ -21,9 +21,9 @@ const ConfigureView = dynamic(() => import('./components/ConfigureView'), { ssr:
 const FileTransferView = dynamic(() => import('./components/FileTransferView'), { ssr: false });
 const HelpView = dynamic(() => import('./components/HelpView'), { ssr: false });
 import ClientView from './components/ClientView';
-const JupyterLabView = dynamic(() => import('./components/JupyterLabView'), { ssr: false });
 const AICompanionView = dynamic(() => import('./components/AICompanionView'), { ssr: false });
 import AIChatPanel from './components/AIChatPanel';
+import AutoRefreshSelect from './components/AutoRefreshSelect';
 import { assetUrl } from './utils/assetUrl';
 import LoginPage from './components/LoginPage';
 const LandingView = dynamic(() => import('./components/LandingView'), { ssr: false });
@@ -43,13 +43,263 @@ import HelpContextMenu from './components/HelpContextMenu';
 import GuidedTour from './components/GuidedTour';
 import { tours } from './data/tourSteps';
 import * as api from './api/client';
-import type { SliceSummary, SliceData, ComponentModel, ValidationIssue, ProjectInfo, VMTemplateSummary, BootConfig, RecipeSummary, ExperimentVariable } from './types/fabric';
+import type { SliceSummary, SliceData, ComponentModel, ValidationIssue, ProjectInfo, VMTemplateSummary, BootConfig, RecipeSummary, ExperimentVariable, LoomAISettings } from './types/fabric';
 import type { ChameleonSite, ChameleonInstance, ChameleonDraft, ChameleonSlice } from './types/chameleon';
 import { useInfrastructure } from './hooks/useInfrastructure';
 
 const AUTH_BASE = (typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH)
   ? `${window.__LOOMAI_BASE_PATH}/api`
   : '/api';
+
+function getChameleonFloatingIpNodeIds(entries: ChameleonSlice['floating_ips'] | undefined): Set<string> {
+  return new Set((entries || []).map(entry => {
+    if (typeof entry === 'string') return entry;
+    return entry?.node_id || '';
+  }).filter(Boolean));
+}
+
+function getChameleonNodeCount(node: { count?: number | string | null }): number {
+  const count = Number(node.count ?? 1);
+  return Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 1;
+}
+
+function getChameleonReplicaName(baseName: string, count: number, index: number): string {
+  return count <= 1 ? baseName : `${baseName}-${index + 1}`;
+}
+
+function resolveChameleonDeployKeyName(node: { site?: string; key_name?: string }, settings: LoomAISettings | null): string {
+  const nodeKey = (node.key_name || '').trim();
+  if (nodeKey) return nodeKey;
+  const siteKey = node.site ? (settings?.chameleon?.sites?.[node.site]?.default_key_name || '').trim() : '';
+  return siteKey || 'loomai-key';
+}
+
+const CHAMELEON_RESOURCE_LABELS: Record<string, string> = {
+  instance: 'Server',
+  lease: 'Reservation',
+  network: 'Network',
+  floating_ip: 'Floating IP',
+  security_group: 'Security Group',
+};
+
+function chameleonStatusColor(status: string): string {
+  const s = (status || '').toUpperCase();
+  if (s === 'ACTIVE' || s === 'STABLEOK') return '#008e7a';
+  if (s === 'ERROR' || s === 'FAILED') return '#e25241';
+  if (s === 'SHUTOFF' || s === 'TERMINATED' || s === 'DEAD') return 'var(--fabric-text-muted)';
+  return '#d76b00';
+}
+
+function fabricStatusColor(status: string): string {
+  const s = (status || '').toUpperCase();
+  if (s === 'ACTIVE' || s === 'STABLEOK') return '#008e7a';
+  if (s.includes('ERROR') || s === 'FAILED') return '#e25241';
+  if (s === 'DEAD' || s === 'CLOSING') return 'var(--fabric-text-muted)';
+  return '#d76b00';
+}
+
+function sliceMatchesId(data: SliceData | null | undefined, idOrName: string): boolean {
+  return !!data && !!idOrName && (data.id === idOrName || data.name === idOrName);
+}
+
+function sliceDataEquals(a: SliceData | null, b: SliceData | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return a === b;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+
+function applySliverStateToSliceData(
+  prev: SliceData | null,
+  sliverData: api.SliverStatesResponse
+): SliceData | null {
+  if (!prev) return prev;
+  const freshByName = new Map(sliverData.nodes.map(node => [node.name, node]));
+  let changed = false;
+  const nextSliceState = sliverData.slice_state || prev.state;
+
+  const nodes = prev.nodes.map(node => {
+    const fresh = freshByName.get(node.name);
+    if (!fresh) return node;
+    const nextNode = {
+      ...node,
+      reservation_state: fresh.reservation_state || node.reservation_state,
+      management_ip: fresh.management_ip ?? node.management_ip,
+      error_message: fresh.error_message ?? node.error_message,
+    };
+    if (
+      nextNode.reservation_state === node.reservation_state
+      && nextNode.management_ip === node.management_ip
+      && nextNode.error_message === node.error_message
+    ) {
+      return node;
+    }
+    changed = true;
+    return nextNode;
+  });
+
+  const graphNodes = (prev.graph?.nodes || []).map(graphNode => {
+    const data = graphNode.data || {};
+    if (data.element_type !== 'node' || !data.name) return graphNode;
+    const fresh = freshByName.get(data.name);
+    if (!fresh) return graphNode;
+
+    let graphChanged = false;
+    const nextData = { ...data };
+    const assign = (key: string, value?: string, allowEmpty = false) => {
+      if ((value === undefined || (!allowEmpty && value === '')) || nextData[key] === value) return;
+      nextData[key] = value;
+      graphChanged = true;
+    };
+
+    assign('state', fresh.reservation_state);
+    assign('reservation_state', fresh.reservation_state);
+    assign('management_ip', fresh.management_ip, true);
+    assign('error_message', fresh.error_message, true);
+    assign('state_bg', fresh.state_bg);
+    assign('state_color', fresh.state_color);
+    assign('state_bg_dark', fresh.state_bg_dark);
+    assign('state_color_dark', fresh.state_color_dark);
+
+    if (!graphChanged) return graphNode;
+    changed = true;
+    return { ...graphNode, data: nextData };
+  });
+
+  if (nextSliceState !== prev.state) changed = true;
+  return changed
+    ? { ...prev, state: nextSliceState, nodes, graph: { ...prev.graph, nodes: graphNodes } }
+    : prev;
+}
+
+function shortResourceId(value?: string): string {
+  if (!value) return '';
+  return value.length > 14 ? `${value.slice(0, 12)}...` : value;
+}
+
+function chameleonResourceLabel(resource: ChameleonDraft['resources'][number]): string {
+  return resource.type_label || CHAMELEON_RESOURCE_LABELS[resource.type] || resource.type.replace(/_/g, ' ');
+}
+
+function chameleonInstanceResourceMatchesNode(
+  resource: ChameleonDraft['resources'][number],
+  node: ChameleonDraft['nodes'][number],
+): boolean {
+  if (resource.type !== 'instance') return false;
+  const relationship = resource.relationship || {};
+  const plannedNodeId = resource.planned_node_id || relationship.planned_node_id || '';
+  const plannedNodeName = resource.planned_node_name || relationship.planned_node_name || '';
+  const sameSite = !resource.site || !node.site || resource.site === node.site;
+  return Boolean(
+    (plannedNodeId && plannedNodeId === node.id)
+    || (sameSite && plannedNodeName && plannedNodeName === node.name)
+    || (sameSite && resource.name && resource.name === node.name),
+  );
+}
+
+function chameleonPlannedNodeDeployStatus(
+  slice: ChameleonDraft,
+  node: ChameleonDraft['nodes'][number],
+  instanceResource?: ChameleonDraft['resources'][number],
+): string {
+  if (instanceResource?.status) return instanceResource.status;
+  if ((slice.state || '').toLowerCase() !== 'deploying') return node.status || 'Draft';
+  const site = node.site || slice.site || '';
+  const lease = (slice.resources || []).find(resource => resource.type === 'lease' && (!site || resource.site === site));
+  if (!lease) return 'Waiting for lease';
+  const leaseStatus = (lease.status || '').toUpperCase();
+  if (leaseStatus === 'ACTIVE') return 'Waiting for launch';
+  if (leaseStatus === 'ERROR') return 'Blocked by lease error';
+  return `Waiting for lease ${lease.status || 'PENDING'}`;
+}
+
+function federatedSubsliceCount(slice: any): number {
+  const keys = new Set<string>();
+  for (const member of (slice?.members || [])) {
+    const provider = String(member?.provider || member?.testbed || '').toLowerCase();
+    const id = String(member?.slice_id || member?.id || '').trim();
+    if (provider && id) keys.add(`${provider}:${id}`);
+  }
+  for (const id of (slice?.fabric_slices || [])) {
+    const text = String(id || '').trim();
+    if (text) keys.add(`fabric:${text}`);
+  }
+  for (const id of (slice?.chameleon_slices || [])) {
+    const text = String(id || '').trim();
+    if (text) keys.add(`chameleon:${text}`);
+  }
+  return keys.size;
+}
+
+function federatedMemberDetailKey(provider: 'fabric' | 'chameleon', member: any): string {
+  return `${provider}:${member?.id || member?.slice_id || member?.name || 'unknown'}`;
+}
+
+function collectFederatedProviderMembers(federatedSlice: any, provider: 'fabric' | 'chameleon'): any[] {
+  const byId = new Map<string, any>();
+  const legacyIds = provider === 'fabric'
+    ? (federatedSlice?.fabric_slices || [])
+    : (federatedSlice?.chameleon_slices || []);
+  const summaries = provider === 'fabric'
+    ? (federatedSlice?.fabric_member_summaries || [])
+    : (federatedSlice?.chameleon_member_summaries || []);
+
+  const add = (member: any) => {
+    const id = String(member?.id || member?.slice_id || '').trim();
+    if (!id) return;
+    byId.set(id, { ...byId.get(id), ...member, id, slice_id: member?.slice_id || id });
+  };
+
+  for (const id of legacyIds) add({ id, slice_id: id });
+  for (const member of federatedSlice?.members || []) {
+    const memberProvider = String(member?.provider || member?.testbed || '').toLowerCase();
+    if (memberProvider === provider) add(member);
+  }
+  for (const summary of summaries) add(summary);
+
+  return [...byId.values()];
+}
+
+function chameleonDraftMemberSummary(draft: ChameleonDraft, fallback: any = {}) {
+  const nodeCount = (draft.nodes || []).reduce((total, node) => total + getChameleonNodeCount(node), 0);
+  const resourceCount = (draft.resources || []).length;
+  return {
+    id: draft.id || fallback.id || fallback.slice_id,
+    name: draft.name || fallback.name || draft.id || fallback.id,
+    state: draft.state || fallback.state || 'Unknown',
+    site: draft.site || (draft.sites || []).join(', ') || fallback.site || '',
+    node_count: nodeCount + resourceCount,
+  };
+}
+
+function federatedStateFromMemberStates(fabricSummaries: any[], chameleonSummaries: any[], fallback = 'Draft'): string {
+  const states = [...fabricSummaries, ...chameleonSummaries]
+    .map(summary => String(summary?.state || '').trim())
+    .filter(Boolean);
+  if (states.length === 0) return fallback;
+  const lower = states.map(state => state.toLowerCase());
+  if (lower.some(state => ['stableerror', 'error', 'terminated', 'dead', 'closing'].includes(state))) return 'Degraded';
+  if (lower.some(state => ['configuring', 'ticketed', 'nascent', 'modifying', 'modifyok', 'modifyerror', 'deploying', 'build', 'pending', 'spawning', 'submitted'].includes(state))) return 'Provisioning';
+  if (lower.every(state => ['stableok', 'active'].includes(state))) return 'Active';
+  return fallback;
+}
+
+type FederatedCandidateSortKey = 'provider' | 'name' | 'state' | 'site' | 'resources' | 'created' | 'id';
+
+type FederatedSubsliceCandidate = {
+  provider: 'fabric' | 'chameleon';
+  providerLabel: 'FABRIC' | 'Chameleon';
+  id: string;
+  name: string;
+  state: string;
+  site: string;
+  resources: string;
+  created: string;
+  searchable: string;
+};
 
 export default function App() {
   // --- Auth gating state ---
@@ -90,8 +340,11 @@ export default function App() {
 
   // --- Original app state ---
   const [slices, setSlices] = useState<SliceSummary[]>([]);
-  const [selectedSliceId, setSelectedSliceId] = useState('');
+  const [selectedSliceId, setSelectedSliceId] = useState(() => localStorage.getItem('fabric-selected-slice') || '');
   const [sliceData, setSliceData] = useState<SliceData | null>(null);
+  const setSliceDataIfChanged = useCallback((next: SliceData | null) => {
+    setSliceData(prev => sliceDataEquals(prev, next) ? prev : next);
+  }, []);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [bootConfigErrors, setBootConfigErrors] = useState<Array<{ node: string; type: string; id: string; detail: string }>>([]);
@@ -107,20 +360,69 @@ export default function App() {
   type TopView = 'landing' | 'slices' | 'artifacts' | 'infrastructure' | 'jupyter' | 'ai' | 'chameleon';
   type SlicesSubView = CompositeSubView;
   type InfraSubView = 'topology' | 'table' | 'storage' | 'map' | 'apps' | 'resources' | 'calendar';
-  type ChameleonSubView = 'topology' | 'slices' | 'map' | 'calendar' | 'openstack';
-  const [currentView, setCurrentView] = useState<TopView>('landing');
-  const [slicesSubView, setSlicesSubView] = useState<SlicesSubView>('topology');
-  const [infraSubView, setInfraSubView] = useState<InfraSubView>('table');
-  const [chameleonSubView, setChameleonSubView] = useState<ChameleonSubView>('slices');
+  type ChameleonSubView = 'topology' | 'slices' | 'storage' | 'map' | 'calendar' | 'openstack';
+  // View state is restored across browser reloads.
+  const [currentView, setCurrentView] = useState<TopView>(() => {
+    const valid: TopView[] = ['landing', 'slices', 'artifacts', 'infrastructure', 'jupyter', 'ai', 'chameleon'];
+    const s = localStorage.getItem('fabric-current-view') as TopView | null;
+    return s && valid.includes(s) ? s : 'landing';
+  });
+  const [slicesSubView, setSlicesSubView] = useState<SlicesSubView>(
+    () => (localStorage.getItem('fabric-slices-subview') as SlicesSubView) || 'slices');
+  const [infraSubView, setInfraSubView] = useState<InfraSubView>(
+    () => (localStorage.getItem('fabric-infra-subview') as InfraSubView) || 'table');
+  const [chameleonSubView, setChameleonSubView] = useState<ChameleonSubView>(
+    () => (localStorage.getItem('fabric-chameleon-subview') as ChameleonSubView) || 'slices');
+  useEffect(() => { try { localStorage.setItem('fabric-current-view', currentView); } catch { /* ignore */ } }, [currentView]);
+  useEffect(() => { try { localStorage.setItem('fabric-slices-subview', slicesSubView); } catch { /* ignore */ } }, [slicesSubView]);
+  useEffect(() => { try { localStorage.setItem('fabric-infra-subview', infraSubView); } catch { /* ignore */ } }, [infraSubView]);
+  useEffect(() => { try { localStorage.setItem('fabric-chameleon-subview', chameleonSubView); } catch { /* ignore */ } }, [chameleonSubView]);
+  useEffect(() => { try { localStorage.setItem('fabric-selected-slice', selectedSliceId); } catch { /* ignore */ } }, [selectedSliceId]);
   const [chameleonSlices, setChameleonSlices] = useState<ChameleonSlice[]>([]);
+  const [chameleonSlicesLoading, setChameleonSlicesLoading] = useState(false);
   const [selectedChameleonSliceId, setSelectedChameleonSliceId] = useState('');
   const [chameleonSliceData, setChameleonSliceData] = useState<ChameleonSlice | null>(null);
-  // Composite slice state — independent from FABRIC and Chameleon
+  // Federated slice state — independent from FABRIC and Chameleon
   const [compositeSlices, setCompositeSlices] = useState<any[]>([]);
   const [selectedCompositeSliceId, setSelectedCompositeSliceId] = useState('');
+  const [compositeRefreshNonce, setCompositeRefreshNonce] = useState(0);
   const [compositeGraph, setCompositeGraph] = useState<{ nodes: any[]; edges: any[] } | null>(null);
   const [compositeEnabled, setCompositeEnabled] = useState(false);
+  const [compositeSlicesLoading, setCompositeSlicesLoading] = useState(false);
   const [checkedCompositeIds, setCheckedCompositeIds] = useState<Set<string>>(new Set());
+  const [expandedCompositeMemberIds, setExpandedCompositeMemberIds] = useState<Set<string>>(new Set());
+  const [showFederatedSubsliceDialog, setShowFederatedSubsliceDialog] = useState(false);
+  const [federatedSubsliceFilter, setFederatedSubsliceFilter] = useState('');
+  const [federatedSubsliceSort, setFederatedSubsliceSort] = useState<{ key: FederatedCandidateSortKey; dir: 'asc' | 'desc' }>({ key: 'provider', dir: 'asc' });
+  const [federatedMemberSaving, setFederatedMemberSaving] = useState(false);
+  const [compositeMemberDetails, setCompositeMemberDetails] = useState<Record<string, {
+    loading: boolean;
+    data: SliceData | ChameleonDraft | null;
+    error?: string;
+  }>>({});
+  const [federatedResourceMenu, setFederatedResourceMenu] = useState<{
+    x: number;
+    y: number;
+    element: Record<string, any>;
+    label: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!federatedResourceMenu) return;
+    const close = () => setFederatedResourceMenu(null);
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFederatedResourceMenu(null);
+    };
+    document.addEventListener('click', close);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('click', close);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [federatedResourceMenu]);
+  // Member FABRIC slice data for the currently selected federated slice — loaded
+  // on demand by the Storage tab so the user can browse files on every member.
+  const [compositeMemberFabricData, setCompositeMemberFabricData] = useState<Array<{ sliceName: string; sliceData: any | null }>>([]);
   const [chameleonAutoRefresh, setChameleonAutoRefresh] = useState(true);
   const [showChameleonLeaseDialog, setShowChameleonLeaseDialog] = useState(false);
   const [chiLeaseStartNow, setChiLeaseStartNow] = useState(true);
@@ -145,8 +447,6 @@ export default function App() {
   const [chameleonLeases, setChameleonLeases] = useState<any[]>([]);
   const [resourceCategory, setResourceCategory] = useState<'sites' | 'facility-ports'>('sites');
   const [editingArtifactDirName, setEditingArtifactDirName] = useState('');
-  const [jupyterPath, setJupyterPath] = useState<string | undefined>(undefined);
-  const [jupyterMounted, setJupyterMounted] = useState(false);
   const [selectedAiTool, setSelectedAiTool] = useState<string | null>(null);
   const [enabledAiTools, setEnabledAiTools] = useState<Record<string, boolean>>({});
   const [aiToolInstallStatus, setAiToolInstallStatus] = useState<Record<string, import('./api/client').ToolInstallInfo>>({});
@@ -163,6 +463,9 @@ export default function App() {
   const [selectedResourceKey, setSelectedResourceKey] = useState<string>('');
   const [listLoaded, setListLoaded] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark');
+  const [pollInterval, setPollInterval] = useState(() => parseInt(localStorage.getItem('poll-interval') || '300000', 10));
+  const pollIntervalRef = useRef(pollInterval);
+  pollIntervalRef.current = pollInterval;
   // Derived display name from selected ID
   const selectedSliceName = useMemo(() => {
     if (!selectedSliceId) return '';
@@ -179,7 +482,7 @@ export default function App() {
 
   const PANEL_ICONS: Record<PanelId, string> = { editor: '\u270E', template: '__marketplace_icon__', chat: '__loomai_icon__', console: '\u2756', details: '\u2139' };
   const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Artifacts', chat: 'LoomAI', console: 'Console', details: 'Details' };
-  const ICON_MAP: Record<string, string> = { '__loomai_icon__': '/loomai-icon-transparent.svg', '__marketplace_icon__': '/marketplace-icon-transparent.svg', '__composite_icon__': '/composite-slice-icon-transparent.svg' };
+  const ICON_MAP: Record<string, string> = { '__loomai_icon__': '/loomai-icon-transparent.svg', '__marketplace_icon__': '/marketplace-icon-transparent.svg', '__composite_icon__': '/loomai-icon-transparent.svg' };
   const renderPanelIcon = (iconKey: string, size = 14) => ICON_MAP[iconKey] ? <img src={assetUrl(ICON_MAP[iconKey])} alt="" style={{ height: size }} /> : <>{iconKey}</>;
   const PANEL_IDS: PanelId[] = ['editor', 'template', 'chat', 'console', 'details'];
   const DEFAULT_PANEL_WIDTH = 280;
@@ -297,8 +600,37 @@ export default function App() {
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
   }, []); // stable — no deps needed
-  const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
-  const [terminalIdCounter, setTerminalIdCounter] = useState(0);
+  // Restore open terminal tabs across browser reloads. The underlying shells
+  // persist server-side (tmux), so the tab must come back to reattach to them.
+  const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>(() => {
+    try {
+      const saved = localStorage.getItem('fabric-terminal-tabs');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed as TerminalTab[];
+      }
+    } catch { /* ignore */ }
+    return [];
+  });
+  const [terminalIdCounter, setTerminalIdCounter] = useState(() => {
+    // Seed past any restored `term-N` ids so new tabs don't collide.
+    let next = 0;
+    try {
+      const saved = localStorage.getItem('fabric-terminal-tabs');
+      if (saved) {
+        for (const t of JSON.parse(saved) as TerminalTab[]) {
+          const m = /^term-(\d+)$/.exec(t.id);
+          if (m) next = Math.max(next, parseInt(m[1], 10) + 1);
+        }
+      }
+    } catch { /* ignore */ }
+    return next;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('fabric-terminal-tabs', JSON.stringify(terminalTabs));
+    } catch { /* ignore */ }
+  }, [terminalTabs]);
   const [validationIssues, setValidationIssues] = useState<ValidationIssue[]>([]);
   const [validationValid, setValidationValid] = useState(false);
   const [projectName, setProjectName] = useState('');
@@ -320,15 +652,28 @@ export default function App() {
   const sitesRequestedRef = useRef(false);
   const currentViewRef = useRef(currentView);
   currentViewRef.current = currentView;
-  const [consoleFullWidth, setConsoleFullWidth] = useState(false);
-  const [consoleExpanded, setConsoleExpanded] = useState(false);
-  const [consoleHeight, setConsoleHeight] = useState(260);
+  const [consoleFullWidth, setConsoleFullWidth] = useState(() => localStorage.getItem('fabric-console-fullwidth') === '1');
+  const [consoleExpanded, setConsoleExpanded] = useState(() => localStorage.getItem('fabric-console-expanded') === '1');
+  const [consoleHeight, setConsoleHeight] = useState(() => {
+    const n = parseInt(localStorage.getItem('fabric-console-height') || '', 10);
+    return Number.isFinite(n) && n > 0 ? n : 260;
+  });
   const [openBootLogSlices, setOpenBootLogSlices] = useState<string[]>([]);
   const [activeRuns, setActiveRuns] = useState<api.BackgroundRun[]>([]);
   // Track which weave dir_names have a deploy in progress (for button state in LibrariesPanel)
   const [deployingWeaves, setDeployingWeaves] = useState<Set<string>>(new Set());
   // Side console panel state (tabs tracked here, layout managed by panel system)
-  const [sideConsoleTabs, setSideConsoleTabs] = useState<string[]>([]);
+  const [sideConsoleTabs, setSideConsoleTabs] = useState<string[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('fabric-side-console-tabs') || '[]');
+      return Array.isArray(saved) ? saved.filter((t): t is string => typeof t === 'string') : [];
+    } catch { return []; }
+  });
+  // Persist console panel state so it restores identically after a browser reload.
+  useEffect(() => { try { localStorage.setItem('fabric-console-expanded', consoleExpanded ? '1' : '0'); } catch { /* ignore */ } }, [consoleExpanded]);
+  useEffect(() => { try { localStorage.setItem('fabric-console-fullwidth', consoleFullWidth ? '1' : '0'); } catch { /* ignore */ } }, [consoleFullWidth]);
+  useEffect(() => { try { localStorage.setItem('fabric-console-height', String(consoleHeight)); } catch { /* ignore */ } }, [consoleHeight]);
+  useEffect(() => { try { localStorage.setItem('fabric-side-console-tabs', JSON.stringify(sideConsoleTabs)); } catch { /* ignore */ } }, [sideConsoleTabs]);
   const [dropIndicator, setDropIndicator] = useState<{ panelId: PanelId; edge: 'left' | 'right' } | null>(null);
 
   // Persist hidden projects to localStorage
@@ -354,6 +699,8 @@ export default function App() {
   // Refs for addError context (moved up so infrastructure hook can use addError)
   const selectedSliceRef = useRef(selectedSliceId);
   selectedSliceRef.current = selectedSliceId;
+  const selectedChameleonSliceRef = useRef(selectedChameleonSliceId);
+  selectedChameleonSliceRef.current = selectedChameleonSliceId;
   const sliceDataRef = useRef(sliceData);
   sliceDataRef.current = sliceData;
   const slicesRef = useRef(slices);
@@ -371,6 +718,76 @@ export default function App() {
     const prefix = parts.length > 0 ? `[${parts.join(' / ')}] ` : '';
     setErrors(prev => [...prev, prefix + msg]);
   }, []);
+
+  // Chameleon refresh mirrors the FABRIC refresh behavior: one action updates
+  // the visible list, backing lease/instance data, and the selected topology.
+  const handleRefreshChameleonSlices = useCallback(async (options: { silent?: boolean; refreshSelected?: boolean } = {}) => {
+    const silent = options.silent ?? false;
+    const refreshSelected = options.refreshSelected ?? true;
+    const selectedId = refreshSelected ? selectedChameleonSliceRef.current : '';
+    let selectedMissing = false;
+
+    if (!silent) {
+      setChameleonSlicesLoading(true);
+      setStatusMessage('Refreshing Chameleon slices...');
+    }
+
+    try {
+      const selectedDraftPromise: Promise<ChameleonDraft | null> = selectedId
+        ? api.getChameleonDraft(selectedId)
+        : Promise.resolve(null);
+      const [slicesResult, leasesResult, instancesResult, selectedResult] = await Promise.allSettled([
+        api.listAllChameleonSlices(),
+        api.listChameleonLeases(),
+        api.listChameleonInstances(),
+        selectedDraftPromise,
+      ] as const);
+
+      if (slicesResult.status === 'fulfilled') {
+        const fresh = slicesResult.value;
+        setChameleonSlices(fresh);
+        if (selectedId && !fresh.find(s => s.id === selectedId)) {
+          selectedMissing = true;
+          setSelectedChameleonSliceId('');
+          setChameleonSliceData(null);
+        }
+      } else if (!silent) {
+        addError(`Chameleon slices refresh failed: ${slicesResult.reason?.message || String(slicesResult.reason)}`);
+      }
+
+      if (leasesResult.status === 'fulfilled') {
+        setChameleonLeases(leasesResult.value);
+      } else if (!silent) {
+        addError(`Chameleon leases refresh failed: ${leasesResult.reason?.message || String(leasesResult.reason)}`);
+      }
+
+      if (instancesResult.status === 'fulfilled') {
+        setChameleonInstances(instancesResult.value);
+      } else if (!silent) {
+        addError(`Chameleon instances refresh failed: ${instancesResult.reason?.message || String(instancesResult.reason)}`);
+      }
+
+      if (selectedId && !selectedMissing) {
+        if (selectedResult.status === 'fulfilled' && selectedResult.value) {
+          setChameleonSliceData(selectedResult.value);
+          setChiDraftVersion(v => v + 1);
+        } else if (selectedResult.status === 'rejected') {
+          const message = selectedResult.reason?.message || String(selectedResult.reason);
+          if (/404|not found/i.test(message)) {
+            setSelectedChameleonSliceId('');
+            setChameleonSliceData(null);
+          } else if (!silent) {
+            addError(`Selected Chameleon slice refresh failed: ${message}`);
+          }
+        }
+      }
+    } finally {
+      if (!silent) {
+        setChameleonSlicesLoading(false);
+        setStatusMessage('');
+      }
+    }
+  }, [addError]);
 
   // --- Infrastructure hook (sites, links, facility ports, metrics) ---
   const {
@@ -392,8 +809,6 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
     localStorage.setItem('theme', dark ? 'dark' : 'light');
-    // Sync JupyterLab theme whenever dark mode changes (fire-and-forget)
-    api.setJupyterTheme(dark ? 'dark' : 'light').catch(() => {});
   }, [dark]);
 
   // Fetch static data once on mount (images, component models, VM templates, AI tools, recipes).
@@ -594,11 +1009,11 @@ export default function App() {
       }
     }).catch(() => {});
 
-    // Check view status and load composite slices
+    // Check view status and load federated slices
     api.getViewsStatus().then(status => {
       setCompositeEnabled(status.composite_enabled);
       if (status.composite_enabled) {
-        api.listCompositeSlices().then(setCompositeSlices).catch(() => {});
+        refreshFederatedSlices({ silent: true });
       }
     }).catch(() => {});
 
@@ -609,30 +1024,41 @@ export default function App() {
   // Load selected Chameleon slice data
   useEffect(() => {
     if (!selectedChameleonSliceId) { setChameleonSliceData(null); return; }
-    api.getChameleonDraft(selectedChameleonSliceId).then(setChameleonSliceData).catch(() => setChameleonSliceData(null));
+    // On selection change, immediately fetch the draft AND bump the version so
+    // the ChameleonEditor refetches the topology graph right away.
+    api.getChameleonDraft(selectedChameleonSliceId).then(d => {
+      setChameleonSliceData(d);
+      setChiDraftVersion(v => v + 1);
+    }).catch((e) => {
+      setChameleonSliceData(null);
+      // Stale selection — the slice no longer exists on the backend.
+      // Clear it and re-sync the slice list to remove any phantom entries.
+      if (/404|not found/i.test(e?.message || '')) {
+        setSelectedChameleonSliceId('');
+        api.listAllChameleonSlices().then(setChameleonSlices).catch(() => {});
+      }
+    });
   }, [selectedChameleonSliceId]);
 
-  // Chameleon auto-refresh polling
+  // Re-sync Chameleon slice list whenever the Chameleon view is opened —
+  // prevents stale phantom entries from sticking around across sessions.
   useEffect(() => {
-    if (!chameleonAutoRefresh || currentView !== 'chameleon') return;
+    if (currentView !== 'chameleon' || !chameleonEnabled) return;
+    handleRefreshChameleonSlices({ silent: true });
+  }, [currentView, chameleonEnabled, handleRefreshChameleonSlices]);
+
+  // Chameleon auto-refresh uses the same full refresh path as the manual
+  // refresh button, so leases, instances, slices, and topology stay in sync.
+  useEffect(() => {
+    if (!chameleonEnabled || !chameleonAutoRefresh || pollInterval === 0) return;
+    if (currentView !== 'chameleon' && currentView !== 'slices') return;
+    const refreshSelected = currentView === 'chameleon';
+    handleRefreshChameleonSlices({ silent: true, refreshSelected });
     const interval = setInterval(() => {
-      api.listAllChameleonSlices().then(setChameleonSlices).catch(() => {});
-      if (selectedChameleonSliceId) {
-        api.getChameleonDraft(selectedChameleonSliceId).then(newData => {
-          setChameleonSliceData(prev => {
-            if (!prev || !newData) return newData;
-            const prevStatuses = (prev.resources || []).map(r => `${r.id}:${r.status || ''}:${r.floating_ip || ''}`).join(',');
-            const newStatuses = (newData.resources || []).map(r => `${r.id}:${r.status || ''}:${r.floating_ip || ''}`).join(',');
-            if (prevStatuses !== newStatuses) {
-              setChiDraftVersion(v => v + 1);
-            }
-            return newData;
-          });
-        }).catch(() => {});
-      }
-    }, 30000);
+      handleRefreshChameleonSlices({ silent: true, refreshSelected });
+    }, pollInterval);
     return () => clearInterval(interval);
-  }, [chameleonAutoRefresh, currentView, selectedChameleonSliceId]);
+  }, [chameleonEnabled, chameleonAutoRefresh, pollInterval, currentView, handleRefreshChameleonSlices]);
 
   // --- Post-login project picker state ---
   const [showPostLoginProjectPicker, setShowPostLoginProjectPicker] = useState(false);
@@ -1013,9 +1439,6 @@ export default function App() {
   const POLL_STATES = new Set(['Configuring', 'Ticketed', 'Nascent', 'ModifyOK', 'ModifyError']);
   const STABLE_STATES = new Set(['StableOK', 'Active']);
   const TERMINAL_STATES_SET = new Set(['Dead', 'Closing', 'StableError']);
-  const [pollInterval, setPollInterval] = useState(() => parseInt(localStorage.getItem('poll-interval') || '300000', 10));
-  const pollIntervalRef = useRef(pollInterval);
-  pollIntervalRef.current = pollInterval;
 
   // Adaptive polling: poll interval controls API call frequency (60s active, user-configured steady).
   // Each poll always fetches fresh data (max_age=0) so FABRIC state changes are detected immediately.
@@ -1180,20 +1603,12 @@ export default function App() {
               // CytoscapeGraph's preserveLayout will diff in-place (update colors, keep positions).
               try {
                 const data = await api.getSlice(currentId);
-                setSliceData(data);
-              } catch { /* fallback: merge states manually */ }
+                setSliceDataIfChanged(data);
+              } catch {
+                setSliceData(prev => applySliverStateToSliceData(prev, sliverData));
+              }
             } else {
-              // No state change — just merge management IPs and error messages
-              setSliceData(prev => {
-                if (!prev || !sliverData.nodes.length) return prev;
-                const updatedNodes = prev.nodes.map(node => {
-                  const fresh = sliverData.nodes.find((s: any) => s.name === node.name);
-                  if (!fresh) return node;
-                  if (node.management_ip === (fresh.management_ip || '') && node.error_message === (fresh.error_message || '')) return node;
-                  return { ...node, management_ip: fresh.management_ip || node.management_ip, error_message: fresh.error_message || node.error_message };
-                });
-                return { ...prev, nodes: updatedNodes };
-              });
+              setSliceData(prev => applySliverStateToSliceData(prev, sliverData));
             }
           } catch { /* next poll will retry */ }
         } else if (currentId && currentEntry && TERMINAL_STATES_SET.has(currentEntry.state)) {
@@ -1201,11 +1616,19 @@ export default function App() {
           setSliceData(prev => {
             if (!prev) return prev;
             const terminalState = currentEntry.state;
+            const stateChanged = prev.state !== terminalState;
+            let nodeChanged = false;
             const updatedNodes = prev.nodes.map(node => ({
               ...node,
               reservation_state: terminalState,
             }));
-            return { ...prev, state: terminalState, nodes: updatedNodes };
+            for (const node of prev.nodes) {
+              if (node.reservation_state !== terminalState) {
+                nodeChanged = true;
+                break;
+              }
+            }
+            return stateChanged || nodeChanged ? { ...prev, state: terminalState, nodes: updatedNodes } : prev;
           });
         }
 
@@ -1220,7 +1643,7 @@ export default function App() {
             (async () => {
               try {
                 const sd = await api.refreshSlice(sliceName);
-                if (entry.id === currentId) setSliceData(sd);
+                if (entry.id === currentId) setSliceDataIfChanged(sd);
               } catch { /* fallback */ }
 
               appendBuildLog(sliceName, { type: 'build', message: 'Running FABlib post-boot config (networking, routes, hostnames)...' });
@@ -1271,7 +1694,7 @@ export default function App() {
     const initialDelay = hasTransitional || forceActive || (Date.now() - lastMutationRef.current) < MUTATION_COOLDOWN
       ? ACTIVE_POLL_INTERVAL : (pollIntervalRef.current || ACTIVE_POLL_INTERVAL);
     scheduleTick(initialDelay);
-  }, [stopPolling, syncStateFromList, handleRunBootConfigStream, appendBuildLog]);
+  }, [stopPolling, syncStateFromList, handleRunBootConfigStream, appendBuildLog, setSliceDataIfChanged]);
 
   // Clean up polling on unmount
   useEffect(() => { return () => stopPolling(); }, [stopPolling]);
@@ -1327,18 +1750,19 @@ export default function App() {
     if (!selectedSliceId) return;
     const view = currentViewRef.current;
     if (view !== 'slices' && view !== 'infrastructure') return;
+    if (sliceMatchesId(sliceDataRef.current, selectedSliceId)) return;
     api.getSlice(selectedSliceId).then(data => {
-      setSliceData(data);
+      setSliceDataIfChanged(data);
     }).catch(() => {});
-  }, [selectedSliceId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedSliceId, setSliceDataIfChanged]);
 
-  // Start/stop slice polling based on active view; refresh selected slice on view switch
+  // Start/stop slice polling based on active view. View switches reuse the
+  // already-loaded slice model; refresh/poll/mutation responses replace it.
   useEffect(() => {
     if (currentView === 'slices' || currentView === 'infrastructure') {
-      // Refresh selected slice to show current state
-      if (selectedSliceId) {
-        api.refreshSlice(selectedSliceId).then(data => {
-          setSliceData(data);
+      if (selectedSliceId && !sliceMatchesId(sliceDataRef.current, selectedSliceId)) {
+        api.getSlice(selectedSliceId).then(data => {
+          setSliceDataIfChanged(data);
         }).catch(() => {});
       }
       // Restart polling (first tick fetches fresh data)
@@ -1349,7 +1773,7 @@ export default function App() {
       // Stop polling when leaving slice-related views
       stopPolling();
     }
-  }, [currentView]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentView, setSliceDataIfChanged]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Restart or stop polling when poll interval changes
   useEffect(() => {
@@ -1366,12 +1790,14 @@ export default function App() {
   }, [pollInterval]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load slice list on first interaction or mount
-  const refreshSliceList = useCallback(async () => {
-    setLoading(true);
-    setErrors([]);
-    setStatusMessage('Refreshing slice list...');
+  const refreshSliceList = useCallback(async (options: { maxAge?: number; silent?: boolean } = {}) => {
+    if (!options.silent) {
+      setLoading(true);
+      setErrors([]);
+      setStatusMessage('Refreshing slice list...');
+    }
     try {
-      const list = await api.listSlices();
+      const list = await api.listSlices(options.maxAge);
       protectDeletingSlices(list);
       // Guard: don't overwrite non-empty slices with empty result (API hiccup)
       if (list.length === 0 && slicesRef.current.length > 0) {
@@ -1399,7 +1825,7 @@ export default function App() {
           if (POLL_STATES.has(entry.state)) {
             try {
               const data = await api.refreshSlice(currentId);
-              setSliceData(data);
+              setSliceDataIfChanged(data);
             } catch { /* ignore */ }
           }
         }
@@ -1414,10 +1840,12 @@ export default function App() {
     } catch (e: any) {
       addError(e.message);
     } finally {
-      setLoading(false);
-      setStatusMessage('');
+      if (!options.silent) {
+        setLoading(false);
+        setStatusMessage('');
+      }
     }
-  }, [syncStateFromList, startPolling]);
+  }, [syncStateFromList, startPolling, setSliceDataIfChanged]);
 
   const handleProjectChange = useCallback(async (uuid: string) => {
     const proj = projects.find((p) => p.uuid === uuid);
@@ -1449,6 +1877,249 @@ export default function App() {
     }
   }, [projects, refreshSliceList, handleLogin]);
 
+  const upsertFederatedSlice = useCallback((federatedSlice?: any) => {
+    if (!federatedSlice?.id) return;
+    setCompositeSlices(prev => {
+      const idx = prev.findIndex(s => s.id === federatedSlice.id);
+      if (idx === -1) return [...prev, federatedSlice];
+      const next = [...prev];
+      next[idx] = federatedSlice;
+      return next;
+    });
+    setSelectedCompositeSliceId(prev => prev || federatedSlice.id);
+  }, []);
+
+  const refreshFederatedSlices = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setCompositeSlicesLoading(true);
+      setStatusMessage('Refreshing federated slices...');
+    }
+    try {
+      const list = await api.listFederatedSlices();
+      setCompositeSlices(list);
+      setCompositeEnabled(true);
+      setCheckedCompositeIds(prev => {
+        if (prev.size === 0) return prev;
+        const available = new Set(list.map(s => s.id));
+        return new Set([...prev].filter(id => available.has(id)));
+      });
+      if (selectedCompositeSliceId && !list.some(s => s.id === selectedCompositeSliceId)) {
+        setSelectedCompositeSliceId('');
+        setCompositeGraph(null);
+      }
+      return list;
+    } catch (e: any) {
+      if (!options?.silent) addError(e.message);
+      return [];
+    } finally {
+      if (!options?.silent) {
+        setCompositeSlicesLoading(false);
+        setStatusMessage('');
+      }
+    }
+  }, [selectedCompositeSliceId]);
+
+  const refreshFederatedSliceById = useCallback(async (federatedId: string) => {
+    if (!federatedId) return null;
+    try {
+      const data = await api.getFederatedSlice(federatedId);
+      upsertFederatedSlice(data);
+      if (selectedCompositeSliceId === federatedId) {
+        api.getFederatedGraph(federatedId).then(setCompositeGraph).catch(() => {});
+      }
+      return data;
+    } catch (e: any) {
+      addError(`Could not refresh federated slice ${federatedId}: ${e.message}`);
+      return null;
+    }
+  }, [addError, selectedCompositeSliceId, upsertFederatedSlice]);
+
+  const refreshFederatedProviderSliceLists = useCallback(async () => {
+    setStatusMessage('Refreshing provider slice lists...');
+    const [fabricResult, chameleonResult] = await Promise.allSettled([
+      api.listSlices(0),
+      api.listAllChameleonSlices(),
+    ]);
+    if (fabricResult.status === 'fulfilled') {
+      protectDeletingSlices(fabricResult.value);
+      setSlices(fabricResult.value);
+      setListLoaded(true);
+    } else {
+      addError(`FABRIC slice refresh failed: ${fabricResult.reason?.message || String(fabricResult.reason)}`);
+    }
+    if (chameleonResult.status === 'fulfilled') {
+      setChameleonSlices(chameleonResult.value);
+    } else {
+      addError(`Chameleon slice refresh failed: ${chameleonResult.reason?.message || String(chameleonResult.reason)}`);
+    }
+    setStatusMessage('');
+  }, [addError, protectDeletingSlices]);
+
+  const handleAttachFederatedMember = useCallback(async (provider: 'fabric' | 'chameleon', sliceId: string) => {
+    const federatedId = selectedCompositeSliceId;
+    if (!federatedId || !sliceId) return;
+    const fabricSlice = provider === 'fabric'
+      ? slices.find(s => (s.id || s.name) === sliceId || s.name === sliceId)
+      : undefined;
+    const chameleonSlice = provider === 'chameleon'
+      ? chameleonSlices.find(s => s.id === sliceId || s.name === sliceId)
+      : undefined;
+    const name = fabricSlice?.name || chameleonSlice?.name || sliceId;
+    setFederatedMemberSaving(true);
+    setStatusMessage(`Adding ${provider === 'fabric' ? 'FABRIC' : 'Chameleon'} slice to federated slice...`);
+    try {
+      const updated = await api.addFederatedMember(federatedId, {
+        provider,
+        slice_id: sliceId,
+        name,
+      });
+      upsertFederatedSlice(updated);
+      await refreshFederatedSliceById(federatedId);
+      setShowFederatedSubsliceDialog(false);
+      setFederatedSubsliceFilter('');
+    } catch (e: any) {
+      addError(e.message || `Could not add ${provider} member`);
+    } finally {
+      setFederatedMemberSaving(false);
+      setStatusMessage('');
+    }
+  }, [addError, chameleonSlices, refreshFederatedSliceById, selectedCompositeSliceId, slices, upsertFederatedSlice]);
+
+  const handleDetachFederatedMember = useCallback(async (
+    federatedId: string,
+    provider: 'fabric' | 'chameleon',
+    sliceId: string,
+    label?: string,
+  ) => {
+    if (!federatedId || !sliceId) return;
+    const providerLabel = provider === 'fabric' ? 'FABRIC' : 'Chameleon';
+    const displayName = label || sliceId;
+    if (!window.confirm(`Remove ${providerLabel} slice "${displayName}" from this federated slice?\n\nThis only detaches it from the federated slice; it does not delete the provider slice.`)) return;
+    setFederatedMemberSaving(true);
+    setStatusMessage(`Removing ${providerLabel} slice from federated slice...`);
+    try {
+      const updated = await api.removeFederatedMember(federatedId, { provider, slice_id: sliceId });
+      upsertFederatedSlice(updated);
+      const detailKey = `${provider}:${sliceId}`;
+      setExpandedCompositeMemberIds(prev => {
+        if (!prev.has(detailKey)) return prev;
+        const next = new Set(prev);
+        next.delete(detailKey);
+        return next;
+      });
+      setCompositeMemberDetails(prev => {
+        if (!(detailKey in prev)) return prev;
+        const next = { ...prev };
+        delete next[detailKey];
+        return next;
+      });
+      await refreshFederatedSliceById(federatedId);
+    } catch (e: any) {
+      addError(e.message || `Could not remove ${provider} member`);
+    } finally {
+      setFederatedMemberSaving(false);
+      setStatusMessage('');
+    }
+  }, [addError, refreshFederatedSliceById, upsertFederatedSlice]);
+
+  const selectedFederatedSlice = useMemo(
+    () => compositeSlices.find(s => s.id === selectedCompositeSliceId) || null,
+    [compositeSlices, selectedCompositeSliceId],
+  );
+
+  const federatedSubsliceCandidates = useMemo<FederatedSubsliceCandidate[]>(() => {
+    const selected = selectedFederatedSlice;
+    const attachedFabricKeys = new Set<string>();
+    const attachedChameleonKeys = new Set<string>();
+    const addKey = (set: Set<string>, value: unknown) => {
+      const text = String(value ?? '').trim();
+      if (text) set.add(text);
+    };
+
+    for (const id of selected?.fabric_slices || []) addKey(attachedFabricKeys, id);
+    for (const id of selected?.chameleon_slices || []) addKey(attachedChameleonKeys, id);
+    for (const member of selected?.members || []) {
+      const provider = String(member?.provider || member?.testbed || '').toLowerCase();
+      const target = provider.includes('chameleon') ? attachedChameleonKeys : provider.includes('fabric') ? attachedFabricKeys : null;
+      if (!target) continue;
+      addKey(target, member?.slice_id || member?.id);
+      addKey(target, member?.name);
+    }
+    for (const member of selected?.fabric_member_summaries || []) {
+      addKey(attachedFabricKeys, member?.id || member?.slice_id);
+      addKey(attachedFabricKeys, member?.name);
+    }
+    for (const member of selected?.chameleon_member_summaries || []) {
+      addKey(attachedChameleonKeys, member?.id || member?.slice_id);
+      addKey(attachedChameleonKeys, member?.name);
+    }
+
+    const fabricCandidates: FederatedSubsliceCandidate[] = slices
+      .filter(s => !attachedFabricKeys.has(String(s.id || '')) && !attachedFabricKeys.has(s.name))
+      .map(s => {
+        const id = s.id || s.name;
+        const state = s.state || 'Unknown';
+        const site = (s as any).site || (s as any).sites?.join?.(', ') || '';
+        const resources = [
+          (s as any).node_count ? `${(s as any).node_count} nodes` : '',
+          (s as any).network_count ? `${(s as any).network_count} networks` : '',
+          s.lease_end ? `lease ${new Date(s.lease_end).toLocaleDateString()}` : '',
+        ].filter(Boolean).join(' · ') || '-';
+        const created = (s as any).created || (s as any).created_at || s.lease_end || '';
+        const searchable = ['FABRIC', id, s.name, state, site, resources, created].join(' ').toLowerCase();
+        return { provider: 'fabric', providerLabel: 'FABRIC', id, name: s.name, state, site, resources, created, searchable };
+      });
+
+    const chameleonCandidates: FederatedSubsliceCandidate[] = chameleonSlices
+      .filter(s => !attachedChameleonKeys.has(s.id) && !attachedChameleonKeys.has(s.name))
+      .map(s => {
+        const site = [s.site, ...(s.sites || [])].filter(Boolean).filter((value, index, arr) => arr.indexOf(value) === index).join(', ');
+        const nodeCount = (s.nodes || []).reduce((total, node: any) => total + getChameleonNodeCount(node), 0);
+        const networkCount = (s.networks || []).length;
+        const resourceCount = (s.resources || []).length;
+        const resources = [
+          nodeCount ? `${nodeCount} server${nodeCount === 1 ? '' : 's'}` : '',
+          networkCount ? `${networkCount} network${networkCount === 1 ? '' : 's'}` : '',
+          resourceCount ? `${resourceCount} resource${resourceCount === 1 ? '' : 's'}` : '',
+        ].filter(Boolean).join(' · ') || '-';
+        const created = s.created || '';
+        const state = s.state || 'Unknown';
+        const searchable = ['Chameleon', s.id, s.name, state, site, resources, created].join(' ').toLowerCase();
+        return { provider: 'chameleon', providerLabel: 'Chameleon', id: s.id, name: s.name, state, site, resources, created, searchable };
+      });
+
+    const filter = federatedSubsliceFilter.trim().toLowerCase();
+    const filtered = [...fabricCandidates, ...chameleonCandidates]
+      .filter(candidate => !filter || candidate.searchable.includes(filter));
+    const sortKey = federatedSubsliceSort.key;
+    const direction = federatedSubsliceSort.dir === 'asc' ? 1 : -1;
+    return filtered.sort((a, b) => {
+      const av = String(a[sortKey] ?? '').toLowerCase();
+      const bv = String(b[sortKey] ?? '').toLowerCase();
+      if (av < bv) return -1 * direction;
+      if (av > bv) return 1 * direction;
+      return a.name.localeCompare(b.name);
+    });
+  }, [chameleonSlices, compositeSlices, federatedSubsliceFilter, federatedSubsliceSort, selectedFederatedSlice, slices]);
+
+  const handleFederatedCandidateSort = useCallback((key: FederatedCandidateSortKey) => {
+    setFederatedSubsliceSort(prev => (
+      prev.key === key
+        ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: 'asc' }
+    ));
+  }, []);
+
+  useEffect(() => {
+    if (currentView !== 'slices' && currentView !== 'infrastructure' && currentView !== 'chameleon') return;
+    refreshFederatedSlices({ silent: true });
+  }, [currentView, refreshFederatedSlices]);
+
+  useEffect(() => {
+    if (currentView !== 'slices' || slicesSubView !== 'slices') return;
+    refreshFederatedSlices({ silent: true });
+  }, [currentView, slicesSubView, refreshFederatedSlices]);
+
   // Debug: log when slices state changes from populated to empty
   const prevSliceCountRef = useRef(0);
   useEffect(() => {
@@ -1477,11 +2148,144 @@ export default function App() {
 
   // Helper: update slice data and re-validate
   const updateSliceAndValidate = useCallback((data: SliceData) => {
-    setSliceData(data);
+    setSliceDataIfChanged(data);
     if (data.name) {
       runValidation(data.name);
     }
-  }, [runValidation]);
+  }, [runValidation, setSliceDataIfChanged]);
+
+  const reportFederatedDeleteIssues = useCallback((result: api.DeleteFederatedSliceResult, label: string) => {
+    const failed = result.member_delete_errors || [];
+    const skipped = result.member_delete_skipped || [];
+    if (failed.length > 0) {
+      addError(`Deleted federated slice "${label}", but ${failed.length} sub-slice delete failed: ${failed.map(item => `${item.provider}:${item.slice_id}`).join(', ')}`);
+    }
+    if (skipped.length > 0) {
+      addError(`Deleted federated slice "${label}", but ${skipped.length} sub-slice type was not deleted automatically: ${skipped.map(item => `${item.provider}:${item.slice_id}`).join(', ')}`);
+    }
+  }, [addError]);
+
+  const refreshProviderSliceListsAfterFederatedDelete = useCallback(async () => {
+    try {
+      const [fabricList, chiList] = await Promise.all([
+        api.listSlices(0).catch(() => null),
+        api.listChameleonSlices().catch(() => null),
+      ]);
+      if (fabricList) {
+        protectDeletingSlices(fabricList);
+        setSlices(fabricList);
+        setListLoaded(true);
+      }
+      if (chiList) {
+        setChameleonSlices(chiList);
+      }
+    } catch {
+      // Best-effort refresh only; the delete result is already handled above.
+    }
+  }, [protectDeletingSlices]);
+
+  const handleDeleteFederatedSlice = useCallback(async (id: string) => {
+    const slice = compositeSlices.find(s => s.id === id);
+    const name = slice?.name || id;
+    const memberCount = federatedSubsliceCount(slice);
+    if (!window.confirm(`Delete federated slice "${name}"?`)) return;
+    const deleteMembers = memberCount > 0 && window.confirm(
+      `Also delete all ${memberCount} sub-slice${memberCount !== 1 ? 's' : ''} for "${name}"?\n\nThis will delete the linked FABRIC and Chameleon provider slices and release their managed resources.`,
+    );
+    setLoading(true);
+    setStatusMessage(deleteMembers ? 'Deleting federated slice and sub-slices...' : 'Deleting federated slice...');
+    try {
+      const result = await api.deleteFederatedSlice(id, { deleteMembers });
+      reportFederatedDeleteIssues(result, name);
+      setCompositeSlices(prev => prev.filter(s => s.id !== id));
+      setCheckedCompositeIds(prev => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      if (selectedCompositeSliceId === id) {
+        setSelectedCompositeSliceId('');
+        setCompositeGraph(null);
+      }
+      if (deleteMembers) await refreshProviderSliceListsAfterFederatedDelete();
+    } catch (e: any) {
+      addError(e.message);
+    } finally {
+      setLoading(false);
+      setStatusMessage('');
+    }
+  }, [addError, compositeSlices, refreshProviderSliceListsAfterFederatedDelete, reportFederatedDeleteIssues, selectedCompositeSliceId]);
+
+  const handleDeleteCheckedFederatedSlices = useCallback(async () => {
+    const ids = [...checkedCompositeIds];
+    if (ids.length === 0) return;
+    const selectedSlices = compositeSlices.filter(s => checkedCompositeIds.has(s.id));
+    const memberCount = selectedSlices.reduce((total, slice) => total + federatedSubsliceCount(slice), 0);
+    if (!window.confirm(`Delete ${ids.length} federated slice${ids.length !== 1 ? 's' : ''}?`)) return;
+    const deleteMembers = memberCount > 0 && window.confirm(
+      `Also delete all ${memberCount} sub-slice${memberCount !== 1 ? 's' : ''} from the selected federated slice${ids.length !== 1 ? 's' : ''}?\n\nThis will delete the linked FABRIC and Chameleon provider slices and release their managed resources.`,
+    );
+    setLoading(true);
+    setStatusMessage(deleteMembers ? 'Deleting federated slices and sub-slices...' : 'Deleting federated slices...');
+    try {
+      const deleted = new Set<string>();
+      for (const slice of selectedSlices) {
+        const result = await api.deleteFederatedSlice(slice.id, { deleteMembers });
+        reportFederatedDeleteIssues(result, slice.name || slice.id);
+        deleted.add(slice.id);
+      }
+      setCompositeSlices(prev => prev.filter(s => !deleted.has(s.id)));
+      setCheckedCompositeIds(new Set());
+      if (deleted.has(selectedCompositeSliceId)) {
+        setSelectedCompositeSliceId('');
+        setCompositeGraph(null);
+      }
+      if (deleteMembers) await refreshProviderSliceListsAfterFederatedDelete();
+    } catch (e: any) {
+      addError(e.message);
+    } finally {
+      setLoading(false);
+      setStatusMessage('');
+    }
+  }, [addError, checkedCompositeIds, compositeSlices, refreshProviderSliceListsAfterFederatedDelete, reportFederatedDeleteIssues, selectedCompositeSliceId]);
+
+  const federatedSliceLinks = useMemo(() => {
+    const fabric: Record<string, { id: string; name: string; state?: string }> = {};
+    const chameleon: Record<string, { id: string; name: string; state?: string }> = {};
+    const addLink = (
+      map: Record<string, { id: string; name: string; state?: string }>,
+      key: unknown,
+      link: { id: string; name: string; state?: string },
+    ) => {
+      const text = String(key ?? '').trim();
+      if (text && !map[text]) map[text] = link;
+    };
+
+    for (const fed of compositeSlices) {
+      if (!fed?.id) continue;
+      const link = { id: fed.id, name: fed.name || fed.id, state: fed.state };
+      for (const sliceId of (fed.fabric_slices || [])) addLink(fabric, sliceId, link);
+      for (const sliceId of (fed.chameleon_slices || [])) addLink(chameleon, sliceId, link);
+      for (const member of (fed.members || [])) {
+        const provider = String(member.provider || member.testbed || '').toLowerCase();
+        const target = provider.includes('chameleon') ? chameleon : provider.includes('fabric') ? fabric : null;
+        if (!target) continue;
+        addLink(target, member.slice_id || member.id, link);
+        addLink(target, member.name, link);
+      }
+      for (const member of (fed.fabric_member_summaries || [])) {
+        addLink(fabric, member.id || member.slice_id, link);
+        addLink(fabric, member.name, link);
+      }
+      for (const member of (fed.chameleon_member_summaries || [])) {
+        addLink(chameleon, member.id || member.slice_id, link);
+        addLink(chameleon, member.name, link);
+      }
+    }
+
+    return { fabric, chameleon };
+  }, [compositeSlices]);
 
 
   const handleCheckAvailability = useCallback(async () => {
@@ -1506,20 +2310,21 @@ export default function App() {
     const hasChameleon = (sliceData?.chameleon_nodes || []).length > 0;
     lastMutationRef.current = Date.now(); // Switch to ACTIVE polling mode
     setLoading(true);
-    setStatusMessage(hasChameleon ? 'Submitting composite slice (FABRIC + Chameleon)...' : 'Submitting slice to FABRIC...');
+    setStatusMessage(hasChameleon ? 'Submitting federated slice (FABRIC + Chameleon)...' : 'Submitting slice to FABRIC...');
 
     // Open build log tab with a fresh log
     setOpenBootLogSlices(prev => prev.includes(name) ? prev : [...prev, name]);
     setConsoleExpanded(true);
     setSliceBootRunning(prev => ({ ...prev, [name]: true }));
     setSliceBootLogs(prev => ({ ...prev, [name]: [] }));
-    appendBuildLog(name, { type: 'build', message: hasChameleon ? 'Submitting composite slice (FABRIC + Chameleon)...' : 'Submitting slice to FABRIC...' });
+    appendBuildLog(name, { type: 'build', message: hasChameleon ? 'Submitting federated slice (FABRIC + Chameleon)...' : 'Submitting slice to FABRIC...' });
 
     try {
       let data: SliceData;
       if (hasChameleon) {
         const compositeResult = await api.submitCompositeSlice(sliceId);
-        appendBuildLog(name, { type: 'build', message: `Composite submit: FABRIC=${compositeResult.fabric_status}, Chameleon=${compositeResult.chameleon_status || 'N/A'}` });
+        upsertFederatedSlice(compositeResult.federated_slice);
+        appendBuildLog(name, { type: 'build', message: `Federated submit: FABRIC=${compositeResult.fabric_status}, Chameleon=${compositeResult.chameleon_status || 'N/A'}` });
         if (compositeResult.chameleon_error) {
           appendBuildLog(name, { type: 'error', message: `Chameleon error: ${compositeResult.chameleon_error}` });
         }
@@ -1532,7 +2337,7 @@ export default function App() {
         data = await api.submitSlice(sliceId);
       }
       if (data.id && data.id !== sliceId) setSelectedSliceId(data.id);
-      setSliceData(data);
+      setSliceDataIfChanged(data);
       setValidationIssues([]);
       setValidationValid(true);
       // Mark this slice as GUI-submitted so polling auto-runs boot config for it
@@ -1591,9 +2396,17 @@ export default function App() {
       setLoading(false);
       setStatusMessage('');
     }
-  }, [selectedSliceId, runValidation, startPolling, handleRunBootConfigStream, appendBuildLog]);
+  }, [selectedSliceId, runValidation, startPolling, handleRunBootConfigStream, appendBuildLog, upsertFederatedSlice, setSliceDataIfChanged]);
 
   const handleRefreshSlices = useCallback(async () => {
+    if (currentViewRef.current === 'slices') {
+      await refreshFederatedSlices();
+      if (selectedCompositeSliceId) {
+        setCompositeRefreshNonce(n => n + 1);
+        api.getFederatedGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+      }
+      return;
+    }
     setLoading(true);
     setStatusMessage('Refreshing slices...');
     try {
@@ -1610,9 +2423,11 @@ export default function App() {
       if (currentName) {
         try {
           const data = await api.refreshSlice(currentName);
-          setSliceData(data);
+          setSliceDataIfChanged(data);
           runValidation(currentName);
-        } catch { /* slice may no longer exist */ }
+        } catch (e: any) {
+          addError(`Could not refresh selected FABRIC slice ${currentName}: ${e.message || String(e)}`);
+        }
       }
     } catch (e: any) {
       addError(e.message);
@@ -1620,13 +2435,9 @@ export default function App() {
       setLoading(false);
       setStatusMessage('');
     }
-  }, [runValidation, syncStateFromList]);
+  }, [addError, refreshFederatedSlices, selectedCompositeSliceId, runValidation, syncStateFromList, setSliceDataIfChanged]);
 
   // --- Chameleon callbacks (mirror FABRIC pattern) ---
-  const handleRefreshChameleonSlices = useCallback(async () => {
-    try { setChameleonSlices(await api.listAllChameleonSlices()); } catch { /* ignore */ }
-  }, []);
-
   const handleCreateChameleonDraft = useCallback(async () => {
     const name = prompt('Draft name:');
     if (!name) return;
@@ -1640,35 +2451,236 @@ export default function App() {
     } catch (e: any) { setErrors(prev => [...prev, e.message]); }
   }, [chameleonSites]);
 
-  // --- Composite auto-refresh: poll member states every 30s ---
+  // --- Federated auto-refresh: poll live member and resource states ---
   const compositeStatesRef = useRef<string>('');
   useEffect(() => {
     if (!selectedCompositeSliceId || pollInterval === 0 || currentView !== 'slices') return;
-    // Immediate refresh on (re-)activation so the user sees fresh state
-    // without waiting 30s after switching back to the composite view.
-    const refreshComposite = async () => {
+    // Immediate refresh on activation forces the topology graph to reload even
+    // when member states have not changed; otherwise a stale graph can survive
+    // a provider-view round trip.
+    let cancelled = false;
+    const refreshComposite = async (forceGraph = false) => {
       try {
-        const data = await api.getCompositeSlice(selectedCompositeSliceId);
-        const stateKey = JSON.stringify(data.fabric_member_summaries?.map((m: any) => m.state) || []) +
-                         JSON.stringify(data.chameleon_member_summaries?.map((m: any) => m.state) || []);
-        if (stateKey !== compositeStatesRef.current) {
+        const data = await api.getFederatedSlice(selectedCompositeSliceId);
+        const fabricMembers = collectFederatedProviderMembers(data, 'fabric');
+        const chameleonMembers = collectFederatedProviderMembers(data, 'chameleon');
+
+        const [fabricResults, chameleonResults] = await Promise.all([
+          Promise.all(fabricMembers.map(async (member: any) => {
+            const id = String(member.id || member.slice_id || '');
+            try {
+              const sliverData = await api.getSliverStates(id, 0);
+              return {
+                member,
+                sliverData,
+                summary: {
+                  id,
+                  name: member.name || sliverData.slice_name || id,
+                  state: sliverData.slice_state || member.state || 'Unknown',
+                  node_count: sliverData.nodes?.length || member.node_count || 0,
+                },
+              };
+            } catch {
+              return {
+                member,
+                sliverData: null,
+                summary: {
+                  id,
+                  name: member.name || id,
+                  state: member.state || 'Unknown',
+                  node_count: member.node_count || 0,
+                },
+              };
+            }
+          })),
+          Promise.all(chameleonMembers.map(async (member: any) => {
+            const id = String(member.id || member.slice_id || '');
+            try {
+              const draft = await api.getChameleonDraft(id);
+              return { member, draft, summary: chameleonDraftMemberSummary(draft, member) };
+            } catch {
+              return {
+                member,
+                draft: null,
+                summary: {
+                  id,
+                  name: member.name || id,
+                  state: member.state || 'Unknown',
+                  site: member.site || '',
+                  node_count: member.node_count || 0,
+                },
+              };
+            }
+          })),
+        ]);
+
+        if (cancelled) return;
+
+        const fabricSummaries = fabricResults.map(result => result.summary);
+        const chameleonSummaries = chameleonResults.map(result => result.summary);
+        const liveFederatedSlice = {
+          ...data,
+          fabric_member_summaries: fabricSummaries,
+          chameleon_member_summaries: chameleonSummaries,
+          state: federatedStateFromMemberStates(fabricSummaries, chameleonSummaries, data.state || 'Draft'),
+        };
+
+        const stateKey = JSON.stringify({
+          state: liveFederatedSlice.state,
+          fabric: fabricResults.map(result => ({
+            id: result.summary.id,
+            state: result.summary.state,
+            nodes: result.sliverData?.nodes?.map(node => ({
+              name: node.name,
+              state: node.reservation_state,
+              ip: node.management_ip,
+              error: node.error_message,
+            })) || [],
+          })),
+          chameleon: chameleonResults.map(result => ({
+            id: result.summary.id,
+            state: result.summary.state,
+            resources: result.draft?.resources?.map(resource => ({
+              id: resource.resource_id || resource.id,
+              type: resource.type,
+              status: resource.status,
+              floating_ip: resource.floating_ip,
+              ip_addresses: resource.ip_addresses,
+              reservations: resource.reservations?.map((reservation: any) => ({
+                id: reservation.id,
+                status: reservation.status,
+              })),
+            })) || [],
+          })),
+        });
+        const stateChanged = stateKey !== compositeStatesRef.current;
+        if (stateChanged || forceGraph) {
           compositeStatesRef.current = stateKey;
-          setCompositeSlices(prev => prev.map(s => s.id === data.id ? data : s));
-          api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+          setCompositeSlices(prev => prev.map(s => s.id === liveFederatedSlice.id ? liveFederatedSlice : s));
+        }
+
+        if (fabricResults.length > 0) {
+          setSlices(prev => {
+            const next = [...prev];
+            for (const result of fabricResults) {
+              const summary = result.summary;
+              const idx = next.findIndex(s => s.id === summary.id || s.name === summary.name || s.name === result.sliverData?.slice_name);
+              const entry = { id: summary.id, name: summary.name, state: summary.state };
+              if (idx === -1) next.push(entry);
+              else next[idx] = { ...next[idx], ...entry };
+            }
+            return next;
+          });
+        }
+
+        const refreshedChameleonDrafts = chameleonResults
+          .map(result => result.draft)
+          .filter(Boolean) as ChameleonDraft[];
+        if (refreshedChameleonDrafts.length > 0) {
+          setChameleonSlices(prev => {
+            const next = [...prev];
+            for (const draft of refreshedChameleonDrafts) {
+              const idx = next.findIndex((s: any) => s.id === draft.id);
+              if (idx === -1) next.push(draft as any);
+              else next[idx] = draft as any;
+            }
+            return next;
+          });
+          const selectedChiId = selectedChameleonSliceRef.current;
+          const selectedDraft = refreshedChameleonDrafts.find(draft => draft.id === selectedChiId);
+          if (selectedDraft) setChameleonSliceData(selectedDraft);
+        }
+
+        setCompositeMemberDetails(prev => {
+          let changed = false;
+          const next = { ...prev };
+
+          for (const result of fabricResults) {
+            const key = federatedMemberDetailKey('fabric', result.summary);
+            const current = next[key];
+            if (!current?.data || !result.sliverData) continue;
+            const currentData = current.data as SliceData;
+            next[key] = {
+              ...current,
+              loading: false,
+              data: {
+                ...currentData,
+                state: result.sliverData.slice_state || currentData.state,
+                nodes: (currentData.nodes || []).map(node => {
+                  const fresh = result.sliverData?.nodes?.find(freshNode => freshNode.name === node.name);
+                  if (!fresh) return node;
+                  return {
+                    ...node,
+                    reservation_state: fresh.reservation_state || node.reservation_state,
+                    management_ip: fresh.management_ip || node.management_ip,
+                    error_message: fresh.error_message || node.error_message,
+                  };
+                }),
+              },
+            };
+            changed = true;
+          }
+
+          for (const result of chameleonResults) {
+            if (!result.draft) continue;
+            const key = federatedMemberDetailKey('chameleon', result.summary);
+            const current = next[key];
+            if (!current) continue;
+            next[key] = { ...current, loading: false, data: result.draft };
+            changed = true;
+          }
+
+          return changed ? next : prev;
+        });
+
+        if (stateChanged || (forceGraph && slicesSubView === 'topology')) {
+          api.getFederatedGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
         }
       } catch { /* ignore polling errors */ }
     };
-    refreshComposite();
-    const interval = setInterval(refreshComposite, 30000);
-    return () => clearInterval(interval);
-  }, [selectedCompositeSliceId, pollInterval, currentView]);
+    refreshComposite(true);
+    const liveRefreshInterval = Math.min(pollInterval, 30000);
+    const interval = setInterval(refreshComposite, liveRefreshInterval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [selectedCompositeSliceId, pollInterval, currentView, slicesSubView, compositeRefreshNonce]);
 
-  // Refresh composite graph when switching to topology tab
+  // Refresh federated graph when switching to topology tab
   useEffect(() => {
     if (currentView === 'slices' && slicesSubView === 'topology' && selectedCompositeSliceId) {
-      api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+      api.getFederatedGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
     }
   }, [slicesSubView, currentView, selectedCompositeSliceId]);
+
+  // Load FABRIC member slice data when the federated Storage tab is active
+  useEffect(() => {
+    if (currentView !== 'slices' || slicesSubView !== 'storage') {
+      return;
+    }
+    if (!selectedCompositeSliceId) {
+      setCompositeMemberFabricData([]);
+      return;
+    }
+    const composite = compositeSlices.find((s) => s.id === selectedCompositeSliceId);
+    const memberIds: string[] = composite?.fabric_slices || [];
+    if (memberIds.length === 0) {
+      setCompositeMemberFabricData([]);
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      memberIds.map((id: string) =>
+        api.getSlice(id)
+          .then((data) => ({ sliceName: data?.name || id, sliceData: data }))
+          .catch(() => ({ sliceName: id, sliceData: null }))
+      )
+    ).then((entries) => {
+      if (!cancelled) setCompositeMemberFabricData(entries);
+    });
+    return () => { cancelled = true; };
+  }, [currentView, slicesSubView, selectedCompositeSliceId, compositeSlices]);
 
   // Refresh Chameleon graph when switching to topology tab
   useEffect(() => {
@@ -1724,7 +2736,7 @@ export default function App() {
     for (const n of chameleonSliceData.nodes) {
       const key = `${n.site}::${n.node_type}`;
       if (!siteTypeMap[key]) siteTypeMap[key] = { site: n.site, count: 0 };
-      siteTypeMap[key].count += n.count || 1;
+      siteTypeMap[key].count += getChameleonNodeCount(n);
     }
     for (const [key, { site, count }] of Object.entries(siteTypeMap)) {
       const nodeType = key.split('::')[1];
@@ -1756,8 +2768,9 @@ export default function App() {
     setSliceBootLogs(prev => ({ ...prev, [deployLogId]: [] }));
     setSliceBootRunning(prev => ({ ...prev, [deployLogId]: true }));
     const log = (type: string, message: string) => appendBuildLog(deployLogId, { type, message });
+    const totalPlannedInstances = chameleonSliceData.nodes.reduce((sum, node) => sum + getChameleonNodeCount(node), 0);
     log('deploy', `Starting Chameleon deployment for "${chameleonSliceData.name}"...`);
-    log('build', `Sites: ${chiDraftSites.join(', ')} | Nodes: ${chameleonSliceData.nodes.length} | Mode: ${chiDeployMode}`);
+    log('build', `Sites: ${chiDraftSites.join(', ')} | Instances: ${totalPlannedInstances} | Mode: ${chiDeployMode}`);
 
     try {
       // Build site→leaseId map
@@ -1838,13 +2851,29 @@ export default function App() {
         } catch { /* proceed without */ }
       }
 
-      // Ensure SSH keypair exists at each site AND we have the private key
-      log('step', 'Ensuring SSH keypair at each site...');
-      const keypairName = 'loomai-key';
-      for (const site of Object.keys(leaseMap)) {
+      // Resolve SSH keypairs before launching. User-selected keypairs are
+      // expected to already exist at the Chameleon site; LoomAI only ensures
+      // its managed fallback key when a node resolves to it.
+      const currentSettings = await api.getSettings().catch(() => null) as LoomAISettings | null;
+      const nodeKeypairNames: Record<string, string> = {};
+      const keypairNamesBySite: Record<string, Set<string>> = {};
+      for (const node of chameleonSliceData.nodes) {
+        const keyName = resolveChameleonDeployKeyName(node, currentSettings);
+        nodeKeypairNames[node.id] = keyName;
+        const nodeSite = node.site;
+        if (!keypairNamesBySite[nodeSite]) keypairNamesBySite[nodeSite] = new Set();
+        keypairNamesBySite[nodeSite].add(keyName);
+      }
+
+      log('step', 'Checking SSH keypairs for launch...');
+      for (const [site, keyNames] of Object.entries(keypairNamesBySite)) {
+        if (!keyNames.has('loomai-key')) {
+          log('step', `SSH keypair at ${site}: using ${Array.from(keyNames).join(', ')}`);
+          continue;
+        }
         try {
           const result = await api.ensureChameleonKeypair(site);
-          log('step', `SSH keypair "${keypairName}" at ${site}: ${result.status}`);
+          log('step', `SSH keypair "loomai-key" at ${site}: ${result.status}`);
         } catch (e: any) {
           log('error', `SSH keypair at ${site}: ${e.message}`);
         }
@@ -1868,7 +2897,7 @@ export default function App() {
 
       // Deploy instances — each node uses its own site's lease/reservation
       setChiDeployStatus('Launching instances...');
-      log('build', `Launching ${chameleonSliceData.nodes.length} instance${chameleonSliceData.nodes.length !== 1 ? 's' : ''}...`);
+      log('build', `Launching ${totalPlannedInstances} instance${totalPlannedInstances !== 1 ? 's' : ''}...`);
       let launched = 0;
       for (const node of chameleonSliceData.nodes) {
         const nodeSite = node.site;
@@ -1892,41 +2921,49 @@ export default function App() {
           if (fallback) networkIds.push(fallback);
         }
         const networkId = networkIds.length === 1 ? networkIds[0] : undefined;
-        try {
-          log('node', `Launching ${node.name} at ${nodeSite}...`);
-          const instance = await api.createChameleonInstance({
-            site: nodeSite,
-            name: node.name,
-            lease_id: nodeLeaseId,
-            image_id: node.image || 'CC-Ubuntu22.04',
-            key_name: keypairName,
-            ...(reservationMap[nodeSite] ? { reservation_id: reservationMap[nodeSite] } : {}),
-            ...(networkIds.length > 1 ? { network_ids: networkIds } : networkId ? { network_id: networkId } : {}),
-          });
-          launched++;
-          log('step', `\u2713 ${node.name} launched (${instance.id?.slice(0, 12) || '?'}...)`);
-          // Track instance in slice resources (best-effort)
+        const count = getChameleonNodeCount(node);
+        const keypairName = nodeKeypairNames[node.id] || resolveChameleonDeployKeyName(node, currentSettings);
+        for (let index = 0; index < count; index++) {
+          const instanceName = getChameleonReplicaName(node.name, count, index);
           try {
-            await api.addChameleonSliceResource(selectedChameleonSliceId, {
-              type: 'instance',
-              id: instance.id || '',
-              name: node.name,
+            log('node', `Launching ${instanceName} at ${nodeSite}...`);
+            const instance = await api.createChameleonInstance({
               site: nodeSite,
-              image: node.image || 'CC-Ubuntu22.04',
+              name: instanceName,
               lease_id: nodeLeaseId,
+              image_id: node.image || 'CC-Ubuntu22.04',
+              key_name: keypairName,
+              ...(reservationMap[nodeSite] ? { reservation_id: reservationMap[nodeSite] } : {}),
+              ...(networkIds.length > 1 ? { network_ids: networkIds } : networkId ? { network_id: networkId } : {}),
             });
-          } catch { /* best-effort tracking */ }
-          setChiDeployStatus(`Launching instances... (${launched}/${chameleonSliceData.nodes.length})`);
-        } catch (e: any) {
-          log('error', `Failed to launch ${node.name}: ${e.message}`);
-          setErrors(prev => [...prev, `Failed to launch ${node.name}: ${e.message}`]);
+            launched++;
+            log('step', `\u2713 ${instanceName} launched (${instance.id?.slice(0, 12) || '?'}...)`);
+            // Track instance in slice resources (best-effort)
+            try {
+              await api.addChameleonSliceResource(selectedChameleonSliceId, {
+                type: 'instance',
+                id: instance.id || '',
+                name: instanceName,
+                site: nodeSite,
+                image: node.image || 'CC-Ubuntu22.04',
+                lease_id: nodeLeaseId,
+                key_name: keypairName,
+                planned_node_id: node.id,
+                planned_node_name: node.name,
+              });
+            } catch { /* best-effort tracking */ }
+            setChiDeployStatus(`Launching instances... (${launched}/${totalPlannedInstances})`);
+          } catch (e: any) {
+            log('error', `Failed to launch ${instanceName}: ${e.message}`);
+            setErrors(prev => [...prev, `Failed to launch ${instanceName}: ${e.message}`]);
+          }
         }
       }
 
       setChiDeployStatus(`Deployed (${launched} instance${launched !== 1 ? 's' : ''} launched)`);
 
       // Auto-bastion: if any nodes don't have floating IP, create a bastion for SSH access
-      const fipNodeIds = new Set(chameleonSliceData.floating_ips || []);
+      const fipNodeIds = getChameleonFloatingIpNodeIds(chameleonSliceData.floating_ips);
       const nodesWithoutFip = chameleonSliceData.nodes.filter(n => !fipNodeIds.has(n.id));
       if (nodesWithoutFip.length > 0 && launched > 0) {
         for (const site of Object.keys(leaseMap)) {
@@ -1965,7 +3002,7 @@ export default function App() {
           }
         } catch (e: any) {
           log('error', `Network setup failed: ${e.message}`);
-          log('step', 'You can manually assign floating IPs from the OpenStack tab → Instances → "+ FIP" button');
+          log('step', 'You can manually assign floating IPs from the Project Inventory tab → Instances → "+ FIP" button');
         }
       }
 
@@ -2062,7 +3099,16 @@ export default function App() {
         setSelectedChameleonSliceId('');
         setChameleonSliceData(null);
         setChameleonSlices(prev => prev.filter(x => x.id !== selectedChameleonSliceId));
-      } catch (e: any) { setErrors(prev => [...prev, e.message]); }
+      } catch (e: any) {
+        // If backend 404s, the slice is already gone — remove the stale local entry
+        if (/404|not found/i.test(e?.message || '')) {
+          setSelectedChameleonSliceId('');
+          setChameleonSliceData(null);
+          setChameleonSlices(prev => prev.filter(x => x.id !== selectedChameleonSliceId));
+        } else {
+          setErrors(prev => [...prev, e.message]);
+        }
+      }
     } else {
       // Slice has resources — open the delete dialog
       setChiDeleteMode('release');
@@ -2083,35 +3129,238 @@ export default function App() {
       setChameleonSlices(prev => prev.filter(x => x.id !== selectedChameleonSliceId));
       setShowChameleonDeleteDialog(false);
     } catch (e: any) {
-      setErrors(prev => [...prev, e.message]);
+      // If backend 404s, the slice is already gone — remove the stale local entry
+      if (/404|not found/i.test(e?.message || '')) {
+        setSelectedChameleonSliceId('');
+        setChameleonSliceData(null);
+        setChameleonSlices(prev => prev.filter(x => x.id !== selectedChameleonSliceId));
+        setShowChameleonDeleteDialog(false);
+      } else {
+        setErrors(prev => [...prev, e.message]);
+      }
     }
     setChiDeleting(false);
   }, [selectedChameleonSliceId, chiDeleteMode]);
 
-  const handleDeleteElements = useCallback(async (elements: Record<string, string>[]) => {
-    if (!sliceData || elements.length === 0) return;
-    setLoading(true);
-    try {
-      let data: SliceData = sliceData;
-      for (const el of elements) {
-        if (el.element_type === 'node') {
-          data = await api.removeNode(selectedSliceId, el.name);
-        } else if (el.element_type === 'network') {
-          data = await api.removeNetwork(selectedSliceId, el.name);
-        } else if (el.element_type === 'facility-port') {
-          data = await api.removeFacilityPort(selectedSliceId, el.name);
-        } else if (el.element_type === 'port-mirror') {
-          data = await api.removePortMirror(selectedSliceId, el.name);
+  const textValue = useCallback((value: unknown) => String(value ?? '').trim(), []);
+
+  const refreshSelectedFederatedTopology = useCallback(async () => {
+    const federatedId = selectedCompositeSliceId;
+    if (!federatedId) return;
+    const [sliceResult, graphResult] = await Promise.allSettled([
+      api.getFederatedSlice(federatedId),
+      api.getFederatedGraph(federatedId),
+    ]);
+    if (sliceResult.status === 'fulfilled') {
+      upsertFederatedSlice(sliceResult.value);
+    } else {
+      addError(`Could not refresh federated slice after topology edit: ${sliceResult.reason?.message || String(sliceResult.reason)}`);
+    }
+    if (graphResult.status === 'fulfilled') {
+      setCompositeGraph(graphResult.value);
+      setCompositeRefreshNonce(n => n + 1);
+    } else {
+      addError(`Could not refresh federated topology after edit: ${graphResult.reason?.message || String(graphResult.reason)}`);
+    }
+  }, [addError, selectedCompositeSliceId, upsertFederatedSlice]);
+
+  const applyUpdatedFabricSlice = useCallback((data: SliceData, targetSlice: string) => {
+    if (!data) return;
+    setSlices(prev => {
+      const entry = {
+        id: data.id || targetSlice,
+        name: data.name || targetSlice,
+        state: data.state || 'Unknown',
+        has_errors: (data.error_messages?.length ?? 0) > 0,
+      };
+      const idx = prev.findIndex(s =>
+        s.id === entry.id
+        || s.name === entry.name
+        || s.id === targetSlice
+        || s.name === targetSlice
+      );
+      if (idx === -1) return [...prev, entry];
+      const next = [...prev];
+      next[idx] = { ...next[idx], ...entry };
+      return next;
+    });
+    setCompositeMemberDetails(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const [key, detail] of Object.entries(prev)) {
+        const current = detail.data as SliceData | null;
+        if (!key.startsWith('fabric:') || !current) continue;
+        if (
+          key === `fabric:${targetSlice}`
+          || current.id === targetSlice
+          || current.name === targetSlice
+          || current.id === data.id
+          || current.name === data.name
+        ) {
+          next[key] = { ...detail, loading: false, data };
+          changed = true;
         }
       }
+      return changed ? next : prev;
+    });
+    const selectedId = selectedSliceRef.current;
+    if (
+      selectedId
+      && (selectedId === targetSlice || selectedId === data.id || selectedId === data.name)
+    ) {
       updateSliceAndValidate(data);
+    }
+  }, [updateSliceAndValidate]);
+
+  const applyUpdatedChameleonDraft = useCallback((draft: ChameleonDraft) => {
+    if (!draft?.id) return;
+    setChameleonSlices(prev => {
+      const idx = prev.findIndex((s: any) => s.id === draft.id);
+      if (idx === -1) return [...prev, draft as any];
+      const next = [...prev];
+      next[idx] = draft as any;
+      return next;
+    });
+    setCompositeMemberDetails(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const [key, detail] of Object.entries(prev)) {
+        const current = detail.data as ChameleonDraft | null;
+        if (!key.startsWith('chameleon:') || !current) continue;
+        if (key === `chameleon:${draft.id}` || current.id === draft.id || current.name === draft.name) {
+          next[key] = { ...detail, loading: false, data: draft };
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    if (selectedChameleonSliceRef.current === draft.id) {
+      setChameleonSliceData(draft as any);
+      setChiDraftVersion(v => v + 1);
+    }
+  }, []);
+
+  const refreshChameleonDraftById = useCallback(async (draftId: string) => {
+    if (!draftId) return null;
+    try {
+      const draft = await api.getChameleonDraft(draftId);
+      applyUpdatedChameleonDraft(draft);
+      return draft;
+    } catch (e: any) {
+      if (!/404|not found/i.test(e?.message || '')) {
+        addError(`Could not refresh Chameleon slice ${draftId}: ${e.message || String(e)}`);
+      }
+      return null;
+    }
+  }, [addError, applyUpdatedChameleonDraft]);
+
+  const handleDeleteElements = useCallback(async (elements: Record<string, string>[]) => {
+    if (elements.length === 0) return;
+    setLoading(true);
+    let providerTopologyChanged = false;
+    try {
+      for (const el of elements as Array<Record<string, any>>) {
+        const elementType = textValue(el.element_type);
+        const testbed = textValue(el.testbed).toLowerCase();
+        const isChameleonElement = testbed === 'chameleon' || elementType === 'chameleon_instance';
+
+        if (isChameleonElement) {
+          const draftId = textValue(el.slice_id) || textValue(el.draft_id) || selectedChameleonSliceRef.current;
+          if (!draftId) throw new Error(`Cannot delete ${textValue(el.name) || elementType}: no Chameleon slice id was provided.`);
+          if (elementType === 'chameleon_instance') {
+            const nodeId = textValue(el.node_id) || textValue(el.planned_node_id);
+            const status = textValue(el.status).toUpperCase();
+            if (status === 'DRAFT' && nodeId) {
+              const updated = await api.removeChameleonDraftNode(draftId, nodeId);
+              applyUpdatedChameleonDraft(updated);
+              providerTopologyChanged = true;
+            } else if (textValue(el.resource_id)) {
+              const updated = await api.removeChameleonSliceResource(draftId, textValue(el.resource_id));
+              applyUpdatedChameleonDraft(updated);
+              providerTopologyChanged = true;
+            } else {
+              throw new Error(`Cannot delete Chameleon server "${textValue(el.name) || textValue(el.id)}" from the topology.`);
+            }
+          } else if (elementType === 'network') {
+            const networkId = textValue(el.network_id);
+            if (textValue(el.deletable).toLowerCase() === 'true' && networkId) {
+              const updated = await api.removeChameleonDraftNetwork(draftId, networkId);
+              applyUpdatedChameleonDraft(updated);
+              providerTopologyChanged = true;
+            } else if (textValue(el.resource_id)) {
+              const updated = await api.removeChameleonSliceResource(draftId, textValue(el.resource_id));
+              applyUpdatedChameleonDraft(updated);
+              providerTopologyChanged = true;
+            } else {
+              throw new Error(`Cannot delete Chameleon network "${textValue(el.name) || textValue(el.id)}" from the topology.`);
+            }
+          } else if (textValue(el.resource_id)) {
+            const updated = await api.removeChameleonSliceResource(draftId, textValue(el.resource_id));
+            applyUpdatedChameleonDraft(updated);
+            providerTopologyChanged = true;
+          } else {
+            throw new Error(`Cannot delete Chameleon resource "${textValue(el.name) || elementType}" from the slice.`);
+          }
+          continue;
+        }
+
+        const targetSlice = textValue(el.slice_id) || textValue(el.slice_name) || selectedSliceId;
+        if (!targetSlice) throw new Error(`Cannot delete ${textValue(el.name) || elementType}: no FABRIC slice id was provided.`);
+        let data: SliceData | null = null;
+        if (elementType === 'node') {
+          data = await api.removeNode(targetSlice, el.name);
+        } else if (elementType === 'network') {
+          data = await api.removeNetwork(targetSlice, el.name);
+        } else if (elementType === 'facility-port') {
+          data = await api.removeFacilityPort(targetSlice, el.name);
+        } else if (elementType === 'port-mirror') {
+          data = await api.removePortMirror(targetSlice, el.name);
+        }
+        if (data) {
+          applyUpdatedFabricSlice(data, targetSlice);
+          providerTopologyChanged = true;
+        }
+      }
+      if (selectedCompositeSliceId && providerTopologyChanged) {
+        await refreshSelectedFederatedTopology();
+      }
       setSelectedElement(null);
     } catch (e: any) {
       addError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [sliceData, selectedSliceId, updateSliceAndValidate]);
+  }, [addError, applyUpdatedChameleonDraft, applyUpdatedFabricSlice, refreshSelectedFederatedTopology, selectedCompositeSliceId, selectedSliceId, textValue]);
+
+  const handleDeleteChameleonInstanceFromTopology = useCallback(async (action: ContextMenuAction) => {
+    if (!action.instanceId || !action.instanceSite) return;
+    const el = (action.elements?.[0] || {}) as Record<string, any>;
+    const draftId = textValue(el.slice_id) || textValue(el.draft_id) || selectedChameleonSliceRef.current;
+    const resourceId = textValue(el.resource_id);
+    setLoading(true);
+    try {
+      await api.deleteChameleonInstance(action.instanceId, action.instanceSite);
+      if (draftId && resourceId) {
+        try {
+          const updated = await api.removeChameleonSliceResource(draftId, resourceId);
+          applyUpdatedChameleonDraft(updated);
+        } catch {
+          await refreshChameleonDraftById(draftId);
+        }
+      } else if (draftId) {
+        await refreshChameleonDraftById(draftId);
+      }
+      if (selectedCompositeSliceId) {
+        await refreshSelectedFederatedTopology();
+      }
+      handleRefreshChameleonSlices({ silent: true, refreshSelected: currentViewRef.current === 'chameleon' });
+      setSelectedElement(null);
+    } catch (e: any) {
+      setErrors(prev => [...prev, `Delete failed: ${e.message}`]);
+    } finally {
+      setLoading(false);
+    }
+  }, [applyUpdatedChameleonDraft, handleRefreshChameleonSlices, refreshChameleonDraftById, refreshSelectedFederatedTopology, selectedCompositeSliceId, textValue]);
 
   const handleDeleteSlice = useCallback(async () => {
     if (!selectedSliceId) return;
@@ -2275,7 +3524,7 @@ export default function App() {
     setStatusMessage('Creating slice...');
     try {
       const data = await api.createSlice(name);
-      setSliceData(data);
+      setSliceDataIfChanged(data);
       const newId = data.id || '';
       setSelectedSliceId(newId);
       setSlices((prev) => {
@@ -2290,20 +3539,24 @@ export default function App() {
       setLoading(false);
       setStatusMessage('');
     }
-  }, [runValidation]);
+  }, [runValidation, setSliceDataIfChanged]);
 
   const handleOpenTerminals = useCallback((elements: Record<string, string>[], sliceName?: string) => {
     let counter = terminalIdCounter;
     const newTabs: TerminalTab[] = [];
-    const resolvedSlice = sliceName || selectedSliceName;
     for (const el of elements) {
       if (el.element_type === 'node' && el.management_ip) {
+        // Per-element slice wins (composite graph nodes carry their own
+        // member slice_name); falls back to the explicit arg, then the
+        // FABRIC view's selected slice as a last resort.
+        const elSlice = (el.slice_name as string | undefined) || sliceName || selectedSliceName;
+        if (!elSlice) continue;
         const id = `term-${counter}`;
         counter++;
         newTabs.push({
           id,
           label: el.name,
-          sliceName: resolvedSlice,
+          sliceName: elSlice,
           nodeName: el.name,
           managementIp: el.management_ip,
         });
@@ -2313,7 +3566,7 @@ export default function App() {
       setTerminalIdCounter(counter);
       setTerminalTabs((prev) => [...prev, ...newTabs]);
     }
-  }, [selectedSliceId, terminalIdCounter]);
+  }, [selectedSliceId, terminalIdCounter, selectedSliceName]);
 
   // Open SSH terminal for a Chameleon instance (bottom panel tab)
   const handleOpenChameleonTerminal = useCallback((instance: { id: string; name: string; site: string }) => {
@@ -2329,6 +3582,623 @@ export default function App() {
     }]);
     setConsoleExpanded(true);
   }, []);
+
+  const hasUsableAddress = useCallback((value: unknown) => {
+    const text = String(value ?? '').trim();
+    return !!text && !['none', 'null', 'undefined', '-', '—'].includes(text.toLowerCase());
+  }, []);
+
+  const openFabricMemberSlice = useCallback(async (member: any) => {
+    const memberId = member?.id || member?.slice_id;
+    if (!memberId) return;
+    setSelectedSliceId(memberId);
+    setInfraSubView('topology');
+    setCurrentView('infrastructure');
+    try {
+      const data = await api.getSlice(memberId);
+      setSliceDataIfChanged(data);
+      const resolvedId = data.id || memberId;
+      setSelectedSliceId(resolvedId);
+      setSlices(prev => {
+        const entry = { id: resolvedId, name: data.name || member.name || memberId, state: data.state || member.state || 'Unknown' };
+        const idx = prev.findIndex(s => s.id === resolvedId || s.id === memberId || s.name === entry.name);
+        if (idx === -1) return [...prev, entry];
+        const next = [...prev];
+        next[idx] = { ...next[idx], ...entry };
+        return next;
+      });
+    } catch (e: any) {
+      addError(`Could not load FABRIC member ${member.name || memberId}: ${e.message}`);
+    }
+  }, [addError, setSliceDataIfChanged]);
+
+  const openChameleonMemberSlice = useCallback(async (member: any) => {
+    const memberId = member?.id || member?.slice_id;
+    if (!memberId) return;
+    setSelectedChameleonSliceId(memberId);
+    setChameleonSubView('topology');
+    setCurrentView('chameleon');
+    try {
+      const data = await api.getChameleonDraft(memberId);
+      setChameleonSliceData(data as any);
+      setChameleonSlices(prev => {
+        const idx = prev.findIndex((s: any) => s.id === data.id);
+        if (idx === -1) return [...prev, data as any];
+        const next = [...prev];
+        next[idx] = data as any;
+        return next;
+      });
+      setChiDraftVersion(v => v + 1);
+    } catch (e: any) {
+      addError(`Could not load Chameleon member ${member.name || memberId}: ${e.message}`);
+    }
+  }, []);
+
+  const openFederatedSliceFromMember = useCallback((federatedSliceId: string) => {
+    if (!federatedSliceId) return;
+    setSelectedCompositeSliceId(federatedSliceId);
+    setCompositeGraph(null);
+    setSlicesSubView('slices');
+    setCurrentView('slices');
+    api.getFederatedSlice(federatedSliceId).then(data => {
+      setCompositeSlices(prev => {
+        const idx = prev.findIndex(s => s.id === data.id);
+        if (idx === -1) return [...prev, data];
+        const next = [...prev];
+        next[idx] = data;
+        return next;
+      });
+    }).catch((e: any) => addError(`Could not load federated slice ${federatedSliceId}: ${e.message}`));
+    api.getFederatedGraph(federatedSliceId).then(setCompositeGraph).catch(() => {});
+  }, []);
+
+  const openFabricMemberTerminals = useCallback((member: any) => {
+    const memberId = member?.id || member?.slice_id;
+    const memberName = member?.name || memberId;
+    const targets = (compositeGraph?.nodes || [])
+      .map((node: any) => node?.data || {})
+      .filter((data: any) => (
+        data.testbed === 'FABRIC'
+        && data.element_type === 'node'
+        && (data.slice_id === memberId || data.slice_name === memberName)
+        && hasUsableAddress(data.management_ip)
+      ))
+      .map((data: any) => ({
+        ...data,
+        element_type: 'node',
+        name: String(data.name || data.label || 'node'),
+        slice_name: String(data.slice_name || memberName),
+        management_ip: String(data.management_ip),
+      }));
+    if (targets.length === 0) {
+      addError(`No SSH-ready FABRIC nodes found for ${memberName}. Submit the member slice and wait for management IPs.`);
+      return;
+    }
+    handleOpenTerminals(targets, memberName);
+    setConsoleExpanded(true);
+  }, [compositeGraph, handleOpenTerminals, hasUsableAddress]);
+
+  const chameleonMemberTerminalTargets = useCallback((member: any) => {
+    const memberId = member?.id || member?.slice_id;
+    return (compositeGraph?.nodes || [])
+      .map((node: any) => node?.data || {})
+      .filter((data: any) => (
+        data.testbed === 'Chameleon'
+        && data.element_type === 'chameleon_instance'
+        && String(data.id || '').startsWith(`chi:${memberId}:`)
+        && hasUsableAddress(data.instance_id)
+        && hasUsableAddress(data.site)
+      ))
+      .map((data: any) => ({
+        id: String(data.instance_id),
+        name: String(data.name || data.label || data.instance_id),
+        site: String(data.site),
+        sshReady: Boolean(data.ssh_ready),
+      }));
+  }, [compositeGraph, hasUsableAddress]);
+
+  const openChameleonMemberTerminals = useCallback((member: any) => {
+    const memberName = member?.name || member?.id || member?.slice_id || 'Chameleon member';
+    const targets = chameleonMemberTerminalTargets(member).filter(target => target.sshReady);
+    if (targets.length === 0) {
+      addError(`No SSH-ready Chameleon instances found for ${memberName}. Deploy the member slice, assign a floating IP, and wait for SSH readiness.`);
+      return;
+    }
+    targets.forEach(target => handleOpenChameleonTerminal(target));
+    setConsoleExpanded(true);
+  }, [chameleonMemberTerminalTargets, handleOpenChameleonTerminal]);
+
+  const compositeMemberKey = useCallback((provider: 'fabric' | 'chameleon', member: any) => {
+    return federatedMemberDetailKey(provider, member);
+  }, []);
+
+  const loadCompositeMemberDetail = useCallback(async (provider: 'fabric' | 'chameleon', member: any) => {
+    const memberId = member?.id || member?.slice_id;
+    if (!memberId) return;
+    const key = compositeMemberKey(provider, member);
+    setCompositeMemberDetails(prev => ({
+      ...prev,
+      [key]: { loading: true, data: prev[key]?.data || null, error: undefined },
+    }));
+    try {
+      const data = provider === 'fabric'
+        ? await api.getSlice(memberId)
+        : await api.getChameleonDraft(memberId);
+      setCompositeMemberDetails(prev => ({
+        ...prev,
+        [key]: { loading: false, data: data as SliceData | ChameleonDraft },
+      }));
+      if (provider === 'fabric') {
+        const fabricData = data as SliceData;
+        setSlices(prev => {
+          const entry = { id: fabricData.id || memberId, name: fabricData.name || member.name || memberId, state: fabricData.state || member.state || 'Unknown' };
+          const idx = prev.findIndex(s => s.id === entry.id || s.name === entry.name);
+          if (idx === -1) return [...prev, entry];
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...entry };
+          return next;
+        });
+      } else {
+        setChameleonSlices(prev => {
+          const chiData = data as ChameleonDraft;
+          const idx = prev.findIndex((s: any) => s.id === chiData.id);
+          if (idx === -1) return [...prev, chiData as any];
+          const next = [...prev];
+          next[idx] = chiData as any;
+          return next;
+        });
+      }
+    } catch (e: any) {
+      setCompositeMemberDetails(prev => ({
+        ...prev,
+        [key]: { loading: false, data: prev[key]?.data || null, error: e.message || String(e) },
+      }));
+    }
+  }, [compositeMemberKey]);
+
+  const toggleCompositeMemberDetail = useCallback((provider: 'fabric' | 'chameleon', member: any) => {
+    const key = compositeMemberKey(provider, member);
+    setExpandedCompositeMemberIds(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+    const current = compositeMemberDetails[key];
+    if (!current?.data && !current?.loading) {
+      loadCompositeMemberDetail(provider, member);
+    }
+  }, [compositeMemberDetails, compositeMemberKey, loadCompositeMemberDetail]);
+
+  const openFederatedResourceMenu = useCallback((
+    event: React.MouseEvent,
+    element: Record<string, any>,
+    label: string,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setFederatedResourceMenu({
+      x: event.clientX,
+      y: event.clientY,
+      element,
+      label,
+    });
+  }, []);
+
+  const renderFabricMemberDetail = (member: any, detailKey: string) => {
+    const detail = compositeMemberDetails[detailKey];
+    if (detail?.loading && !detail.data) {
+      return <div style={{ padding: '10px 0', color: 'var(--fabric-text-muted)', fontSize: 11 }}>Loading FABRIC resources...</div>;
+    }
+    if (detail?.error) {
+      return (
+        <div style={{ padding: '10px 0', color: '#e25241', fontSize: 11 }}>
+          Could not load FABRIC resources: {detail.error}
+          <button
+            style={{ marginLeft: 8, fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(87, 152, 188, 0.45)', background: 'transparent', color: '#5798bc', cursor: 'pointer' }}
+            onClick={(e) => { e.stopPropagation(); loadCompositeMemberDetail('fabric', member); }}
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+    const data = detail?.data as SliceData | undefined;
+    if (!data) return null;
+    const nodes = data.nodes || [];
+    const networks = data.networks || [];
+    const errors = data.error_messages || [];
+    const facilityPorts = data.facility_ports || [];
+    const memberSliceId = String(data.id || member.id || member.slice_id || '');
+    const memberSliceName = String(data.name || member.name || memberSliceId);
+    const fabricContext = {
+      testbed: 'FABRIC',
+      slice_id: memberSliceId,
+      slice_name: memberSliceName,
+    };
+    return (
+      <div style={{ padding: '8px 0 10px 28px' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+          <thead>
+            <tr style={{ color: 'var(--fabric-text-muted)', textAlign: 'left', borderBottom: '1px solid var(--fabric-border)' }}>
+              <th style={{ padding: '5px 8px', width: 78 }}>Type</th>
+              <th style={{ padding: '5px 8px' }}>Name</th>
+              <th style={{ padding: '5px 8px' }}>Site</th>
+              <th style={{ padding: '5px 8px' }}>Host/Subnet</th>
+              <th style={{ padding: '5px 8px' }}>State</th>
+              <th style={{ padding: '5px 8px' }}>Resources</th>
+              <th style={{ padding: '5px 8px' }}>IP/Interfaces</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nodes.map(node => {
+              const canSsh = hasUsableAddress(node.management_ip);
+              const element = {
+                ...fabricContext,
+                element_type: 'node',
+                name: node.name,
+                site: node.site || '',
+                cores: String(node.cores ?? ''),
+                ram: String(node.ram ?? ''),
+                disk: String(node.disk ?? ''),
+                image: node.image || '',
+                reservation_state: node.reservation_state || '',
+                management_ip: node.management_ip || '',
+              };
+              return (
+                <tr
+                  key={`fab-node-${node.name}`}
+                  style={{ borderBottom: '1px solid rgba(128,128,128,0.12)' }}
+                  data-testid="federated-member-resource-row"
+                  data-provider="fabric"
+                  data-resource-type="node"
+                  data-resource-name={node.name}
+                  data-slice-id={memberSliceId}
+                  data-slice-name={memberSliceName}
+                  onContextMenu={(e) => openFederatedResourceMenu(e, element, `FABRIC VM ${node.name}`)}
+                >
+                  <td style={{ padding: '5px 8px', color: '#5798bc', fontWeight: 700 }}>VM</td>
+                  <td style={{ padding: '5px 8px', fontWeight: 600 }}>{node.name}</td>
+                  <td style={{ padding: '5px 8px' }}>{node.site || '-'}</td>
+                  <td style={{ padding: '5px 8px' }}>{node.host || '-'}</td>
+                  <td style={{ padding: '5px 8px', color: fabricStatusColor(node.reservation_state || data.state), fontWeight: 600 }}>{node.reservation_state || data.state || '-'}</td>
+                  <td style={{ padding: '5px 8px' }}>{node.cores ?? ''}{node.ram ? ` / ${node.ram}G` : ''}{node.disk ? ` / ${node.disk}G` : ''}</td>
+                  <td style={{ padding: '5px 8px' }}>
+                    {canSsh && (
+                      <button
+                        style={{ fontSize: 10, padding: '1px 5px', marginRight: 6, cursor: 'pointer', background: 'none', border: '1px solid #5798bc', borderRadius: 3, color: '#5798bc' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenTerminals([{
+                            element_type: 'node',
+                            name: node.name,
+                            management_ip: node.management_ip,
+                            slice_name: memberSliceName,
+                            slice_id: memberSliceId,
+                          } as any], memberSliceName);
+                          setConsoleExpanded(true);
+                        }}
+                      >
+                        SSH
+                      </button>
+                    )}
+                    <span title={node.management_ip || ''}>{node.management_ip || '-'}</span>
+                  </td>
+                </tr>
+              );
+            })}
+            {networks.map(net => {
+              const element = {
+                ...fabricContext,
+                element_type: 'network',
+                name: net.name,
+                layer: net.layer || '',
+                type: net.type || '',
+                subnet: net.subnet || '',
+                gateway: net.gateway || '',
+              };
+              return (
+                <tr
+                  key={`fab-net-${net.name}`}
+                  style={{ borderBottom: '1px solid rgba(128,128,128,0.12)' }}
+                  data-testid="federated-member-resource-row"
+                  data-provider="fabric"
+                  data-resource-type="network"
+                  data-resource-name={net.name}
+                  data-slice-id={memberSliceId}
+                  data-slice-name={memberSliceName}
+                  onContextMenu={(e) => openFederatedResourceMenu(e, element, `FABRIC network ${net.name}`)}
+                >
+                  <td style={{ padding: '5px 8px', color: '#27aae1', fontWeight: 700 }}>Network</td>
+                  <td style={{ padding: '5px 8px', fontWeight: 600 }}>{net.name}</td>
+                  <td style={{ padding: '5px 8px' }}>{[net.layer, net.type].filter(Boolean).join(' / ') || '-'}</td>
+                  <td style={{ padding: '5px 8px' }}>{net.subnet || '-'}</td>
+                  <td style={{ padding: '5px 8px' }}>{net.gateway || '-'}</td>
+                  <td style={{ padding: '5px 8px' }}></td>
+                  <td style={{ padding: '5px 8px' }}>{net.interfaces?.length ?? 0} interface{(net.interfaces?.length ?? 0) === 1 ? '' : 's'}</td>
+                </tr>
+              );
+            })}
+            {facilityPorts.map(fp => {
+              const element = {
+                ...fabricContext,
+                element_type: 'facility-port',
+                name: fp.name,
+                site: fp.site || '',
+                vlan: fp.vlan || '',
+                bandwidth: fp.bandwidth || '',
+              };
+              return (
+                <tr
+                  key={`fab-fp-${fp.name}`}
+                  style={{ borderBottom: '1px solid rgba(128,128,128,0.12)' }}
+                  data-testid="federated-member-resource-row"
+                  data-provider="fabric"
+                  data-resource-type="facility-port"
+                  data-resource-name={fp.name}
+                  data-slice-id={memberSliceId}
+                  data-slice-name={memberSliceName}
+                  onContextMenu={(e) => openFederatedResourceMenu(e, element, `FABRIC facility port ${fp.name}`)}
+                >
+                  <td style={{ padding: '5px 8px', color: '#d76b00', fontWeight: 700 }}>Facility Port</td>
+                  <td style={{ padding: '5px 8px', fontWeight: 600 }}>{fp.name}</td>
+                  <td style={{ padding: '5px 8px' }}>{fp.site || '-'}</td>
+                  <td style={{ padding: '5px 8px' }}>VLAN {fp.vlan || '-'}</td>
+                  <td style={{ padding: '5px 8px' }}></td>
+                  <td style={{ padding: '5px 8px' }}>{fp.bandwidth || '-'}</td>
+                  <td style={{ padding: '5px 8px' }}>{fp.interfaces?.length ?? 0} interface{(fp.interfaces?.length ?? 0) === 1 ? '' : 's'}</td>
+                </tr>
+              );
+            })}
+            {errors.map((err, idx) => (
+              <tr key={`fab-error-${idx}`} style={{ borderBottom: '1px solid rgba(128,128,128,0.12)' }}>
+                <td style={{ padding: '5px 8px', color: '#e25241', fontWeight: 700 }}>Error</td>
+                <td style={{ padding: '5px 8px', fontWeight: 600 }}>{err.sliver || 'Slice'}</td>
+                <td colSpan={5} style={{ padding: '5px 8px', color: '#e25241' }}>{err.message}</td>
+              </tr>
+            ))}
+            {nodes.length === 0 && networks.length === 0 && facilityPorts.length === 0 && errors.length === 0 && (
+              <tr><td colSpan={7} style={{ padding: 10, color: 'var(--fabric-text-muted)', fontStyle: 'italic' }}>No FABRIC resources in this member slice.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderChameleonMemberDetail = (member: any, detailKey: string) => {
+    const detail = compositeMemberDetails[detailKey];
+    if (detail?.loading && !detail.data) {
+      return <div style={{ padding: '10px 0', color: 'var(--fabric-text-muted)', fontSize: 11 }}>Loading Chameleon resources...</div>;
+    }
+    if (detail?.error) {
+      return (
+        <div style={{ padding: '10px 0', color: '#e25241', fontSize: 11 }}>
+          Could not load Chameleon resources: {detail.error}
+          <button
+            style={{ marginLeft: 8, fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(57, 181, 74, 0.45)', background: 'transparent', color: '#2f9b3d', cursor: 'pointer' }}
+            onClick={(e) => { e.stopPropagation(); loadCompositeMemberDetail('chameleon', member); }}
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+    const data = detail?.data as ChameleonDraft | undefined;
+    if (!data) return null;
+    const nodes = data.nodes || [];
+    const networks = data.networks || [];
+    const resources = data.resources || [];
+    const liveInstancesById = new Map(chameleonInstances.map(instance => [instance.id, instance]));
+    const nodeResourceMatches = new Map<string, ChameleonDraft['resources'][number]>();
+    const matchedResourceKeys = new Set<string>();
+    for (const node of nodes) {
+      const match = resources.find(resource => chameleonInstanceResourceMatchesNode(resource, node));
+      if (match) {
+        nodeResourceMatches.set(node.id, match);
+        matchedResourceKeys.add(match.resource_id || match.id);
+      }
+    }
+    const resourceRows = resources.filter(resource => (
+      resource.type !== 'instance' || !matchedResourceKeys.has(resource.resource_id || resource.id)
+    ));
+    const draftId = String(data.id || member.id || member.slice_id || '');
+    const draftName = String(data.name || member.name || draftId);
+    const chameleonContext = {
+      testbed: 'Chameleon',
+      draft_id: draftId,
+      slice_id: draftId,
+      slice_name: draftName,
+    };
+    return (
+      <div style={{ padding: '8px 0 10px 28px' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+          <thead>
+            <tr style={{ color: 'var(--fabric-text-muted)', textAlign: 'left', borderBottom: '1px solid var(--fabric-border)' }}>
+              <th style={{ padding: '5px 8px', width: 92 }}>Type</th>
+              <th style={{ padding: '5px 8px' }}>Name</th>
+              <th style={{ padding: '5px 8px' }}>Site</th>
+              <th style={{ padding: '5px 8px' }}>Status</th>
+              <th style={{ padding: '5px 8px' }}>Address/Detail</th>
+              <th style={{ padding: '5px 8px' }}>Image/Role</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nodes.map(node => {
+              const match = nodeResourceMatches.get(node.id);
+              const live = match ? liveInstancesById.get(match.id) : undefined;
+              const nodeStatus = match?.status || live?.status || chameleonPlannedNodeDeployStatus(data, node, match);
+              const resourceSite = match?.site || live?.site || node.site || data.site || '';
+              const floatingIp = match?.floating_ip || live?.floating_ip || node.floating_ip || '';
+              const ipAddresses = match?.ip_addresses || live?.ip_addresses || node.ip_addresses || [];
+              const displayAddress = floatingIp || node.management_ip || ipAddresses[0] || '';
+              const instanceId = match?.id || node.instance_id || '';
+              const canSsh = nodeStatus.toUpperCase() === 'ACTIVE' && hasUsableAddress(instanceId) && hasUsableAddress(floatingIp);
+              const element = {
+                ...chameleonContext,
+                element_type: 'chameleon_instance',
+                name: node.name,
+                site: resourceSite,
+                status: nodeStatus,
+                node_id: node.id,
+                planned_node_id: node.id,
+                resource_id: match?.resource_id || '',
+                provider_id: match?.provider_id || '',
+                instance_id: instanceId,
+                floating_ip: floatingIp || '',
+                ip: node.management_ip || ipAddresses[0] || '',
+              };
+              return (
+                <tr
+                  key={`chi-node-${node.id}`}
+                  style={{ borderBottom: '1px solid rgba(128,128,128,0.12)' }}
+                  data-testid="federated-member-resource-row"
+                  data-provider="chameleon"
+                  data-resource-type="server"
+                  data-resource-name={node.name}
+                  data-slice-id={draftId}
+                  data-slice-name={draftName}
+                  onContextMenu={(e) => openFederatedResourceMenu(e, element, `Chameleon server ${node.name}`)}
+                >
+                  <td style={{ padding: '5px 8px', color: '#39B54A', fontWeight: 700 }}>Server</td>
+                  <td style={{ padding: '5px 8px', fontWeight: 600 }}>{node.name}</td>
+                  <td style={{ padding: '5px 8px' }}>{resourceSite || '-'}</td>
+                  <td style={{ padding: '5px 8px', color: chameleonStatusColor(nodeStatus), fontWeight: 600 }}>{nodeStatus}</td>
+                  <td style={{ padding: '5px 8px' }}>
+                    {canSsh && (
+                      <button
+                        style={{ fontSize: 10, padding: '1px 5px', marginRight: 6, cursor: 'pointer', background: 'none', border: '1px solid #39B54A', borderRadius: 3, color: '#39B54A' }}
+                        onClick={(e) => { e.stopPropagation(); handleOpenChameleonTerminal({ id: instanceId, name: node.name, site: resourceSite }); }}
+                      >
+                        SSH
+                      </button>
+                    )}
+                    {displayAddress || `${node.node_type}${getChameleonNodeCount(node) > 1 ? ` x${getChameleonNodeCount(node)}` : ''}`}
+                  </td>
+                  <td style={{ padding: '5px 8px' }}>{node.image || '-'}</td>
+                </tr>
+              );
+            })}
+            {networks.map(net => {
+              const element = {
+                ...chameleonContext,
+                element_type: 'network',
+                name: net.name,
+                network_id: net.id,
+                deletable: 'true',
+              };
+              return (
+                <tr
+                  key={`chi-net-${net.id}`}
+                  style={{ borderBottom: '1px solid rgba(128,128,128,0.12)' }}
+                  data-testid="federated-member-resource-row"
+                  data-provider="chameleon"
+                  data-resource-type="network"
+                  data-resource-name={net.name}
+                  data-slice-id={draftId}
+                  data-slice-name={draftName}
+                  onContextMenu={(e) => openFederatedResourceMenu(e, element, `Chameleon network ${net.name}`)}
+                >
+                  <td style={{ padding: '5px 8px', color: '#27aae1', fontWeight: 700 }}>Network</td>
+                  <td style={{ padding: '5px 8px', fontWeight: 600 }}>{net.name}</td>
+                  <td style={{ padding: '5px 8px' }}></td>
+                  <td style={{ padding: '5px 8px', color: '#d76b00', fontWeight: 600 }}>Network</td>
+                  <td style={{ padding: '5px 8px' }}>{net.connected_nodes?.length || 0} connected</td>
+                  <td style={{ padding: '5px 8px' }}></td>
+                </tr>
+              );
+            })}
+            {resourceRows.map(resource => {
+              const live = resource.type === 'instance' ? liveInstancesById.get(resource.id) : undefined;
+              const resourceStatus = resource.status || live?.status || '';
+              const resourceSite = resource.site || live?.site || '';
+              const floatingIp = resource.floating_ip || live?.floating_ip;
+              const ipAddresses = resource.ip_addresses || live?.ip_addresses || [];
+              const label = chameleonResourceLabel(resource);
+              const resourceName = resource.name || floatingIp || resource.id;
+              const primaryDetail = resource.type === 'instance'
+                ? (floatingIp || ipAddresses[0] || '-')
+                : resource.type === 'lease'
+                  ? `${shortResourceId(resource.lease_id || resource.id)}${resource.reservations?.length ? ` (${resource.reservations.length} reservation${resource.reservations.length === 1 ? '' : 's'})` : ''}`
+                  : resource.type === 'floating_ip'
+                    ? (floatingIp || resource.name || shortResourceId(resource.id))
+                    : resource.type === 'network'
+                      ? (resource.cidr || shortResourceId(resource.id) || '-')
+                      : shortResourceId(resource.id) || resource.type;
+              const canSsh = resource.type === 'instance' && (resourceStatus || '').toUpperCase() === 'ACTIVE' && hasUsableAddress(floatingIp);
+              const elementType = resource.type === 'instance'
+                ? 'chameleon_instance'
+                : resource.type === 'network'
+                  ? 'network'
+                  : 'chameleon_resource';
+              const element = {
+                ...chameleonContext,
+                element_type: elementType,
+                resource_type: resource.type || '',
+                name: resourceName,
+                site: resourceSite,
+                status: resourceStatus || '',
+                network_id: resource.type === 'network' ? (resource.id || resource.provider_id || '') : '',
+                resource_id: resource.resource_id || resource.id || '',
+                provider_id: resource.provider_id || '',
+                instance_id: resource.type === 'instance' ? resource.id : '',
+                floating_ip: floatingIp || '',
+                ip: ipAddresses[0] || '',
+                deletable: '',
+              };
+              return (
+                <React.Fragment key={`chi-resource-${resource.resource_id || resource.id}`}>
+                  <tr
+                    style={{ borderBottom: '1px solid rgba(128,128,128,0.12)' }}
+                    data-testid="federated-member-resource-row"
+                    data-provider="chameleon"
+                    data-resource-type={resource.type || 'resource'}
+                    data-resource-name={resourceName}
+                    data-slice-id={draftId}
+                    data-slice-name={draftName}
+                    onContextMenu={(e) => openFederatedResourceMenu(e, element, `Chameleon ${label.toLowerCase()} ${resourceName}`)}
+                  >
+                    <td style={{ padding: '5px 8px', color: '#39B54A', fontWeight: 700 }}>{label}</td>
+                    <td style={{ padding: '5px 8px', fontWeight: 600 }}>
+                      {resourceName}
+                      {resource.ownership === 'imported' && <span style={{ marginLeft: 6, fontSize: 9, color: 'var(--fabric-text-muted)' }}>Imported</span>}
+                    </td>
+                    <td style={{ padding: '5px 8px' }}>{resourceSite || '-'}</td>
+                    <td style={{ padding: '5px 8px', color: chameleonStatusColor(resourceStatus || resource.type), fontWeight: 600 }}>{resourceStatus || label}</td>
+                    <td style={{ padding: '5px 8px' }}>
+                      {canSsh && (
+                        <button
+                          style={{ fontSize: 10, padding: '1px 5px', marginRight: 6, cursor: 'pointer', background: 'none', border: '1px solid #39B54A', borderRadius: 3, color: '#39B54A' }}
+                          onClick={(e) => { e.stopPropagation(); handleOpenChameleonTerminal({ id: resource.id, name: resource.name || resource.id, site: resourceSite }); }}
+                        >
+                          SSH
+                        </button>
+                      )}
+                      {primaryDetail}
+                    </td>
+                    <td style={{ padding: '5px 8px' }}>{resource.type === 'instance' ? (live?.image || resource.image || '') : label}</td>
+                  </tr>
+                  {resource.type === 'lease' && (resource.reservations || []).map((reservation: any, idx: number) => (
+                    <tr key={`chi-resource-${resource.resource_id || resource.id}-reservation-${reservation.id || idx}`} style={{ borderBottom: '1px solid rgba(128,128,128,0.08)' }}>
+                      <td style={{ padding: '4px 8px 4px 24px', color: '#d76b00', fontWeight: 700 }}>Reservation</td>
+                      <td style={{ padding: '4px 8px', fontWeight: 600 }}>{reservation.id ? shortResourceId(reservation.id) : `reservation-${idx + 1}`}</td>
+                      <td style={{ padding: '4px 8px' }}>{resourceSite || '-'}</td>
+                      <td style={{ padding: '4px 8px', color: chameleonStatusColor(reservation.status || resourceStatus || 'PENDING'), fontWeight: 600 }}>{reservation.status || resourceStatus || 'PENDING'}</td>
+                      <td style={{ padding: '4px 8px' }}>{reservation.resource_type || resource.resource_type || 'physical:host'}</td>
+                      <td style={{ padding: '4px 8px' }}>{reservation.min || reservation.max ? `${reservation.min ?? ''}-${reservation.max ?? ''}` : 'Reserved capacity'}</td>
+                    </tr>
+                  ))}
+                </React.Fragment>
+              );
+            })}
+            {nodes.length === 0 && networks.length === 0 && resourceRows.length === 0 && (
+              <tr><td colSpan={6} style={{ padding: 10, color: 'var(--fabric-text-muted)', fontStyle: 'italic' }}>No Chameleon resources in this member slice.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
 
   const handleDeleteComponent = useCallback(async (nodeName: string, componentName: string) => {
     if (!selectedSliceId) return;
@@ -2357,7 +4227,7 @@ export default function App() {
   }, [selectedSliceId, updateSliceAndValidate]);
 
   // --- Save-weave / save-VM-template modal state ---
-  const [saveTemplateModal, setSaveTemplateModal] = useState<{ type: 'slice' | 'vm'; nodeName?: string } | null>(null);
+  const [saveTemplateModal, setSaveTemplateModal] = useState<{ type: 'slice' | 'vm'; nodeName?: string; sliceId?: string; sliceData?: SliceData | null } | null>(null);
   const [saveTemplateName, setSaveTemplateName] = useState('');
   const [saveTemplateDesc, setSaveTemplateDesc] = useState('');
   const [saveTemplateBusy, setSaveTemplateBusy] = useState(false);
@@ -2365,32 +4235,34 @@ export default function App() {
   const handleSaveSliceTemplate = useCallback(() => {
     setSaveTemplateName(selectedSliceName || '');
     setSaveTemplateDesc('');
-    setSaveTemplateModal({ type: 'slice' });
-  }, [selectedSliceId]);
+    setSaveTemplateModal({ type: 'slice', sliceId: selectedSliceId, sliceData });
+  }, [selectedSliceId, selectedSliceName, sliceData]);
 
   const handleSaveVmTemplate = useCallback((nodeName: string) => {
     setSaveTemplateName('');
     setSaveTemplateDesc('');
-    setSaveTemplateModal({ type: 'vm', nodeName });
-  }, []);
+    setSaveTemplateModal({ type: 'vm', nodeName, sliceId: selectedSliceId, sliceData });
+  }, [selectedSliceId, sliceData]);
 
   const handleSaveTemplateConfirm = useCallback(async () => {
     if (!saveTemplateName.trim() || !saveTemplateModal) return;
     setSaveTemplateBusy(true);
     setStatusMessage('Saving...');
     try {
+      const templateSliceId = saveTemplateModal.sliceId || selectedSliceId;
+      const templateSliceData = saveTemplateModal.sliceData || sliceData;
       if (saveTemplateModal.type === 'slice') {
         await api.saveTemplate({
           name: saveTemplateName.trim(),
           description: saveTemplateDesc.trim(),
-          slice_name: selectedSliceId,
+          slice_name: templateSliceId,
         });
       } else if (saveTemplateModal.type === 'vm' && saveTemplateModal.nodeName) {
         let bootConfig: BootConfig = { uploads: [], commands: [], network: [] };
         try {
-          bootConfig = await api.getBootConfig(selectedSliceId, saveTemplateModal.nodeName);
+          bootConfig = await api.getBootConfig(templateSliceId, saveTemplateModal.nodeName);
         } catch { /* no boot config yet */ }
-        const node = sliceData?.nodes.find((n) => n.name === saveTemplateModal.nodeName);
+        const node = templateSliceData?.nodes.find((n) => n.name === saveTemplateModal.nodeName);
         const vmData: Parameters<typeof api.saveVmTemplate>[0] = {
           name: saveTemplateName.trim(),
           description: saveTemplateDesc.trim(),
@@ -2608,7 +4480,7 @@ export default function App() {
     } else if (action.type === 'chi-start' && action.instanceId && action.instanceSite) {
       api.startChameleonInstance(action.instanceId, action.instanceSite).catch((e: any) => setErrors(prev => [...prev, `Start failed: ${e.message}`]));
     } else if (action.type === 'chi-delete' && action.instanceId && action.instanceSite) {
-      api.deleteChameleonInstance(action.instanceId, action.instanceSite).catch((e: any) => setErrors(prev => [...prev, `Delete failed: ${e.message}`]));
+      handleDeleteChameleonInstanceFromTopology(action);
     } else if (action.type === 'chi-assign-fip' && action.instanceId && action.instanceSite) {
       api.assignChameleonFloatingIp(action.instanceId, action.instanceSite)
         .then(() => { setChiDraftVersion(v => v + 1); })
@@ -2657,7 +4529,7 @@ export default function App() {
           setErrors(prev => [...prev, `Boot config failed for ${action.nodeName}: ${e.message}`]);
         });
     }
-  }, [handleOpenTerminals, handleDeleteElements, handleDeleteSliceByName, handleRefreshSlices, handleDeleteComponent, handleDeleteFacilityPort, handleSaveVmTemplate, handleExecuteRecipe, selectedSliceId, handleOpenChameleonTerminal, handleRunFullBootConfigPipeline, selectedSliceName, appendBuildLog]);
+  }, [handleOpenTerminals, handleDeleteElements, handleDeleteSliceByName, handleRefreshSlices, handleDeleteComponent, handleDeleteFacilityPort, handleSaveVmTemplate, handleExecuteRecipe, selectedSliceId, handleOpenChameleonTerminal, handleDeleteChameleonInstanceFromTopology, handleRunFullBootConfigPipeline, selectedSliceName, appendBuildLog]);
 
   const handleCloseTerminal = useCallback((id: string) => {
     setTerminalTabs((prev) => prev.filter((t) => t.id !== id));
@@ -2686,13 +4558,13 @@ export default function App() {
     updateSliceAndValidate(data);
   }, [updateSliceAndValidate]);
 
-  // Separate handler for composite view — refreshes composite graph after edits
+  // Separate handler for federated view — refreshes federated graph after edits
   const handleCompositeSliceUpdated = useCallback((data: SliceData) => {
-    setSliceData(data);
+    setSliceDataIfChanged(data);
     if (selectedCompositeSliceId) {
-      api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+      api.getFederatedGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
     }
-  }, [selectedCompositeSliceId]);
+  }, [selectedCompositeSliceId, setSliceDataIfChanged]);
 
   const handleOpenHelp = useCallback((section?: string) => {
     if (!section && helpOpen) {
@@ -2711,7 +4583,7 @@ export default function App() {
     setStatusMessage('Cloning slice...');
     try {
       const data = await api.cloneSlice(selectedSliceId, newName);
-      setSliceData(data);
+      setSliceDataIfChanged(data);
       const cloneId = data.id || '';
       setSelectedSliceId(cloneId);
       // Refresh the full slice list from backend to include the new draft
@@ -2734,10 +4606,10 @@ export default function App() {
       setLoading(false);
       setStatusMessage('');
     }
-  }, [selectedSliceId, runValidation]);
+  }, [selectedSliceId, runValidation, setSliceDataIfChanged]);
 
   const handleSliceImported = useCallback((data: SliceData) => {
-    setSliceData(data);
+    setSliceDataIfChanged(data);
     const importId = data.id || '';
     setSelectedSliceId(importId);
     setSlices((prev) => {
@@ -2746,7 +4618,7 @@ export default function App() {
     });
     runValidation(importId || data.name);
     setCurrentView('slices'); setSlicesSubView('topology');
-  }, [runValidation]);
+  }, [runValidation, setSliceDataIfChanged]);
 
   // Deploy weave: load template → submit → poll → boot config (all automatic)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -2776,7 +4648,7 @@ export default function App() {
       // Step 1: Load the template as a draft slice
       const data = await api.loadTemplate(templateDirName, sliceNameForDeploy);
       const sliceId = data.id || '';
-      setSliceData(data);
+      setSliceDataIfChanged(data);
       setSelectedSliceId(sliceId);
       // Don't switch view tab — let the user stay on their current view.
       // Build log output appears in the console panel (bottom) regardless.
@@ -2786,14 +4658,15 @@ export default function App() {
       });
       appendBuildLog(sliceNameForDeploy, { type: 'build', message: 'Weave loaded as draft slice' });
 
-      // Step 2: Submit the slice (composite if Chameleon nodes present)
+      // Step 2: Submit the slice (federated if Chameleon nodes present)
       const weaveChameleon = (data.chameleon_nodes || []).length > 0;
-      setStatusMessage(weaveChameleon ? 'Submitting composite slice (FABRIC + Chameleon)...' : 'Submitting slice to FABRIC...');
-      appendBuildLog(sliceNameForDeploy, { type: 'build', message: weaveChameleon ? 'Submitting composite slice (FABRIC + Chameleon)...' : 'Submitting slice to FABRIC...' });
+      setStatusMessage(weaveChameleon ? 'Submitting federated slice (FABRIC + Chameleon)...' : 'Submitting slice to FABRIC...');
+      appendBuildLog(sliceNameForDeploy, { type: 'build', message: weaveChameleon ? 'Submitting federated slice (FABRIC + Chameleon)...' : 'Submitting slice to FABRIC...' });
       let submitted: SliceData;
       if (weaveChameleon) {
         const compositeResult = await api.submitCompositeSlice(sliceId);
-        appendBuildLog(sliceNameForDeploy, { type: 'build', message: `Composite: FABRIC=${compositeResult.fabric_status}, Chameleon=${compositeResult.chameleon_status || 'N/A'}` });
+        upsertFederatedSlice(compositeResult.federated_slice);
+        appendBuildLog(sliceNameForDeploy, { type: 'build', message: `Federated: FABRIC=${compositeResult.fabric_status}, Chameleon=${compositeResult.chameleon_status || 'N/A'}` });
         if (compositeResult.chameleon_error) appendBuildLog(sliceNameForDeploy, { type: 'error', message: `Chameleon: ${compositeResult.chameleon_error}` });
         if (compositeResult.fabric_error) appendBuildLog(sliceNameForDeploy, { type: 'error', message: `FABRIC: ${compositeResult.fabric_error}` });
         submitted = compositeResult.fabric_slice || await api.getSlice(sliceId);
@@ -2802,10 +4675,10 @@ export default function App() {
       }
       if (submitted.id && submitted.id !== sliceId) {
         setSelectedSliceId(submitted.id);
-        // Update composite slices that reference the old draft ID
-        api.replaceCompositeFabricMember(sliceId, submitted.id).catch(() => {});
+        // Update federated slices that reference the old draft ID
+        api.replaceFederatedFabricMember(sliceId, submitted.id).catch(() => {});
       }
-      setSliceData(submitted);
+      setSliceDataIfChanged(submitted);
       appendBuildLog(sliceNameForDeploy, { type: 'build', message: `Slice submitted (state: ${submitted.state || 'unknown'})` });
       prevSliceStatesRef.current[sliceNameForDeploy] = submitted.state || '';
 
@@ -2815,7 +4688,7 @@ export default function App() {
       try {
         const refreshed = await api.refreshSlice(submitted.id || sliceId);
         refreshedData = refreshed;
-        setSliceData(refreshed);
+        setSliceDataIfChanged(refreshed);
         if (refreshed.state && refreshed.state !== submitted.state) {
           appendBuildLog(sliceNameForDeploy, { type: 'build', message: `State: ${submitted.state || 'unknown'} \u2192 ${refreshed.state}` });
           prevSliceStatesRef.current[sliceNameForDeploy] = refreshed.state;
@@ -2864,7 +4737,7 @@ export default function App() {
       setLoading(false);
       setStatusMessage('');
     }
-  }, [appendBuildLog, startPolling, handleRunBootConfigStream]);
+  }, [appendBuildLog, startPolling, handleRunBootConfigStream, upsertFederatedSlice, setSliceDataIfChanged]);
 
   // Run weave script: execute weave.sh as a background run (survives browser disconnect)
   const runPollTimers = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
@@ -3055,9 +4928,9 @@ export default function App() {
   }, []);
 
   const handleLaunchNotebook = useCallback((path: string) => {
-    setJupyterPath(path);
-    setJupyterMounted(true);
-    setCurrentView('jupyter');
+    const base = (typeof window !== 'undefined' && (window as any).__LOOMAI_BASE_PATH) || '';
+    const url = path.startsWith('http') ? path : `${base}${path.startsWith('/') ? path : `/${path}`}`;
+    window.open(url, '_blank', 'noopener');
   }, []);
 
   const handleEditArtifact = useCallback((dirName: string) => {
@@ -3094,9 +4967,19 @@ export default function App() {
   );
 
   const handleViewChange = useCallback((v: TopView) => {
-    if (v === 'jupyter') setJupyterMounted(true);
+    // Picking a view from the title bar should always take you to that view —
+    // close any Settings/Help overlay that's currently covering the screen.
+    setSettingsOpen(false);
+    setHelpOpen(false);
     setCurrentView(v);
-  }, []);
+    if (v === 'infrastructure') {
+      refreshSliceList({ maxAge: 0, silent: true });
+    } else if (v === 'slices') {
+      refreshFederatedSlices({ silent: true });
+    } else if (v === 'chameleon') {
+      handleRefreshChameleonSlices({ silent: true, refreshSelected: true });
+    }
+  }, [handleRefreshChameleonSlices, refreshFederatedSlices, refreshSliceList]);
 
   const handleRecipesChanged = useCallback(() => {
     api.listRecipes().then(setRecipes).catch(() => {});
@@ -3132,7 +5015,7 @@ export default function App() {
   }, []);
 
   // --- Panel rendering helpers (shared between left/right panel groups) ---
-  const showSidePanels = currentView === 'slices' || currentView === 'artifacts' || currentView === 'infrastructure' || currentView === 'chameleon' || currentView === 'jupyter';
+  const showSidePanels = currentView === 'slices' || currentView === 'artifacts' || currentView === 'infrastructure' || currentView === 'chameleon';
   // In artifacts view, only show chat and console panels (not editor/template)
   // In chameleon view, show all panels (editor panel shows Chameleon infrastructure editing)
   // Details panel only visible in infrastructure view
@@ -3154,12 +5037,12 @@ export default function App() {
     const icon = PANEL_ICONS[id];
     switch (id) {
       case 'editor':
-        // Composite view: show CompositeEditorPanel with member management
+        // Federated view: show CompositeEditorPanel with member management
         if (currentView === 'slices') {
           return (
             <div key="composite-editor" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
               <div {...dragProps} className="panel-header" style={{ padding: '6px 10px', fontSize: 11, fontWeight: 600, cursor: 'grab', background: 'var(--fabric-bg-tint)', borderBottom: '1px solid var(--fabric-border)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>{icon}</span> Composite Editor
+                <span>{icon}</span> Federated Editor
                 <button onClick={handleCollapseEditor} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--fabric-text-muted)' }}>×</button>
               </div>
               <div style={{ flex: 1, overflow: 'auto' }}>
@@ -3173,20 +5056,40 @@ export default function App() {
                   sites={infraSites}
                   images={images}
                   componentModels={componentModels}
-                  onFabricSliceUpdated={(data) => { setSliceData(data); handleSliceUpdated(data); }}
+                  selectedElement={selectedElement}
+                  vmTemplates={vmTemplates}
+                  onSaveVmTemplate={(sliceId, nodeName, memberData) => {
+                    setSaveTemplateName('');
+                    setSaveTemplateDesc('');
+                    setSaveTemplateModal({ type: 'vm', nodeName, sliceId, sliceData: memberData });
+                  }}
+                  onBootConfigErrors={setBootConfigErrors}
+                  onRunFabricBootConfig={(sliceId) => handleRunFullBootConfigPipeline(sliceId)}
+                  sliceBootRunning={sliceBootRunning}
+                  facilityPorts={infraFacilityPorts}
+                  chameleonAutoRefresh={chameleonAutoRefresh}
+                  onOpenChameleonTerminal={handleOpenChameleonTerminal}
+                  onChameleonSliceUpdated={(draft) => {
+                    setChameleonSlices(prev => prev.map(s => s.id === draft.id ? draft : s));
+                    if (selectedChameleonSliceId === draft.id) {
+                      setChameleonSliceData(draft);
+                      setChiDraftVersion(v => v + 1);
+                    }
+                  }}
+                  onFabricSliceUpdated={(data) => { setSliceDataIfChanged(data); handleSliceUpdated(data); }}
                   onMembersUpdated={(updated) => {
                     setCompositeSlices(prev => prev.map(s => s.id === updated.id ? updated : s));
                     // Immediately refresh graph when members change
                     if (selectedCompositeSliceId) {
-                      api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+                      api.getFederatedGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
                     }
                   }}
                   onCompositeGraphRefresh={() => {
                     if (selectedCompositeSliceId) {
-                      api.getCompositeSlice(selectedCompositeSliceId).then(data => {
+                      api.getFederatedSlice(selectedCompositeSliceId).then(data => {
                         setCompositeSlices(prev => prev.map(s => s.id === data.id ? data : s));
                       }).catch(() => {});
-                      api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+                      api.getFederatedGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
                     }
                   }}
                   onError={(msg) => addError(msg)}
@@ -3207,20 +5110,20 @@ export default function App() {
                         const data = await api.createSlice(name);
                         // Refresh FABRIC slice list so the new slice appears in FABRIC view
                         handleRefreshSlices();
-                        // Auto-add to composite
+                        // Auto-add to federated slice
                         const sliceId = data.id || name;
                         const newFab = [...(compositeSlices.find(s => s.id === selectedCompositeSliceId)?.fabric_slices || []), sliceId];
-                        await api.updateCompositeMembers(selectedCompositeSliceId, newFab, compositeSlices.find(s => s.id === selectedCompositeSliceId)?.chameleon_slices || []);
-                        api.getCompositeSlice(selectedCompositeSliceId).then(d => setCompositeSlices(prev => prev.map(s => s.id === d.id ? d : s))).catch(() => {});
-                        api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+                        await api.updateFederatedMembers(selectedCompositeSliceId, newFab, compositeSlices.find(s => s.id === selectedCompositeSliceId)?.chameleon_slices || []);
+                        api.getFederatedSlice(selectedCompositeSliceId).then(d => setCompositeSlices(prev => prev.map(s => s.id === d.id ? d : s))).catch(() => {});
+                        api.getFederatedGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
                       } else {
                         const data = await api.createChameleonSlice({ name, site: chameleonSites?.[0]?.name || 'CHI@TACC' });
                         setChameleonSlices(prev => [...prev, data]);
-                        // Auto-add to composite
+                        // Auto-add to federated slice
                         const newChi = [...(compositeSlices.find(s => s.id === selectedCompositeSliceId)?.chameleon_slices || []), data.id];
-                        await api.updateCompositeMembers(selectedCompositeSliceId, compositeSlices.find(s => s.id === selectedCompositeSliceId)?.fabric_slices || [], newChi);
-                        api.getCompositeSlice(selectedCompositeSliceId).then(d => setCompositeSlices(prev => prev.map(s => s.id === d.id ? d : s))).catch(() => {});
-                        api.getCompositeGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
+                        await api.updateFederatedMembers(selectedCompositeSliceId, compositeSlices.find(s => s.id === selectedCompositeSliceId)?.fabric_slices || [], newChi);
+                        api.getFederatedSlice(selectedCompositeSliceId).then(d => setCompositeSlices(prev => prev.map(s => s.id === d.id ? d : s))).catch(() => {});
+                        api.getFederatedGraph(selectedCompositeSliceId).then(setCompositeGraph).catch(() => {});
                       }
                     } catch (e: any) { addError(e.message); }
                   }}
@@ -3235,6 +5138,7 @@ export default function App() {
             <div key="chi-editor-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
               <div {...dragProps} className="panel-header" style={{ padding: '6px 10px', fontSize: 11, fontWeight: 600, cursor: 'grab', background: 'var(--fabric-bg-tint)', borderBottom: '1px solid var(--fabric-border)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span>{icon}</span> Chameleon Editor
+                <button onClick={handleCollapseEditor} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, color: 'var(--fabric-text-muted)' }}>×</button>
               </div>
               <div style={{ flex: 1, overflow: 'auto' }}>
                 <ChameleonEditor
@@ -3244,6 +5148,7 @@ export default function App() {
                   draftId={selectedChameleonSliceId}
                   onDraftUpdated={(d: ChameleonDraft) => { setChameleonSliceData(d); setChiDraftVersion(v => v + 1); }}
                   autoRefresh={chameleonAutoRefresh}
+                  onOpenTerminal={handleOpenChameleonTerminal}
                 />
               </div>
             </div>
@@ -3336,6 +5241,7 @@ export default function App() {
             sliceBootLogs={sliceBootLogs}
             sliceBootRunning={sliceBootRunning}
             onClearSliceBootLog={handleClearSliceBootLog}
+            onCloseBootLog={(sn) => setOpenBootLogSlices(prev => prev.filter(s => s !== sn))}
             containerTermActive={true}
             onReceiveExternalTab={handleSideReceiveTab}
             onTabMovedOut={handleSideTabMovedOut}
@@ -3580,7 +5486,13 @@ export default function App() {
               setIsConfigured(true);
               setListLoaded(false);
               infraRequestedRef.current = false; sitesRequestedRef.current = false; // re-fetch infra on next tab visit
-              // Check if user changed — clear all account-specific state
+              // Check if user changed — clear all account-specific state.
+              // IMPORTANT: do NOT call setProjects from cfg.token_info.projects
+              // here. After a project switch FABlib refreshes the token with a
+              // project-scoped JWT whose `projects` claim contains only the
+              // newly-active project, which would collapse the Settings list
+              // to one row. The canonical list comes from listUserProjects
+              // below (UIS-backed, full membership).
               api.getConfig().then((cfg) => {
                 setConfigStatus(cfg);
                 const newUuid = cfg.token_info?.uuid || '';
@@ -3591,19 +5503,17 @@ export default function App() {
                   setSelectedSliceId('');
                   setSliceData(null);
                 }
-                if (cfg.token_info?.projects) {
-                  setProjects(cfg.token_info.projects);
-                }
                 if (cfg.project_id) {
                   setProjectId(cfg.project_id);
-                  const proj = cfg.token_info?.projects?.find((p: any) => p.uuid === cfg.project_id);
-                  if (proj) setProjectName(proj.name);
                 }
               }).catch(() => {});
               // Refresh slices for the (possibly new) account
               refreshSliceList();
-              // Refresh project list from Core API (with config fallback)
-              api.listUserProjects().then((resp) => {
+              // Refresh project list from UIS (canonical, full membership).
+              // Force-bypass the module-level cache so we don't serve a stale
+              // 1-element list captured during a token-scoped window.
+              api.invalidateUserProjectsCache();
+              api.listUserProjects(true).then((resp) => {
                 setProjects(resp.projects);
                 if (resp.active_project_id) {
                   setProjectId(resp.active_project_id);
@@ -3627,7 +5537,7 @@ export default function App() {
 
       {/* FABRIC title bar with tabs — sits above the content grid */}
       {currentView === 'infrastructure' && !(settingsOpen || helpOpen) && (
-        <div className="fabric-bar">
+        <div className="fabric-bar" data-testid="fabric-bar">
           <img src={assetUrl('/fabric_wave_dark.png')} alt="" className="fabric-bar-logo fabric-wave-light-mode" />
           <img src={assetUrl('/fabric_wave_light.png')} alt="" className="fabric-bar-logo fabric-wave-dark-mode" />
           <span className="fabric-bar-title">FABRIC</span>
@@ -3640,7 +5550,7 @@ export default function App() {
               {projectName}
             </span>
           )}
-          <div className="fabric-bar-tabs">
+          <div className="fabric-bar-tabs" data-testid="fabric-bar-tabs">
             {([
               { key: 'table' as InfraSubView, label: 'Slices', needsSlice: false },
               { key: 'topology' as InfraSubView, label: 'Topology', needsSlice: true },
@@ -3654,6 +5564,8 @@ export default function App() {
                 key={t.key}
                 className={`fabric-bar-tab${infraSubView === t.key ? ' active' : ''}`}
                 onClick={() => setInfraSubView(t.key)}
+                data-testid="fabric-bar-tab"
+                data-tab={t.key}
               >
                 {t.label}
               </button>
@@ -3663,6 +5575,7 @@ export default function App() {
             <select
               className="fabric-bar-slice-select"
               value={selectedSliceId}
+              data-testid="fabric-bar-slice-select"
               onChange={(e) => {
                 const id = e.target.value;
                 setSelectedSliceId(id);
@@ -3679,7 +5592,7 @@ export default function App() {
                 <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
               ))}
             </select>
-            <button className="fabric-bar-action-btn" onClick={async () => {
+            <button className="fabric-bar-action-btn" data-testid="fabric-bar-new-slice" onClick={async () => {
               const name = prompt('Slice name:');
               if (!name) return;
               try {
@@ -3694,39 +5607,32 @@ export default function App() {
                 });
               } catch (e: any) { setErrors(prev => [...prev, e.message]); }
             }} title="Create new slice">+ New</button>
-            <button className="fabric-bar-action-btn" onClick={async () => {
+            <button className="fabric-bar-action-btn" data-testid="fabric-bar-submit-slice" onClick={async () => {
               if (!selectedSliceId) return;
               handleSubmit();
             }} disabled={!selectedSliceId} title="Submit selected slice">Submit</button>
             <button className="fabric-bar-action-btn" onClick={handleCheckAvailability}
+              data-testid="fabric-bar-check-availability"
               disabled={!selectedSliceId || checkingAvailability} title="Check if resources are available for this slice">
               {checkingAvailability ? '\u23F3 Checking...' : '\uD83D\uDD0D Availability'}</button>
             <button className="fabric-bar-action-btn fabric-bar-action-danger" onClick={async () => {
               if (!selectedSliceId || !selectedSliceName) return;
               if (!window.confirm(`Delete slice "${selectedSliceName}"?`)) return;
               handleDeleteSlice();
-            }} disabled={!selectedSliceId} title="Delete selected slice">Delete</button>
-            <button className="fabric-bar-action-btn" onClick={handleRefreshSlices} title="Refresh slices">&#x21BB; Slices</button>
-            <select
+            }} disabled={!selectedSliceId} title="Delete selected slice" data-testid="fabric-bar-delete-slice">Delete</button>
+            <button className="fabric-bar-action-btn" onClick={handleRefreshSlices} title="Refresh slices" data-testid="fabric-bar-refresh-slices">&#x21BB; Slices</button>
+            <button className="fabric-bar-action-btn" onClick={() => refreshInfrastructure(0)} title="Refresh resources" data-testid="fabric-bar-refresh-resources">&#x21BB; Resources</button>
+            <AutoRefreshSelect
               className="fabric-bar-action-btn"
               value={pollInterval}
-              onChange={(e) => {
-                const val = parseInt(e.target.value, 10);
+              onChange={(val) => {
                 setPollInterval(val);
                 localStorage.setItem('poll-interval', String(val));
               }}
               title="Auto-refresh interval for slice polling"
-              style={{ minWidth: 60, cursor: 'pointer' }}
-            >
-              <option value={0}>Never</option>
-              <option value={15000}>15s</option>
-              <option value={30000}>30s</option>
-              <option value={60000}>1m</option>
-              <option value={120000}>2m</option>
-              <option value={300000}>5m</option>
-            </select>
+            />
           </>)}
-          {(infraSubView === 'map' || infraSubView === 'resources' || infraSubView === 'calendar') && (
+          {(infraSubView === 'resources' || infraSubView === 'calendar') && (
             <button className="fabric-bar-action-btn" onClick={() => refreshInfrastructure(0)} title="Refresh resources">&#x21BB; Resources</button>
           )}
         </div>
@@ -3734,22 +5640,26 @@ export default function App() {
 
       {/* Chameleon title bar — mirrors FABRIC bar with extracted callbacks */}
       {currentView === 'chameleon' && !(settingsOpen || helpOpen) && chameleonEnabled && (
-        <div className="chameleon-bar">
+        <div className="chameleon-bar" data-testid="chameleon-bar">
           <img src={assetUrl('/chameleon-icon.png')} alt="" className="chameleon-bar-logo" />
           <span className="chameleon-bar-title">Chameleon</span>
-          <div className="chameleon-bar-tabs">
+          <div className="chameleon-bar-tabs" data-testid="chameleon-bar-tabs">
             {([
               { key: 'slices' as ChameleonSubView, label: 'Slices' },
               { key: 'topology' as ChameleonSubView, label: 'Topology' },
+              { key: 'storage' as ChameleonSubView, label: 'Storage' },
               { key: 'map' as ChameleonSubView, label: 'Map' },
               { key: 'calendar' as ChameleonSubView, label: 'Calendar' },
-              { key: 'openstack' as ChameleonSubView, label: 'OpenStack' },
+              { key: 'openstack' as ChameleonSubView, label: 'Project Inventory' },
             ]).map(t => (
               <button key={t.key} className={`chameleon-bar-tab${chameleonSubView === t.key ? ' active' : ''}`}
+                data-testid="chameleon-bar-tab"
+                data-chameleon-bar-tab={t.key}
                 onClick={() => setChameleonSubView(t.key)}>{t.label}</button>
             ))}
           </div>
           <select className="chameleon-bar-select" value={selectedChameleonSliceId}
+            data-testid="chameleon-bar-slice-select"
             onChange={(e) => { setSelectedChameleonSliceId(e.target.value); if (e.target.value) setChameleonSubView('topology'); }}>
             <option value="">-- Select Slice --</option>
             {chameleonSlices.filter(s => !['Terminated', 'Error'].includes(s.state || '') || s.id === selectedChameleonSliceId).map(s => {
@@ -3758,9 +5668,9 @@ export default function App() {
               return <option key={s.id} value={s.id}>{s.name} [{s.state}] ({siteLabel})</option>;
             })}
           </select>
-          <button className="chameleon-bar-btn" onClick={handleCreateChameleonDraft} title="Create new draft">+ New</button>
-          <button className="chameleon-bar-btn" disabled={!selectedChameleonSliceId} onClick={handleSubmitChameleonDraft} title="Deploy as lease">Submit</button>
-          <button className="chameleon-bar-btn chameleon-bar-btn-danger" disabled={!selectedChameleonSliceId} onClick={handleDeleteChameleonDraft} title="Delete draft">Delete</button>
+          <button className="chameleon-bar-btn" data-testid="chameleon-bar-new-draft" onClick={handleCreateChameleonDraft} title="Create new draft">+ New</button>
+          <button className="chameleon-bar-btn" data-testid="chameleon-bar-submit-draft" disabled={!selectedChameleonSliceId} onClick={handleSubmitChameleonDraft} title="Deploy as lease">Submit</button>
+          <button className="chameleon-bar-btn chameleon-bar-btn-danger" data-testid="chameleon-bar-delete-draft" disabled={!selectedChameleonSliceId} onClick={handleDeleteChameleonDraft} title="Delete draft">Delete</button>
           <button className="chameleon-bar-btn chameleon-bar-btn-danger" disabled={chameleonSlices.length === 0} onClick={async () => {
             const drafts = chameleonSlices.filter(s => s.state === 'Draft');
             const all = chameleonSlices;
@@ -3774,21 +5684,28 @@ export default function App() {
             setChameleonSliceData(null);
             handleRefreshChameleonSlices();
           }} title="Delete all drafts">Delete All</button>
-          <button className="chameleon-bar-btn" onClick={handleRefreshChameleonSlices} title="Refresh slices">&#x21BB; Slices</button>
-          <button className={`chameleon-bar-btn ${chameleonAutoRefresh ? 'chi-action-active' : ''}`}
-            onClick={() => setChameleonAutoRefresh(prev => !prev)}
-            title={chameleonAutoRefresh ? 'Disable auto-refresh' : 'Enable auto-refresh'}>
-            {chameleonAutoRefresh ? '\u25CF Auto: ON' : '\u25CB Auto: OFF'}
+          <button className="chameleon-bar-btn" data-testid="chameleon-bar-refresh-slices" onClick={() => handleRefreshChameleonSlices()} disabled={chameleonSlicesLoading} title="Refresh slices">
+            {chameleonSlicesLoading ? '...' : '\u21BB Slices'}
           </button>
+          <AutoRefreshSelect
+            className="chameleon-bar-btn"
+            value={chameleonAutoRefresh ? pollInterval : 0}
+            onChange={(val) => {
+              setChameleonAutoRefresh(val > 0);
+              setPollInterval(val);
+              localStorage.setItem('poll-interval', String(val));
+            }}
+            title="Auto-refresh interval for Chameleon slices"
+          />
         </div>
       )}
 
-      {/* Composite Slice bar — mirrors FABRIC/Chameleon bar with LoomAI indigo */}
+      {/* Federated Slice bar — mirrors FABRIC/Chameleon bar with LoomAI indigo */}
       {currentView === 'slices' && !(settingsOpen || helpOpen) && (
-        <div className="composite-bar">
-          <img src={assetUrl('/composite-slice-icon-transparent.svg')} alt="" className="composite-bar-logo" />
-          <span className="composite-bar-title">Composite Slices</span>
-          <div className="composite-bar-tabs">
+        <div className="composite-bar" data-testid="federated-bar">
+          <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" className="composite-bar-logo" />
+          <span className="composite-bar-title">Federated Slices</span>
+          <div className="composite-bar-tabs" data-testid="federated-bar-tabs">
             {([
               { key: 'slices' as SlicesSubView, label: 'Slices' },
               { key: 'topology' as SlicesSubView, label: 'Topology' },
@@ -3800,7 +5717,14 @@ export default function App() {
               <button
                 key={t.key}
                 className={`composite-bar-tab${slicesSubView === t.key ? ' active' : ''}`}
-                onClick={() => setSlicesSubView(t.key)}
+                data-testid="federated-bar-tab"
+                data-federated-bar-tab={t.key}
+                onClick={() => {
+                  setSlicesSubView(t.key);
+                  if (t.key === 'slices') {
+                    refreshFederatedSlices({ silent: true });
+                  }
+                }}
               >
                 {t.label}
               </button>
@@ -3809,77 +5733,71 @@ export default function App() {
           {(slicesSubView === 'slices' || slicesSubView === 'topology' || slicesSubView === 'map') && (<>
             <select
               className="composite-bar-select"
+              data-testid="federated-bar-slice-select"
               value={selectedCompositeSliceId}
               onChange={async (e) => {
                 const id = e.target.value;
                 setSelectedCompositeSliceId(id);
                 setCompositeGraph(null);
                 if (id) {
-                  api.getCompositeSlice(id).then(data => {
+                  api.getFederatedSlice(id).then(data => {
                     setCompositeSlices(prev => prev.map(s => s.id === data.id ? data : s));
                   }).catch(() => {});
-                  api.getCompositeGraph(id).then(setCompositeGraph).catch(err => addError(err.message));
+                  api.getFederatedGraph(id).then(setCompositeGraph).catch(err => addError(err.message));
                 }
               }}
             >
-              <option value="">-- Select Composite Slice --</option>
+              <option value="">-- Select Federated Slice --</option>
               {compositeSlices.map(s => (
                 <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
               ))}
             </select>
-            <button className="composite-bar-btn" onClick={async () => {
-              const name = prompt('Composite slice name:');
+            <button className="composite-bar-btn" data-testid="federated-bar-new-slice" onClick={async () => {
+              const name = prompt('Federated slice name:');
               if (!name) return;
               try {
-                const data = await api.createCompositeSlice(name);
+                const data = await api.createFederatedSlice(name);
                 setCompositeSlices(prev => [...prev, data]);
                 setSelectedCompositeSliceId(data.id);
                 setSlicesSubView('slices');
               } catch (e: any) { addError(e.message); }
-            }} title="Create new composite slice">+ New</button>
-            <button className="composite-bar-btn" onClick={async () => {
+            }} title="Create new federated slice">+ New</button>
+            <button className="composite-bar-btn" data-testid="federated-bar-submit-slice" onClick={async () => {
               if (!selectedCompositeSliceId) return;
               setLoading(true);
               try {
-                const result = await api.submitCompositeSliceById(selectedCompositeSliceId);
+                const result = await api.submitFederatedSliceById(selectedCompositeSliceId);
                 if (result.fabric_results) for (const r of result.fabric_results) { if (r.status === 'error') addError(`FABRIC: ${r.error}`); }
                 if (result.chameleon_results) for (const r of result.chameleon_results) { if (r.status === 'error') addError(`Chameleon: ${r.error}`); }
                 const compId = selectedCompositeSliceId;
-                api.getCompositeGraph(compId).then(setCompositeGraph).catch(() => {});
-                setTimeout(() => { api.getCompositeGraph(compId).then(setCompositeGraph).catch(() => {}); }, 5000);
-                setCompositeSlices(prev => prev.map(s => s.id === compId ? { ...s, state: 'Provisioning' } : s));
+                if (result.federated_slice) {
+                  upsertFederatedSlice(result.federated_slice);
+                }
+                api.getFederatedSlice(compId).then(data => {
+                  upsertFederatedSlice(data);
+                }).catch(() => {});
+                api.getFederatedGraph(compId).then(setCompositeGraph).catch(() => {});
+                setTimeout(() => { api.getFederatedGraph(compId).then(setCompositeGraph).catch(() => {}); }, 5000);
+                setCompositeSlices(prev => prev.map(s => s.id === compId ? { ...s, state: result.federated_slice?.state || 'Provisioning' } : s));
               } catch (e: any) { addError(e.message); }
               finally { setLoading(false); }
-            }} disabled={!selectedCompositeSliceId || loading} title="Submit composite slice">Submit</button>
-            <button className="composite-bar-btn composite-bar-btn-danger" onClick={() => {
+            }} disabled={!selectedCompositeSliceId || loading} title="Submit federated slice">Submit</button>
+            <button className="composite-bar-btn composite-bar-btn-danger" data-testid="federated-bar-delete-slice" onClick={() => {
               if (!selectedCompositeSliceId) return;
-              const name = compositeSlices.find(s => s.id === selectedCompositeSliceId)?.name || '';
-              if (!window.confirm(`Delete composite slice "${name}"?`)) return;
-              api.deleteCompositeSlice(selectedCompositeSliceId).then(() => {
-                setCompositeSlices(prev => prev.filter(s => s.id !== selectedCompositeSliceId));
-                setSelectedCompositeSliceId('');
-                setCompositeGraph(null);
-              }).catch((e: any) => addError(e.message));
-            }} disabled={!selectedCompositeSliceId} title="Delete composite slice">Delete</button>
-            <button className="composite-bar-btn" onClick={handleRefreshSlices} title="Refresh slices">{'\u21BB'} Slices</button>
-            <select
+              handleDeleteFederatedSlice(selectedCompositeSliceId);
+            }} disabled={!selectedCompositeSliceId} title="Delete federated slice">Delete</button>
+            <button className="composite-bar-btn" data-testid="federated-bar-refresh-slices" onClick={handleRefreshSlices} disabled={compositeSlicesLoading} title="Refresh federated slices">
+              {compositeSlicesLoading ? '...' : '\u21BB Slices'}
+            </button>
+            <AutoRefreshSelect
               className="composite-bar-btn"
               value={pollInterval}
-              onChange={(e) => {
-                const val = parseInt(e.target.value, 10);
+              onChange={(val) => {
                 setPollInterval(val);
                 localStorage.setItem('poll-interval', String(val));
               }}
               title="Auto-refresh interval for slice polling"
-              style={{ minWidth: 60, cursor: 'pointer' }}
-            >
-              <option value={0}>Never</option>
-              <option value={15000}>15s</option>
-              <option value={30000}>30s</option>
-              <option value={60000}>1m</option>
-              <option value={120000}>2m</option>
-              <option value={300000}>5m</option>
-            </select>
+            />
           </>)}
           {(slicesSubView === 'map' || slicesSubView === 'calendar') && (
             <button className="composite-bar-btn" onClick={() => refreshInfrastructure(0)} title="Refresh resources">{'\u21BB'} Resources</button>
@@ -3950,31 +5868,6 @@ export default function App() {
             <AICompanionView selectedTool={selectedAiTool} onToolChange={setSelectedAiTool} visible={currentView === 'ai'} />
           </div>
 
-          {/* JupyterLab — mounted once visited, hidden via visibility (not display:none)
-              to preserve iframe state and WebSocket connections across view switches */}
-          {jupyterMounted && (
-            <div style={{
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden',
-              ...(currentView === 'jupyter' ? {
-                flex: 1,
-                minHeight: 0,
-              } : {
-                position: 'absolute' as const,
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                visibility: 'hidden' as const,
-                pointerEvents: 'none' as const,
-                zIndex: -1,
-              }),
-            }}>
-              <JupyterLabView initialPath={jupyterPath} dark={dark} />
-            </div>
-          )}
-
           {/* View content */}
           {currentView === 'ai' ? null : currentView === 'landing' ? (
             <LandingView
@@ -3986,8 +5879,6 @@ export default function App() {
               hasToken={configStatus?.has_token ?? undefined}
               tokenExpired={configStatus?.has_token && configStatus?.token_info?.exp ? configStatus.token_info.exp * 1000 < Date.now() : false}
             />
-          ) : currentView === 'jupyter' ? (
-            null /* JupyterLabView rendered persistently below */
           ) : currentView === 'artifacts' ? (
             editingArtifactDirName ? (
               <ArtifactEditorView
@@ -4001,7 +5892,7 @@ export default function App() {
               />
             ) : (
               <LibrariesView
-                onLoadSlice={(data) => { setSliceData(data); setSelectedSliceId(data.id || ''); refreshSliceList(); setCurrentView('slices'); setSlicesSubView('topology'); }}
+                onLoadSlice={(data) => { setSliceDataIfChanged(data); setSelectedSliceId(data.id || ''); refreshSliceList(); setCurrentView('slices'); setSlicesSubView('topology'); }}
                 onLaunchNotebook={handleLaunchNotebook}
                 onEditArtifact={handleEditArtifact}
                 initialPublishNotebook={publishNotebookName}
@@ -4040,7 +5931,8 @@ export default function App() {
                 slices={slices}
                 dark={dark}
                 selectedSliceId={selectedSliceId}
-                onSliceSelect={(id) => {
+                onSliceSelect={(id, data) => {
+                  if (data) setSliceDataIfChanged(data);
                   setSelectedSliceId(id);
                   setInfraSubView('topology');
                 }}
@@ -4058,6 +5950,9 @@ export default function App() {
                 nodeActivity={nodeActivity}
                 recipes={recipes}
                 refreshKey={sliceRefreshKey}
+                currentSliceData={sliceData}
+                federatedSliceLinks={federatedSliceLinks.fabric}
+                onFederatedSliceOpen={openFederatedSliceFromMember}
               />
             ) : infraSubView === 'storage' ? (
               <FileTransferView
@@ -4123,10 +6018,20 @@ export default function App() {
             ) : chameleonSubView === 'slices' ? (
               <ChameleonSlicesView
                 drafts={chameleonSlices}
-                leases={chameleonLeases}
                 instances={chameleonInstances}
+                leases={chameleonLeases}
                 selectedDraftId={selectedChameleonSliceId}
                 onDraftSelect={(id) => { setSelectedChameleonSliceId(id); setChameleonSubView('topology'); }}
+                onDraftUpdated={(draft) => {
+                  setChameleonSlices(prev => {
+                    const idx = prev.findIndex(s => s.id === draft.id);
+                    if (idx === -1) return [...prev, draft];
+                    const next = [...prev];
+                    next[idx] = draft;
+                    return next;
+                  });
+                  if (selectedChameleonSliceId === draft.id) setChameleonSliceData(draft);
+                }}
                 onDeleteDrafts={async (ids) => {
                   for (const id of ids) {
                     try { await api.deleteChameleonDraft(id); } catch {}
@@ -4138,11 +6043,40 @@ export default function App() {
                   handleRefreshChameleonSlices();
                 }}
                 onOpenTerminal={handleOpenChameleonTerminal}
-                onRefresh={() => { handleRefreshChameleonSlices(); api.listChameleonLeases().then(setChameleonLeases).catch(() => {}); }}
-                loading={false}
+                onRefresh={() => handleRefreshChameleonSlices()}
+                loading={chameleonSlicesLoading}
+                federatedSliceLinks={federatedSliceLinks.chameleon}
+                onFederatedSliceOpen={openFederatedSliceFromMember}
               />
             ) : chameleonSubView === 'openstack' ? (
               <ChameleonOpenStackView onError={(msg) => setErrors(prev => [...prev, msg])} onOpenTerminal={handleOpenChameleonTerminal} />
+            ) : chameleonSubView === 'storage' ? (
+              <FileTransferView
+                sliceName=""
+                sliceData={null}
+                chameleonInstances={(() => {
+                  // Prefer the selected slice's deployed instances; fall back
+                  // to all known Chameleon instances so the user always has
+                  // *something* to browse.
+                  const fromSlice = (chameleonSliceData?.resources || [])
+                    .filter((r: any) => r.type === 'instance' && r.id)
+                    .map((r: any) => ({
+                      instance_id: r.id,
+                      site: r.site,
+                      name: r.name,
+                      status: r.status,
+                      floating_ip: r.floating_ip,
+                    }));
+                  if (fromSlice.length > 0) return fromSlice;
+                  return chameleonInstances.map((i) => ({
+                    instance_id: i.id,
+                    site: i.site,
+                    name: i.name,
+                    status: i.status,
+                    floating_ip: i.floating_ip,
+                  }));
+                })()}
+              />
             ) : (
               <ChameleonView
                 onError={(msg) => setErrors(prev => [...prev, msg])}
@@ -4170,8 +6104,8 @@ export default function App() {
               ) : (
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--fabric-text-muted)', fontSize: 13, textAlign: 'center', padding: 40 }}>
                   {selectedCompositeSliceId
-                    ? <div><p style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No resources attached</p><p>Attach FABRIC or Chameleon slices to this composite slice to see the unified topology.</p></div>
-                    : <div><p style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No composite slice selected</p><p>Select or create a composite slice from the dropdown above.</p></div>
+                    ? <div><p style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No resources attached</p><p>Attach FABRIC or Chameleon slices to this federated slice to see the unified topology.</p></div>
+                    : <div><p style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No federated slice selected</p><p>Select or create a federated slice from the dropdown above.</p></div>
                   }
                 </div>
               )
@@ -4179,8 +6113,8 @@ export default function App() {
               <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
                 {compositeSlices.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: 40, color: 'var(--fabric-text-muted)', fontSize: 13 }}>
-                    <p style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No composite slices</p>
-                    <p>Click "+ New" in the toolbar to create a composite slice.</p>
+                    <p style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No federated slices</p>
+                    <p>Click "+ New" in the toolbar to create a federated slice.</p>
                   </div>
                 ) : (
                   <>
@@ -4190,18 +6124,7 @@ export default function App() {
                       <span style={{ fontWeight: 600 }}>{checkedCompositeIds.size} selected</span>
                       <button
                         style={{ fontSize: 11, padding: '3px 10px', borderRadius: 4, border: '1px solid #e25241', background: 'rgba(226,82,65,0.1)', color: '#e25241', cursor: 'pointer', fontWeight: 600 }}
-                        onClick={async () => {
-                          if (!window.confirm(`Delete ${checkedCompositeIds.size} composite slice${checkedCompositeIds.size !== 1 ? 's' : ''}? Member slices will NOT be affected.`)) return;
-                          for (const id of checkedCompositeIds) {
-                            try { await api.deleteCompositeSlice(id); } catch {}
-                          }
-                          setCompositeSlices(prev => prev.filter(s => !checkedCompositeIds.has(s.id)));
-                          setCheckedCompositeIds(new Set());
-                          if (checkedCompositeIds.has(selectedCompositeSliceId)) {
-                            setSelectedCompositeSliceId('');
-                            setCompositeGraph(null);
-                          }
-                        }}
+                        onClick={handleDeleteCheckedFederatedSlices}
                       >Delete Selected</button>
                     </div>
                   )}
@@ -4230,22 +6153,51 @@ export default function App() {
                         const isSelected = cs.id === selectedCompositeSliceId;
                         const fabSummaries = cs.fabric_member_summaries || [];
                         const chiSummaries = cs.chameleon_member_summaries || [];
-                        const fabCount = (cs.fabric_slices || []).length;
-                        const chiCount = (cs.chameleon_slices || []).length;
+                        const summaryFor = (summaries: any[], id: string) => summaries.find((m: any) => (
+                          String(m.id || m.slice_id || '') === id || String(m.name || '') === id
+                        ));
+                        const fabMemberIds = Array.from(new Set([
+                          ...(cs.fabric_slices || []),
+                          ...fabSummaries.map((m: any) => m.id || m.slice_id).filter(Boolean),
+                        ].map(String)));
+                        const chiMemberIds = Array.from(new Set([
+                          ...(cs.chameleon_slices || []),
+                          ...chiSummaries.map((m: any) => m.id || m.slice_id).filter(Boolean),
+                        ].map(String)));
+                        const fabCount = fabMemberIds.length;
+                        const chiCount = chiMemberIds.length;
+                        const fabRows = fabMemberIds.map(id => ({
+                          id,
+                          slice_id: id,
+                          name: id,
+                          state: 'Referenced',
+                          node_count: 0,
+                          ...(summaryFor(fabSummaries, id) || {}),
+                        }));
+                        const chiRows = chiMemberIds.map(id => ({
+                          id,
+                          slice_id: id,
+                          name: id,
+                          state: 'Referenced',
+                          site: '',
+                          node_count: 0,
+                          ...(summaryFor(chiSummaries, id) || {}),
+                        }));
+                        const attachedCount = fabRows.length + chiRows.length;
                         return (
                           <React.Fragment key={cs.id}>
                             <tr
                               onClick={() => {
                                 setSelectedCompositeSliceId(cs.id);
                                 setCompositeGraph(null);
-                                api.getCompositeSlice(cs.id).then(data => {
+                                api.getFederatedSlice(cs.id).then(data => {
                                   setCompositeSlices(prev => prev.map(s => s.id === data.id ? data : s));
                                 }).catch(() => {});
-                                api.getCompositeGraph(cs.id).then(setCompositeGraph).catch(() => {});
+                                api.getFederatedGraph(cs.id).then(setCompositeGraph).catch(() => {});
                               }}
                               style={{
                                 cursor: 'pointer',
-                                borderBottom: isSelected && (fabSummaries.length > 0 || chiSummaries.length > 0) ? 'none' : '1px solid var(--fabric-border)',
+                                borderBottom: isSelected ? 'none' : '1px solid var(--fabric-border)',
                                 background: isSelected ? 'rgba(39, 170, 225, 0.08)' : undefined,
                               }}
                             >
@@ -4264,7 +6216,44 @@ export default function App() {
                                 />
                               </td>
                               <td style={{ padding: '8px 12px', fontWeight: 600 }}>
-                                <span style={{ marginRight: 6 }}>{isSelected ? '▾' : '▸'}</span>
+                                <button
+                                  type="button"
+                                  style={{
+                                    width: 22,
+                                    height: 20,
+                                    marginRight: 8,
+                                    borderRadius: 4,
+                                    border: '1px solid rgba(39, 170, 225, 0.45)',
+                                    background: isSelected ? 'rgba(39, 170, 225, 0.16)' : 'rgba(39, 170, 225, 0.06)',
+                                    color: '#27aae1',
+                                    cursor: 'pointer',
+                                    fontWeight: 700,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    lineHeight: 1,
+                                    padding: 0,
+                                    verticalAlign: 'middle',
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (isSelected) {
+                                      setSelectedCompositeSliceId('');
+                                      setCompositeGraph(null);
+                                      return;
+                                    }
+                                    setSelectedCompositeSliceId(cs.id);
+                                    setCompositeGraph(null);
+                                    api.getFederatedSlice(cs.id).then(data => {
+                                      setCompositeSlices(prev => prev.map(s => s.id === data.id ? data : s));
+                                    }).catch(() => {});
+                                    api.getFederatedGraph(cs.id).then(setCompositeGraph).catch(() => {});
+                                  }}
+                                  title={isSelected ? 'Collapse federated slice members' : 'Expand federated slice members'}
+                                  aria-label={isSelected ? `Collapse ${cs.name}` : `Expand ${cs.name}`}
+                                >
+                                  <span style={{ fontSize: 13, transform: isSelected ? 'translateY(-1px)' : 'translateX(1px)', display: 'inline-block' }}>{isSelected ? '▾' : '▸'}</span>
+                                </button>
                                 {cs.name}
                               </td>
                               <td style={{ padding: '8px 12px' }}>
@@ -4272,7 +6261,7 @@ export default function App() {
                                   fontSize: 10, fontWeight: 600, textTransform: 'uppercase', padding: '2px 6px', borderRadius: 4,
                                   background: cs.state === 'Active' ? 'rgba(0, 142, 122, 0.15)' : cs.state === 'Degraded' ? 'rgba(226, 82, 65, 0.15)' : 'rgba(39, 170, 225, 0.15)',
                                   color: cs.state === 'Active' ? '#008e7a' : cs.state === 'Degraded' ? '#e25241' : '#27aae1',
-                                }}>{cs.state}</span>
+                                }} data-testid="federated-slice-state-badge" data-state={cs.state}>{cs.state}</span>
                               </td>
                               <td style={{ padding: '8px 12px' }}>
                                 {fabCount > 0 && <span style={{ color: '#5798bc', fontWeight: 500, marginRight: 8 }}>{fabCount} FABRIC</span>}
@@ -4282,25 +6271,118 @@ export default function App() {
                               <td style={{ padding: '8px 12px', color: 'var(--fabric-text-muted)', fontSize: 11 }}>{cs.created ? new Date(cs.created).toLocaleDateString() : ''}</td>
                             </tr>
                             {/* Expandable member details */}
-                            {isSelected && (fabSummaries.length > 0 || chiSummaries.length > 0) && (
+                            {isSelected && (
                               <tr style={{ background: 'rgba(39, 170, 225, 0.04)', borderBottom: '1px solid var(--fabric-border)' }}>
                                 <td colSpan={5} style={{ padding: '4px 12px 8px 36px' }}>
-                                  {fabSummaries.map((m: any) => (
-                                    <div key={m.id} style={{ fontSize: 11, padding: '3px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
-                                      <span style={{ fontSize: 9, fontWeight: 700, color: '#5798bc', background: 'rgba(87, 152, 188, 0.15)', padding: '1px 4px', borderRadius: 3 }}>FAB</span>
-                                      <span style={{ fontWeight: 500 }}>{m.name}</span>
-                                      <span style={{ color: m.state === 'StableOK' ? '#008e7a' : 'var(--fabric-text-muted)', fontSize: 10 }}>{m.state}</span>
-                                      <span style={{ color: 'var(--fabric-text-muted)', fontSize: 10 }}>{m.node_count} node{m.node_count !== 1 ? 's' : ''}</span>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '6px 0 8px', borderBottom: '1px solid rgba(128,128,128,0.12)', marginBottom: 4 }}>
+                                    <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fabric-text-muted)' }}>Sub-slices</span>
+                                    <span style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>{attachedCount} attached</span>
+                                    <button
+                                      style={{ fontSize: 10, padding: '3px 9px', borderRadius: 4, border: '1px solid rgba(39, 170, 225, 0.45)', background: 'rgba(39, 170, 225, 0.1)', color: '#27aae1', cursor: federatedMemberSaving ? 'not-allowed' : 'pointer', fontWeight: 700, opacity: federatedMemberSaving ? 0.55 : 1 }}
+                                      disabled={federatedMemberSaving}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedCompositeSliceId(cs.id);
+                                        setFederatedSubsliceFilter('');
+                                        setShowFederatedSubsliceDialog(true);
+                                        refreshFederatedProviderSliceLists();
+                                      }}
+                                      title="Open a searchable, sortable table of FABRIC and Chameleon slices that can be added"
+                                    >
+                                      Add Sub-slice
+                                    </button>
+                                    <button
+                                      style={{ fontSize: 10, padding: '3px 8px', borderRadius: 4, border: '1px solid var(--fabric-border)', background: 'var(--fabric-bg)', color: 'var(--fabric-text-muted)', cursor: 'pointer', fontWeight: 600 }}
+                                      disabled={federatedMemberSaving}
+                                      onClick={(e) => { e.stopPropagation(); refreshFederatedProviderSliceLists(); }}
+                                      title="Refresh FABRIC and Chameleon slice lists"
+                                    >
+                                      Refresh Providers
+                                    </button>
+                                  </div>
+                                  {fabRows.length === 0 && chiRows.length === 0 && (
+                                    <div style={{ padding: '8px 0', color: 'var(--fabric-text-muted)', fontSize: 11, fontStyle: 'italic' }}>
+                                      No provider slices are attached yet. Add existing FABRIC or Chameleon slices above.
                                     </div>
-                                  ))}
-                                  {chiSummaries.map((m: any) => (
-                                    <div key={m.id} style={{ fontSize: 11, padding: '3px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
-                                      <span style={{ fontSize: 9, fontWeight: 700, color: '#39B54A', background: 'rgba(57, 181, 74, 0.15)', padding: '1px 4px', borderRadius: 3 }}>CHI</span>
-                                      <span style={{ fontWeight: 500 }}>{m.name}</span>
-                                      <span style={{ color: m.state === 'Active' ? '#008e7a' : 'var(--fabric-text-muted)', fontSize: 10 }}>{m.state}</span>
-                                      {m.site && <span style={{ color: 'var(--fabric-text-muted)', fontSize: 10 }}>@ {m.site}</span>}
-                                    </div>
-                                  ))}
+                                  )}
+                                  {fabRows.map((m: any) => {
+                                    const memberSliceId = String(m.slice_id || m.id || '');
+                                    const detailKey = compositeMemberKey('fabric', m);
+                                    const memberExpanded = expandedCompositeMemberIds.has(detailKey);
+                                    return (
+                                      <React.Fragment key={`fabric-${memberSliceId}`}>
+                                        <div style={{ fontSize: 11, padding: '4px 0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                          <button
+                                            style={{ width: 22, height: 20, borderRadius: 4, border: '1px solid rgba(87, 152, 188, 0.45)', background: memberExpanded ? 'rgba(87, 152, 188, 0.16)' : 'rgba(87, 152, 188, 0.06)', color: '#5798bc', cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1, padding: 0 }}
+                                            onClick={(e) => { e.stopPropagation(); toggleCompositeMemberDetail('fabric', m); }}
+                                            title={memberExpanded ? 'Collapse FABRIC resources' : 'Expand FABRIC resources'}
+                                            aria-label={memberExpanded ? 'Collapse FABRIC resources' : 'Expand FABRIC resources'}
+                                          >
+                                            <span style={{ fontSize: 13, transform: memberExpanded ? 'translateY(-1px)' : 'translateX(1px)', display: 'inline-block' }}>{memberExpanded ? '▾' : '▸'}</span>
+                                          </button>
+                                          <span style={{ fontSize: 9, fontWeight: 700, color: '#5798bc', background: 'rgba(87, 152, 188, 0.15)', padding: '1px 5px', borderRadius: 3 }}>FABRIC</span>
+                                          <span style={{ fontWeight: 600 }}>{m.name || memberSliceId}</span>
+                                          <span style={{ color: m.state === 'StableOK' ? '#008e7a' : 'var(--fabric-text-muted)', fontSize: 10 }}>{m.state || 'Referenced'}</span>
+                                          <span style={{ color: 'var(--fabric-text-muted)', fontSize: 10 }}>{m.node_count || 0} node{m.node_count !== 1 ? 's' : ''}</span>
+                                          <button
+                                            style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(87, 152, 188, 0.45)', background: 'rgba(87, 152, 188, 0.08)', color: '#5798bc', cursor: 'pointer', fontWeight: 600 }}
+                                            onClick={(e) => { e.stopPropagation(); openFabricMemberSlice(m); }}
+                                            title="Open this FABRIC sub-slice in the FABRIC view"
+                                          >
+                                            Open
+                                          </button>
+                                          <button
+                                            style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(226, 82, 65, 0.45)', background: 'rgba(226, 82, 65, 0.08)', color: '#e25241', cursor: federatedMemberSaving ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: federatedMemberSaving ? 0.55 : 1 }}
+                                            disabled={federatedMemberSaving}
+                                            onClick={(e) => { e.stopPropagation(); handleDetachFederatedMember(cs.id, 'fabric', memberSliceId, m.name); }}
+                                            title="Detach this FABRIC slice from the federated slice"
+                                          >
+                                            Remove
+                                          </button>
+                                        </div>
+                                        {memberExpanded && renderFabricMemberDetail(m, detailKey)}
+                                      </React.Fragment>
+                                    );
+                                  })}
+                                  {chiRows.map((m: any) => {
+                                    const memberSliceId = String(m.slice_id || m.id || '');
+                                    const detailKey = compositeMemberKey('chameleon', m);
+                                    const memberExpanded = expandedCompositeMemberIds.has(detailKey);
+                                    return (
+                                      <React.Fragment key={`chameleon-${memberSliceId}`}>
+                                        <div style={{ fontSize: 11, padding: '4px 0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                          <button
+                                            style={{ width: 22, height: 20, borderRadius: 4, border: '1px solid rgba(57, 181, 74, 0.45)', background: memberExpanded ? 'rgba(57, 181, 74, 0.16)' : 'rgba(57, 181, 74, 0.06)', color: '#2f9b3d', cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1, padding: 0 }}
+                                            onClick={(e) => { e.stopPropagation(); toggleCompositeMemberDetail('chameleon', m); }}
+                                            title={memberExpanded ? 'Collapse Chameleon resources' : 'Expand Chameleon resources'}
+                                            aria-label={memberExpanded ? 'Collapse Chameleon resources' : 'Expand Chameleon resources'}
+                                          >
+                                            <span style={{ fontSize: 13, transform: memberExpanded ? 'translateY(-1px)' : 'translateX(1px)', display: 'inline-block' }}>{memberExpanded ? '▾' : '▸'}</span>
+                                          </button>
+                                          <span style={{ fontSize: 9, fontWeight: 700, color: '#39B54A', background: 'rgba(57, 181, 74, 0.15)', padding: '1px 5px', borderRadius: 3 }}>Chameleon</span>
+                                          <span style={{ fontWeight: 600 }}>{m.name || memberSliceId}</span>
+                                          <span style={{ color: m.state === 'Active' ? '#008e7a' : 'var(--fabric-text-muted)', fontSize: 10 }}>{m.state || 'Referenced'}</span>
+                                          {m.site && <span style={{ color: 'var(--fabric-text-muted)', fontSize: 10 }}>@ {m.site}</span>}
+                                          <button
+                                            style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(57, 181, 74, 0.45)', background: 'rgba(57, 181, 74, 0.08)', color: '#2f9b3d', cursor: 'pointer', fontWeight: 600 }}
+                                            onClick={(e) => { e.stopPropagation(); openChameleonMemberSlice(m); }}
+                                            title="Open this Chameleon sub-slice in the Chameleon view"
+                                          >
+                                            Open
+                                          </button>
+                                          <button
+                                            style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, border: '1px solid rgba(226, 82, 65, 0.45)', background: 'rgba(226, 82, 65, 0.08)', color: '#e25241', cursor: federatedMemberSaving ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: federatedMemberSaving ? 0.55 : 1 }}
+                                            disabled={federatedMemberSaving}
+                                            onClick={(e) => { e.stopPropagation(); handleDetachFederatedMember(cs.id, 'chameleon', memberSliceId, m.name); }}
+                                            title="Detach this Chameleon slice from the federated slice"
+                                          >
+                                            Remove
+                                          </button>
+                                        </div>
+                                        {memberExpanded && renderChameleonMemberDetail(m, detailKey)}
+                                      </React.Fragment>
+                                    );
+                                  })}
                                 </td>
                               </tr>
                             )}
@@ -4313,10 +6395,37 @@ export default function App() {
                 )}
               </div>
             ) : slicesSubView === 'storage' ? (
-              <FileTransferView
-                sliceName={selectedSliceName}
-                sliceData={sliceData}
-              />
+              (() => {
+                const composite = compositeSlices.find((s) => s.id === selectedCompositeSliceId);
+                const chiMemberIds: string[] = composite?.chameleon_slices || [];
+                // Build the Chameleon instance list from member slices' deployed
+                // resources (instances). Fall back to all known instances if a
+                // member slice has no resource entries cached yet.
+                const chiInstances: Array<{ instance_id: string; site: string; name: string; status?: string; floating_ip?: string }> = [];
+                for (const id of chiMemberIds) {
+                  const slice = chameleonSlices.find((s: any) => s.id === id);
+                  if (!slice) continue;
+                  for (const r of (slice.resources || [])) {
+                    if (r.type === 'instance' && r.id) {
+                      chiInstances.push({
+                        instance_id: r.id,
+                        site: r.site,
+                        name: r.name,
+                        status: r.status,
+                        floating_ip: r.floating_ip,
+                      });
+                    }
+                  }
+                }
+                return (
+                  <FileTransferView
+                    sliceName=""
+                    sliceData={null}
+                    fabricSlices={compositeMemberFabricData}
+                    chameleonInstances={chiInstances}
+                  />
+                );
+              })()
             ) : slicesSubView === 'map' ? (
               <GeoView
                 sliceData={sliceData}
@@ -4425,6 +6534,152 @@ export default function App() {
         recipeRunning={recipeRunning}
         bootRunning={Object.values(sliceBootRunning).some(Boolean)}
       />
+
+      {federatedResourceMenu && (
+        <div
+          className="graph-context-menu"
+          style={{ position: 'fixed', left: federatedResourceMenu.x, top: federatedResourceMenu.y, zIndex: 99999 }}
+          data-testid="federated-resource-context-menu"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="graph-context-menu-label">{federatedResourceMenu.label}</div>
+          <button
+            className="graph-context-menu-item danger"
+            data-testid="federated-resource-context-delete"
+            onClick={() => {
+              const el = federatedResourceMenu.element;
+              const isChameleonInstance = textValue(el.testbed).toLowerCase() === 'chameleon'
+                && textValue(el.element_type) === 'chameleon_instance'
+                && textValue(el.status).toUpperCase() !== 'DRAFT'
+                && !!textValue(el.instance_id);
+              setFederatedResourceMenu(null);
+              if (isChameleonInstance) {
+                handleDeleteChameleonInstanceFromTopology({
+                  type: 'chi-delete',
+                  elements: [el],
+                  instanceId: textValue(el.instance_id),
+                  instanceSite: textValue(el.site),
+                  instanceName: textValue(el.name || el.label),
+                });
+              } else {
+                handleDeleteElements([el]);
+              }
+            }}
+          >
+            ✕ Delete
+          </button>
+        </div>
+      )}
+
+      {showFederatedSubsliceDialog && selectedFederatedSlice && typeof document !== 'undefined' && createPortal(
+        <div
+          className="template-modal-overlay"
+          onClick={() => setShowFederatedSubsliceDialog(false)}
+        >
+          <div
+            className="template-modal federated-subslice-modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h4>Add Sub-slice</h4>
+            <p>
+              Attach an existing FABRIC or Chameleon slice to <strong>{selectedFederatedSlice.name}</strong>.
+            </p>
+            <div className="federated-subslice-controls">
+              <div className="federated-subslice-filter">
+                <label htmlFor="federated-subslice-filter">Filter candidates</label>
+                <input
+                  id="federated-subslice-filter"
+                  className="template-input"
+                  aria-label="Filter candidate sub-slices"
+                  placeholder="Filter by provider, name, state, site, resources, or ID..."
+                  value={federatedSubsliceFilter}
+                  onChange={(e) => setFederatedSubsliceFilter(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <button
+                disabled={federatedMemberSaving}
+                onClick={refreshFederatedProviderSliceLists}
+              >
+                Refresh Providers
+              </button>
+              <span>
+                {federatedSubsliceCandidates.length} candidate{federatedSubsliceCandidates.length === 1 ? '' : 's'}
+              </span>
+            </div>
+            <div className="federated-candidate-table-wrap">
+              <table className="federated-candidate-table">
+                <thead>
+                  <tr>
+                    {([
+                      ['provider', 'Provider'],
+                      ['name', 'Name'],
+                      ['state', 'State'],
+                      ['site', 'Site'],
+                      ['resources', 'Resources'],
+                      ['created', 'Created/Lease'],
+                      ['id', 'ID'],
+                    ] as Array<[FederatedCandidateSortKey, string]>).map(([key, label]) => (
+                      <th key={key}>
+                        <button
+                          type="button"
+                          onClick={() => handleFederatedCandidateSort(key)}
+                          title={`Sort by ${label}`}
+                        >
+                          {label}{federatedSubsliceSort.key === key ? (federatedSubsliceSort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+                        </button>
+                      </th>
+                    ))}
+                    <th className="federated-candidate-action-column"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {federatedSubsliceCandidates.map(candidate => (
+                    <tr key={`${candidate.provider}:${candidate.id}`}>
+                      <td>
+                        <span className={`federated-candidate-provider federated-candidate-provider-${candidate.provider}`}>
+                          {candidate.providerLabel}
+                        </span>
+                      </td>
+                      <td className="federated-candidate-name">{candidate.name}</td>
+                      <td>
+                        <span className={candidate.state === 'StableOK' || candidate.state === 'Active' ? 'federated-candidate-state-ok' : 'federated-candidate-state-muted'}>
+                          {candidate.state}
+                        </span>
+                      </td>
+                      <td>{candidate.site || '-'}</td>
+                      <td>{candidate.resources}</td>
+                      <td className="federated-candidate-muted">{candidate.created ? new Date(candidate.created).toLocaleDateString() : '-'}</td>
+                      <td className="federated-candidate-id" title={candidate.id}>{candidate.id}</td>
+                      <td className="federated-candidate-actions">
+                        <button
+                          className="primary"
+                          disabled={federatedMemberSaving}
+                          onClick={() => handleAttachFederatedMember(candidate.provider, candidate.id)}
+                        >
+                          Add
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {federatedSubsliceCandidates.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="federated-candidate-empty">
+                        No candidate sub-slices match the current filter.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="template-modal-actions">
+              <button onClick={() => setShowFederatedSubsliceDialog(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
 
       {/* Save Weave / VM Template Modal */}
       {saveTemplateModal && (
@@ -4630,7 +6885,7 @@ export default function App() {
                 {chiDraftSites.map(site => {
                   const siteNodes = chameleonSliceData.nodes.filter(n => n.site === site);
                   const typeCounts = siteNodes.reduce((acc: Record<string, number>, n) => {
-                    acc[n.node_type] = (acc[n.node_type] || 0) + (n.count || 1);
+                    acc[n.node_type] = (acc[n.node_type] || 0) + getChameleonNodeCount(n);
                     return acc;
                   }, {});
                   return (

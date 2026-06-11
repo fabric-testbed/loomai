@@ -52,7 +52,7 @@ loomai weaves list                                    # List weaves
 loomai weaves run Hello_FABRIC --args SLICE_NAME=test # Run weave
 loomai weaves logs <run-id> --follow                  # Follow output
 loomai artifacts list --remote                        # Marketplace
-loomai artifacts search "iperf" --tags networking
+loomai artifacts search "iperf" --tags experiment
 loomai artifacts get <uuid> --name My_Weave
 loomai artifacts publish My_Weave --title "..." --description "..."
 ```

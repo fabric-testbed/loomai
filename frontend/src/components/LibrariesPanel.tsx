@@ -300,7 +300,7 @@ export default React.memo(function LibrariesPanel({
   const [recipeNodePicker, setRecipeNodePicker] = useState<string | null>(null);
 
   // ─── Notebooks state ───
-  const [notebooks, setNotebooks] = useState<{ name: string; description?: string; description_short?: string; dir_name: string; created?: string; artifact_uuid?: string }[]>([]);
+  const [notebooks, setNotebooks] = useState<{ name: string; description?: string; description_short?: string; dir_name: string; created?: string; artifact_uuid?: string; source?: string }[]>([]);
   const [notebooksLoading, setNotebooksLoading] = useState(false);
   const [notebookSearchFilter, setNotebookSearchFilter] = useState('');
   const [launchingNotebook, setLaunchingNotebook] = useState<string | null>(null);
@@ -718,6 +718,7 @@ export default React.memo(function LibrariesPanel({
               <div className="template-card" key={t.dir_name}>
                 <div className="template-card-header">
                   <span className="template-card-name">{t.name}</span>
+                  <span className="vmt-card-badge vmt-card-badge-weave" title="FABRIC weave artifact">weave</span>
                   {isDeploying && <span className="tp-status-badge tp-status-running">{'\u25CF'} deploying</span>}
                   {isRunning && !isDeploying && <span className="tp-status-badge tp-status-running">{'\u25CF'} running</span>}
                   {!isBusy && lastRun?.status === 'done' && <span className="tp-status-badge tp-status-done">{'\u2713'} done</span>}
@@ -1148,6 +1149,11 @@ export default React.memo(function LibrariesPanel({
               <div className="vmt-card" key={n.dir_name}>
                 <div className="vmt-card-header">
                   <span className="vmt-card-name">{n.name}</span>
+                  {n.source === 'trovi' ? (
+                    <span className="vmt-card-badge vmt-card-badge-trovi" title="Chameleon Trovi artifact">trovi</span>
+                  ) : (
+                    <span className="vmt-card-badge vmt-card-badge-notebook" title="Jupyter notebook artifact">notebook</span>
+                  )}
                   <OverflowMenu
                     isOpen={overflowOpen === `nb-${n.dir_name}`}
                     onToggle={() => setOverflowOpen(overflowOpen === `nb-${n.dir_name}` ? null : `nb-${n.dir_name}`)}

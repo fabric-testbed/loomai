@@ -118,6 +118,13 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
     edges = []
     slice_name = slice_data.get("name", "slice")
     slice_id = slice_data.get("id", "unknown")
+    node_names = {node.get("name") for node in slice_data.get("nodes", []) if node.get("name")}
+    facility_ports_by_name = {
+        fp.get("name"): fp
+        for fp in slice_data.get("facility_ports", [])
+        if fp.get("name")
+    }
+    external_iface_node_ids: set[str] = set()
 
     # Slice container node
     nodes.append({
@@ -152,7 +159,7 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
         if site_group:
             site_line += f"  ({site_group})"
         label_lines = [
-            f"[FAB] {node_name}",
+            node_name,
             site_line,
             f"{cores}c / {ram}G / {disk}G",
         ]
@@ -266,16 +273,48 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
             "classes": net_classes,
         })
 
-        # Edges from nodes/components to networks via interfaces
+        # Edges from nodes/components to networks via interfaces. Some FABRIC
+        # facility-port stitches are returned as network interfaces with a
+        # non-VM node_name (for example "Chameleon-TACC") rather than in the
+        # facility_ports collection; render those endpoints explicitly so graph
+        # edges never point at a missing VM node.
         for iface in net.get("interfaces", []):
             iface_node = iface.get("node_name", "")
             iface_name = iface.get("name", "")
             if iface_node:
-                vm_id = f"node:{slice_id}:{iface_node}"
-                # Route from component if available, else from VM
-                comp_id = iface_to_comp.get(iface_name, "")
-                source_id = comp_id if comp_id else vm_id
-                comp_name = iface_to_comp_name.get(iface_name, "")
+                if iface_node in node_names:
+                    vm_id = f"node:{slice_id}:{iface_node}"
+                    # Route from component if available, else from VM
+                    comp_id = iface_to_comp.get(iface_name, "")
+                    source_id = comp_id if comp_id else vm_id
+                    comp_name = iface_to_comp_name.get(iface_name, "")
+                else:
+                    vm_id = ""
+                    comp_id = ""
+                    comp_name = ""
+                    source_id = f"fp:{slice_id}:{iface_node}"
+                    matching_fp = facility_ports_by_name.get(iface_node)
+                    if source_id not in external_iface_node_ids:
+                        label_lines = [iface_node, "(facility port)"]
+                        fp_site = matching_fp.get("site", iface_node) if matching_fp else iface_node
+                        fp_vlan = matching_fp.get("vlan", iface.get("vlan", "")) if matching_fp else iface.get("vlan", "")
+                        fp_bw = matching_fp.get("bandwidth", iface.get("bandwidth", "")) if matching_fp else iface.get("bandwidth", "")
+                        if fp_vlan:
+                            label_lines.append(f"VLAN {fp_vlan}")
+                        nodes.append({
+                            "data": {
+                                "id": source_id,
+                                "label": "\n".join(label_lines),
+                                "element_type": "facility-port",
+                                "name": iface_node,
+                                "site": fp_site,
+                                "vlan": str(fp_vlan),
+                                "bandwidth": str(fp_bw),
+                                "deletable": "true" if matching_fp else "false",
+                            },
+                            "classes": "facility-port",
+                        })
+                        external_iface_node_ids.add(source_id)
 
                 edge_id = f"edge:{slice_id}:{iface_name}"
                 short_iface = _strip_node_prefix(iface_name, iface_node)
@@ -303,7 +342,7 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
                         "ip_addr": iface.get("ip_addr", ""),
                         "bandwidth": iface.get("bandwidth", ""),
                     },
-                    "classes": f"edge-{layer.lower()}",
+                    "classes": f"edge-{layer.lower()} edge-facility-port-l2" if not vm_id else f"edge-{layer.lower()}",
                 })
 
     # Synthetic FABRIC Internet node — shown when any FABNetv4/v6 gateways exist
@@ -344,13 +383,13 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
         nodes.append({
             "data": {
                 "id": fp_id,
-                "parent": f"slice:{slice_id}",
                 "label": "\n".join(label_lines),
                 "element_type": "facility-port",
                 "name": fp_name,
                 "site": fp_site,
                 "vlan": str(fp_vlan),
                 "bandwidth": str(fp_bw),
+                "deletable": "true",
             },
             "classes": "facility-port",
         })
@@ -377,7 +416,7 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
                         "ip_addr": iface.get("ip_addr", ""),
                         "bandwidth": iface.get("bandwidth", ""),
                     },
-                    "classes": "edge-l2",
+                    "classes": "edge-l2 edge-facility-port-l2",
                 })
 
     # Port mirror service nodes
@@ -445,6 +484,34 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _find_chi_instance_for_composite_node(name: str, site: str) -> dict:
+    """Search all Chameleon slices for an instance matching (name, site).
+
+    Returns a dict with instance_id, floating_ip, status, ssh_ready if found,
+    else an empty dict. Used to enrich composite-view Chameleon nodes so the
+    right-click "Open Terminal" menu item can fire.
+    """
+    try:
+        from app.routes.chameleon import _chameleon_slices
+    except ImportError:
+        return {}
+    for slice_obj in _chameleon_slices.values():
+        for res in slice_obj.get("resources", []):
+            if (
+                res.get("type") == "instance"
+                and res.get("name") == name
+                and res.get("site") == site
+                and res.get("id")
+            ):
+                return {
+                    "instance_id": res.get("id", ""),
+                    "floating_ip": res.get("floating_ip", ""),
+                    "status": res.get("status", ""),
+                    "ssh_ready": res.get("ssh_ready", False),
+                }
+    return {}
+
+
 def build_chameleon_slice_node_elements(chameleon_nodes: list[dict], slice_id: str = "") -> dict[str, Any]:
     """Build Cytoscape.js elements for Chameleon nodes attached to a FABRIC slice.
 
@@ -473,6 +540,11 @@ def build_chameleon_slice_node_elements(chameleon_nodes: list[dict], slice_id: s
         status = chi.get("status", "draft")
         connection_type = chi.get("connection_type", "fabnet_v4")
 
+        # Enrich with live instance data if a matching Chameleon slice instance exists
+        live = _find_chi_instance_for_composite_node(name, site)
+        if live.get("status"):
+            status = live["status"]
+
         # Use draft colors (gray) for draft nodes, existing state colors for deployed
         if status == "draft":
             bg = "#f5f5f5"
@@ -486,25 +558,32 @@ def build_chameleon_slice_node_elements(chameleon_nodes: list[dict], slice_id: s
             border_dark = "#4caf50"
 
         node_id = f"chi-slice:{name}"
-        label = f"[CHI] {name}\n{site}\n{node_type}"
+        label = f"{name}\n{site}\n{node_type}"
+
+        node_data = {
+            "id": node_id,
+            "label": label,
+            "element_type": "chameleon_instance",
+            "name": name,
+            "site": site,
+            "status": status,
+            "node_type": node_type,
+            "connection_type": connection_type,
+            "testbed": "Chameleon",
+            "parent": "chameleon:slice-cluster",
+            "bg_color": bg,
+            "border_color": border,
+            "bg_color_dark": bg_dark,
+            "border_color_dark": border_dark,
+        }
+        # Attach instance metadata so right-click "Open Terminal" works
+        if live.get("instance_id"):
+            node_data["instance_id"] = live["instance_id"]
+            node_data["floating_ip"] = live.get("floating_ip", "")
+            node_data["ssh_ready"] = live.get("ssh_ready", False)
 
         nodes.append({
-            "data": {
-                "id": node_id,
-                "label": label,
-                "element_type": "chameleon_instance",
-                "name": name,
-                "site": site,
-                "status": status,
-                "node_type": node_type,
-                "connection_type": connection_type,
-                "testbed": "Chameleon",
-                "parent": "chameleon:slice-cluster",
-                "bg_color": bg,
-                "border_color": border,
-                "bg_color_dark": bg_dark,
-                "border_color_dark": border_dark,
-            },
+            "data": node_data,
             "classes": "chameleon-instance" + (" chameleon-draft-node" if status == "draft" else ""),
         })
 
@@ -544,12 +623,27 @@ def build_chameleon_slice_graph(
     draft_id = draft.get("id", "unknown")
     draft_name = draft.get("name", "draft")
 
-    # Map planned node names to deployed instance resources
+    # Map deployed instance resources back to planned nodes. New deploys track
+    # planned_node_id; legacy resources only have instance/planned names.
     resource_map: dict[tuple[str, str], dict] = {}
+    resource_map_by_planned_name: dict[tuple[str, str], list[dict]] = {}
+    resource_map_by_node_id: dict[str, list[dict]] = {}
+    instance_resources: list[dict] = []
+    network_resources: list[dict] = []
     for res in draft.get("resources", []):
         if res.get("type") == "instance":
+            instance_resources.append(res)
             key = (res.get("name", ""), res.get("site", ""))
             resource_map[key] = res
+            relationship = res.get("relationship") if isinstance(res.get("relationship"), dict) else {}
+            planned_node_id = res.get("planned_node_id", "") or relationship.get("planned_node_id", "")
+            if planned_node_id:
+                resource_map_by_node_id.setdefault(planned_node_id, []).append(res)
+            planned_node_name = res.get("planned_node_name", "") or relationship.get("planned_node_name", "")
+            if planned_node_name:
+                resource_map_by_planned_name.setdefault((planned_node_name, res.get("site", "")), []).append(res)
+        elif res.get("type") == "network":
+            network_resources.append(res)
 
     # Map instance IDs to live data
     instance_map: dict[str, dict] = {}
@@ -557,10 +651,16 @@ def build_chameleon_slice_graph(
         for inst in live_instances:
             instance_map[inst.get("id", "")] = inst
 
-    # Collect unique sites from nodes (fall back to legacy draft.site)
+    # Collect unique sites from planned nodes and deployed resources. Some
+    # federated workflows attach an already deployed Chameleon slice whose
+    # resources are known but whose original planned ``nodes`` array is empty.
     unique_sites = sorted(set(
-        n.get("site") or draft.get("site", "?")
-        for n in draft.get("nodes", [])
+        site
+        for site in [
+            *(n.get("site") or draft.get("site", "?") for n in draft.get("nodes", [])),
+            *(r.get("site") or draft.get("site", "?") for r in draft.get("resources", [])),
+        ]
+        if site
     )) or [draft.get("site", "?")]
 
     # One container per site
@@ -582,8 +682,17 @@ def build_chameleon_slice_graph(
         })
 
     # Node elements
-    floating_ips_set = set(draft.get("floating_ips", []))
+    # floating_ips can be a list of strings (legacy) or list of dicts
+    # ({"node_id": ..., "nic": ...}) — normalize to a set of node_ids.
+    _raw_fips = draft.get("floating_ips", []) or []
+    floating_ips_set = set()
+    for entry in _raw_fips:
+        if isinstance(entry, str):
+            floating_ips_set.add(entry)
+        elif isinstance(entry, dict) and entry.get("node_id"):
+            floating_ips_set.add(entry["node_id"])
 
+    rendered_instance_resource_ids: set[str] = set()
     for node in draft.get("nodes", []):
         node_id = node.get("id", "")
         node_name = node.get("name", "node")
@@ -592,43 +701,68 @@ def build_chameleon_slice_graph(
         count = node.get("count", 1)
         node_site = node.get("site") or draft.get("site", "?")
 
-        label_parts = [f"[CHI] {node_name}"]
+        label_parts = [node_name]
         if count > 1:
             label_parts.append(f"x{count}")
 
-        # Check for deployed instance matching this planned node
-        matched_resource = resource_map.get((node_name, node_site))
-        live_inst = None
-        if matched_resource:
-            live_inst = instance_map.get(matched_resource.get("id", ""))
+        # Check for deployed instances matching this planned node. Counted nodes
+        # may have multiple resources named <node>-1, <node>-2, ...
+        matched_resources = resource_map_by_node_id.get(node_id, [])
+        if not matched_resources:
+            matched_resources = resource_map_by_planned_name.get((node_name, node_site), [])
+        if not matched_resources:
+            legacy_match = resource_map.get((node_name, node_site))
+            matched_resources = [legacy_match] if legacy_match else []
+        matched_resource = matched_resources[0] if matched_resources else None
 
         ssh_ready = False
-        if live_inst:
-            status = live_inst.get("status", "UNKNOWN")
-            state_colors = CHAMELEON_STATE_COLORS.get(status, {"bg": "#fff3e0", "border": "#ff8542"})
-            state_colors_dark = CHAMELEON_STATE_COLORS_DARK.get(status, {"bg": "#3a2a1a", "border": "#ff8542"})
-            instance_id = live_inst.get("id", "")
-            floating_ip = live_inst.get("floating_ip", "")
-            ip = floating_ip or (live_inst.get("ip_addresses", [""])[0] if live_inst.get("ip_addresses") else "")
-            label_parts.append(f"[{status}]")
-            if floating_ip:
-                label_parts.append(f"Floating IP: {floating_ip}")
-            elif ip:
-                label_parts.append(ip)
-            node_classes = f"chameleon-instance chameleon-{status.lower()}"
-            ssh_ready = bool(matched_resource and matched_resource.get("ssh_ready"))
-        elif matched_resource and matched_resource.get("id"):
-            status = matched_resource.get("status", "DEPLOYED")
+        if matched_resources:
+            rendered_instance_resource_ids.update(r.get("id", "") for r in matched_resources if r.get("id"))
+            live_by_resource = [
+                instance_map.get(r.get("id", "")) for r in matched_resources
+            ]
+            statuses = [
+                str((live or r).get("status", "UNKNOWN")).upper()
+                for r, live in zip(matched_resources, live_by_resource)
+            ]
+            if any(s == "ERROR" for s in statuses):
+                status = "ERROR"
+            elif statuses and all(s == "ACTIVE" for s in statuses):
+                status = "ACTIVE"
+            elif any(s in ("BUILD", "PENDING", "SPAWNING") for s in statuses):
+                status = "BUILD"
+            else:
+                status = statuses[0] if statuses else "DEPLOYED"
             state_colors = CHAMELEON_STATE_COLORS.get(status, {"bg": "#fff3e0", "border": "#ff8542"})
             state_colors_dark = CHAMELEON_STATE_COLORS_DARK.get(status, {"bg": "#3a2a1a", "border": "#ff8542"})
             instance_id = matched_resource.get("id", "")
-            floating_ip = matched_resource.get("floating_ip", "")
-            ip = floating_ip
-            label_parts.append(f"[{status}]")
-            if ip:
-                label_parts.append(ip)
+            floating_ips = [
+                (live or r).get("floating_ip", "")
+                for r, live in zip(matched_resources, live_by_resource)
+                if (live or r).get("floating_ip", "")
+            ]
+            ips = []
+            for r, live in zip(matched_resources, live_by_resource):
+                source = live or r
+                if source.get("ip_addresses"):
+                    ips.append(source["ip_addresses"][0])
+                elif source.get("floating_ip"):
+                    ips.append(source["floating_ip"])
+            floating_ip = floating_ips[0] if floating_ips else ""
+            ip = floating_ip or (ips[0] if ips else "")
+            if len(matched_resources) > 1:
+                active_count = sum(1 for s in statuses if s == "ACTIVE")
+                label_parts.append(f"[{status}: {active_count}/{len(matched_resources)} ACTIVE]")
+                if floating_ips:
+                    label_parts.append(f"Floating IPs: {len(floating_ips)}")
+            else:
+                label_parts.append(f"[{status}]")
+                if floating_ip:
+                    label_parts.append(f"Floating IP: {floating_ip}")
+                elif ip:
+                    label_parts.append(ip)
             node_classes = f"chameleon-instance chameleon-{status.lower()}"
-            ssh_ready = bool(matched_resource.get("ssh_ready"))
+            ssh_ready = all(bool(r.get("ssh_ready")) for r in matched_resources)
         else:
             status = "DRAFT"
             state_colors = CHAMELEON_DRAFT_STATE
@@ -647,10 +781,15 @@ def build_chameleon_slice_graph(
                 "label": "\n".join(label_parts),
                 "element_type": "chameleon_instance",
                 "testbed": "Chameleon",
+                "draft_id": draft_id,
+                "node_id": node_id,
+                "planned_node_id": node_id,
                 "name": node_name,
                 "site": node_site,
                 "status": status,
                 "instance_id": instance_id,
+                "resource_id": matched_resource.get("resource_id", "") if matched_resource else "",
+                "provider_id": matched_resource.get("provider_id", "") if matched_resource else "",
                 "floating_ip": floating_ip,
                 "ip": ip,
                 "ssh_ready": ssh_ready,
@@ -681,17 +820,66 @@ def build_chameleon_slice_graph(
         if net_id not in seen_net_ids:
             seen_net_ids.add(net_id)
 
-    # --- Helper: extract all network assignments from a node ---
+    def _normalize_chameleon_network_ref(value: Any) -> dict | None:
+        if isinstance(value, dict):
+            net = dict(value)
+        elif isinstance(value, str) and value:
+            net = {"id": value, "name": value}
+        else:
+            return None
+
+        name = net.get("name") or net.get("network_name") or net.get("id")
+        net_id = net.get("id") or net.get("network_id") or name
+        if not net_id and not name:
+            return None
+        net["id"] = net_id or name
+        net["name"] = name or net_id
+        return net
+
+    def _is_site_scoped_chameleon_network(net_id: str, net_name: str) -> bool:
+        text = f"{net_id} {net_name}".lower()
+        return "sharednet" in text
+
+    def _network_scope_key(site: str, net_id: str, net_name: str) -> str:
+        if _is_site_scoped_chameleon_network(net_id, net_name):
+            return f"{site}:{net_id}"
+        return net_id
+
+    def _network_cy_id(site: str, net_id: str, net_name: str) -> str:
+        if _is_site_scoped_chameleon_network(net_id, net_name):
+            return f"chi-draft-net:{draft_id}:{site}:{net_id}"
+        return f"chi-draft-net:{draft_id}:{net_id}"
+
+    def _network_label(site: str, net_id: str, net_name: str) -> str:
+        if _is_site_scoped_chameleon_network(net_id, net_name) and site:
+            return f"{net_name}\n@ {site}\n(network)"
+        return f"{net_name}\n(network)"
+
+    def _is_fabnet_network_name(net_name: str) -> bool:
+        normalized = "".join(ch for ch in str(net_name).lower() if ch.isalnum())
+        return normalized.startswith("fabnetv4") or normalized.startswith("fabnetv6")
+
     def _get_node_networks(node: dict) -> list[tuple[int, dict | None]]:
         """Return list of (nic_index, network_dict_or_None) for a node.
         Handles interfaces array, legacy network field, and legacy connection_type.
         """
         ifaces = node.get("interfaces")
         if ifaces:
-            return [(ifc.get("nic", i), ifc.get("network")) for i, ifc in enumerate(ifaces)]
+            assignments = []
+            for i, ifc in enumerate(ifaces):
+                if not isinstance(ifc, dict):
+                    continue
+                net = _normalize_chameleon_network_ref(ifc.get("network"))
+                if not net:
+                    net = _normalize_chameleon_network_ref({
+                        "id": ifc.get("network_id") or ifc.get("network_name") or ifc.get("name"),
+                        "name": ifc.get("network_name") or ifc.get("name") or ifc.get("network_id"),
+                    })
+                assignments.append((ifc.get("nic", i), net))
+            return assignments
         # Legacy: single network field
-        net = node.get("network")
-        if net and net.get("id"):
+        net = _normalize_chameleon_network_ref(node.get("network"))
+        if net:
             return [(0, net)]
         # Legacy: connection_type
         conn_type = node.get("connection_type", "")
@@ -699,30 +887,66 @@ def build_chameleon_slice_graph(
             return [(0, {"id": "_fabnetv4", "name": "fabnetv4"})]
         return []
 
+    def _looks_like_fabnetv4_ip(ip: str) -> bool:
+        """Chameleon FABNetv4 addresses are allocated from 10.128.0.0/10."""
+        parts = str(ip or "").split(".")
+        if len(parts) != 4:
+            return False
+        try:
+            first = int(parts[0])
+            second = int(parts[1])
+        except ValueError:
+            return False
+        return first == 10 and 128 <= second <= 191
+
+    def _instance_ip_addresses(res: dict) -> list[str]:
+        ips = res.get("ip_addresses") or []
+        if isinstance(ips, str):
+            ips = [ips]
+        elif not isinstance(ips, list):
+            ips = []
+        return [str(ip) for ip in ips if ip]
+
+    def _runtime_resource_display_name(res: dict) -> str:
+        relationship = res.get("relationship") if isinstance(res.get("relationship"), dict) else {}
+        return (
+            res.get("planned_node_name")
+            or relationship.get("planned_node_name")
+            or res.get("name")
+            or res.get("id")
+            or "server"
+        )
+
     # --- Network elements ---
     # Emit from per-node assignments (interfaces array or legacy network field)
-    emitted_nets: dict[str, str] = {}  # net_id → cy_net_id
+    emitted_nets: dict[str, str] = {}  # network scope key → cy_net_id
     for node in draft.get("nodes", []):
         node_site = node.get("site") or draft.get("site", "?")
         for _nic, net_assign in _get_node_networks(node):
             if not net_assign or not net_assign.get("id"):
                 continue
             net_id = net_assign["id"]
-            if net_id in emitted_nets:
-                continue
             net_name = net_assign.get("name", "net")
             # Skip fabnetv4 networks — handled separately below
-            if "fabnet" in net_name.lower():
+            if _is_fabnet_network_name(net_name):
                 continue
-            cy_net_id = f"chi-draft-net:{draft_id}:{net_id}"
-            emitted_nets[net_id] = cy_net_id
+            net_key = _network_scope_key(node_site, net_id, net_name)
+            if net_key in emitted_nets:
+                continue
+            cy_net_id = _network_cy_id(node_site, net_id, net_name)
+            emitted_nets[net_key] = cy_net_id
             net_parent = site_container_ids.get(node_site, next(iter(site_container_ids.values()), ""))
             nodes.append({
                 "data": {
                     "id": cy_net_id,
-                    "label": f"{net_name}\n(network)",
+                    "label": _network_label(node_site, net_id, net_name),
                     "element_type": "network",
+                    "testbed": "Chameleon",
+                    "draft_id": draft_id,
+                    "network_id": net_id,
+                    "deletable": "false",
                     "name": net_name,
+                    "site": node_site,
                     "parent": net_parent,
                 },
                 "classes": "network-l2 chameleon-draft-net",
@@ -730,12 +954,10 @@ def build_chameleon_slice_graph(
 
     # Also emit legacy networks (from networks array, backward compat)
     for net in draft.get("networks", []):
-        net_id = net.get("id", "")
-        if net_id in emitted_nets:
+        net_id = net.get("id") or net.get("name", "")
+        if not net_id:
             continue
         net_name = net.get("name", "net")
-        cy_net_id = f"chi-draft-net:{draft_id}:{net_id}"
-        emitted_nets[net_id] = cy_net_id
         connected_nodes = net.get("connected_nodes", [])
         net_site = net.get("site", "")
         if not net_site and connected_nodes:
@@ -744,13 +966,58 @@ def build_chameleon_slice_graph(
                 if cn_node:
                     net_site = cn_node.get("site", "")
                     break
+        net_key = _network_scope_key(net_site, net_id, net_name)
+        if net_key in emitted_nets:
+            continue
+        cy_net_id = _network_cy_id(net_site, net_id, net_name)
+        emitted_nets[net_key] = cy_net_id
         net_parent = site_container_ids.get(net_site, next(iter(site_container_ids.values()), ""))
         nodes.append({
             "data": {
                 "id": cy_net_id,
-                "label": f"{net_name}\n(network)",
+                "label": _network_label(net_site, net_id, net_name),
                 "element_type": "network",
+                "testbed": "Chameleon",
+                "draft_id": draft_id,
+                "network_id": net_id,
+                "deletable": "true",
                 "name": net_name,
+                "site": net_site,
+                "parent": net_parent,
+            },
+            "classes": "network-l2 chameleon-draft-net",
+        })
+
+    # Runtime-only Chameleon networks. These appear when a deployed Chameleon
+    # slice is attached to a federated slice after launch, or when the original
+    # planned topology is not present in the registry.
+    for res in network_resources:
+        net_id = res.get("id") or res.get("provider_id") or res.get("name", "")
+        if not net_id:
+            continue
+        net_name = res.get("name") or net_id
+        if _is_fabnet_network_name(net_name):
+            continue
+        net_site = res.get("site") or draft.get("site", "")
+        net_key = _network_scope_key(net_site, net_id, net_name)
+        if net_key in emitted_nets:
+            continue
+        cy_net_id = _network_cy_id(net_site, net_id, net_name)
+        emitted_nets[net_key] = cy_net_id
+        net_parent = site_container_ids.get(net_site, next(iter(site_container_ids.values()), ""))
+        nodes.append({
+            "data": {
+                "id": cy_net_id,
+                "label": _network_label(net_site, net_id, net_name),
+                "element_type": "network",
+                "testbed": "Chameleon",
+                "draft_id": draft_id,
+                "name": net_name,
+                "site": net_site,
+                "network_id": net_id,
+                "resource_id": res.get("resource_id", ""),
+                "provider_id": res.get("provider_id", ""),
+                "status": res.get("status", ""),
                 "parent": net_parent,
             },
             "classes": "network-l2 chameleon-draft-net",
@@ -761,10 +1028,14 @@ def build_chameleon_slice_graph(
     has_fabnetv4 = False
     for node in draft.get("nodes", []):
         for _nic, net_assign in _get_node_networks(node):
-            if net_assign and net_assign.get("name") and "fabnet" in net_assign["name"].lower():
+            if net_assign and net_assign.get("name") and _is_fabnet_network_name(net_assign["name"]):
                 has_fabnetv4 = True
                 node_site = node.get("site") or draft.get("site", "?")
                 fabnetv4_sites.add(node_site)
+    for res in instance_resources:
+        if any(_looks_like_fabnetv4_ip(ip) for ip in _instance_ip_addresses(res)):
+            has_fabnetv4 = True
+            fabnetv4_sites.add(res.get("site") or draft.get("site", "?"))
 
     fabnetv4_net_ids: dict[str, str] = {}  # site → cy network ID
     for site in fabnetv4_sites:
@@ -776,8 +1047,11 @@ def build_chameleon_slice_graph(
                 "id": cy_fabnet_id,
                 "label": f"FABNetv4 Gateway\n@ {site}",
                 "element_type": "network",
+                "testbed": "Chameleon",
+                "draft_id": draft_id,
                 "name": "fabnetv4",
                 "net_type": "FABNetv4",
+                "deletable": "false",
                 "parent": net_parent,
             },
             "classes": "network-l3 chameleon-draft-net",
@@ -806,6 +1080,165 @@ def build_chameleon_slice_graph(
                 "classes": "edge-fabnet-internet",
             })
 
+    def _ensure_runtime_l2_network(site: str, net_id: str, net_name: str) -> str:
+        net_key = _network_scope_key(site, net_id, net_name)
+        existing = emitted_nets.get(net_key)
+        if existing:
+            return existing
+        cy_net_id = _network_cy_id(site, net_id, net_name)
+        emitted_nets[net_key] = cy_net_id
+        net_parent = site_container_ids.get(site, next(iter(site_container_ids.values()), ""))
+        nodes.append({
+            "data": {
+                "id": cy_net_id,
+                "label": _network_label(site, net_id, net_name),
+                "element_type": "network",
+                "testbed": "Chameleon",
+                "draft_id": draft_id,
+                "name": net_name,
+                "site": site,
+                "network_id": net_id,
+                "deletable": "false",
+                "parent": net_parent,
+            },
+            "classes": "network-l2 chameleon-draft-net",
+        })
+        return cy_net_id
+
+    def _append_runtime_interface(
+        *,
+        instance_node_id: str,
+        instance_name: str,
+        resource_id: str,
+        nic_index: int,
+        network_id: str,
+        network_name: str,
+        target_id: str,
+        layer: str = "l2",
+    ) -> None:
+        comp_id = f"chi-resource-comp:{draft_id}:{resource_id}:nic-{nic_index}"
+        nodes.append({
+            "data": {
+                "id": comp_id,
+                "parent_vm": instance_node_id,
+                "label": network_name[:12],
+                "element_type": "component",
+                "name": f"nic-{nic_index}",
+                "model": "NIC_Basic",
+                "node_name": instance_name,
+            },
+            "classes": "component component-nic",
+        })
+        edges.append({
+            "data": {
+                "id": f"edge-chi-runtime:{draft_id}:{resource_id}:nic{nic_index}-{network_id}",
+                "source": comp_id,
+                "target": target_id,
+                "source_vm": instance_node_id,
+                "source_comp": comp_id,
+                "component_name": f"nic-{nic_index}",
+                "label": network_name[:12],
+                "element_type": "interface",
+                "interface_name": f"nic-{nic_index}",
+                "node_name": instance_name,
+                "network_name": network_name,
+            },
+            "classes": f"edge-{layer} edge-draft",
+        })
+
+    # Deployed instances that do not correspond to planned nodes still need to
+    # render in topology. This is common for federated slices created from
+    # provider resources after deployment.
+    for res in instance_resources:
+        instance_id = res.get("id", "")
+        if instance_id and instance_id in rendered_instance_resource_ids:
+            continue
+        resource_id = instance_id or res.get("resource_id") or res.get("provider_id") or res.get("name", "instance")
+        site = res.get("site") or draft.get("site", "?")
+        display_name = _runtime_resource_display_name(res)
+        instance_name = res.get("name") or display_name
+        status = str(res.get("status") or "UNKNOWN").upper()
+        state_colors = CHAMELEON_STATE_COLORS.get(status, CHAMELEON_DEFAULT_STATE)
+        state_colors_dark = CHAMELEON_STATE_COLORS_DARK.get(status, CHAMELEON_DEFAULT_STATE_DARK)
+        floating_ip = res.get("floating_ip") or res.get("management_ip") or ""
+        ip_addresses = _instance_ip_addresses(res)
+        ip = floating_ip or (ip_addresses[0] if ip_addresses else "")
+
+        label_parts = [display_name, f"[{status}]"]
+        if floating_ip:
+            label_parts.append(f"Floating IP: {floating_ip}")
+        elif ip:
+            label_parts.append(ip)
+
+        parent_id = site_container_ids.get(site, next(iter(site_container_ids.values()), ""))
+        cy_node_id = f"chi-resource-node:{draft_id}:{resource_id}"
+        nodes.append({
+            "data": {
+                "id": cy_node_id,
+                "label": "\n".join(label_parts),
+                "element_type": "chameleon_instance",
+                "testbed": "Chameleon",
+                "name": display_name,
+                "instance_name": instance_name,
+                "site": site,
+                "status": status,
+                "instance_id": instance_id,
+                "resource_id": res.get("resource_id", ""),
+                "provider_id": res.get("provider_id", ""),
+                "floating_ip": floating_ip,
+                "management_ip": res.get("management_ip", ""),
+                "ip": ip,
+                "ip_addresses": ip_addresses,
+                "ssh_ready": bool(res.get("ssh_ready")),
+                "ssh_command": res.get("ssh_command", ""),
+                "ssh_user": res.get("ssh_user", ""),
+                "node_type": res.get("node_type", "?"),
+                "image": res.get("image", "?"),
+                "count": 1,
+                "parent": parent_id,
+                "bg_color": state_colors["bg"],
+                "border_color": state_colors["border"],
+                "bg_color_dark": state_colors_dark["bg"],
+                "border_color_dark": state_colors_dark["border"],
+            },
+            "classes": f"chameleon-instance chameleon-{status.lower()}",
+        })
+
+        runtime_network_targets: list[tuple[str, str, str, str]] = []
+        if floating_ip or res.get("management_ip"):
+            sharednet_id = _ensure_runtime_l2_network(site, "sharednet1", "sharednet1")
+            runtime_network_targets.append(("sharednet1", "sharednet1", sharednet_id, "l2"))
+        for net_res in network_resources:
+            net_site = net_res.get("site") or draft.get("site", "")
+            if net_site and site and net_site != site:
+                continue
+            net_id = net_res.get("id") or net_res.get("provider_id") or net_res.get("name", "")
+            net_name = net_res.get("name") or net_id
+            if not net_id or _is_fabnet_network_name(net_name):
+                continue
+            target_id = _ensure_runtime_l2_network(site, net_id, net_name)
+            runtime_network_targets.append((net_id, net_name, target_id, "l2"))
+        if any(_looks_like_fabnetv4_ip(ip_addr) for ip_addr in ip_addresses):
+            fabnet_target = fabnetv4_net_ids.get(site)
+            if fabnet_target:
+                runtime_network_targets.append(("_fabnetv4", "fabnetv4", fabnet_target, "l3"))
+
+        seen_runtime_targets: set[str] = set()
+        for nic_index, (net_id, net_name, target_id, layer) in enumerate(runtime_network_targets):
+            if target_id in seen_runtime_targets:
+                continue
+            seen_runtime_targets.add(target_id)
+            _append_runtime_interface(
+                instance_node_id=cy_node_id,
+                instance_name=display_name,
+                resource_id=resource_id,
+                nic_index=nic_index,
+                network_id=net_id,
+                network_name=net_name,
+                target_id=target_id,
+                layer=layer,
+            )
+
     # --- NIC component badges + interface edges per node ---
     for node in draft.get("nodes", []):
         node_id = node.get("id", "")
@@ -819,7 +1252,7 @@ def build_chameleon_slice_graph(
             net_id = net_assign["id"]
             net_name = net_assign.get("name", "net")
 
-            if "fabnet" in net_name.lower() and node_site in fabnetv4_net_ids:
+            if _is_fabnet_network_name(net_name) and node_site in fabnetv4_net_ids:
                 # FABNetv4 — NIC connects to site-scoped gateway
                 comp_id = f"chi-comp:{draft_id}:{node_id}:nic-{nic_index}"
                 cy_fabnet_id = fabnetv4_net_ids[node_site]
@@ -853,7 +1286,8 @@ def build_chameleon_slice_graph(
                 })
             else:
                 # Regular network — NIC → network node
-                cy_net_id = emitted_nets.get(net_id, f"chi-draft-net:{draft_id}:{net_id}")
+                net_key = _network_scope_key(node_site, net_id, net_name)
+                cy_net_id = emitted_nets.get(net_key, _network_cy_id(node_site, net_id, net_name))
                 comp_id = f"chi-comp:{draft_id}:{node_id}:nic-{nic_index}"
                 nodes.append({
                     "data": {
@@ -895,9 +1329,9 @@ build_chameleon_draft_graph = build_chameleon_slice_graph
 # Chameleon graph elements — merge into existing FABRIC graph
 # ---------------------------------------------------------------------------
 
-# Chameleon state colors (orange theme)
+# Chameleon state colors — ACTIVE = Chameleon green (#39B54A), others orange
 CHAMELEON_STATE_COLORS = {
-    "ACTIVE": {"bg": "#fff3e0", "border": "#ff8542"},
+    "ACTIVE": {"bg": "#e8f5e9", "border": "#39B54A"},
     "BUILD": {"bg": "#fff3e0", "border": "#ffb74d"},
     "SHUTOFF": {"bg": "#eeeeee", "border": "#616161"},
     "ERROR": {"bg": "#fce4ec", "border": "#b00020"},
@@ -906,7 +1340,7 @@ CHAMELEON_STATE_COLORS = {
 CHAMELEON_DEFAULT_STATE = {"bg": "#fff3e0", "border": "#ff8542"}
 
 CHAMELEON_STATE_COLORS_DARK = {
-    "ACTIVE": {"bg": "#3a2008", "border": "#ffb74d"},
+    "ACTIVE": {"bg": "#0f2818", "border": "#39B54A"},
     "BUILD": {"bg": "#3a2008", "border": "#ff8542"},
     "SHUTOFF": {"bg": "#222230", "border": "#8a8a9a"},
     "ERROR": {"bg": "#3a1018", "border": "#ff6b6b"},
@@ -951,7 +1385,7 @@ def build_chameleon_elements(instances: list[dict], connections: list[dict] | No
         state_colors = CHAMELEON_STATE_COLORS.get(status, CHAMELEON_DEFAULT_STATE)
         state_colors_dark = CHAMELEON_STATE_COLORS_DARK.get(status, CHAMELEON_DEFAULT_STATE_DARK)
 
-        label = f"[CHI] {name}\n@ {site}\n{ip}" if ip else f"[CHI] {name}\n@ {site}"
+        label = f"{name}\n@ {site}\n{ip}" if ip else f"{name}\n@ {site}"
 
         nodes.append({
             "data": {
@@ -1075,29 +1509,34 @@ def build_composite_graph(
     all_nodes: list[dict] = []
     all_edges: list[dict] = []
     fabnet_internet_ids: list[str] = []  # prefixed IDs of fabnet-internet nodes to deduplicate
+    member_container_fallbacks: dict[tuple[str, str], str] = {}
 
     # --- FABRIC members ---
     for slice_data, member_id in fabric_members:
         member_graph = build_graph(slice_data)
         prefix = f"fab:{member_id}"
-        member_parent_id = f"member:fab:{member_id}"
+        member_slice_name = slice_data.get("name", member_id)
 
-        # Add member bounding box
-        all_nodes.append({
-            "data": {
-                "id": member_parent_id,
-                "label": f"[FABRIC] {slice_data.get('name', member_id)}",
-                "element_type": "composite_member",
-                "testbed": "FABRIC",
-                "member_id": member_id,
-                "member_state": slice_data.get("state", ""),
-            },
-            "classes": "composite-member composite-member-fabric",
-        })
-
-        prefixed = _prefix_graph_ids(member_graph, prefix, member_parent_id)
+        # FABRIC member graphs already include the same slice container used by
+        # the standalone FABRIC topology view. Do not wrap them in an extra
+        # composite-member box; otherwise federated FABRIC sub-slices show two
+        # nested boxes for the same slice.
+        prefixed = _prefix_graph_ids(member_graph, prefix, None)
+        # Tag every prefixed FABRIC node with its parent slice context so the
+        # frontend can dispatch terminal/SSH actions against the right slice
+        # (the composite view's selectedSliceName is the *composite* slice,
+        # not the member, so we can't fall back to it).
+        for n in prefixed["nodes"]:
+            n["data"]["slice_name"] = member_slice_name
+            n["data"]["slice_id"] = member_id
+            n["data"]["testbed"] = "FABRIC"
         all_nodes.extend(prefixed["nodes"])
         all_edges.extend(prefixed["edges"])
+        member_container_fallbacks[("fab", member_id)] = next((
+            node["data"]["id"]
+            for node in prefixed["nodes"]
+            if node.get("data", {}).get("element_type") == "slice"
+        ), "")
 
         # Track fabnet-internet nodes for dedup
         for node in prefixed["nodes"]:
@@ -1108,21 +1547,22 @@ def build_composite_graph(
     for chi_slice, member_id in chameleon_members:
         member_graph = build_chameleon_slice_graph(chi_slice)
         prefix = f"chi:{member_id}"
-        member_parent_id = f"member:chi:{member_id}"
 
-        all_nodes.append({
-            "data": {
-                "id": member_parent_id,
-                "label": f"[CHI] {chi_slice.get('name', member_id)}",
-                "element_type": "composite_member",
-                "testbed": "Chameleon",
-                "member_id": member_id,
-                "member_state": chi_slice.get("state", ""),
-            },
-            "classes": "composite-member composite-member-chameleon",
-        })
-
-        prefixed = _prefix_graph_ids(member_graph, prefix, member_parent_id)
+        # Chameleon member graphs already have the same site-cluster containers
+        # used by the standalone Chameleon topology view. Do not wrap them in an
+        # extra composite-member box; otherwise federated Chameleon sub-slices
+        # look different from normal Chameleon slices.
+        prefixed = _prefix_graph_ids(member_graph, prefix, None)
+        member_container_fallbacks[("chi", member_id)] = next((
+            node["data"]["id"]
+            for node in prefixed["nodes"]
+            if node.get("data", {}).get("element_type") in {"chameleon_draft", "chameleon_cluster"}
+        ), "")
+        for n in prefixed["nodes"]:
+            n["data"]["slice_name"] = chi_slice.get("name", member_id)
+            n["data"]["slice_id"] = member_id
+            if n["data"].get("element_type") != "fabnet-internet":
+                n["data"]["testbed"] = "Chameleon"
         all_nodes.extend(prefixed["nodes"])
         all_edges.extend(prefixed["edges"])
 
@@ -1159,22 +1599,223 @@ def build_composite_graph(
                 node["classes"] = node.get("classes", "") + " composite-shared-network"
                 break
 
+    def _find_member_node_id(provider_prefix: str, member_id: str, node_name: str) -> str:
+        if not node_name:
+            return ""
+        prefix = f"{provider_prefix}:{member_id}:"
+        for node in all_nodes:
+            data = node.get("data", {})
+            if not str(data.get("id", "")).startswith(prefix):
+                continue
+            if data.get("name") == node_name and data.get("element_type") in {"node", "chameleon_instance"}:
+                return data.get("id", "")
+        return ""
+
+    def _find_member_network_id(provider_prefix: str, member_id: str, network_name: str) -> str:
+        if not network_name:
+            return ""
+        prefix = f"{provider_prefix}:{member_id}:"
+        for node in all_nodes:
+            data = node.get("data", {})
+            if not str(data.get("id", "")).startswith(prefix):
+                continue
+            if data.get("element_type") != "network":
+                continue
+            if data.get("name") == network_name or data.get("network_name") == network_name:
+                return data.get("id", "")
+        return ""
+
+    def _node_by_id(node_id: str) -> dict | None:
+        for node in all_nodes:
+            if node.get("data", {}).get("id") == node_id:
+                return node
+        return None
+
+    def _find_facility_port_name_for_network(network_id: str) -> str:
+        if not network_id:
+            return ""
+        for edge in all_edges:
+            data = edge.get("data", {})
+            if data.get("source") == network_id:
+                other_id = data.get("target", "")
+            elif data.get("target") == network_id:
+                other_id = data.get("source", "")
+            else:
+                continue
+            other = _node_by_id(other_id)
+            other_data = other.get("data", {}) if other else {}
+            if other_data.get("element_type") == "facility-port":
+                return other_data.get("name", "")
+        return ""
+
+    def _slug(value: str) -> str:
+        chars = [
+            ch.lower() if ch.isalnum() else "-"
+            for ch in str(value or "")
+        ]
+        return "-".join(part for part in "".join(chars).split("-") if part) or "unknown"
+
+    def _shared_facility_port_id(conn: dict, fab_endpoint: dict, chi_endpoint: dict) -> str:
+        fp_name = (
+            conn.get("facility_port")
+            or fab_endpoint.get("facility_port")
+            or chi_endpoint.get("facility_port")
+            or fab_endpoint.get("site")
+            or chi_endpoint.get("site")
+            or "facility-port"
+        )
+        vlan = conn.get("vlan") or fab_endpoint.get("vlan") or chi_endpoint.get("vlan") or ""
+        if vlan:
+            return f"shared:facility-port-l2:{_slug(fp_name)}:vlan-{_slug(vlan)}"
+        conn_id = conn.get("id") or f"{fp_name}-{fab_endpoint.get('slice_id', '')}-{chi_endpoint.get('slice_id', '')}"
+        return f"shared:facility-port-l2:{_slug(fp_name)}:{_slug(conn_id)}"
+
+    def _upsert_shared_facility_port(conn: dict, fab_endpoint: dict, chi_endpoint: dict) -> str:
+        shared_id = _shared_facility_port_id(conn, fab_endpoint, chi_endpoint)
+        for node in all_nodes:
+            if node.get("data", {}).get("id") == shared_id:
+                return shared_id
+
+        fp_name = (
+            conn.get("facility_port")
+            or fab_endpoint.get("facility_port")
+            or chi_endpoint.get("facility_port")
+            or fab_endpoint.get("site")
+            or chi_endpoint.get("site")
+            or "Facility Port"
+        )
+        vlan = conn.get("vlan") or fab_endpoint.get("vlan") or chi_endpoint.get("vlan") or ""
+        label_lines = [str(fp_name)]
+        if vlan:
+            label_lines.append(f"VLAN {vlan}")
+        all_nodes.append({
+            "data": {
+                "id": shared_id,
+                "label": "\n".join(label_lines),
+                "element_type": "facility-port",
+                "name": fp_name,
+                "site": fab_endpoint.get("site") or chi_endpoint.get("site") or "",
+                "vlan": str(vlan),
+                "connection_type": "facility_port_l2",
+                "testbed": "SHARED",
+            },
+            "classes": "facility-port composite-shared-network",
+        })
+        return shared_id
+
+    def _promote_matching_facility_port_node(shared_id: str, provider_prefix: str, member_id: str, fp_name: str) -> None:
+        if not fp_name:
+            return
+        prefix = f"{provider_prefix}:{member_id}:"
+        for node in list(all_nodes):
+            data = node.get("data", {})
+            if data.get("element_type") != "facility-port":
+                continue
+            if not str(data.get("id", "")).startswith(prefix):
+                continue
+            if data.get("name") != fp_name:
+                continue
+
+            old_id = data.get("id", "")
+            if not old_id:
+                continue
+            for edge in all_edges:
+                if edge.get("data", {}).get("source") == old_id:
+                    edge["data"]["source"] = shared_id
+                if edge.get("data", {}).get("target") == old_id:
+                    edge["data"]["target"] = shared_id
+                if edge.get("data", {}).get("source") == shared_id or edge.get("data", {}).get("target") == shared_id:
+                    edge["data"]["element_type"] = "cross_testbed"
+                    edge["data"]["connection_type"] = "facility_port_l2"
+                    edge["classes"] = "edge-cross-testbed edge-facility-port-l2"
+            all_nodes.remove(node)
+            return
+
+    def _add_stitch_edge(conn_id: str, source_id: str, target_id: str, label: str, suffix: str) -> None:
+        if not source_id or not target_id:
+            return
+        for edge in all_edges:
+            data = edge.get("data", {})
+            existing_pair = {data.get("source"), data.get("target")}
+            if existing_pair == {source_id, target_id}:
+                if label and not data.get("label"):
+                    data["label"] = label
+                edge["classes"] = "edge-cross-testbed edge-facility-port-l2"
+                data["element_type"] = "cross_testbed"
+                data["connection_type"] = "facility_port_l2"
+                return
+        edge_id = f"xconn:{conn_id}:{suffix}"
+        if any(edge.get("data", {}).get("id") == edge_id for edge in all_edges):
+            return
+        all_edges.append({
+            "data": {
+                "id": edge_id,
+                "source": source_id,
+                "target": target_id,
+                "label": label,
+                "element_type": "cross_testbed",
+                "connection_type": "facility_port_l2",
+            },
+            "classes": "edge-cross-testbed edge-facility-port-l2",
+        })
+
     # --- Cross-connections ---
     if cross_connections:
         for conn in cross_connections:
             conn_type = conn.get("type", "fabnetv4")
-            fab_slice = conn.get("fabric_slice", "")
-            fab_node = conn.get("fabric_node", "")
-            chi_slice_id = conn.get("chameleon_slice", "")
-            chi_node = conn.get("chameleon_node", "")
+            endpoints = [conn.get("endpoint_a"), conn.get("endpoint_b"), conn.get("source"), conn.get("target")]
+            fab_endpoint = next((e for e in endpoints if isinstance(e, dict) and e.get("provider") == "fabric"), {})
+            chi_endpoint = next((e for e in endpoints if isinstance(e, dict) and e.get("provider") == "chameleon"), {})
+            fab_slice = conn.get("fabric_slice") or fab_endpoint.get("slice_id", "")
+            fab_node = conn.get("fabric_node") or fab_endpoint.get("node", "")
+            chi_slice_id = conn.get("chameleon_slice") or chi_endpoint.get("slice_id", "")
+            chi_node = conn.get("chameleon_node") or chi_endpoint.get("node", "")
 
-            if fab_slice and fab_node and chi_slice_id and chi_node:
-                source_id = f"fab:{fab_slice}:node:{fab_slice}:{fab_node}"
-                target_id = f"chi:{chi_slice_id}:chi-draft-node:{chi_slice_id}:{chi_node}"
-                edge_label = "L2 Stitch" if conn_type == "l2_stitch" else "FABnet v4"
+            if fab_slice and chi_slice_id:
+                if conn_type in {"l2_stitch", "facility_port_l2"}:
+                    conn_id = conn.get("id") or f"{fab_slice}-{chi_slice_id}-{fab_node}-{chi_node}"
+                    fp_name = (
+                        conn.get("facility_port")
+                        or fab_endpoint.get("facility_port")
+                        or chi_endpoint.get("facility_port")
+                        or ""
+                    )
+                    fab_network = conn.get("fabric_network") or fab_endpoint.get("network", "")
+                    chi_network = conn.get("chameleon_network") or chi_endpoint.get("network", "")
+                    fab_net_id = _find_member_network_id("fab", fab_slice, fab_network)
+                    chi_net_id = _find_member_network_id("chi", chi_slice_id, chi_network)
+
+                    if fab_net_id or chi_net_id:
+                        if not fp_name:
+                            fp_name = _find_facility_port_name_for_network(fab_net_id)
+                        conn_for_fp = {**conn}
+                        if fp_name:
+                            conn_for_fp["facility_port"] = fp_name
+                        shared_fp_id = _upsert_shared_facility_port(conn_for_fp, fab_endpoint, chi_endpoint)
+                        _promote_matching_facility_port_node(shared_fp_id, "fab", fab_slice, fp_name)
+                        vlan = conn.get("vlan") or fab_endpoint.get("vlan") or chi_endpoint.get("vlan") or ""
+                        edge_label = f"VLAN {vlan}" if vlan else ""
+                        _add_stitch_edge(conn_id, fab_net_id, shared_fp_id, edge_label, "fabric")
+                        _add_stitch_edge(conn_id, chi_net_id, shared_fp_id, edge_label, "chameleon")
+                        continue
+
+                source_id = _find_member_node_id("fab", fab_slice, fab_node) if fab_node else ""
+                target_id = _find_member_node_id("chi", chi_slice_id, chi_node) if chi_node else ""
+                source_id = source_id or (member_container_fallbacks.get(("fab", fab_slice)) or f"member:fab:{fab_slice}")
+                target_id = target_id or (member_container_fallbacks.get(("chi", chi_slice_id)) or f"member:chi:{chi_slice_id}")
+                if conn_type in {"l2_stitch", "facility_port_l2"}:
+                    label_parts = ["Facility Port L2"]
+                    if conn.get("facility_port") or fab_endpoint.get("facility_port"):
+                        label_parts.append(str(conn.get("facility_port") or fab_endpoint.get("facility_port")))
+                    if conn.get("vlan") or fab_endpoint.get("vlan") or chi_endpoint.get("vlan"):
+                        label_parts.append(f"VLAN {conn.get('vlan') or fab_endpoint.get('vlan') or chi_endpoint.get('vlan')}")
+                    edge_label = "\n".join(label_parts)
+                else:
+                    edge_label = "FABNetv4 L3"
+                conn_id = conn.get("id") or f"{fab_slice}-{chi_slice_id}-{fab_node}-{chi_node}"
                 all_edges.append({
                     "data": {
-                        "id": f"xconn:{fab_node}-{chi_node}",
+                        "id": f"xconn:{conn_id}",
                         "source": source_id,
                         "target": target_id,
                         "label": edge_label,

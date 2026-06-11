@@ -18,7 +18,8 @@
 │  │  Graph   │ │   Map    │ │ Terminal │ │  File Editor  │  │
 │  └──────────┘ └──────────┘ └──────────┘ └───────────────┘  │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │ AI Tools │ (LoomAI, Aider, OpenCode, Crush, Claude Code)│
+│  │ AI Tools │ (LoomAI, Antigravity, Codex, Aider, OpenCode, │
+│  │          │  Crush, Deep Agents, Claude Code; Jupyter AI)  │
 │  └──────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │          App.tsx (state orchestration)                │   │
@@ -310,7 +311,7 @@ viewable in the console via "View Log".
 
 | Protocol | Path | Description |
 |----------|------|-------------|
-| WS | `/ws/terminal/ai/{tool}` | AI tool terminal (aider, opencode, crush, claude, deep-agents) |
+| WS | `/ws/terminal/ai/{tool}` | AI tool terminal (`antigravity`, `codex`, `aider`, `opencode`, `crush`, `claude`, `deepagents`) |
 
 #### AI Assistant (`routes/ai_chat.py` → `/api`)
 
@@ -415,7 +416,7 @@ A 15-second interval refreshes the slice list while any slice is in a transition
 |------|-------|-------------------|
 | Getting Started | 10 | Token, bastion key, slice key, configured, load slices, load slice, select node |
 | Topology Editor | 9 | Create slice, add node, select node, add component, create network |
-| AI Tools | 6 | Launch a tool |
+| AI Tools | 6 tour steps | Launch a tool |
 | Artifacts & Weaves | 8 | Load a weave |
 | Map & Resources | 4 | Refresh resources |
 | Table View | 6 | Load slices |
@@ -442,20 +443,24 @@ The landing page (`LandingView.tsx`) is the default view on launch. It provides:
 
 ### AI Tools Integration
 
-Five AI coding assistants are integrated:
+Eight launchable AI tools are integrated, with Jupyter AI available inside
+JupyterLab:
 
-| Tool | Type | Cost | Features |
-|------|------|------|----------|
-| LoomAI | Chat panel | Free | FABRIC tool calling, agent personas, model selection |
-| Aider | Web IDE | Free | File editing, code generation |
-| OpenCode | Web terminal | Free | FABRIC skills, agents, MCP tools |
-| Crush | Terminal | Free | Charm TUI, NRP model support |
-| Claude Code | Terminal | Paid | Anthropic CLI, advanced coding |
-| Deep Agents | Terminal | Free | LangChain coding agent, planning, memory, skills |
+| Tool | Type | Access | AI asset support |
+|------|------|--------|------------------|
+| LoomAI | Chat panel | FABRIC AI key | Native tool calling, selectable agents, RAG context |
+| Antigravity | Terminal | Google account | Workspace `AGENTS.md` context |
+| Codex | Terminal | OpenAI account or optional custom provider | Workspace `AGENTS.md` context; richer adapter not yet implemented |
+| Aider | Web IDE | FABRIC AI key | Workspace `AGENTS.md` read-only context |
+| OpenCode | Web/terminal | FABRIC AI key | Shared skills, agent prompts, MCP tools |
+| Crush | Terminal | FABRIC AI key; optional NRP models | Shared skills and agents |
+| Deep Agents | Terminal | FABRIC AI key; optional NRP models | Shared skills and agents |
+| Claude Code | Terminal | Anthropic subscription | Workspace `CLAUDE.md` and shared skills converted to slash commands |
+| Jupyter AI | JupyterLab panel | FABRIC AI key | Patched notebook prompt plus copied reference skills/agents |
 
 LoomAI (`AIChatPanel.tsx`) supports streaming responses, expandable tool call cards, and multiple agent personas (Network Architect, Troubleshooter, Experiment Designer, etc.).
 
-Terminal-based tools run in split-pane views (`TerminalCompanionView.tsx`) with an embedded file browser. Web-based tools (`AiderWebView.tsx`, `OpenCodeWebView.tsx`) run in iframes.
+Terminal-based tools run in split-pane views (`TerminalCompanionView.tsx`) with an embedded file browser. Web-based tools (`AiderWebView.tsx`, `OpenCodeWebView.tsx`) run in iframes when supported by the tool.
 
 ### Artifact Marketplace
 
@@ -678,7 +683,7 @@ Key K8s components:
 
 HTTPS: CHP terminates TLS directly using a K8s TLS secret (`loomai-proxy-manual-tls`). When `proxy.https.enabled: true`, the LoadBalancer exposes only port 443. See `docs/KUBERNETES.md` for certificate setup.
 
-Hub mode restrictions: Installable AI tools (Aider, OpenCode, Crush, Claude Code, Deep Agents) are greyed out in hub mode since per-user PVC storage is limited. LoomAI (built-in) remains available. Detection: frontend checks `window.__LOOMAI_BASE_PATH` (set by hub spawner, absent in standalone Docker).
+Hub mode restrictions: installable AI tools (Antigravity, Codex, Aider, OpenCode, Crush, Deep Agents, Claude Code) are greyed out in hub mode since per-user PVC storage is limited. LoomAI (built-in) remains available. Detection: frontend checks `window.__LOOMAI_BASE_PATH` (set by hub spawner, absent in standalone Docker).
 
 ## CLI Tool (`loomai`)
 
@@ -752,7 +757,7 @@ Inside the shell, a readline completer function (`_shell_completer`) maps the cu
 
 ## AI Provider Abstraction Layer
 
-The backend integrates with OpenAI-compatible LLM APIs for the 6 AI tools. No `openai` Python library is used — all calls go through `httpx.AsyncClient`.
+The backend integrates with OpenAI-compatible LLM APIs for LoomAI, the FABRIC/NRP-backed in-container tools, and optional custom providers. No `openai` Python library is used — all calls go through `httpx.AsyncClient`.
 
 ### Providers
 

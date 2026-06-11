@@ -35,6 +35,25 @@ When orchestrating sub-agents:
 4. Each agent should read `AGENTS.md` for tool reference before executing
 5. Pass slice names and node names between agents — these are the coordination keys
 
+For LoomAI application development, use `loomai-team-lead` first. The shorter
+`loomai-lead` alias is equivalent. It assigns small packets to
+`loomai-frontend-engineer`, `loomai-backend-engineer`,
+`loomai-federation-engineer`, `loomai-qa-engineer`,
+`loomai-devops-release-engineer`, and `loomai-ai-rag-engineer`. Keep each packet
+bounded by file ownership and expected verification.
+
+## Federated Slices
+
+Use **Federated Slice** for cross-facility experiments that group FABRIC,
+Chameleon, and future provider resources. The old "Composite Slice" name is a
+compatibility alias. New cross-facility weaves should create/update a
+Federated Slice entry during `start()` via `/api/federated/slices`, add
+provider members, and add connection intent (`fabnetv4_l3` or
+`facility_port_l2`) so the WebUI shows the experiment and sub-slice state
+immediately. The older `/api/slices/{slice_name}/submit-composite` path also
+materializes a Federated Slice when running a FABRIC draft with attached
+Chameleon nodes.
+
 ## Key Conventions
 
 - Read `AGENTS.md` for detailed FABRIC API reference, tool signatures, and best practices

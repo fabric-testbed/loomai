@@ -32,6 +32,8 @@ import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Iterable, Optional
 
+from app.ai_assets import parse_markdown_asset
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -93,6 +95,36 @@ def _sha256_file(path: str) -> str:
 
 def _sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _metadata_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _classify_domains(*, tags: list[str], rel_file: str, title: str = "", description: str = "") -> list[str]:
+    """Infer retrieval domains for examples and curated source metadata."""
+    text = " ".join([rel_file, title, description, *tags]).lower()
+    domains: set[str] = {"fabric", "fablib"}
+    checks = {
+        "weave": ("weave", "artifact"),
+        "chameleon": ("chameleon", "blazar", "nova", "neutron"),
+        "openstack": ("openstack", "blazar", "nova", "neutron"),
+        "federated": ("federated", "composite", "cross-testbed", "cross-facility"),
+        "troubleshooting": ("debug", "troubleshoot", "ssh", "failure", "stuck", "connectivity"),
+        "networking": ("network", "l2", "l3", "fabnet", "vlan", "route"),
+        "testing": ("test", "verify", "benchmark", "performance", "iperf"),
+        "storage": ("storage", "nvme", "ceph"),
+        "hardware": ("gpu", "fpga", "smartnic", "bluefield", "tofino"),
+        "loomai": ("loomai",),
+    }
+    for domain, needles in checks.items():
+        if any(needle in text for needle in needles):
+            domains.add(domain)
+    return sorted(domains)
 
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
@@ -197,6 +229,74 @@ def load_fabric_ai_md(ai_tools_dir: str) -> list[Chunk]:
     return chunks
 
 
+def load_curated_assets(ai_tools_dir: str) -> list[Chunk]:
+    """Load canonical curated RAG assets from shared/corpus/*.md."""
+    corpus_dir = os.path.join(ai_tools_dir, "shared", "corpus")
+    if not os.path.isdir(corpus_dir):
+        return []
+
+    chunks: list[Chunk] = []
+    for name in sorted(os.listdir(corpus_dir)):
+        if not name.endswith(".md"):
+            continue
+        path = os.path.join(corpus_dir, name)
+        try:
+            with open(path) as f:
+                text = f.read()
+        except OSError:
+            continue
+
+        parsed = parse_markdown_asset(text)
+        metadata = parsed.metadata
+        body = parsed.body
+        asset_id = str(metadata.get("id") or name[:-3])
+        description = str(metadata.get("description", ""))
+        domains = _metadata_list(metadata.get("domains"))
+        tools = _metadata_list(metadata.get("tools"))
+        triggers = _metadata_list(metadata.get("triggers"))
+        source_paths = _metadata_list(metadata.get("source_paths"))
+        freshness = str(metadata.get("freshness", "review-on-change") or "review-on-change")
+        file_hash = _sha256_text(text)
+
+        source_hint = "\n".join(f"- `{p}`" for p in source_paths[:16])
+        trigger_hint = ", ".join(triggers)
+        domain_hint = ", ".join(domains)
+        tool_hint = ", ".join(tools)
+
+        for i, (section, part) in enumerate(_split_markdown_by_heading(body, max_chars=1800)):
+            header = (
+                f"# Curated RAG Asset: {asset_id}\n"
+                f"Description: {description}\n"
+                f"Domains: {domain_hint}\n"
+                f"Tools: {tool_hint}\n"
+                f"Triggers: {trigger_hint}\n"
+                f"Freshness: {freshness}\n"
+                f"Source paths:\n{source_hint}\n"
+            )
+            chunks.append(
+                Chunk(
+                    chunk_id=f"curated:{asset_id}:{i}",
+                    source_type="curated",
+                    source_path=f"ai-tools/shared/corpus/{name}",
+                    section=f"{asset_id} > {section}",
+                    text=f"{header}\n## {section}\n\n{part}",
+                    file_hash=file_hash,
+                    metadata={
+                        "asset_id": asset_id,
+                        "asset_type": str(metadata.get("asset_type", "runbook")),
+                        "description": description,
+                        "domains": domains,
+                        "tools": tools,
+                        "triggers": triggers,
+                        "source_paths": source_paths,
+                        "freshness": freshness,
+                        "curated": True,
+                    },
+                )
+            )
+    return chunks
+
+
 def load_skills(ai_tools_dir: str) -> list[Chunk]:
     """Load each shared/skills/*.md as one or more chunks.
 
@@ -224,13 +324,18 @@ def load_skills(ai_tools_dir: str) -> list[Chunk]:
                     text = f.read()
             except OSError:
                 continue
-            # Strip YAML frontmatter
-            if text.startswith("---"):
-                end = text.find("---", 3)
-                if end > 0:
-                    text = text[end + 3:].lstrip()
+            parsed = parse_markdown_asset(text)
+            metadata = parsed.metadata
+            text = parsed.body
             file_hash = _sha256_text(text)
             skill_name = name[:-3]
+            description = str(metadata.get("description", ""))
+            domains = _metadata_list(metadata.get("domains")) or _classify_domains(
+                tags=[skill_name, *_metadata_list(metadata.get("triggers"))],
+                rel_file=f"{source_path_prefix}/{name}",
+                title=str(metadata.get("name") or skill_name),
+                description=f"{description} {text[:500]}",
+            )
             skill_chunks: list[Chunk] = []
             for i, (section, body) in enumerate(_split_markdown_by_heading(text, max_chars=1500)):
                 skill_chunks.append(
@@ -241,7 +346,15 @@ def load_skills(ai_tools_dir: str) -> list[Chunk]:
                         section=f"{skill_name} > {section}",
                         text=f"# Skill: {skill_name}\n## {section}\n\n{body}",
                         file_hash=file_hash,
-                        metadata={"skill": skill_name},
+                        metadata={
+                            "skill": skill_name,
+                            "description": description,
+                            "domains": domains,
+                            "tools": _metadata_list(metadata.get("tools")),
+                            "triggers": _metadata_list(metadata.get("triggers")),
+                            "source_paths": [f"{source_path_prefix}/{name}"],
+                            "freshness": str(metadata.get("freshness", "review-on-change") or "review-on-change"),
+                        },
                     )
                 )
             by_skill[skill_name] = skill_chunks
@@ -285,21 +398,9 @@ def load_agents(ai_tools_dir: str) -> list[Chunk]:
             continue
         file_hash = _sha256_text(text)
         agent_name = name[:-3]
-        # Parse frontmatter for description
-        description = ""
-        if text.startswith("---"):
-            end = text.find("---", 3)
-            if end > 0:
-                fm = text[3:end]
-                body = text[end + 3:].lstrip()
-                for line in fm.splitlines():
-                    if line.startswith("description:"):
-                        description = line.split(":", 1)[1].strip()
-                        break
-            else:
-                body = text
-        else:
-            body = text
+        parsed = parse_markdown_asset(text)
+        description = str(parsed.metadata.get("description", ""))
+        body = parsed.body
         # One chunk per agent; long agents get multiple
         for i, (section, part) in enumerate(_split_markdown_by_heading(body, max_chars=1800)):
             chunks.append(
@@ -339,6 +440,12 @@ def load_fablib_examples(ai_tools_dir: str) -> list[Chunk]:
         rel_file = entry.get("file", "")
         tags = entry.get("tags", []) or []
         description = entry.get("description", "")
+        domains = _classify_domains(
+            tags=[str(tag) for tag in tags],
+            rel_file=str(rel_file),
+            title=str(title),
+            description=str(description),
+        )
         example_path = os.path.join(examples_dir, rel_file) if rel_file else ""
         code_snippet = ""
         file_hash = index_hash
@@ -355,6 +462,7 @@ def load_fablib_examples(ai_tools_dir: str) -> list[Chunk]:
         body = (
             f"# FABlib Example: {title}\n"
             f"**Tags**: {', '.join(tags)}\n"
+            f"**Domains**: {', '.join(domains)}\n"
             f"**File**: `ai-tools/fablib-examples/{rel_file}`\n\n"
             f"{description}\n\n"
             f"```python\n{code_snippet}\n```"
@@ -367,13 +475,26 @@ def load_fablib_examples(ai_tools_dir: str) -> list[Chunk]:
                 section=title,
                 text=body,
                 file_hash=file_hash,
-                metadata={"tags": tags, "title": title, "file": rel_file},
+                metadata={
+                    "tags": tags,
+                    "domains": domains,
+                    "title": title,
+                    "file": rel_file,
+                    "source_paths": [f"ai-tools/fablib-examples/{rel_file}"],
+                    "freshness": "review-on-change",
+                    "curated": True,
+                },
             )
         )
     return chunks
 
 
-def load_weaves(storage_dirs: Iterable[str]) -> list[Chunk]:
+def load_weaves(
+    storage_dirs: Iterable[str],
+    *,
+    origin: str = "user",
+    source_path_prefix: str = "",
+) -> list[Chunk]:
     """Load every weave.json under the given storage directories as a chunk.
 
     Indexes each weave's name, description, node topology, and any
@@ -442,9 +563,23 @@ def load_weaves(storage_dirs: Iterable[str]) -> list[Chunk]:
                 except OSError:
                     pass
 
+            code_snippets: list[str] = []
+            for tool_name in sorted(files):
+                if not (tool_name.endswith(".py") or tool_name.endswith(".sh")):
+                    continue
+                tool_path = os.path.join(root, tool_name)
+                try:
+                    with open(tool_path) as f:
+                        tool_body = f.read()[:3000]
+                except OSError:
+                    continue
+                fence = "python" if tool_name.endswith(".py") else "bash"
+                code_snippets.append(f"**{tool_name}**:\n```{fence}\n{tool_body}\n```")
+
             body_parts = [
                 f"# Weave: {name}",
                 f"**Directory**: `{dir_name}/`",
+                f"**Origin**: {origin}",
                 f"**Description**: {description}" if description else "",
                 f"**Run script**: `{run_script}`" if run_script else "",
                 f"**Nodes** ({len(nodes)}):\n" + ("\n".join(node_summary) if node_summary else "(none)"),
@@ -454,24 +589,41 @@ def load_weaves(storage_dirs: Iterable[str]) -> list[Chunk]:
                 body_parts.append("**Args**:\n" + "\n".join(args_summary))
             if weave_md:
                 body_parts.append("**weave.md**:\n" + weave_md)
+            if code_snippets:
+                body_parts.append("**Tool code**:\n" + "\n\n".join(code_snippets))
             body = "\n\n".join(p for p in body_parts if p)
 
             file_hash = _sha256_file(weave_json)
             if weave_md:
                 file_hash = _sha256_text(file_hash + _sha256_file(weave_md_path))
+            for tool_name in sorted(files):
+                if tool_name.endswith(".py") or tool_name.endswith(".sh"):
+                    file_hash = _sha256_text(file_hash + _sha256_file(os.path.join(root, tool_name)))
 
             rel_path = os.path.relpath(weave_json, storage_dir)
+            source_path = f"{source_path_prefix}/{rel_path}" if source_path_prefix else rel_path
+            domains = _classify_domains(
+                tags=["weave", origin],
+                rel_file=source_path,
+                title=str(name),
+                description=str(description),
+            )
             chunks.append(
                 Chunk(
-                    chunk_id=f"weave:{dir_name}",
+                    chunk_id=f"weave:{origin}:{dir_name}",
                     source_type="weave",
-                    source_path=rel_path,
+                    source_path=source_path,
                     section=name,
                     text=body,
                     file_hash=file_hash,
                     metadata={
                         "weave_name": name,
                         "dir_name": dir_name,
+                        "origin": origin,
+                        "domains": domains,
+                        "source_paths": [source_path],
+                        "freshness": "review-on-change",
+                        "curated": origin == "default",
                         "node_count": len(nodes),
                         "has_gpu": any(
                             any("GPU" in c.get("model", "") for c in (n.get("components", []) or []) if isinstance(c, dict))
@@ -481,6 +633,28 @@ def load_weaves(storage_dirs: Iterable[str]) -> list[Chunk]:
                 )
             )
     return chunks
+
+
+def _default_artifacts_dir(ai_tools_dir: str) -> tuple[str, str] | None:
+    """Return (directory, source_prefix) for repo default artifacts if present."""
+    parent = os.path.dirname(ai_tools_dir)
+    candidates = [
+        (os.path.join(parent, "default_artifacts"), "backend/default_artifacts"),
+        (os.path.join(parent, "backend", "default_artifacts"), "backend/default_artifacts"),
+    ]
+    for path, prefix in candidates:
+        if os.path.isdir(path):
+            return path, prefix
+    return None
+
+
+def load_default_weaves(ai_tools_dir: str) -> list[Chunk]:
+    """Load repo-shipped default weave artifacts as curated starter examples."""
+    default_dir = _default_artifacts_dir(ai_tools_dir)
+    if default_dir is None:
+        return []
+    path, source_prefix = default_dir
+    return load_weaves([path], origin="default", source_path_prefix=source_prefix)
 
 
 def load_site_catalog() -> list[Chunk]:
@@ -936,8 +1110,14 @@ class RAGIndex:
 
     def status(self) -> dict:
         sources: dict[str, int] = {}
+        domains: dict[str, int] = {}
+        curated_count = 0
         for c in self.chunks:
             sources[c.source_type] = sources.get(c.source_type, 0) + 1
+            if c.metadata.get("curated"):
+                curated_count += 1
+            for domain in _metadata_list(c.metadata.get("domains")):
+                domains[domain] = domains.get(domain, 0) + 1
         return {
             "chunk_count": len(self.chunks),
             "embedder": self.embedder.name,
@@ -945,6 +1125,8 @@ class RAGIndex:
             "last_built": self.last_built,
             "last_refreshed": self.last_refreshed,
             "sources": sources,
+            "domains": domains,
+            "curated_count": curated_count,
             "index_dir": self.index_dir,
         }
 
@@ -960,9 +1142,11 @@ def _gather_corpus_chunks(ai_tools_dir: str) -> list[Chunk]:
 
     t0 = time.time()
     chunks.extend(load_fabric_ai_md(ai_tools_dir))
+    chunks.extend(load_curated_assets(ai_tools_dir))
     chunks.extend(load_skills(ai_tools_dir))
     chunks.extend(load_agents(ai_tools_dir))
     chunks.extend(load_fablib_examples(ai_tools_dir))
+    chunks.extend(load_default_weaves(ai_tools_dir))
     chunks.extend(load_site_catalog())
 
     # User weaves (from storage dirs)

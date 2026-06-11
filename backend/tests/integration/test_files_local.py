@@ -11,16 +11,18 @@ class TestListFiles:
         assert isinstance(data, list)
 
     def test_list_includes_dirs(self, client, storage_dir):
+        # The browse root sits one level above the storage dir, so the storage
+        # dir itself is what appears at root.
         resp = client.get("/api/files?path=.")
         names = [f["name"] for f in resp.json()]
-        assert "my_artifacts" in names
+        assert storage_dir.name in names
 
 
 class TestMkdir:
-    def test_create_directory(self, client, storage_dir):
+    def test_create_directory(self, client, browse_root):
         resp = client.post("/api/files/mkdir", json={"name": "test_dir"})
         assert resp.status_code == 200
-        assert (storage_dir / "test_dir").is_dir()
+        assert (browse_root / "test_dir").is_dir()
 
 
 class TestReadWriteFile:

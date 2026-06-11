@@ -6,6 +6,32 @@
   overflow: hidden;
 }
 
+.chi-os-scope-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--fabric-border);
+  background: var(--fabric-bg);
+  flex-shrink: 0;
+}
+
+.chi-os-scope-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fabric-text);
+}
+
+.chi-os-scope-badge {
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid rgba(57, 181, 74, 0.35);
+  color: #2d8f3a;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 /* Sub-tab bar — matches .chi-resource-category-bar */
 .chi-os-tabs {
   display: flex;

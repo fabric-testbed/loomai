@@ -94,7 +94,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
 
 
   return (
-    <div className="toolbar">
+    <div className="toolbar" data-testid="slice-toolbar">
       {/* --- Slice Group (selector + actions) --- */}
       <div className="toolbar-group">
         <span className="toolbar-group-label">Slice</span>
@@ -105,17 +105,20 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
             className="toolbar-btn toolbar-btn-list"
             onClick={props.listLoaded ? props.onRefreshSlices : props.onLoadSlices}
             disabled={props.loading}
+            data-testid="toolbar-refresh-slices"
           >
             {props.listLoaded ? '\u21BB Refresh Slices' : 'Load Slices'}
           </button>
         </Tooltip>
 
-        <div className="slice-combo" ref={comboRef} data-help-id="toolbar.slice-selector">
+        <div className="slice-combo" ref={comboRef} data-help-id="toolbar.slice-selector" data-testid="slice-selector">
           <input
             type="text"
             className="slice-combo-input"
             placeholder={selectedName || '-- Select Slice --'}
             value={sliceDropOpen ? sliceFilter : (selectedName || '')}
+            aria-label="Select slice"
+            data-testid="slice-selector-input"
             onChange={(e) => { setSliceFilter(e.target.value); if (!sliceDropOpen) setSliceDropOpen(true); }}
             onFocus={() => { setSliceDropOpen(true); setSliceFilter(''); }}
             onKeyDown={(e) => {
@@ -126,6 +129,8 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
             className="slice-combo-toggle"
             onClick={() => { setSliceDropOpen(!sliceDropOpen); setSliceFilter(''); }}
             tabIndex={-1}
+            aria-label="Toggle slice selector"
+            data-testid="slice-selector-toggle"
           >
             {sliceDropOpen ? '\u25B4' : '\u25BE'}
           </button>
@@ -136,7 +141,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
             const draftSlices = props.slices.filter((s) => s.state === 'Draft' && s.name.toLowerCase().includes(q));
             const hasResults = activeSlices.length > 0 || terminalSlices.length > 0 || draftSlices.length > 0;
             return (
-              <div className="slice-combo-dropdown">
+              <div className="slice-combo-dropdown" data-testid="slice-selector-options">
                 {props.selectedSlice && !sliceFilter && (
                   <button
                     className="slice-combo-option slice-combo-option-clear"
@@ -145,6 +150,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
                       setSliceDropOpen(false);
                       setSliceFilter('');
                     }}
+                    data-testid="slice-selector-clear"
                   >
                     <span className="slice-combo-name" style={{ fontStyle: 'italic', opacity: 0.7 }}>-- None --</span>
                   </button>
@@ -162,6 +168,10 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
                         <button
                           key={s.id || s.name}
                           className={`slice-combo-option ${isSelected ? 'active' : ''}`}
+                          data-testid="slice-selector-option"
+                          data-slice-id={s.id}
+                          data-slice-name={s.name}
+                          data-slice-state={s.state}
                           onClick={() => {
                             props.onSelectSlice(s.id);
                             setSliceDropOpen(false);
@@ -182,6 +192,10 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
                       <button
                         key={s.id || s.name}
                         className={`slice-combo-option slice-combo-option-terminal ${s.has_errors ? 'has-errors' : ''} ${s.id === props.selectedSlice ? 'active' : ''}`}
+                        data-testid="slice-selector-option"
+                        data-slice-id={s.id}
+                        data-slice-name={s.name}
+                        data-slice-state={s.state}
                         onClick={() => {
                           props.onSelectSlice(s.id);
                           setSliceDropOpen(false);
@@ -206,6 +220,10 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
                       <button
                         key={s.id || s.name}
                         className={`slice-combo-option ${s.id === props.selectedSlice ? 'active' : ''}`}
+                        data-testid="slice-selector-option"
+                        data-slice-id={s.id}
+                        data-slice-name={s.name}
+                        data-slice-state={s.state}
                         onClick={() => {
                           props.onSelectSlice(s.id);
                           setSliceDropOpen(false);
@@ -229,6 +247,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
             onClick={() => setCreating(true)}
             disabled={props.loading}
             data-help-id="toolbar.new"
+            data-testid="toolbar-new-slice"
           >
             + New
           </button>
@@ -240,6 +259,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
             onClick={props.onSubmit}
             disabled={!hasSlice || !canSubmit || props.loading}
             data-help-id="toolbar.submit"
+            data-testid="toolbar-submit-slice"
           >
             Submit
           </button>
@@ -251,6 +271,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
               className="toolbar-btn toolbar-btn-boot-config"
               onClick={props.onRunBootConfig}
               disabled={!props.selectedSlice || props.bootConfigRunning}
+              data-testid="toolbar-run-boot-config"
             >
               {props.bootConfigRunning ? '↻ Running...' : '↻ Boot Config'}
             </button>
@@ -263,6 +284,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
             onClick={() => setConfirmingDelete(true)}
             disabled={!hasSlice || props.loading}
             data-help-id="toolbar.delete"
+            data-testid="toolbar-delete-slice"
           >
             {isDraft ? 'Discard' : 'Delete'}
           </button>
@@ -274,6 +296,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
             onClick={() => { setCloneName(`${selectedName}-copy`); setCloning(true); }}
             disabled={!hasSlice || props.loading}
             data-help-id="toolbar.clone"
+            data-testid="toolbar-clone-slice"
           >
             Clone
           </button>
@@ -286,6 +309,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
               onClick={() => props.onArchiveSlice?.()}
               disabled={props.loading}
               title="Archive selected terminal slice to storage"
+              data-testid="toolbar-archive-slice"
             >
               Archive
             </button>
@@ -299,6 +323,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
               onClick={() => props.onArchiveAllTerminal?.()}
               disabled={props.loading}
               title="Archive all terminal slices to storage"
+              data-testid="toolbar-archive-terminal-slices"
             >
               Archive Terminal Slices
             </button>
@@ -319,6 +344,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
             onClick={props.onSaveSliceTemplate}
             disabled={props.loading}
             data-help-id="toolbar.save-template"
+            data-testid="toolbar-save-weave"
           >
             Save Weave
           </button>
@@ -331,6 +357,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
             className="toolbar-btn toolbar-btn-experiment"
             onClick={props.onSaveExperiment}
             disabled={props.loading}
+            data-testid="toolbar-save-experiment"
           >
             Save Experiment
           </button>
@@ -345,6 +372,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
           onClick={props.onRefreshTopology}
           disabled={props.infraLoading}
           data-help-id="toolbar.refresh-resources"
+          data-testid="toolbar-refresh-resources"
         >
           {props.infraLoading ? '\u21BB Loading Resources...' : props.infraLoaded ? '\u21BB Refresh Resources' : 'Load Resources'}
         </button>
@@ -352,16 +380,16 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
 
       {/* --- Modal: Confirm Delete --- */}
       {confirmingDelete && (
-        <div className="toolbar-modal-overlay" onClick={() => setConfirmingDelete(false)}>
-          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
-            <h4>{isDraft ? 'Discard Draft' : 'Delete Slice'}</h4>
+        <div className="toolbar-modal-overlay" onClick={() => setConfirmingDelete(false)} data-testid="slice-delete-modal">
+          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="slice-delete-modal-title">
+            <h4 id="slice-delete-modal-title">{isDraft ? 'Discard Draft' : 'Delete Slice'}</h4>
             <p>{isDraft
               ? <>Discard draft <strong>{selectedName}</strong>? This only removes the local draft — nothing has been submitted to FABRIC.</>
               : <>Are you sure you want to delete <strong>{selectedName}</strong>? This cannot be undone.</>
             }</p>
             <div className="toolbar-modal-actions">
-              <button onClick={() => setConfirmingDelete(false)}>Cancel</button>
-              <button className="danger" onClick={handleDeleteConfirm}>{isDraft ? 'Discard' : 'Delete'}</button>
+              <button onClick={() => setConfirmingDelete(false)} data-testid="slice-delete-cancel">Cancel</button>
+              <button className="danger" onClick={handleDeleteConfirm} data-testid="slice-delete-confirm">{isDraft ? 'Discard' : 'Delete'}</button>
             </div>
           </div>
         </div>
@@ -369,22 +397,24 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
 
       {/* --- Modal: Create Slice --- */}
       {creating && (
-        <div className="toolbar-modal-overlay" onClick={() => { setCreating(false); setNewSliceName(''); }}>
-          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
-            <h4>Create New Slice</h4>
+        <div className="toolbar-modal-overlay" onClick={() => { setCreating(false); setNewSliceName(''); }} data-testid="slice-create-modal">
+          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="slice-create-modal-title">
+            <h4 id="slice-create-modal-title">Create New Slice</h4>
             <p>Enter a name for the new draft slice.</p>
             <input
               type="text"
               className="toolbar-modal-input"
               placeholder="Slice name..."
               value={newSliceName}
+              aria-label="New slice name"
+              data-testid="slice-create-name"
               onChange={(e) => setNewSliceName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
               autoFocus
             />
             <div className="toolbar-modal-actions">
-              <button onClick={() => { setCreating(false); setNewSliceName(''); }}>Cancel</button>
-              <button className="success" onClick={handleCreate} disabled={!newSliceName.trim()}>Create</button>
+              <button onClick={() => { setCreating(false); setNewSliceName(''); }} data-testid="slice-create-cancel">Cancel</button>
+              <button className="success" onClick={handleCreate} disabled={!newSliceName.trim()} data-testid="slice-create-confirm">Create</button>
             </div>
           </div>
         </div>
@@ -392,22 +422,24 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
 
       {/* --- Modal: Clone Slice --- */}
       {cloning && (
-        <div className="toolbar-modal-overlay" onClick={() => { setCloning(false); setCloneName(''); }}>
-          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
-            <h4>Clone Slice</h4>
+        <div className="toolbar-modal-overlay" onClick={() => { setCloning(false); setCloneName(''); }} data-testid="slice-clone-modal">
+          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="slice-clone-modal-title">
+            <h4 id="slice-clone-modal-title">Clone Slice</h4>
             <p>Enter a name for the cloned draft slice.</p>
             <input
               type="text"
               className="toolbar-modal-input"
               placeholder="New slice name..."
               value={cloneName}
+              aria-label="Cloned slice name"
+              data-testid="slice-clone-name"
               onChange={(e) => setCloneName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleClone()}
               autoFocus
             />
             <div className="toolbar-modal-actions">
-              <button onClick={() => { setCloning(false); setCloneName(''); }}>Cancel</button>
-              <button className="success" onClick={handleClone} disabled={!cloneName.trim()}>Clone</button>
+              <button onClick={() => { setCloning(false); setCloneName(''); }} data-testid="slice-clone-cancel">Cancel</button>
+              <button className="success" onClick={handleClone} disabled={!cloneName.trim()} data-testid="slice-clone-confirm">Clone</button>
             </div>
           </div>
         </div>

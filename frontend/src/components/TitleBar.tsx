@@ -35,10 +35,10 @@ interface TitleBarProps {
 }
 
 const VIEWS: Array<{ key: TopView; label: string; icon: string; desc: string; requiresChameleon?: boolean; requiresComposite?: boolean }> = [
+  { key: 'slices', label: 'Federated Slice', icon: '__composite_icon__', desc: 'Federated Slice — build, monitor, transfer files, and launch apps', requiresComposite: true },
   { key: 'infrastructure', label: 'FABRIC', icon: '__fabric_logo__', desc: 'FABRIC — testbed slices, resources, and availability' },
-  { key: 'slices', label: 'Composite Slice', icon: '__composite_icon__', desc: 'Composite Slice — build, monitor, transfer files, and launch apps', requiresComposite: true },
-  { key: 'artifacts', label: 'Marketplace', icon: '__marketplace_icon__', desc: 'Marketplace — browse, publish, and download experiment artifacts' },
   { key: 'chameleon', label: 'Chameleon', icon: '__chameleon_logo__', desc: 'Chameleon Cloud — leases, instances, and bare-metal resources', requiresChameleon: true },
+  { key: 'artifacts', label: 'Marketplace', icon: '__marketplace_icon__', desc: 'Marketplace — browse, publish, and download experiment artifacts' },
   { key: 'jupyter', label: 'JupyterLab', icon: '__jupyter_logo__', desc: 'JupyterLab — interactive notebooks' },
 ];
 
@@ -57,7 +57,7 @@ function ViewIcon({ icon, size = 12, dark }: { icon: string; size?: number; dark
     return <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
   }
   if (icon === '__composite_icon__') {
-    return <img src={assetUrl('/composite-slice-icon-transparent.svg')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
+    return <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
   }
   if (icon === '__marketplace_icon__') {
     return <img src={assetUrl('/marketplace-icon-transparent.svg')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
@@ -72,8 +72,11 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
   const [updateOpen, setUpdateOpen] = useState(false);
   const [copiedPull, setCopiedPull] = useState(false);
   const [copiedRun, setCopiedRun] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [logoutConfirm, setLogoutConfirm] = useState(false);
   const viewRef = useRef<HTMLDivElement>(null);
   const updateRef = useRef<HTMLDivElement>(null);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
   // Show the selected AI tool name in the pill when an AI view is active
   const activeAiTool = aiTools?.find((t) => t.id === selectedAiTool);
@@ -89,6 +92,10 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
     const handler = (e: MouseEvent) => {
       if (viewRef.current && !viewRef.current.contains(e.target as Node)) setViewOpen(false);
       if (updateRef.current && !updateRef.current.contains(e.target as Node)) setUpdateOpen(false);
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false);
+        setLogoutConfirm(false);
+      }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -218,20 +225,33 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
           </button>
           {viewOpen && (
             <div className="title-pill-dropdown">
-              {VIEWS.filter(v => (!v.requiresChameleon || chameleonEnabled) && (!v.requiresComposite || compositeEnabled)).map((v) => (
-                <button
-                  key={v.key}
-                  className={`title-pill-option ${currentView === v.key ? 'active' : ''}`}
-                  onClick={() => { onViewChange(v.key); setViewOpen(false); }}
-                  title={v.desc}
-                >
-                  <span className="title-pill-option-icon">
-                    <ViewIcon icon={v.icon} size={12} dark={dark} />
-                  </span>
-                  {v.label}
-                  {currentView === v.key && <span className="title-pill-check">{'\u2713'}</span>}
-                </button>
-              ))}
+              {VIEWS.filter(v => (!v.requiresChameleon || chameleonEnabled) && (!v.requiresComposite || compositeEnabled)).map((v) => {
+                const isJupyter = v.key === 'jupyter';
+                const handleClick = () => {
+                  if (isJupyter) {
+                    const base = (typeof window !== 'undefined' && (window as any).__LOOMAI_BASE_PATH) || '';
+                    window.open(`${base}/jupyter/lab`, '_blank', 'noopener');
+                  } else {
+                    onViewChange(v.key);
+                  }
+                  setViewOpen(false);
+                };
+                return (
+                  <button
+                    key={v.key}
+                    className={`title-pill-option ${!isJupyter && currentView === v.key ? 'active' : ''}`}
+                    onClick={handleClick}
+                    title={isJupyter ? `${v.desc} (opens in a new tab)` : v.desc}
+                  >
+                    <span className="title-pill-option-icon">
+                      <ViewIcon icon={v.icon} size={12} dark={dark} />
+                    </span>
+                    {v.label}
+                    {isJupyter && <span className="title-pill-check" aria-hidden>{'\u2197'}</span>}
+                    {!isJupyter && currentView === v.key && <span className="title-pill-check">{'\u2713'}</span>}
+                  </button>
+                );
+              })}
               {aiTools && aiTools.length > 0 && (
                 <>
                   <div className="title-pill-section-header">AI Tools</div>
@@ -266,57 +286,94 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
           )}
         </div>
 
-        {/* Token status pill + user info */}
-        {hasToken && !tokenExpired ? (
-          <span className="title-user-pill" title={userName || userEmail || 'Token active'}>
-            <span className="title-token-status title-token-active">Active</span>
-            {userEmail && (
+        {/* User pill -- opens a dropdown with Settings / Help / Theme / Sign out.
+            All title-bar account actions live here so the title bar is not
+            cluttered with tiny circular icons (and the Sign-out action is
+            behind a confirmation, not one click away from the gear). */}
+        <div className="title-user-menu-wrapper" ref={userMenuRef}>
+          <button
+            className={
+              'title-user-pill title-user-pill-btn'
+              + (tokenExpired ? ' title-token-expired-pill' : '')
+              + (!hasToken && !tokenExpired ? ' title-token-none-pill' : '')
+            }
+            onClick={() => { setUserMenuOpen(!userMenuOpen); setLogoutConfirm(false); }}
+            title={userName || userEmail || 'Account menu'}
+            data-help-id="titlebar.user"
+          >
+            {hasToken && !tokenExpired ? (
+              <span className="title-token-status title-token-active">Active</span>
+            ) : tokenExpired ? (
+              <span className="title-token-status title-token-expired">Expired</span>
+            ) : (
+              <span className="title-token-status title-token-none">No Token</span>
+            )}
+            {userEmail && hasToken && !tokenExpired && (
               <>
                 <span className="title-user-avatar">{(userName || userEmail).charAt(0).toUpperCase()}</span>
                 <span className="title-user-email">{userEmail}</span>
               </>
             )}
-            {onLogout && (
-              <button className="title-logout-btn" onClick={onLogout} title={typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH ? 'Stop server & logout' : 'Sign out'}>
-                {'\u23FB'}
+            {userEmail && tokenExpired && <span className="title-user-email">{userEmail}</span>}
+            <span className="title-pill-arrow">{userMenuOpen ? '\u25B4' : '\u25BE'}</span>
+          </button>
+          {userMenuOpen && (
+            <div className="title-user-menu">
+              <button
+                className="title-user-menu-item"
+                onClick={() => { setUserMenuOpen(false); onOpenSettings(); }}
+                data-help-id="titlebar.settings"
+              >
+                <span className="title-user-menu-icon">{'\u2699'}</span> Settings
               </button>
-            )}
-          </span>
-        ) : tokenExpired ? (
-          <span className="title-user-pill title-token-expired-pill">
-            <span className="title-token-status title-token-expired" onClick={onOpenSettings} title="Token expired — click to open Settings and upload a new token" style={{ cursor: 'pointer' }}>Expired</span>
-            {userEmail && <span className="title-user-email">{userEmail}</span>}
-            {onLogout && (
-              <button className="title-logout-btn" onClick={onLogout} title="Sign out">
-                {'\u23FB'}
+              <button
+                className="title-user-menu-item"
+                onClick={() => { setUserMenuOpen(false); onOpenHelp(); }}
+                data-help-id="titlebar.help"
+              >
+                <span className="title-user-menu-icon">?</span> Help
               </button>
-            )}
-          </span>
-        ) : (
-          <span className="title-user-pill title-token-none-pill">
-            <span className="title-token-status title-token-none" onClick={onOpenSettings} title="No token — click to open Settings and upload your FABRIC token" style={{ cursor: 'pointer' }}>No Token</span>
-            {onLogout && (
-              <button className="title-logout-btn" onClick={onLogout} title="Sign out">
-                {'\u23FB'}
+              <button
+                className="title-user-menu-item"
+                onClick={onToggleDark}
+                data-help-id="titlebar.theme"
+              >
+                <span className="title-user-menu-icon">{dark ? '\u2600' : '\u263E'}</span>
+                {dark ? 'Light mode' : 'Dark mode'}
               </button>
-            )}
-          </span>
-        )}
-
-        {/* Settings button */}
-        <button className="title-icon-btn" onClick={onOpenSettings} title="Settings" data-help-id="titlebar.settings">
-          {'\u2699'}
-        </button>
-
-        {/* Theme toggle */}
-        <button className="title-icon-btn" onClick={onToggleDark} title={dark ? 'Switch to light mode' : 'Switch to dark mode'} data-help-id="titlebar.theme">
-          {dark ? '\u2600' : '\u263E'}
-        </button>
-
-        {/* Help button */}
-        <button className="title-icon-btn" onClick={onOpenHelp} title="Help" data-help-id="titlebar.help">
-          ?
-        </button>
+              {onLogout && (
+                <>
+                  <div className="title-user-menu-divider" />
+                  {logoutConfirm ? (
+                    <div className="title-user-menu-confirm">
+                      <span className="title-user-menu-confirm-text">
+                        {isHubMode ? 'Stop server and sign out?' : 'Sign out?'}
+                      </span>
+                      <div className="title-user-menu-confirm-actions">
+                        <button
+                          className="title-user-menu-confirm-no"
+                          onClick={() => setLogoutConfirm(false)}
+                        >Cancel</button>
+                        <button
+                          className="title-user-menu-confirm-yes"
+                          onClick={() => { setUserMenuOpen(false); setLogoutConfirm(false); onLogout(); }}
+                        >Sign out</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      className="title-user-menu-item title-user-menu-item-danger"
+                      onClick={() => setLogoutConfirm(true)}
+                    >
+                      <span className="title-user-menu-icon">{'\u23FB'}</span>
+                      {isHubMode ? 'Stop server & sign out' : 'Sign out'}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -278,3 +278,10 @@ curl -X DELETE http://localhost:8000/api/templates/runs/{run_id}
 - Test with the WebUI: load the weave from Artifacts → Local tab
 - Study the Hello FABRIC weave in my_artifacts/ for patterns
 - For long experiments, use `weave.sh` — it runs in the background and survives disconnects
+- If a weave spans FABRIC, Chameleon, or another facility, it must create or
+  update a Federated Slice entry when it runs. Prefer the explicit
+  `/api/federated/slices` API pattern from
+  `ai-tools/fablib-examples/experiments/federated_slice_weave_pattern.py`.
+  The older `/api/slices/{slice_name}/submit-composite` path also materializes
+  a Federated Slice automatically when running a FABRIC draft with attached
+  Chameleon nodes.

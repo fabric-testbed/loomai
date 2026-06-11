@@ -61,28 +61,55 @@ def _storage_dir() -> str:
     return get_user_storage()
 
 
-def _safe_path(base: str, user_path: str) -> str:
-    """Resolve *user_path* under *base*, rejecting traversals.
+def _browse_dir() -> str:
+    """Base directory for the file-manager "Storage" view.
 
-    If *user_path* is already an absolute path that lives under *base*,
-    it is accepted as-is (this happens for template/recipe tool directories
-    injected at load time).
+    Mounts one level above the storage root (``/home/fabric`` when
+    ``FABRIC_STORAGE_DIR`` is the default ``/home/fabric/work``) so the panel
+    shows the whole home directory, not just ``work/``. Internal feature dirs
+    (``.provisions``, ``.boot-config``, templates, etc.) still resolve against
+    ``_storage_dir()``; only the user-facing browse endpoints use this base.
+
+    The internal ``.loomai`` secrets dir remains blocked by ``_safe_path``.
     """
-    # If user_path is absolute and already under base, accept it directly
+    from app.settings_manager import get_root_storage_dir
+    return os.path.dirname(get_root_storage_dir().rstrip(os.sep)) or os.sep
+
+
+# Backend install dir (holds default_artifacts and bundled tool scripts that may
+# be referenced by absolute path from template/recipe directories).
+_APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _under(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _safe_path(base: str, user_path: str) -> str:
+    """Resolve *user_path* (absolute or relative to *base*) and confirm it lands
+    inside an allowed root, rejecting traversals.
+
+    Allowed roots: *base*, the user storage dir, and the backend install dir
+    (for bundled artifacts/scripts referenced by absolute path). Paths inside the
+    internal ``.loomai`` dir (password hash, signing secret, settings) are always
+    denied — those must never be reachable through the file manager.
+    """
     if os.path.isabs(user_path):
         resolved = os.path.realpath(user_path)
-        base_resolved = os.path.realpath(base)
-        if resolved.startswith(base_resolved + os.sep) or resolved == base_resolved:
-            return resolved
-        # Also allow paths under other known directories
-        # (e.g. artifact paths outside the user storage base)
-        if os.path.exists(resolved):
-            return resolved
-        raise HTTPException(status_code=400, detail="Path traversal not allowed")
-    joined = os.path.join(base, user_path.lstrip("/"))
-    resolved = os.path.realpath(joined)
-    base_resolved = os.path.realpath(base)
-    if not resolved.startswith(base_resolved + os.sep) and resolved != base_resolved:
+    else:
+        resolved = os.path.realpath(os.path.join(base, user_path.lstrip("/")))
+
+    try:
+        storage = os.path.realpath(_storage_dir())
+    except Exception:
+        storage = os.path.realpath(base)
+
+    # Never expose internal secrets (session_secret, password_hash, settings.json).
+    if _under(resolved, os.path.join(storage, ".loomai")):
+        raise HTTPException(status_code=400, detail="Path not allowed")
+
+    allowed_roots = {os.path.realpath(base), storage, os.path.realpath(_APP_ROOT)}
+    if not any(_under(resolved, r) for r in allowed_roots):
         raise HTTPException(status_code=400, detail="Path traversal not allowed")
     return resolved
 
@@ -186,7 +213,7 @@ def _get_sftp(slice_name: str, node_name: str):
 
 @router.get("/api/files")
 async def list_files(path: str = ""):
-    base = _storage_dir()
+    base = _browse_dir()
     target = _safe_path(base, path)
     if not os.path.isdir(target):
         raise HTTPException(status_code=404, detail="Directory not found")
@@ -206,7 +233,7 @@ async def list_files(path: str = ""):
 
 @router.post("/api/files/upload")
 async def upload_files(path: str = "", files: List[UploadFile] = File(...)):
-    base = _storage_dir()
+    base = _browse_dir()
     target = _safe_path(base, path)
     os.makedirs(target, exist_ok=True)
     saved = []
@@ -232,7 +259,7 @@ class MkdirRequest(BaseModel):
 
 @router.post("/api/files/mkdir")
 async def create_folder(body: MkdirRequest, path: str = ""):
-    base = _storage_dir()
+    base = _browse_dir()
     target = _safe_path(base, path)
     new_dir = os.path.join(target, body.name)
     _safe_path(base, os.path.join(path, body.name))
@@ -246,7 +273,7 @@ MAX_TEXT_SIZE = 5 * 1024 * 1024  # 5 MB
 @router.get("/api/files/content")
 async def read_file_content(path: str = ""):
     """Read text file content for in-browser editing."""
-    base = _storage_dir()
+    base = _browse_dir()
     target = _safe_path(base, path)
     if not os.path.isfile(target):
         raise HTTPException(status_code=404, detail="File not found")
@@ -271,7 +298,7 @@ class FileContentBody(BaseModel):
 @router.put("/api/files/content")
 async def write_file_content(body: FileContentBody):
     """Write text file content from in-browser editor."""
-    base = _storage_dir()
+    base = _browse_dir()
     target = _safe_path(base, body.path)
     def _do():
         try:
@@ -285,7 +312,7 @@ async def write_file_content(body: FileContentBody):
 
 @router.get("/api/files/download")
 async def download_file(path: str = ""):
-    base = _storage_dir()
+    base = _browse_dir()
     target = _safe_path(base, path)
     if not os.path.isfile(target):
         raise HTTPException(status_code=404, detail="File not found")
@@ -294,7 +321,7 @@ async def download_file(path: str = ""):
 
 @router.get("/api/files/download-folder")
 async def download_folder(path: str = ""):
-    base = _storage_dir()
+    base = _browse_dir()
     target = _safe_path(base, path)
     if not os.path.isdir(target):
         raise HTTPException(status_code=404, detail="Directory not found")
@@ -320,7 +347,7 @@ async def download_folder(path: str = ""):
 
 @router.delete("/api/files")
 async def delete_file(path: str = ""):
-    base = _storage_dir()
+    base = _browse_dir()
     if not path or path.strip("/") == "":
         raise HTTPException(status_code=400, detail="Cannot delete storage root")
     target = _safe_path(base, path)
@@ -372,7 +399,7 @@ async def download_vm_file(slice_name: str, node_name: str, body: VmDownloadRequ
     slice_name = resolve_slice_name(slice_name)
     def _do():
         node_obj = _get_node(slice_name, node_name)
-        base = _storage_dir()
+        base = _browse_dir()
         dest = _safe_path(base, body.dest_dir)
         os.makedirs(dest, exist_ok=True)
         filename = os.path.basename(body.remote_path)
@@ -392,7 +419,7 @@ class VmUploadRequest(BaseModel):
 async def upload_to_vm(slice_name: str, node_name: str, body: VmUploadRequest):
     slice_name = resolve_slice_name(slice_name)
     def _do():
-        base = _storage_dir()
+        base = _browse_dir()
         local_path = _safe_path(base, body.source)
         if not os.path.exists(local_path):
             raise HTTPException(status_code=404, detail="Source not found in container storage")

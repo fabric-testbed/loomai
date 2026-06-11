@@ -10,8 +10,8 @@ ARG FABLIB_BRANCH=fabvis
 COPY requirements.txt .
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc python3-dev libffi-dev libssl-dev \
-    openssh-client git tmux sudo curl \
-    vim less htop tree wget jq net-tools iputils-ping dnsutils procps nano \
+    openssh-client git tmux sudo curl bubblewrap \
+    vim less htop tree wget jq net-tools iputils-ping dnsutils procps nano ripgrep \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && sed -i "s|fabrictestbed-extensions.*|fabrictestbed-extensions @ git+https://github.com/fabric-testbed/fabrictestbed-extensions.git@${FABLIB_BRANCH}|" requirements.txt \
@@ -38,6 +38,7 @@ RUN pip install --no-cache-dir /app/cli/ && rm -rf /app/cli/
 
 COPY scripts/ scripts/
 COPY app/ app/
+COPY default_artifacts/ default_artifacts/
 
 COPY VERSION /app/VERSION
 

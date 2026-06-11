@@ -12,6 +12,178 @@ Extend Loomai to manage Chameleon Cloud experiments alongside FABRIC. Users shou
 
 ---
 
+## Cross-Testbed FABNetv4 Route Metrics
+
+Apply explicit netplan route metrics to every Chameleon server that attaches to
+`fabnetv4`, even if that server has only one NIC. FABNet DHCP may install an
+IPv4 default route; giving the FABNet interface a high metric prevents it from
+becoming the preferred public egress path when a management interface is also
+present.
+
+For the common public-SSH layout, keep `sharednet1` as NIC 0 for management and
+floating-IP SSH, and attach `fabnetv4` as NIC 1 for the FABNet dataplane. Both
+DHCP interfaces can install IPv4 default routes. If the default routes have
+equal metrics, SSH can enter through the floating IP on `sharednet1` while
+replies leave through `fabnetv4`, which causes asymmetric routing and SSH
+timeouts or hangs.
+
+Use cloud-init/netplan user data at first boot to make the management route
+preferred and the FABNet route non-preferred:
+
+```yaml
+#cloud-config
+write_files:
+  - path: /etc/netplan/99-chameleon-route-metrics.yaml
+    owner: root:root
+    permissions: '0600'
+    content: |
+      network:
+        version: 2
+        ethernets:
+          eno1np0:
+            dhcp4-overrides:
+              route-metric: 50
+          eno2np1:
+            dhcp4-overrides:
+              route-metric: 500
+runcmd:
+  - [ netplan, apply ]
+```
+
+The common Ubuntu 22.04 and Ubuntu 24.04 Chameleon names are `eno1np0` for
+`sharednet1` and `eno2np1` for `fabnetv4`, but new images or hardware may use
+different names. Verify with `ip link` or console access when changing images.
+For FABNet-only or single-NIC servers, set `route-metric: 500` on whichever
+interface is attached to `fabnetv4`; omit the `sharednet1` stanza if no
+management NIC exists. Do not remove the FABNet route for `10.128.0.0/10`;
+verify it after boot with `ip route | grep 10.128`.
+
+FABNet-only Chameleon nodes may accept floating IPs at some sites, but for
+reliable public SSH plus FABNet dataplane connectivity, prefer
+`sharednet1 + fabnetv4` with explicit route metrics.
+
+---
+
+## Slice Model Specification
+
+LoomAI treats a slice as the user-facing experiment boundary. FABRIC has native
+slices; Chameleon does not. Therefore LoomAI must provide a consistent slice
+abstraction while preserving each provider's real lifecycle rules.
+
+### Provider Slices
+
+A provider slice is a logical group of resources on one testbed.
+
+- **FABRIC provider slice**: a native FABRIC slice. LoomAI stores and displays
+  the FABRIC slice ID/name and mirrors FABRIC state.
+- **Chameleon provider slice**: a first-class LoomAI record that groups
+  Chameleon project resources such as Blazar leases, Nova instances, Neutron
+  networks, floating IPs, and security groups. The Chameleon project remains a
+  resource pool, not the slice boundary.
+
+The Chameleon slice record is the source of truth for membership:
+
+```json
+{
+  "id": "chi-slice-...",
+  "name": "experiment-a",
+  "provider": "chameleon",
+  "state": "Draft|Deploying|Active|Error|Terminated",
+  "sites": ["CHI@TACC"],
+  "nodes": [],
+  "networks": [],
+  "floating_ips": [],
+  "resources": [
+    {
+      "resource_id": "res-...",
+      "provider": "chameleon",
+      "type": "instance|lease|network|floating_ip|security_group",
+      "id": "provider-resource-id",
+      "name": "server-1",
+      "site": "CHI@TACC",
+      "ownership": "managed|imported",
+      "managed": true,
+      "created_by": "loomai|external",
+      "delete_with_slice": true,
+      "relationship": {
+        "lease_id": "lease-id",
+        "planned_node_id": "node-id"
+      }
+    }
+  ]
+}
+```
+
+Resource ownership determines lifecycle behavior:
+
+- **managed**: LoomAI created the resource for this slice. It may be deleted
+  during "delete slice and resources".
+- **imported**: the user attached an existing Chameleon resource to the slice.
+  Deleting the slice only detaches the resource unless the user explicitly asks
+  to delete imported resources.
+- **orphan**: visible in the Chameleon project but not attached to any LoomAI
+  slice. The UI should offer an "Add to Slice" or "Import Reservation" action.
+
+Where OpenStack metadata/tags are supported, LoomAI should also tag managed
+resources:
+
+```text
+loomai_slice_id=<slice-id>
+loomai_slice_name=<slice-name>
+loomai_managed=true
+loomai_composite_id=<optional-composite-id>
+```
+
+The persisted LoomAI slice record remains authoritative because not every
+Chameleon resource exposes reliable metadata.
+
+### Composite Slices
+
+A composite slice is a LoomAI grouping across provider slices. It should not own
+low-level provider resources directly.
+
+```json
+{
+  "id": "comp-...",
+  "name": "cross-testbed-experiment",
+  "state": "Draft|Provisioning|Active|Degraded|Terminated",
+  "members": [
+    { "provider": "fabric", "slice_id": "fabric-slice-id" },
+    { "provider": "chameleon", "slice_id": "chi-slice-id" }
+  ],
+  "fabric_slices": ["legacy-compatible-fabric-id"],
+  "chameleon_slices": ["legacy-compatible-chameleon-id"],
+  "cross_connections": []
+}
+```
+
+The composite owns the relationship between provider slices and any cross-testbed
+connection intent. Lifecycle operations delegate to member slices:
+
+- Refresh: refresh each provider member and recompute aggregate state.
+- Submit: submit/deploy member slices that are still drafts.
+- Delete composite: delete only the composite grouping unless the user chooses a
+  separate explicit provider-slice cleanup operation.
+
+### User Interaction Rules
+
+Users should be able to work at any level:
+
+- **FABRIC view**: create, edit, submit, refresh, inspect, and delete native
+  FABRIC slices.
+- **Chameleon view**: create, edit, submit, refresh, inspect, and delete LoomAI
+  Chameleon slices. Users can add planned servers or attach existing Chameleon
+  resources to an existing slice.
+- **Composite view**: create a composite slice, add existing FABRIC or Chameleon
+  provider slices as members, create new member slices, edit member slices in
+  place, and add future testbed members through the same provider-member model.
+
+The same resource should have exactly one primary owner. Imported resources may
+be detached from one slice and attached to another, but they should not be
+silently deleted.
+
+---
+
 ## Phase 1: Backend Foundation
 
 ### 1.1 Settings Schema

@@ -645,6 +645,8 @@ In hub mode (K8s), each user gets a container with limited persistent storage (d
 | Tool | Install Size | Hub Mode |
 |------|-------------|----------|
 | **LoomAI** | Built-in (0 MB) | Available |
+| **Antigravity** | Installed CLI + account cache | Disabled |
+| **Codex** | Installed CLI + account/cache config | Disabled |
 | **Aider** | ~900 MB | Disabled |
 | **Claude Code** | ~1 GB | Disabled |
 | **OpenCode** | ~200 MB | Disabled |

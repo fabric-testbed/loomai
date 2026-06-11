@@ -41,6 +41,20 @@ def _mock_external_deps(tmp_path):
     (skills_dir / "deploy-slice.md").write_text(
         "name: deploy-slice\ndescription: Deploy a slice\n---\nDeploy instructions.\n"
     )
+    (skills_dir / "benchmark.md").write_text(
+        "---\n"
+        "id: benchmark\n"
+        "name: benchmark\n"
+        "asset_type: skill\n"
+        "audience: end-user\n"
+        "description: Run benchmarks\n"
+        "tools:\n"
+        "  - loomai\n"
+        "  - opencode\n"
+        "---\n"
+        "# Benchmark\n"
+        "Run benchmark instructions.\n"
+    )
 
     # Agents
     agents_dir = shared_dir / "agents"
@@ -52,7 +66,12 @@ def _mock_external_deps(tmp_path):
     # Aider defaults
     aider_dir = tmp_path / "ai-tools" / "aider"
     aider_dir.mkdir(parents=True)
-    (aider_dir / ".aider.conf.yml").write_text("model: openai/qwen3-coder-30b\n")
+    (aider_dir / ".aider.conf.yml").write_text(
+        "model: openai/qwen3-coder-30b\n"
+        "read:\n"
+        "  - AGENTS.md\n"
+        "  - AI_ASSETS.md\n"
+    )
     (aider_dir / ".aiderignore").write_text(".git\n__pycache__\n")
 
     # Claude Code defaults
@@ -75,7 +94,6 @@ def _mock_external_deps(tmp_path):
     patches = [
         patch("app.routes.ai_terminal._FABRIC_AI_MD_PATH", str(fabric_ai_md)),
         patch("app.routes.ai_terminal._SHARED_DIR", str(shared_dir)),
-        patch("app.routes.ai_terminal._OPENCODE_DEFAULTS_DIR", str(shared_dir)),
         patch("app.routes.ai_terminal._AIDER_DEFAULTS_DIR", str(aider_dir)),
         patch("app.routes.ai_terminal._CLAUDE_DEFAULTS_DIR", str(claude_dir)),
         patch("app.routes.ai_terminal._CRUSH_DEFAULTS_DIR", str(crush_dir)),
@@ -123,6 +141,29 @@ class TestOpenCodeSeeding:
             # Should have at least the two skills we created (minus _SKIP_SKILLS)
             skill_names = os.listdir(skills_dir)
             assert len(skill_names) >= 1
+
+    def test_preserves_canonical_skill_frontmatter(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from app.routes.ai_terminal import _setup_opencode_workspace
+            _setup_opencode_workspace(tmpdir)
+            skill_path = os.path.join(tmpdir, ".opencode", "skills", "benchmark", "SKILL.md")
+            with open(skill_path) as f:
+                content = f.read()
+            assert content.startswith("---\nid: benchmark\n")
+            assert "asset_type: skill" in content
+            assert "# Benchmark" in content
+
+    def test_preserves_unmanaged_skill_directories(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            custom_skill = os.path.join(tmpdir, ".opencode", "skills", "local-only")
+            os.makedirs(custom_skill, exist_ok=True)
+            with open(os.path.join(custom_skill, "SKILL.md"), "w") as f:
+                f.write("# Local only\n")
+
+            from app.routes.ai_terminal import _setup_opencode_workspace
+            _setup_opencode_workspace(tmpdir)
+
+            assert os.path.isfile(os.path.join(custom_skill, "SKILL.md"))
 
     def test_creates_agent_prompts_dir(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -182,6 +223,20 @@ class TestAiderSeeding:
             _setup_aider_workspace(tmpdir)
             assert os.path.isfile(os.path.join(tmpdir, ".aiderignore"))
 
+    def test_creates_read_only_asset_index(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from app.routes.ai_terminal import _setup_aider_workspace
+            _setup_aider_workspace(tmpdir)
+            asset_index = os.path.join(tmpdir, "AI_ASSETS.md")
+            assert os.path.isfile(asset_index)
+            with open(asset_index) as f:
+                content = f.read()
+            assert "## Skills" in content
+            assert "`benchmark`" in content
+            with open(os.path.join(tmpdir, ".aider.conf.yml")) as f:
+                config = f.read()
+            assert "AI_ASSETS.md" in config
+
 
 class TestClaudeSeeding:
     def test_creates_agents_md(self):
@@ -205,6 +260,17 @@ class TestClaudeSeeding:
             # Should have at least one skill converted to a command
             assert len(os.listdir(cmds_dir)) >= 1
 
+    def test_strips_canonical_frontmatter_from_commands(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from app.routes.ai_terminal import _setup_claude_workspace
+            _setup_claude_workspace(tmpdir)
+            command_path = os.path.join(tmpdir, ".claude", "commands", "benchmark.md")
+            with open(command_path) as f:
+                content = f.read()
+            assert content.startswith("# Benchmark")
+            assert "asset_type: skill" not in content
+            assert "id: benchmark" not in content
+
 
 class TestCrushSeeding:
     def test_creates_agents_md(self):
@@ -223,6 +289,8 @@ class TestCrushSeeding:
                 config = json.load(f)
             assert "providers" in config
             assert "fabric" in config["providers"]
+            assert config["providers"]["fabric"]["models"][0]["id"] == "test-model"
+            assert config["providers"]["fabric"]["models"][0]["name"] == "test-model"
 
     def test_includes_nrp_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -232,6 +300,7 @@ class TestCrushSeeding:
                 config = json.load(f)
             assert "nrp" in config["providers"]
             assert config["providers"]["nrp"]["base_url"] == "https://nrp.test.net/v1"
+            assert config["providers"]["nrp"]["models"][0]["id"] == "nrp-model"
 
     def test_creates_skills_dir(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -272,6 +341,7 @@ class TestDeepAgentsSeeding:
             assert "providers" in config
             assert "fabric" in config["providers"]
             assert config["default_provider"] == "fabric"
+            assert config["providers"]["fabric"]["models"] == ["test-model"]
 
     def test_includes_nrp_provider(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -281,6 +351,7 @@ class TestDeepAgentsSeeding:
                 config = json.load(f)
             assert "nrp" in config["providers"]
             assert config["providers"]["nrp"]["base_url"] == "https://nrp.test.net/v1"
+            assert config["providers"]["nrp"]["models"] == ["nrp-model"]
 
     def test_creates_skills_dir(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -293,6 +364,94 @@ class TestDeepAgentsSeeding:
             from app.routes.ai_terminal import _setup_deepagents_workspace
             _setup_deepagents_workspace(tmpdir, api_key="test-key")
             assert os.path.isdir(os.path.join(tmpdir, ".deepagents", "agents"))
+
+    def test_refreshes_existing_managed_skill_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skills_dir = os.path.join(tmpdir, ".deepagents", "skills")
+            os.makedirs(skills_dir, exist_ok=True)
+            with open(os.path.join(skills_dir, "benchmark.md"), "w") as f:
+                f.write("stale")
+
+            from app.routes.ai_terminal import _setup_deepagents_workspace
+            _setup_deepagents_workspace(tmpdir, api_key="test-key")
+
+            with open(os.path.join(skills_dir, "benchmark.md")) as f:
+                content = f.read()
+            assert content.startswith("---\nid: benchmark\n")
+            assert "Run benchmark instructions." in content
+
+    def test_preserves_unmanaged_markdown_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skills_dir = os.path.join(tmpdir, ".deepagents", "skills")
+            os.makedirs(skills_dir, exist_ok=True)
+            local_path = os.path.join(skills_dir, "local-only.md")
+            with open(local_path, "w") as f:
+                f.write("# Local only\n")
+
+            from app.routes.ai_terminal import _setup_deepagents_workspace
+            _setup_deepagents_workspace(tmpdir, api_key="test-key")
+
+            assert os.path.isfile(local_path)
+
+
+class TestCodexAndAntigravitySeeding:
+    def test_codex_creates_parallel_skills_agents_and_asset_index(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = os.path.join(tmpdir, "home")
+            os.makedirs(home)
+            workspace = os.path.join(tmpdir, "workspace")
+            os.makedirs(workspace)
+
+            from app.routes.ai_terminal import _setup_codex_workspace
+            with patch("app.routes.ai_terminal.os.path.expanduser", return_value=home), \
+                 patch("app.settings_manager.get_custom_providers", return_value=[]):
+                _setup_codex_workspace(workspace)
+
+            skill_path = os.path.join(workspace, ".codex", "skills", "benchmark", "SKILL.md")
+            agent_path = os.path.join(workspace, ".codex", "agents", "fabric-manager.md")
+            assert os.path.isfile(skill_path)
+            assert os.path.isfile(agent_path)
+            assert os.path.isfile(os.path.join(workspace, "AI_ASSETS.md"))
+            with open(skill_path) as f:
+                assert f.read().startswith("---\nid: benchmark\n")
+
+    def test_antigravity_creates_parallel_context_copies(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from app.routes.ai_terminal import _setup_antigravity_workspace
+            _setup_antigravity_workspace(tmpdir)
+
+            assert os.path.isfile(os.path.join(tmpdir, "AI_ASSETS.md"))
+            assert os.path.isfile(os.path.join(tmpdir, ".antigravity", "skills", "benchmark.md"))
+            assert os.path.isfile(os.path.join(tmpdir, ".antigravity", "agents", "fabric-manager.md"))
+
+
+class TestUserCustomAssetOverlay:
+    def test_custom_skill_overrides_builtin_for_opencode_adapter(self, tmp_path):
+        custom_dir = tmp_path / ".loomai" / "skills"
+        custom_dir.mkdir(parents=True)
+        (custom_dir / "benchmark.md").write_text(
+            "---\n"
+            "id: benchmark\n"
+            "name: benchmark\n"
+            "asset_type: skill\n"
+            "audience: end-user\n"
+            "description: Custom benchmark workflow\n"
+            "---\n"
+            "# Custom Benchmark\n"
+            "Use the local lab benchmark process.\n"
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             patch("app.settings_manager.get_storage_dir", return_value=str(tmp_path)):
+            from app.routes.ai_terminal import _setup_opencode_workspace
+            _setup_opencode_workspace(tmpdir)
+
+            skill_path = os.path.join(tmpdir, ".opencode", "skills", "benchmark", "SKILL.md")
+            with open(skill_path) as f:
+                content = f.read()
+            assert "Custom benchmark workflow" in content
+            assert "# Custom Benchmark" in content
+            assert "Run benchmark instructions." not in content
 
 
 class TestPropagateAiConfigs:

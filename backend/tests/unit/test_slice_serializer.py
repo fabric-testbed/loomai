@@ -1,5 +1,7 @@
 """Tests for app.slice_serializer — uses mock FABlib objects."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.slice_serializer import (
@@ -21,6 +23,58 @@ from tests.fixtures.fablib_mocks import (
     MockNetworkService,
     MockSlice,
 )
+
+
+class FablibStyleFacilityPort:
+    """FacilityPort shape used by current FABlib: VLAN/bw live on interfaces."""
+
+    def __init__(self, name: str = "fp-real", site: str = "RENC", vlan: str = "3101", bandwidth: str = "10"):
+        self._name = name
+        self._site = site
+        self._interfaces = [MockInterface(name=f"{name}-iface-1", node=self, vlan=vlan, bandwidth=bandwidth)]
+
+    def get_name(self) -> str:
+        return self._name
+
+    def get_site(self) -> str:
+        return self._site
+
+    def get_interfaces(self) -> list:
+        return self._interfaces
+
+
+class FablibStyleFacilitySlice(MockSlice):
+    """Slice shape used by current FABlib for facility-port access."""
+
+    def __init__(self, *args, facilities: list | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._facilities = facilities or []
+
+    def get_facilities(self, refresh: bool = False) -> list:
+        return self._facilities
+
+
+class CountingInterface(MockInterface):
+    """Mock interface that records expensive network lookup attempts."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.get_network_calls = 0
+
+    def get_network(self):
+        self.get_network_calls += 1
+        return super().get_network()
+
+
+class TopologyBackedSlice(MockSlice):
+    """Mock slice exposing a FIM-like topology index."""
+
+    def __init__(self, *args, topology, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._topology = topology
+
+    def get_fim_topology(self):
+        return self._topology
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +263,67 @@ class TestSliceToDict:
         result = slice_to_dict(s)
         assert len(result["networks"]) == 1
         assert result["networks"][0]["name"] == "lan"
+
+    def test_slice_to_dict_uses_topology_index_for_interface_networks(self):
+        iface1 = CountingInterface(name="n1-if1")
+        iface2 = CountingInterface(name="n2-if1")
+        node1 = MockNode(name="n1", interfaces=[iface1])
+        node2 = MockNode(name="n2", interfaces=[iface2])
+        topology = SimpleNamespace(
+            nodes={"n1": {}, "n2": {}},
+            interface_list=[
+                SimpleNamespace(name="n1-if1"),
+                SimpleNamespace(name="n2-if1"),
+            ],
+            network_services={
+                "lan": SimpleNamespace(
+                    name="lan",
+                    type="L2Bridge",
+                    layer="L2",
+                    interfaces={"n1-if1": {}, "n2-if1": {}},
+                    interface_list=(),
+                    user_data={},
+                    subnet="",
+                    gateway="",
+                )
+            },
+        )
+        s = TopologyBackedSlice(name="test", nodes=[node1, node2], topology=topology)
+
+        result = slice_to_dict(s)
+
+        assert iface1.get_network_calls == 0
+        assert iface2.get_network_calls == 0
+        assert result["nodes"][0]["interfaces"][0]["network_name"] == "lan"
+        assert result["nodes"][1]["interfaces"][0]["network_name"] == "lan"
+        assert result["networks"] == [{
+            "name": "lan",
+            "type": "L2Bridge",
+            "layer": "L2",
+            "subnet": "",
+            "gateway": "",
+            "interfaces": [
+                result["nodes"][0]["interfaces"][0],
+                result["nodes"][1]["interfaces"][0],
+            ],
+        }]
+
+    def test_slice_with_current_fablib_facilities(self):
+        fp = FablibStyleFacilityPort()
+        s = FablibStyleFacilitySlice(name="test", facilities=[fp])
+        result = slice_to_dict(s)
+        assert len(result["facility_ports"]) == 1
+        assert result["facility_ports"][0] == {
+            "name": "fp-real",
+            "site": "RENC",
+            "vlan": "3101",
+            "bandwidth": "10",
+            "interfaces": result["facility_ports"][0]["interfaces"],
+        }
+        assert result["facility_ports"][0]["interfaces"][0]["name"] == "fp-real-iface-1"
+        assert result["facility_ports"][0]["interfaces"][0]["node_name"] == "fp-real"
+        assert result["facility_ports"][0]["interfaces"][0]["vlan"] == "3101"
+        assert result["facility_ports"][0]["interfaces"][0]["bandwidth"] == "10"
 
     def test_slice_error_messages(self):
         s = MockSlice(name="test")

@@ -148,6 +148,18 @@ def client(mock_fablib, storage_dir):
 
 
 @pytest.fixture()
+def browse_root(storage_dir):
+    """The base the user-facing file routes browse from.
+
+    Today's file manager browses one level *above* the storage root (so the UI
+    shows the whole home dir, not just ``work/``) — see ``files._browse_dir()``.
+    Tests that create files for the ``/api/files*`` endpoints must place them
+    here, relative to this base.
+    """
+    return storage_dir.parent
+
+
+@pytest.fixture()
 def mock_sites():
     """Return default mock site data."""
     return default_sites()

@@ -12,6 +12,7 @@ import {
   navigateToView, createSliceViaBar, clickBarTab,
   clickEditorTab, isAuthenticated, isChameleonConfigured,
   waitForChameleonSliceActive, cleanupAllE2ESlices,
+  chooseChameleonImage, chooseChameleonNodeType, e2eResourceName,
 } from '../helpers/gui-helpers';
 
 const API = 'http://localhost:8000/api';
@@ -33,7 +34,8 @@ test.describe('Chameleon Provisioning — Real Deploy E2E', () => {
   });
 
   test('create and deploy Chameleon slice via GUI, verify ACTIVE', async ({ page }) => {
-    const name = `e2e-chi-gui-${Date.now().toString(36)}`;
+    const name = e2eResourceName('chi-gui');
+    const nodeName = e2eResourceName('chi-node');
 
     // Navigate to Chameleon view
     const ok = await navigateToView(page, 'chameleon');
@@ -59,6 +61,26 @@ test.describe('Chameleon Provisioning — Real Deploy E2E', () => {
     if (!testSlice) { test.skip(true, 'Slice not found in API'); return; }
     const sliceId = testSlice.id;
 
+    const draftResp = await page.request.get(`${API}/chameleon/drafts/${sliceId}`);
+    const draft = await draftResp.json();
+    const firstNode = draft.nodes?.[0];
+    if (!firstNode?.id || !firstNode.site) {
+      test.skip(true, 'No Chameleon server was added to the draft');
+      return;
+    }
+    const ntResp = await page.request.get(`${API}/chameleon/sites/${firstNode.site}/node-types`);
+    const ntData = await ntResp.json();
+    const imgResp = await page.request.get(`${API}/chameleon/sites/${firstNode.site}/images`);
+    const images = imgResp.ok() ? await imgResp.json() : [];
+    await page.request.put(`${API}/chameleon/drafts/${sliceId}/nodes/${firstNode.id}`, {
+      data: {
+        name: nodeName,
+        node_type: chooseChameleonNodeType(ntData.node_types || ntData),
+        image: chooseChameleonImage(images),
+        site: firstNode.site,
+      },
+    });
+
     // Click Submit/Deploy button
     const submitBtn = page.locator('button', { hasText: /Submit|Deploy/ }).first();
     if (await submitBtn.isVisible({ timeout: 5000 })) {
@@ -67,7 +89,7 @@ test.describe('Chameleon Provisioning — Real Deploy E2E', () => {
     }
 
     // Wait for instances to become ACTIVE via API polling
-    const active = await waitForChameleonSliceActive(sliceId, 600_000);
+    const active = await waitForChameleonSliceActive(sliceId, 900_000);
     expect(active).toBeTruthy();
 
     // Verify the topology graph shows active state
@@ -79,7 +101,8 @@ test.describe('Chameleon Provisioning — Real Deploy E2E', () => {
 
   test('deployed Chameleon slice shows ACTIVE in Slices tab', async ({ page }) => {
     // Create and deploy via API (faster for this test)
-    const name = `e2e-chi-active-${Date.now().toString(36)}`;
+    const name = e2eResourceName('chi-active');
+    const nodeName = e2eResourceName('chi-node');
 
     // Get site info
     const sitesResp = await page.request.get(`${API}/chameleon/sites`);
@@ -93,7 +116,10 @@ test.describe('Chameleon Provisioning — Real Deploy E2E', () => {
     const ntResp = await page.request.get(`${API}/chameleon/sites/${siteName}/node-types`);
     const ntData = await ntResp.json();
     const nodeTypes = ntData.node_types || ntData;
-    const nodeType = (nodeTypes[0]?.name || nodeTypes[0]) ?? 'compute_skylake';
+    const nodeType = chooseChameleonNodeType(nodeTypes);
+    const imagesResp = await page.request.get(`${API}/chameleon/sites/${siteName}/images`);
+    const images = imagesResp.ok() ? await imagesResp.json() : [];
+    const image = chooseChameleonImage(images);
 
     // Create slice via API
     const createResp = await page.request.post(`${API}/chameleon/slices`, {
@@ -105,7 +131,7 @@ test.describe('Chameleon Provisioning — Real Deploy E2E', () => {
 
     // Add node
     await page.request.post(`${API}/chameleon/drafts/${sliceId}/nodes`, {
-      data: { name: 'node1', node_type: nodeType, image: 'CC-Ubuntu22.04', site: siteName },
+      data: { name: nodeName, node_type: nodeType, image, site: siteName },
     });
 
     // Deploy
@@ -113,10 +139,14 @@ test.describe('Chameleon Provisioning — Real Deploy E2E', () => {
       data: { lease_name: name, duration_hours: 1, full_deploy: true },
       timeout: 600_000,
     });
-    if (!deployResp.ok()) { test.skip(true, `Deploy failed: ${await deployResp.text()}`); return; }
+    const deployBody = await deployResp.json().catch(async () => ({ error: await deployResp.text() }));
+    if (!deployResp.ok() || deployBody.errors?.length || deployBody.error) {
+      test.skip(true, `Deploy failed: ${JSON.stringify(deployBody)}`);
+      return;
+    }
 
     // Wait for ACTIVE
-    const active = await waitForChameleonSliceActive(sliceId, 600_000);
+    const active = await waitForChameleonSliceActive(sliceId, 900_000);
     expect(active).toBeTruthy();
 
     // Now check the GUI

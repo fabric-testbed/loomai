@@ -214,6 +214,16 @@ class TestChameleonAccessors:
         sm.invalidate_settings_cache()
         assert sm.get_chameleon_ssh_key() == "/custom/chi_key"
 
+    def test_resolve_chameleon_key_name_uses_node_site_then_fallback(self, isolated_storage):
+        settings = sm.load_settings()
+        settings["chameleon"]["sites"]["CHI@TACC"]["default_key_name"] = "site-key"
+        sm.save_settings(settings)
+        sm.invalidate_settings_cache()
+
+        assert sm.resolve_chameleon_key_name("CHI@TACC", {"key_name": "node-key"}) == "node-key"
+        assert sm.resolve_chameleon_key_name("CHI@TACC", {}) == "site-key"
+        assert sm.resolve_chameleon_key_name("CHI@UC", {}) == "loomai-key"
+
     def test_is_chameleon_site_configured(self, isolated_storage):
         """A site without credentials should not be configured."""
         assert sm.is_chameleon_site_configured("CHI@TACC") is False
@@ -222,6 +232,31 @@ class TestChameleonAccessors:
         settings = sm.load_settings()
         settings["chameleon"]["sites"]["CHI@TACC"]["app_credential_id"] = "cred-id"
         settings["chameleon"]["sites"]["CHI@TACC"]["app_credential_secret"] = "cred-secret"
+        sm.save_settings(settings)
+        sm.invalidate_settings_cache()
+        assert sm.is_chameleon_site_configured("CHI@TACC") is True
+
+    def test_is_chameleon_site_configured_with_password_auth(self, isolated_storage):
+        settings = sm.load_settings()
+        settings["chameleon"]["password_auth"]["username"] = "user@example.org"
+        settings["chameleon"]["password_auth"]["password"] = "secret"
+        site = settings["chameleon"]["sites"]["CHI@UC"]
+        site["auth_type"] = "password"
+        site["project_id"] = "project-id"
+        site["client_id"] = "keystone-uc-prod"
+        sm.save_settings(settings)
+        sm.invalidate_settings_cache()
+        assert sm.is_chameleon_site_configured("CHI@UC") is True
+
+    def test_inactive_chameleon_password_auth_does_not_replace_app_creds(self, isolated_storage):
+        settings = sm.load_settings()
+        site = settings["chameleon"]["sites"]["CHI@TACC"]
+        site["auth_type"] = "application_credential"
+        site["app_credential_id"] = "cred-id"
+        site["app_credential_secret"] = "cred-secret"
+        settings["chameleon"]["password_auth"]["username"] = "user@example.org"
+        settings["chameleon"]["password_auth"]["password"] = ""
+        site["project_id"] = "project-id"
         sm.save_settings(settings)
         sm.invalidate_settings_cache()
         assert sm.is_chameleon_site_configured("CHI@TACC") is True
@@ -458,3 +493,55 @@ class TestPathAccessors:
     def test_get_log_file(self, isolated_storage):
         log_file = sm.get_log_file()
         assert log_file == "/tmp/fablib/fablib.log"
+
+
+class TestConfigPathsIgnoreStaleStoredPaths:
+    """Config-derived paths must come from the live root ``fabric_config``
+    symlink, not the per-user absolute paths frozen in settings.json — those
+    go stale across user switches and the users/ -> .loomai/users/ relocation
+    (regression: SSH terminal used a stale ``work/users/<uuid>/...`` bastion key).
+    """
+
+    def _save_stale(self, storage):
+        settings = sm.load_settings()
+        stale = "/home/fabric/work/users/deadbeef/fabric_config"
+        settings["paths"]["config_dir"] = stale
+        settings["paths"]["bastion_key_file"] = os.path.join(stale, "fabric_bastion_key")
+        settings["paths"]["token_file"] = os.path.join(stale, "id_token.json")
+        settings["paths"]["ssh_config_file"] = os.path.join(stale, "ssh_config")
+        settings["paths"]["slice_keys_dir"] = os.path.join(stale, "slice_keys")
+        sm.save_settings(settings)
+        return str(storage / "fabric_config")
+
+    def test_getters_ignore_stale_stored_config_paths(self, isolated_storage):
+        live = self._save_stale(isolated_storage)
+        assert sm.get_config_dir() == live
+        assert sm.get_bastion_key_path() == os.path.join(live, "fabric_bastion_key")
+        assert sm.get_ssh_config_path() == os.path.join(live, "ssh_config")
+        assert sm.get_slice_keys_dir() == os.path.join(live, "slice_keys")
+        # No stale "users/deadbeef" leaks through any config path.
+        for p in (sm.get_config_dir(), sm.get_bastion_key_path(),
+                  sm.get_ssh_config_path(), sm.get_slice_keys_dir()):
+            assert "users/deadbeef" not in p
+
+    def test_apply_env_vars_uses_live_config_paths(self, isolated_storage):
+        live = self._save_stale(isolated_storage)
+        sm.apply_env_vars(sm.load_settings())
+        assert os.environ["FABRIC_CONFIG_DIR"] == live
+        assert os.environ["FABRIC_BASTION_KEY_LOCATION"] == os.path.join(live, "fabric_bastion_key")
+        assert os.environ["FABRIC_TOKEN_LOCATION"] == os.path.join(live, "id_token.json")
+        assert "users/deadbeef" not in os.environ["FABRIC_BASTION_KEY_LOCATION"]
+
+    def test_generated_fabric_rc_has_live_bastion_key(self, isolated_storage):
+        live = self._save_stale(isolated_storage)
+        sm.generate_fabric_rc(sm.load_settings())
+        rc = (isolated_storage / "fabric_config" / "fabric_rc").read_text()
+        assert f"FABRIC_BASTION_KEY_LOCATION={os.path.join(live, 'fabric_bastion_key')}" in rc
+        assert "users/deadbeef" not in rc
+
+    def test_generated_ssh_config_has_live_bastion_key(self, isolated_storage):
+        live = self._save_stale(isolated_storage)
+        sm.generate_ssh_config(sm.load_settings())
+        cfg = (isolated_storage / "fabric_config" / "ssh_config").read_text()
+        assert os.path.join(live, "fabric_bastion_key") in cfg
+        assert "users/deadbeef" not in cfg

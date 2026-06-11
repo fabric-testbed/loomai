@@ -46,6 +46,63 @@ export function nextNodeId(): string {
   return `node-${++nodeIdCounter}`;
 }
 
+/**
+ * Validate a value parsed from persisted storage is a well-formed layout tree,
+ * so a corrupt/old localStorage entry can't crash the console on restore.
+ */
+export function isValidLayout(v: unknown): v is LayoutNode {
+  if (!v || typeof v !== 'object') return false;
+  const n = v as {
+    type?: unknown; id?: unknown; tabIds?: unknown; activeTabId?: unknown;
+    direction?: unknown; children?: unknown; sizes?: unknown;
+  };
+  if (typeof n.id !== 'string') return false;
+  if (n.type === 'leaf') {
+    return Array.isArray(n.tabIds) && n.tabIds.every((t: unknown) => typeof t === 'string')
+      && typeof n.activeTabId === 'string';
+  }
+  if (n.type === 'split') {
+    return (n.direction === 'horizontal' || n.direction === 'vertical')
+      && Array.isArray(n.children) && n.children.length > 0
+      && Array.isArray(n.sizes)
+      && n.children.every(isValidLayout);
+  }
+  return false;
+}
+
+/**
+ * After restoring a persisted layout, advance the module-level node-id counter
+ * past every id already present so freshly split/created nodes never collide
+ * with restored ones (the counter resets to 0 on page reload).
+ */
+export function reserveNodeIds(root: LayoutNode): void {
+  const walk = (n: LayoutNode) => {
+    const m = /^node-(\d+)$/.exec(n.id);
+    if (m) nodeIdCounter = Math.max(nodeIdCounter, parseInt(m[1], 10));
+    if (n.type === 'split') n.children.forEach(walk);
+  };
+  walk(root);
+}
+
+/**
+ * Restore a panel's layout tree from localStorage so terminal/console tabs land
+ * in the same split positions after a browser reload. Falls back to a single
+ * leaf holding `defaultTabIds` when nothing valid is stored.
+ */
+export function loadPersistedLayout(panelId: string, defaultTabIds: string[] = []): LayoutNode {
+  try {
+    const raw = localStorage.getItem(`fabric-console-layout-${panelId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (isValidLayout(parsed)) {
+        reserveNodeIds(parsed);
+        return parsed;
+      }
+    }
+  } catch { /* ignore corrupt storage */ }
+  return { type: 'leaf', id: nextNodeId(), tabIds: [...defaultTabIds], activeTabId: defaultTabIds[0] ?? '' };
+}
+
 export function findLeaf(root: LayoutNode, id: string): LeafNode | null {
   if (root.type === 'leaf') return root.id === id ? root : null;
   for (const child of root.children) {

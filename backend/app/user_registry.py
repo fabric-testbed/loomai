@@ -7,15 +7,20 @@ When no registry exists, the system operates in legacy single-user mode.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
+import re
+import shutil
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 _REGISTRY_FILE = "user_registry.json"
+# Folder names under .loomai/users/ that are treated as a user (UUID-shaped).
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-?[0-9a-fA-F-]{4,}$")
 
 
 def _registry_path() -> str:
@@ -68,20 +73,85 @@ def _new_registry() -> dict:
 # Query helpers
 # ---------------------------------------------------------------------------
 
+def _decode_jwt_payload(token: str) -> dict:
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return {}
+
+
+def _user_meta_path(uuid: str) -> str:
+    return os.path.join(users_base_dir(), uuid, "user.json")
+
+
+def _read_user_meta(uuid: str) -> dict:
+    """Best-effort display metadata for a user folder: user.json → token → uuid."""
+    path = _user_meta_path(uuid)
+    if os.path.isfile(path):
+        try:
+            with open(path) as f:
+                m = json.load(f)
+            return {"uuid": uuid, "name": m.get("name", ""),
+                    "email": m.get("email", ""), "added_at": m.get("added_at", "")}
+        except Exception:
+            pass
+    tok = os.path.join(users_base_dir(), uuid, "fabric_config", "id_token.json")
+    if os.path.isfile(tok):
+        try:
+            with open(tok) as f:
+                data = json.load(f)
+            p = _decode_jwt_payload(data.get("id_token", ""))
+            return {"uuid": uuid, "name": p.get("name", ""), "email": p.get("email", ""), "added_at": ""}
+        except Exception:
+            pass
+    return {"uuid": uuid, "name": "", "email": "", "added_at": ""}
+
+
+def _write_user_meta(uuid: str, name: str, email: str) -> None:
+    """Persist a user's display metadata into their folder (creating it)."""
+    os.makedirs(os.path.join(users_base_dir(), uuid), exist_ok=True)
+    existing = _read_user_meta(uuid)
+    meta = {
+        "uuid": uuid,
+        "name": name or existing.get("name", ""),
+        "email": email or existing.get("email", ""),
+        "added_at": existing.get("added_at") or datetime.now(timezone.utc).isoformat(),
+    }
+    _atomic_write_json(_user_meta_path(uuid), meta)
+
+
 def get_active_user_uuid() -> Optional[str]:
-    """Return the active user UUID, or None if no registry (legacy mode)."""
+    """Active user UUID. Folders are ground truth: if the stored active user's
+    folder is gone, fall back to the first existing user (and persist)."""
+    existing = [u["uuid"] for u in list_users()]
     reg = load_registry()
-    if reg is None:
-        return None
-    return reg.get("active_user")
+    active = reg.get("active_user") if reg else None
+    if active in existing:
+        return active
+    new_active = existing[0] if existing else None
+    # Only PERSIST a reassignment to a real user. Never auto-null a configured
+    # active user just because the scan came back empty (e.g. a transient/path
+    # glitch) — that would silently wipe the registry's active pointer.
+    if new_active and new_active != active:
+        reg = reg or _new_registry()
+        reg["active_user"] = new_active
+        save_registry(reg)
+    return new_active
 
 
 def list_users() -> list[dict]:
-    """Return the list of registered users."""
-    reg = load_registry()
-    if reg is None:
+    """Ground truth: every UUID-named folder under ``.loomai/users/`` is a user.
+    Manually creating/deleting a folder adds/removes a user."""
+    base = users_base_dir()
+    if not os.path.isdir(base):
         return []
-    return reg.get("users", [])
+    out = []
+    for name in sorted(os.listdir(base)):
+        if os.path.isdir(os.path.join(base, name)) and _UUID_RE.match(name):
+            out.append(_read_user_meta(name))
+    return out
 
 
 def _find_user(registry: dict, uuid: str) -> Optional[dict]:
@@ -97,11 +167,13 @@ def _find_user(registry: dict, uuid: str) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 def add_user(uuid: str, name: str, email: str) -> dict:
-    """Add or update a user in the registry. Returns the updated registry."""
+    """Register a user: create their folder + user.json (ground truth) and
+    update the registry (active pointer + metadata cache)."""
+    _write_user_meta(uuid, name, email)            # folder + user.json
+
     reg = load_registry()
     if reg is None:
         reg = _new_registry()
-
     existing = _find_user(reg, uuid)
     if existing:
         existing["name"] = name
@@ -113,49 +185,34 @@ def add_user(uuid: str, name: str, email: str) -> dict:
             "email": email,
             "added_at": datetime.now(timezone.utc).isoformat(),
         })
-
-    # If no active user, set this one
     if not reg.get("active_user"):
         reg["active_user"] = uuid
-
     save_registry(reg)
     return reg
 
 
 def remove_user(uuid: str) -> dict:
-    """Remove a user from the registry. Cannot remove the active user.
+    """Delete a user: removes their folder (ground truth) and registry entry.
+    If they were the active user, reassigns to a remaining user (or None)."""
+    user_dir = os.path.join(users_base_dir(), uuid)
+    if os.path.isdir(user_dir):
+        shutil.rmtree(user_dir, ignore_errors=True)
 
-    Returns the updated registry.
-    Raises ValueError if trying to remove the active user.
-    Raises KeyError if the user is not found.
-    """
-    reg = load_registry()
-    if reg is None:
-        raise KeyError(f"No registry exists")
-
+    reg = load_registry() or _new_registry()
+    reg["users"] = [u for u in reg.get("users", []) if u["uuid"] != uuid]
     if reg.get("active_user") == uuid:
-        raise ValueError("Cannot remove the active user. Switch to another user first.")
-
-    if not _find_user(reg, uuid):
-        raise KeyError(f"User {uuid} not found in registry")
-
-    reg["users"] = [u for u in reg["users"] if u["uuid"] != uuid]
+        remaining = [u["uuid"] for u in list_users()]
+        reg["active_user"] = remaining[0] if remaining else None
     save_registry(reg)
     return reg
 
 
 def set_active_user(uuid: str) -> dict:
-    """Switch the active user. Returns the updated registry.
+    """Switch the active user. Raises KeyError if the user's folder doesn't exist."""
+    if uuid not in [u["uuid"] for u in list_users()]:
+        raise KeyError(f"User {uuid} not found")
 
-    Raises KeyError if the user is not found.
-    """
-    reg = load_registry()
-    if reg is None:
-        raise KeyError("No registry exists")
-
-    if not _find_user(reg, uuid):
-        raise KeyError(f"User {uuid} not found in registry")
-
+    reg = load_registry() or _new_registry()
     reg["active_user"] = uuid
     save_registry(reg)
     return reg
@@ -164,6 +221,12 @@ def set_active_user(uuid: str) -> dict:
 # ---------------------------------------------------------------------------
 # Storage directory
 # ---------------------------------------------------------------------------
+
+def users_base_dir() -> str:
+    """Return the base dir holding all per-user storage: ``{storage}/.loomai/users``."""
+    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    return os.path.join(storage, ".loomai", "users")
+
 
 def get_user_storage_dir(uuid: Optional[str] = None) -> Optional[str]:
     """Return the storage directory for a user, or None if legacy mode.
@@ -176,8 +239,7 @@ def get_user_storage_dir(uuid: Optional[str] = None) -> Optional[str]:
     if uuid is None:
         return None
 
-    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
-    return os.path.join(storage, "users", uuid)
+    return os.path.join(users_base_dir(), uuid)
 
 
 def ensure_user_dir(uuid: str) -> str:

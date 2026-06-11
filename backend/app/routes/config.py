@@ -16,7 +16,7 @@ from urllib.parse import urlencode
 import httpx
 import paramiko
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from pydantic import BaseModel
 
 from app.http_pool import fabric_client
@@ -43,21 +43,65 @@ router = APIRouter()
 # Multi-user symlink management
 # ---------------------------------------------------------------------------
 
-_SYMLINKED_DIRS = ["fabric_config", "my_artifacts", "my_slices", "notebooks"]
+# Dirs mounted at the storage root via symlink to the active user's folder.
+# (my_slices/notebooks are accessed via per-user paths, so they need no mount.)
+_SYMLINKED_DIRS = ["fabric_config", "my_artifacts"]
+
+
+def multiuser_enabled() -> bool:
+    """Multi-user is only for standalone (non-Kubernetes) installs. In K8s the
+    hub spawns one pod per user (LOOMAI_BASE_PATH is set), so each container has
+    a single identity and the in-container user switcher doesn't apply."""
+    return not os.environ.get("LOOMAI_BASE_PATH", "").strip()
+
+
+# Home-dir AI-tool config that should follow the active user (mounted from the
+# user's folder, which lives on the persistent work volume — so each user's AI
+# logins/config survive a switch AND a container rebuild). (name, is_dir).
+_USER_AI_HOME_PATHS = [
+    (".claude", True), (".claude.json", False),     # Claude Code
+    (".codex", True),                               # Codex
+    (".crush", True), (".crush.json", False),       # Crush
+    (".opencode", True),                            # OpenCode
+    (".antigravity", True),                         # Antigravity
+    (".deepagents", True),                          # Deep Agents
+]
+
+
+def _link_home_to_user(link_path: str, target: str, is_dir: bool) -> None:
+    """Point a home-dir path (e.g. ~/.claude) at the active user's per-user
+    folder, preserving any existing real content into that folder on first setup."""
+    if os.path.islink(link_path):
+        if os.readlink(link_path) == target:
+            return
+        os.unlink(link_path)
+    elif os.path.exists(link_path):           # real file/dir from before multi-user
+        if not os.path.exists(target):
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            shutil.move(link_path, target)    # keep the current user's config
+        elif os.path.isdir(link_path):
+            shutil.rmtree(link_path)
+        else:
+            os.remove(link_path)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if is_dir:
+        os.makedirs(target, exist_ok=True)
+    os.symlink(target, link_path)
 
 
 def _ensure_user_symlinks(uuid: str) -> None:
     """Create or update top-level symlinks to the active user's directories.
 
-    In multi-user mode the per-user data lives under ``users/{uuid}/``.
-    This function maintains symlinks at the storage root so that tools
-    reading the filesystem directly (JupyterLab, terminal, etc.) always
-    see the active user's data at the well-known paths.
+    In multi-user mode the per-user data lives under ``.loomai/users/{uuid}/``.
+    This function maintains symlinks at the storage root (fabric_config,
+    my_artifacts, …) and in the home dir (~/.claude, ~/.codex, ~/.claude.json)
+    so that tools reading the filesystem directly always see the active user's
+    data — switching users swaps the whole profile.
     """
-    from app import settings_manager
+    from app import settings_manager, user_registry
 
     root = settings_manager.get_root_storage_dir()
-    user_dir = os.path.join(root, "users", uuid)
+    user_dir = user_registry.get_user_storage_dir(uuid)
 
     for name in _SYMLINKED_DIRS:
         link_path = os.path.join(root, name)
@@ -82,6 +126,14 @@ def _ensure_user_symlinks(uuid: str) -> None:
 
         os.symlink(target, link_path)
         logger.info("Symlinked %s → users/%s/%s", name, uuid, name)
+
+    # AI-tool config in the home dir → the active user's folder.
+    home = os.path.expanduser("~")
+    for name, is_dir in _USER_AI_HOME_PATHS:
+        try:
+            _link_home_to_user(os.path.join(home, name), os.path.join(user_dir, name), is_dir)
+        except Exception:
+            logger.warning("Could not mount %s for user %s", name, uuid, exc_info=True)
 
 
 # Read version from frontend/src/version.ts (single source of truth)
@@ -184,6 +236,20 @@ def _fetch_uis_person(id_token: str, user_uuid: str) -> dict:
     return resp.json()
 
 
+def _write_user_token(uuid: str, token_data: dict) -> None:
+    """Write a token into a user's per-user fabric_config/id_token.json."""
+    from app import user_registry
+    user_dir = user_registry.get_user_storage_dir(uuid)
+    if not user_dir:
+        return
+    cfg_dir = os.path.join(user_dir, "fabric_config")
+    os.makedirs(cfg_dir, exist_ok=True)
+    tp = os.path.join(cfg_dir, "id_token.json")
+    with open(tp, "w") as f:
+        json.dump(token_data, f, indent=2)
+    os.chmod(tp, stat.S_IRUSR | stat.S_IWUSR)
+
+
 def _handle_token_write(token_data: dict) -> None:
     """Handle multi-user registration when a token is written.
 
@@ -191,7 +257,11 @@ def _handle_token_write(token_data: dict) -> None:
     registers the new user and switches to them.
     If no registry exists but there's already a token for a different user,
     triggers migration to multi-user layout.
+
+    No-op in Kubernetes mode (one pod per user).
     """
+    if not multiuser_enabled():
+        return
     from app import user_registry
 
     id_token = token_data.get("id_token", "")
@@ -208,11 +278,11 @@ def _handle_token_write(token_data: dict) -> None:
         return
 
     reg = user_registry.load_registry()
+    current_active = reg.get("active_user") if reg else None
 
     if reg is not None:
         # Registry exists — register/update and switch if different
         user_registry.add_user(new_uuid, new_name, new_email)
-        current_active = reg.get("active_user")
         if current_active != new_uuid:
             user_registry.set_active_user(new_uuid)
             user_registry.ensure_user_dir(new_uuid)
@@ -227,33 +297,37 @@ def _handle_token_write(token_data: dict) -> None:
                 os.chmod(tp, stat.S_IRUSR | stat.S_IWUSR)
             _do_user_switch(new_uuid)
     else:
-        # No registry — check if there's already a token for a different user
+        # No registry yet (flat single-user layout). Identify any existing user.
+        existing_uuid = ""
+        existing_name = existing_email = ""
         existing_token = _read_token()
         if existing_token and "id_token" in existing_token:
             try:
-                existing_payload = _decode_jwt_payload(existing_token["id_token"])
-                existing_uuid = existing_payload.get("uuid", "")
-                if existing_uuid and existing_uuid != new_uuid:
-                    # Different user! Trigger migration
-                    existing_name = existing_payload.get("name", "")
-                    existing_email = existing_payload.get("email", "")
-                    _migrate_to_multi_user(existing_uuid, existing_name, existing_email)
-                    # Register and switch to the new user
-                    user_registry.add_user(new_uuid, new_name, new_email)
-                    user_registry.set_active_user(new_uuid)
-                    user_registry.ensure_user_dir(new_uuid)
-                    # Write token to new user's config dir
-                    new_user_dir = user_registry.get_user_storage_dir(new_uuid)
-                    if new_user_dir:
-                        cfg_dir = os.path.join(new_user_dir, "fabric_config")
-                        os.makedirs(cfg_dir, exist_ok=True)
-                        tp = os.path.join(cfg_dir, "id_token.json")
-                        with open(tp, "w") as f:
-                            json.dump(token_data, f, indent=2)
-                        os.chmod(tp, stat.S_IRUSR | stat.S_IWUSR)
-                    _do_user_switch(new_uuid)
+                ep = _decode_jwt_payload(existing_token["id_token"])
+                existing_uuid = ep.get("uuid", "")
+                existing_name = ep.get("name", "")
+                existing_email = ep.get("email", "")
             except Exception:
-                pass  # Can't decode existing token — just proceed normally
+                existing_uuid = ""
+
+        try:
+            if existing_uuid and existing_uuid != new_uuid:
+                # A different user already used this container — migrate them into
+                # their own folder, then add + switch to the new user.
+                _migrate_to_multi_user(existing_uuid, existing_name, existing_email)
+                user_registry.add_user(new_uuid, new_name, new_email)
+                user_registry.set_active_user(new_uuid)
+                user_registry.ensure_user_dir(new_uuid)
+                _write_user_token(new_uuid, token_data)
+                _do_user_switch(new_uuid)
+            else:
+                # First user (or same single user re-logging in) — give them a
+                # folder so they appear as a user (folders are ground truth).
+                _migrate_to_multi_user(new_uuid, new_name, new_email)
+                _write_user_token(new_uuid, token_data)
+                _do_user_switch(new_uuid)
+        except Exception:
+            logger.warning("multi-user migration on token write failed", exc_info=True)
 
 
 def _storage_dir() -> str:
@@ -401,6 +475,9 @@ async def upload_token(file: UploadFile = File(...)):
 # GET /api/config/login — return CM OAuth login URL
 # ---------------------------------------------------------------------------
 
+_OAUTH_STATE_COOKIE = "loomai_oauth_state"
+
+
 @router.get("/api/config/login")
 def get_login_url(origin: str = Query(None)):
     """Return CM OAuth login URL with redirect_uri pointing to our callback.
@@ -409,19 +486,39 @@ def get_login_url(origin: str = Query(None)):
     We use the caller-supplied *origin* (from ``window.location.origin``) when
     available so the redirect works regardless of which port the UI is served on.
     Falls back to ``WEBGUI_BASE_URL`` or ``http://localhost:3000``.
+
+    A random ``state`` is embedded in the redirect_uri and mirrored into a
+    short-lived cookie so the callback can reject a forged token delivery (CSRF).
     """
     base = origin or os.environ.get("WEBGUI_BASE_URL", "http://localhost:3000")
+    state = secrets.token_urlsafe(24)
     params: dict = {
         "scope": "all",
         "lifetime": "4",
-        "redirect_uri": f"{base}/api/config/callback",
+        # state lives inside the redirect_uri so CM echoes it back on redirect
+        "redirect_uri": f"{base}/api/config/callback?state={state}",
     }
     # Include current project_id so the token is scoped to the active project
     pid = os.environ.get("FABRIC_PROJECT_ID", "")
     if pid:
         params["project_id"] = pid
     cm_url = "https://cm.fabric-testbed.net/credmgr/tokens/create_cli?" + urlencode(params)
-    return {"login_url": cm_url}
+    resp = JSONResponse({"login_url": cm_url})
+    resp.set_cookie(_OAUTH_STATE_COOKIE, state, httponly=True, samesite="lax",
+                    max_age=1800, path="/")
+    return resp
+
+
+def _verify_oauth_state(request: Request, state: str) -> None:
+    """Reject a forged callback. Non-breaking: only fails on an explicit
+    state mismatch. If CM doesn't echo state, or there's no cookie (e.g. the
+    paste flow), we log and proceed rather than block login."""
+    cookie = request.cookies.get(_OAUTH_STATE_COOKIE, "")
+    if cookie and state:
+        if not secrets.compare_digest(cookie, state):
+            raise HTTPException(status_code=403, detail="Invalid OAuth state")
+    elif cookie and not state:
+        logger.warning("oauth_callback: state cookie present but no state echoed by CM — CSRF check skipped")
 
 
 # ---------------------------------------------------------------------------
@@ -643,8 +740,11 @@ def _process_oauth_callback(id_token: str, refresh_token: str = "") -> RedirectR
 
 
 @router.get("/api/config/callback")
-def oauth_callback_get(id_token: str, refresh_token: str = ""):
-    return _process_oauth_callback(id_token, refresh_token)
+def oauth_callback_get(request: Request, id_token: str, refresh_token: str = "", state: str = ""):
+    _verify_oauth_state(request, state)
+    resp = _process_oauth_callback(id_token, refresh_token)
+    resp.delete_cookie(_OAUTH_STATE_COOKIE, path="/")
+    return resp
 
 
 @router.post("/api/config/callback")
@@ -1370,15 +1470,74 @@ def set_slice_key_assignment(slice_name: str, body: SliceKeyAssignment):
 # ---------------------------------------------------------------------------
 
 @router.get("/api/projects")
-def list_user_projects():
-    """Return all projects the user belongs to, queried from the FABRIC Core API."""
+async def list_user_projects():
+    """Return every project the user belongs to.
+
+    Source of truth is the UIS ``/people/{uuid}`` endpoint, which returns the
+    user's full project membership regardless of token scope. We need this
+    because after a project switch FABlib refreshes the token with a
+    project-scoped JWT whose ``projects`` claim contains only the active
+    project — falling back to FABlib's ``get_project_info()`` after that
+    point would collapse the Settings → Projects list to a single row.
+
+    If the UIS call fails (no token, network error, UIS down), fall back to
+    FABlib so single-project users still see something.
+    """
+    current_id = _read_project_id_from_rc()
+
+    token_data = _read_token()
+    if token_data and token_data.get("id_token"):
+        id_token = token_data["id_token"]
+        try:
+            payload = _decode_jwt_payload(id_token)
+        except Exception:
+            payload = {}
+        user_uuid = payload.get("uuid", "") or os.environ.get("FABRIC_USER_UUID", "")
+        if user_uuid:
+            try:
+                from app.fabric_call_manager import get_call_manager
+                cm = get_call_manager()
+                data = await cm.get(
+                    f"uis:people:{user_uuid}",
+                    fetcher=lambda: _fetch_uis_person(id_token, user_uuid),
+                    max_age=60,
+                )
+                results = data.get("results", [])
+                if results:
+                    # UIS encodes project membership in the `roles` array.
+                    # Each entry looks like {name: "<uuid>-<suffix>", description: "<project name>"}
+                    # where the suffix is -pm (member), -po (owner), -pc
+                    # (creator). One user can have multiple roles per project,
+                    # so dedupe by uuid.
+                    roles = results[0].get("roles", []) or []
+                    seen: dict[str, str] = {}
+                    role_re = re.compile(
+                        r"^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})-(?:pm|po|pc)$"
+                    )
+                    for role in roles:
+                        if not isinstance(role, dict):
+                            continue
+                        rname = role.get("name", "")
+                        m = role_re.match(rname)
+                        if not m:
+                            continue
+                        puuid = m.group(1)
+                        # First-wins; descriptions are identical across role
+                        # suffixes for the same project.
+                        seen.setdefault(puuid, role.get("description", "") or puuid)
+                    projects = [{"uuid": u, "name": n} for u, n in seen.items()]
+                    if projects:
+                        # Sort by name for a stable display order.
+                        projects.sort(key=lambda p: p["name"].lower())
+                        return {"projects": projects, "active_project_id": current_id}
+            except Exception as e:
+                logger.warning("UIS project list lookup failed, falling back to FABlib: %s", e)
+
+    # FABlib fallback — works in single-project / first-login cases.
     try:
         fablib = get_fablib()
         mgr = fablib.get_manager()
         projects = mgr.get_project_info()  # returns [{name, uuid}, ...]
-        # Read from fabric_rc (stable on disk) instead of os.environ which
-        # can be temporarily mutated by reconcile_projects during its scan.
-        current_id = _read_project_id_from_rc()
         return {"projects": projects, "active_project_id": current_id}
     except RuntimeError:
         raise HTTPException(status_code=400, detail="FABRIC is not configured yet.")
@@ -1653,11 +1812,72 @@ def views_status():
     }
 
 
+_SECRET_MASK = "********"
+
+
+def _walk_secret_fields(settings: dict):
+    """Yield (container_dict, key) for every secret-bearing field in settings."""
+    ai = settings.get("ai") or {}
+    for k in ("fabric_api_key", "nrp_api_key"):
+        if k in ai:
+            yield ai, k
+    for cp in ai.get("custom_providers") or []:
+        if isinstance(cp, dict) and "api_key" in cp:
+            yield cp, "api_key"
+    chm = settings.get("chameleon") or {}
+    pa = chm.get("password_auth")
+    if isinstance(pa, dict) and "password" in pa:
+        yield pa, "password"
+    for site in (chm.get("sites") or {}).values():
+        if isinstance(site, dict):
+            for k in ("app_credential_secret", "password"):
+                if k in site:
+                    yield site, k
+
+
+def _mask_secrets(settings: dict) -> dict:
+    """Return a copy of *settings* with non-empty secret values masked."""
+    import copy
+    masked = copy.deepcopy(settings)
+    for container, key in _walk_secret_fields(masked):
+        if container.get(key):
+            container[key] = _SECRET_MASK
+    return masked
+
+
+def _restore_masked_secrets(new: dict, old: dict) -> dict:
+    """Where an incoming secret equals the mask (i.e. the client never saw the
+    real value), keep the stored one so a save doesn't wipe it."""
+    old_ai = (old.get("ai") or {})
+    new_ai = (new.get("ai") or {})
+    for k in ("fabric_api_key", "nrp_api_key"):
+        if new_ai.get(k) == _SECRET_MASK:
+            new_ai[k] = old_ai.get(k, "")
+    old_cps = {cp.get("name"): cp for cp in (old_ai.get("custom_providers") or []) if isinstance(cp, dict)}
+    for cp in new_ai.get("custom_providers") or []:
+        if isinstance(cp, dict) and cp.get("api_key") == _SECRET_MASK:
+            cp["api_key"] = (old_cps.get(cp.get("name")) or {}).get("api_key", "")
+    old_chm = (old.get("chameleon") or {})
+    new_chm = (new.get("chameleon") or {})
+    old_pa = old_chm.get("password_auth") or {}
+    new_pa = new_chm.get("password_auth")
+    if isinstance(new_pa, dict) and new_pa.get("password") == _SECRET_MASK:
+        new_pa["password"] = old_pa.get("password", "")
+    old_sites = old_chm.get("sites") or {}
+    for site_key, site in (new_chm.get("sites") or {}).items():
+        if isinstance(site, dict):
+            old_site = old_sites.get(site_key) or {}
+            for k in ("app_credential_secret", "password"):
+                if site.get(k) == _SECRET_MASK:
+                    site[k] = old_site.get(k, "")
+    return new
+
+
 @router.get("/api/settings")
 def get_settings():
-    """Return the full settings.json contents."""
+    """Return settings with secret values masked (API keys, passwords, secrets)."""
     from app import settings_manager
-    return settings_manager.load_settings()
+    return _mask_secrets(settings_manager.load_settings())
 
 
 @router.put("/api/settings")
@@ -1666,12 +1886,19 @@ def put_settings(body: dict, background_tasks: BackgroundTasks):
 
     Also triggers background propagation of AI config to all tool
     workspaces so changes to API keys and server URLs take effect
-    without a container restart.
+    without a container restart. Secret fields sent back as the mask keep their
+    stored value (the client never received the real one).
     """
     from app import settings_manager
+    body = _restore_masked_secrets(body, settings_manager.load_settings())
     settings_manager.save_settings(body)
     settings_manager.apply_env_vars(body)
     reset_fablib()
+    try:
+        from app.chameleon_manager import reset_sessions as reset_chameleon_sessions
+        reset_chameleon_sessions()
+    except Exception:
+        logger.warning("Failed to reset Chameleon sessions after settings update", exc_info=True)
 
     # Propagate AI config changes to all tool workspaces in the background
     from app.routes.ai_terminal import propagate_ai_configs
@@ -1868,15 +2095,72 @@ def _do_user_switch(uuid: str) -> None:
     # Notify all caches (resets FABlib, etc.)
     notify_user_changed()
     reset_fablib()
+    # Note: ~/.claude, ~/.codex, ~/.claude.json are symlinked to the active
+    # user's folder by _ensure_user_symlinks above, so the AI-tool profile swaps
+    # automatically — no copy needed.
+
+
+def relocate_users_to_loomai() -> None:
+    """One-time move of per-user storage from the old ``{storage}/users/`` to
+    ``{storage}/.loomai/users/``, repointing the active user's root symlinks so
+    nothing breaks. Idempotent and safe to run on every startup."""
+    import shutil as _shutil
+    from app import user_registry
+
+    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    old_base = os.path.join(storage, "users")
+    new_base = user_registry.users_base_dir()
+
+    # Move any users still in the old location.
+    if os.path.isdir(old_base):
+        os.makedirs(new_base, exist_ok=True)
+        for uuid in list(os.listdir(old_base)):
+            src = os.path.join(old_base, uuid)
+            dst = os.path.join(new_base, uuid)
+            if os.path.isdir(src) and not os.path.exists(dst):
+                _shutil.move(src, dst)
+                logger.info("Relocated users/%s -> .loomai/users/%s", uuid, uuid)
+        try:
+            os.rmdir(old_base)          # remove if now empty
+        except OSError:
+            pass
+
+    # Always reconcile the active user's root symlinks so they point at the
+    # current per-user location. This self-heals symlinks left dangling by an
+    # earlier partial relocation (the move ran but the repoint didn't).
+    try:
+        active = user_registry.get_active_user_uuid()
+        if active:
+            _ensure_user_symlinks(active)
+    except Exception:
+        logger.warning("Re-symlink during user-storage relocation failed", exc_info=True)
+
+    # Drop the old root mounts that are no longer used: my_slices is per-user
+    # (accessed by its absolute path), and notebooks is now a shared flat dir.
+    for name in ("my_slices", "notebooks"):
+        link = os.path.join(storage, name)
+        if os.path.islink(link):
+            try:
+                target = os.path.realpath(link)
+                os.unlink(link)
+                if name == "notebooks":
+                    os.makedirs(link, exist_ok=True)   # shared flat dir
+                    if os.path.isdir(target):           # preserve existing notebooks
+                        for entry in os.listdir(target):
+                            dst = os.path.join(link, entry)
+                            if not os.path.exists(dst):
+                                _shutil.move(os.path.join(target, entry), dst)
+            except OSError:
+                logger.warning("Could not drop old %s mount", name, exc_info=True)
 
 
 def _migrate_to_multi_user(first_uuid: str, first_name: str, first_email: str) -> None:
-    """Migrate from flat single-user layout into users/{uuid}/ for the first user."""
+    """Migrate from flat single-user layout into .loomai/users/{uuid}/ for the first user."""
     from app import user_registry
     import shutil as _shutil
 
     storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
-    user_dir = os.path.join(storage, "users", first_uuid)
+    user_dir = user_registry.get_user_storage_dir(first_uuid)
 
     if os.path.isdir(user_dir):
         logger.info("User dir %s already exists — skipping migration", user_dir)
@@ -1913,14 +2197,18 @@ def _migrate_to_multi_user(first_uuid: str, first_name: str, first_email: str) -
 
 @router.get("/api/users")
 def list_users():
-    """List registered users with active flag."""
+    """List registered users with active flag. Empty in Kubernetes mode."""
     from app import user_registry
+
+    if not multiuser_enabled():
+        return {"active_user": None, "users": [], "multiuser": False}
 
     users = user_registry.list_users()
     active = user_registry.get_active_user_uuid()
 
     return {
         "active_user": active,
+        "multiuser": True,
         "users": [
             {**u, "is_active": u["uuid"] == active}
             for u in users
@@ -1948,21 +2236,18 @@ def switch_user(req: UserSwitchRequest):
 
 
 @router.delete("/api/users/{uuid}")
-def delete_user(uuid: str, delete_data: bool = Query(False)):
-    """Remove a user from the registry. Optionally delete their data."""
+def delete_user(uuid: str, delete_data: bool = Query(True)):
+    """Delete a user — removes their folder (the ground truth for existence).
+    If they were active, switches to a remaining user."""
     from app import user_registry
 
-    try:
-        user_registry.remove_user(uuid)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    was_active = user_registry.get_active_user_uuid() == uuid
+    user_registry.remove_user(uuid)               # deletes the folder + reassigns active
 
-    if delete_data:
-        user_dir = user_registry.get_user_storage_dir(uuid)
-        if user_dir and os.path.isdir(user_dir):
-            shutil.rmtree(user_dir)
+    if was_active:
+        new_active = user_registry.get_active_user_uuid()
+        if new_active:
+            _do_user_switch(new_active)
 
     return {"status": "ok", "removed": uuid}
 
@@ -2160,12 +2445,18 @@ async def _test_nrp_server() -> dict:
         return {"ok": False, "message": f"NRP server test failed: {e}"}
 
 
-async def _test_project() -> dict:
-    """Validate the current project_id against the FABRIC Core API."""
+async def _test_project(project_id: str | None = None) -> dict:
+    """Validate a project_id against the FABRIC Core API.
+
+    If ``project_id`` is provided (e.g. the row the user clicked in the
+    Settings → Projects list), validate that one. Otherwise fall back to
+    the currently saved active project.
+    """
     try:
         from app import settings_manager
         settings = settings_manager.load_settings()
-        project_id = settings["fabric"].get("project_id", "")
+        if not project_id:
+            project_id = settings["fabric"].get("project_id", "")
         core_api_host = settings["fabric"]["hosts"].get("core_api", "uis.fabric-testbed.net")
 
         if not project_id:
@@ -2248,14 +2539,27 @@ async def test_custom_provider(request: Request):
 
 
 @router.post("/api/settings/test/{setting_name}")
-async def test_setting(setting_name: str):
-    """Test an individual setting for validity."""
+async def test_setting(setting_name: str, request: Request):
+    """Test an individual setting for validity.
+
+    For the ``project`` test, the caller can pass ``{"project_id": "..."}``
+    in the request body to validate a specific project (e.g. the row the
+    user selected in Settings → Projects but hasn't saved yet) rather than
+    the currently-saved active project.
+    """
     test_fn = _SETTING_TESTS.get(setting_name)
     if not test_fn:
         raise HTTPException(
             status_code=404,
             detail=f"Unknown setting '{setting_name}'. Valid: {', '.join(_SETTING_TESTS.keys())}",
         )
+    if setting_name == "project":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        project_id = (body or {}).get("project_id") or None
+        return await test_fn(project_id=project_id)
     return await test_fn()
 
 

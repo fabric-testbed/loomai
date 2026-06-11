@@ -2,10 +2,11 @@ import { test, expect } from '@playwright/test';
 import {
   navigateToView, createSliceViaBar, waitForText,
   clickBarTab, clickEditorTab, isAuthenticated,
-  waitForSliceState, deleteSliceViaApi, cleanupAllE2ESlices,
+  waitForSliceState, deleteSliceViaApi, cleanupAllE2ESlices, e2eResourceName,
 } from '../helpers/gui-helpers';
 
-const SLICE_NAME = `e2e-fab-${Date.now().toString(36)}`;
+const API = 'http://localhost:8000/api';
+const SLICE_NAME = e2eResourceName('fab');
 
 test.describe('FABRIC View — GUI Tests', () => {
   test.afterAll(async ({ request }) => { await cleanupAllE2ESlices(request); });
@@ -50,7 +51,7 @@ test.describe('FABRIC View — GUI Tests', () => {
     const ok = await navigateToView(page, 'fabric');
     if (!ok) { test.skip(); return; }
     // Create a slice first
-    await createSliceViaBar(page, 'fabric-bar', `e2e-editor-${Date.now().toString(36)}`);
+    await createSliceViaBar(page, 'fabric-bar', e2eResourceName('editor'));
     await page.waitForTimeout(2000);
     // The editor panel should be visible
     const editorTabs = page.locator('.editor-top-tabs');
@@ -62,7 +63,7 @@ test.describe('FABRIC View — GUI Tests', () => {
   test('Topology tab shows graph', async ({ page }) => {
     const ok = await navigateToView(page, 'fabric');
     if (!ok) { test.skip(); return; }
-    await createSliceViaBar(page, 'fabric-bar', `e2e-topo-${Date.now().toString(36)}`);
+    await createSliceViaBar(page, 'fabric-bar', e2eResourceName('topo'));
     await page.locator('.fabric-bar-tab', { hasText: 'Topology' }).click();
     // Should see the Cytoscape container
     await expect(page.locator('.cytoscape-container')).toBeVisible({ timeout: 5000 });
@@ -79,11 +80,12 @@ test.describe('FABRIC View — GUI Tests', () => {
   // --- Real provisioning tests (require credentials) ---
 
   test('submit slice and wait for StableOK', async ({ page }) => {
+    test.setTimeout(900_000);
     const authed = await isAuthenticated(page);
     if (!authed) { test.skip(true, 'Not authenticated — skipping real provisioning test'); return; }
     if (!process.env.E2E_FULL) { test.skip(true, 'Set E2E_FULL=1 to run provisioning tests'); return; }
 
-    const name = `e2e-submit-${Date.now().toString(36)}`;
+    const name = e2eResourceName('submit');
     await navigateToView(page, 'fabric');
     await createSliceViaBar(page, 'fabric-bar', name);
 
@@ -100,11 +102,30 @@ test.describe('FABRIC View — GUI Tests', () => {
         await page.waitForTimeout(1000);
       }
     }
+    const addNodeButton = page.getByTestId('node-submit');
+    if (await addNodeButton.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await addNodeButton.click();
+      await page.waitForTimeout(2000);
+    }
+    const draftResp = await page.request.get(`${API}/slices/${encodeURIComponent(name)}`);
+    const draft = draftResp.ok() ? await draftResp.json() : {};
+    if (!Array.isArray(draft.nodes) || draft.nodes.length === 0) {
+      const nodeResp = await page.request.post(`${API}/slices/${encodeURIComponent(name)}/nodes`, {
+        data: { name: 'node1', site: 'auto', cores: 2, ram: 8, disk: 10, image: 'default_ubuntu_22' },
+      });
+      expect(nodeResp.ok(), await nodeResp.text()).toBeTruthy();
+    }
 
     // Submit
     const submitBtn = page.locator('.fabric-bar-action-btn', { hasText: 'Submit' });
     if (await submitBtn.isVisible()) {
+      const submitResponse = page.waitForResponse(
+        resp => resp.url().includes('/api/slices/') && resp.url().endsWith('/submit'),
+        { timeout: 120_000 },
+      ).catch(() => null);
       await submitBtn.click();
+      const resp = await submitResponse;
+      expect(resp?.ok(), resp ? await resp.text() : 'No submit response').toBeTruthy();
       await page.waitForTimeout(5000);
 
       // Wait for slice to reach StableOK via API

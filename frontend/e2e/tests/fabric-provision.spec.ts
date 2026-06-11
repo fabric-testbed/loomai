@@ -10,11 +10,11 @@
 import { test, expect } from '@playwright/test';
 import {
   navigateToView, createSliceViaBar, clickBarTab,
-  clickEditorTab, isAuthenticated, waitForSliceState,
+  clickEditorTab, isAuthenticated, waitForSliceState, selectSliceFromBar,
   deleteSliceViaApi, cleanupAllE2ESlices,
   rightClickNodeInGraph, openTerminalFromContextMenu,
   hasTerminalTab, execOnNode, waitForSSHReady,
-  requireFabricResources,
+  requireFabricResources, e2eResourceName,
 } from '../helpers/gui-helpers';
 
 const API = 'http://localhost:8000/api';
@@ -35,7 +35,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
 
   test('submit FABRIC slice via GUI and wait for StableOK', async ({ page }) => {
     const site = await requireFabricResources(test);
-    const name = `e2e-fab-gui-prov-${Date.now().toString(36)}`;
+    const name = e2eResourceName('fab-gui-prov');
 
     // Navigate to FABRIC view
     const ok = await navigateToView(page, 'fabric');
@@ -56,15 +56,28 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
         await page.waitForTimeout(1000);
       }
     }
+    const draftResp = await page.request.get(`${API}/slices/${encodeURIComponent(name)}`);
+    const draft = draftResp.ok() ? await draftResp.json() : {};
+    if (!Array.isArray(draft.nodes) || draft.nodes.length === 0) {
+      const nodeResp = await page.request.post(`${API}/slices/${encodeURIComponent(name)}/nodes`, {
+        data: { name: 'node1', site: site || 'auto', cores: 2, ram: 8, disk: 10, image: 'default_ubuntu_22' },
+      });
+      expect(nodeResp.ok()).toBeTruthy();
+    }
 
     // Submit via toolbar
     const submitBtn = page.locator('.fabric-bar-action-btn', { hasText: 'Submit' });
     if (await submitBtn.isVisible({ timeout: 3000 })) {
       await submitBtn.click();
       await page.waitForTimeout(5000);
-    } else {
-      // Fallback: submit via API
-      await page.request.post(`${API}/slices/${encodeURIComponent(name)}/submit`);
+    }
+    const stateResp = await page.request.get(`${API}/slices/${encodeURIComponent(name)}`);
+    const stateBody = stateResp.ok() ? await stateResp.json() : {};
+    if (!stateResp.ok() || stateBody.state === 'Draft') {
+      const submitResp = await page.request.post(`${API}/slices/${encodeURIComponent(name)}/submit`, {
+        timeout: 120_000,
+      });
+      expect(submitResp.ok(), await submitResp.text()).toBeTruthy();
     }
 
     // Wait for StableOK
@@ -77,7 +90,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
 
   test('submit multi-node FABRIC slice via API and verify in GUI', async ({ page }) => {
     await requireFabricResources(test, 4, 16);  // 2 nodes = 4 cores, 16 GB
-    const name = `e2e-fab-gui-multi-${Date.now().toString(36)}`;
+    const name = e2eResourceName('fab-gui-multi');
 
     // Create slice + 2 nodes via API (faster)
     const createResp = await page.request.post(`${API}/slices?name=${encodeURIComponent(name)}`);
@@ -110,7 +123,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 15000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await page.waitForTimeout(3000);
 
     // Verify topology shows 2 nodes
@@ -124,7 +137,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
 
   test('active FABRIC slice shows StableOK in Slices tab', async ({ page }) => {
     await requireFabricResources(test);
-    const name = `e2e-fab-gui-state-${Date.now().toString(36)}`;
+    const name = e2eResourceName('fab-gui-state');
 
     // Create and submit via API
     await page.request.post(`${API}/slices?name=${encodeURIComponent(name)}`);
@@ -157,7 +170,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
 
   test('execute command on active FABRIC node via API', async ({ page }) => {
     await requireFabricResources(test);
-    const name = `e2e-fab-gui-exec-${Date.now().toString(36)}`;
+    const name = e2eResourceName('fab-gui-exec');
 
     // Create, add node, submit via API
     await page.request.post(`${API}/slices?name=${encodeURIComponent(name)}`);
@@ -174,7 +187,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
     const sshStart = Date.now();
     while (Date.now() - sshStart < 180_000) {
       try {
-        const resp = await fetch(`${API}/api/files/vm/${encodeURIComponent(name)}/node1/execute`, {
+        const resp = await fetch(`${API}/files/vm/${encodeURIComponent(name)}/node1/execute`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ command: 'echo ok' }),
@@ -189,7 +202,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
     expect(sshReady).toBeTruthy();
 
     // Execute uname
-    const resp = await fetch(`${API}/api/files/vm/${encodeURIComponent(name)}/node1/execute`, {
+    const resp = await fetch(`${API}/files/vm/${encodeURIComponent(name)}/node1/execute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command: 'uname -a' }),
@@ -204,7 +217,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
 
   test('delete active FABRIC slice and verify removal', async ({ page }) => {
     await requireFabricResources(test);
-    const name = `e2e-fab-gui-del-${Date.now().toString(36)}`;
+    const name = e2eResourceName('fab-gui-del');
 
     // Create, submit, wait
     await page.request.post(`${API}/slices?name=${encodeURIComponent(name)}`);
@@ -237,7 +250,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
 
   test('right-click node opens SSH terminal in bottom panel', async ({ page }) => {
     await requireFabricResources(test);
-    const name = `e2e-fab-gui-term-${Date.now().toString(36)}`;
+    const name = e2eResourceName('fab-gui-term');
 
     // Create, submit, wait via API
     await page.request.post(`${API}/slices?name=${encodeURIComponent(name)}`);
@@ -262,7 +275,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 15000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await page.waitForTimeout(3000);
 
     // Switch to Topology tab
@@ -314,15 +327,16 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
   });
 
   test('right-click terminal + verify node operational with ping', async ({ page }) => {
-    await requireFabricResources(test, 4, 16);  // 2 nodes
-    const name = `e2e-fab-gui-op-${Date.now().toString(36)}`;
+    test.setTimeout(1_500_000);
+    const site = await requireFabricResources(test, 4, 16);  // 2 nodes
+    const name = e2eResourceName('fab-gui-op');
 
     // Create 2-node slice with FABNetv4 via API
     await page.request.post(`${API}/slices?name=${encodeURIComponent(name)}`);
     for (let i = 1; i <= 2; i++) {
       await page.request.post(`${API}/slices/${encodeURIComponent(name)}/nodes`, {
         data: {
-          name: `node${i}`, site: 'auto', cores: 2, ram: 8, disk: 10,
+          name: `node${i}`, site, cores: 2, ram: 8, disk: 10,
           image: 'default_ubuntu_22',
           components: [{ model: 'NIC_Basic', name: `nic${i}` }],
         },
@@ -340,14 +354,22 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
         }
       }
     }
-    await page.request.post(`${API}/slices/${encodeURIComponent(name)}/networks`, {
+    expect(ifaces.length).toBeGreaterThanOrEqual(2);
+    const networkResp = await page.request.post(`${API}/slices/${encodeURIComponent(name)}/networks`, {
       data: { name: 'fabnet', type: 'FABNetv4', interfaces: ifaces.slice(0, 2) },
     });
+    expect(networkResp.ok(), await networkResp.text()).toBeTruthy();
 
     // Submit and wait
-    await page.request.post(`${API}/slices/${encodeURIComponent(name)}/submit`, { timeout: 120_000 });
-    const ok = await waitForSliceState(name, 'StableOK', 600_000);
+    const submitResp = await page.request.post(`${API}/slices/${encodeURIComponent(name)}/submit`, { timeout: 120_000 });
+    expect(submitResp.ok(), await submitResp.text()).toBeTruthy();
+    const ok = await waitForSliceState(name, 'StableOK', 900_000);
     expect(ok).toBeTruthy();
+
+    const configResp = await page.request.post(`${API}/slices/${encodeURIComponent(name)}/auto-configure-networks`, {
+      timeout: 300_000,
+    });
+    expect(configResp.ok(), await configResp.text()).toBeTruthy();
 
     // Wait for SSH on both nodes
     for (const nn of ['node1', 'node2']) {
@@ -364,7 +386,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 15000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await page.waitForTimeout(3000);
 
     // Switch to Topology and try right-click terminal
@@ -379,12 +401,24 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
 
     // Operational test: get node2's data-plane IP and ping from node1
     const ipResult = await execOnNode(name, 'node2',
-      "ip -4 addr show | grep 'inet 10\\.' | awk '{print $2}' | cut -d/ -f1 | head -1");
+      "ip -4 -o addr show scope global | awk '$4 ~ /^10\\.(12[8-9]|1[3-8][0-9]|19[0-1])\\./ { sub(/\\/.*/, \"\", $4); print $4; exit }'");
     const node2Ip = ipResult.stdout.trim();
 
     if (node2Ip) {
-      const pingResult = await execOnNode(name, 'node1', `ping -c 3 -W 5 ${node2Ip}`);
-      expect(pingResult.stdout).toContain('bytes from');
+      let pingOutput = '';
+      const pingStart = Date.now();
+      while (Date.now() - pingStart < 180_000) {
+        const pingResult = await execOnNode(name, 'node1', `ping -c 3 -W 5 ${node2Ip}`);
+        pingOutput = pingResult.stdout || pingResult.stderr || '';
+        if (pingOutput.includes('bytes from')) break;
+        await page.waitForTimeout(10_000);
+      }
+      expect(pingOutput).toContain('bytes from');
+    } else {
+      test.info().annotations.push({
+        type: 'network',
+        description: 'FABNetv4 data-plane IP was not configured on node2; SSH operational checks still passed.',
+      });
     }
 
     // Cleanup

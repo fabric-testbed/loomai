@@ -1,6 +1,18 @@
 ---
+id: create-chameleon-lease
 name: create-chameleon-lease
+asset_type: skill
+audience: end-user
 description: Create and manage Chameleon Cloud leases and instances
+domains:
+  - chameleon
+  - openstack
+tools:
+  - loomai
+  - claude-code
+  - opencode
+  - crush
+  - deepagents
 ---
 
 Help the user create Chameleon leases and launch instances.

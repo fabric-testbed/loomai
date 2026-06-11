@@ -8,7 +8,7 @@ Verifies that:
 Run:  cd backend && pytest tests/integration/test_chameleon_floating_ip.py -v
 """
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,14 +18,39 @@ class TestFloatingIpNicSelection:
 
     def test_set_floating_ips_old_format(self, client):
         """Old format (node_ids array) should be accepted and converted."""
-        with patch("loomai_cli.client.Client._request") as mock:
-            # This test validates the API contract — the backend should accept
-            # {"node_ids": [...]} and convert to [{node_id, nic: 0}, ...]
-            pass  # Backend integration test below
+        with patch("app.routes.chameleon._require_enabled", return_value=None):
+            create = client.post("/api/chameleon/drafts", json={"name": "fip-old"})
+            draft_id = create.json()["id"]
+            node = client.post(
+                f"/api/chameleon/drafts/{draft_id}/nodes",
+                json={"name": "n1", "site": "CHI@TACC"},
+            ).json()["nodes"][0]
+
+            resp = client.put(
+                f"/api/chameleon/drafts/{draft_id}/floating-ips",
+                json={"node_ids": [node["id"]]},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["floating_ips"] == [{"node_id": node["id"], "nic": 0}]
 
     def test_set_floating_ips_new_format(self, client):
         """New format (entries with node_id + nic) should be accepted."""
-        pass  # Backend integration test below
+        with patch("app.routes.chameleon._require_enabled", return_value=None):
+            create = client.post("/api/chameleon/drafts", json={"name": "fip-new"})
+            draft_id = create.json()["id"]
+            node = client.post(
+                f"/api/chameleon/drafts/{draft_id}/nodes",
+                json={"name": "n1", "site": "CHI@TACC"},
+            ).json()["nodes"][0]
+
+            resp = client.put(
+                f"/api/chameleon/drafts/{draft_id}/floating-ips",
+                json={"entries": [{"node_id": node["id"], "nic": 1}]},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["floating_ips"] == [{"node_id": node["id"], "nic": 1}]
 
 
 class TestFloatingIpPortSelection:

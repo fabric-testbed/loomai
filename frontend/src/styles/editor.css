@@ -1695,36 +1695,77 @@
 }
 
 /* Facility Port searchable dropdown */
+.fp-dropdown-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+}
+.fp-refresh-button {
+  border: 1px solid var(--fabric-border);
+  border-radius: 4px;
+  background: var(--fabric-bg-tint);
+  color: var(--fabric-text);
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.fp-refresh-button:hover:not(:disabled) {
+  border-color: var(--fabric-primary);
+  color: var(--fabric-primary);
+}
+.fp-refresh-button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.fp-dropdown-error {
+  margin-bottom: 4px;
+  color: var(--fabric-coral);
+  font-size: 11px;
+}
 .fp-searchable-dropdown {
   position: relative;
 }
 .fp-dropdown-input {
   width: 100%;
-  padding: 6px 10px;
+  padding: 6px 24px 6px 10px;
   border: 1px solid var(--fabric-border);
-  border-radius: 4px;
-  background: var(--fabric-bg);
+  border-radius: 6px;
+  background: var(--fabric-white);
   color: var(--fabric-text);
   font-size: 12px;
   box-sizing: border-box;
+  min-height: 28px;
 }
 .fp-dropdown-input:focus {
   outline: none;
   border-color: var(--fabric-primary);
 }
+.fp-dropdown-arrow {
+  position: absolute;
+  top: 14px;
+  right: 9px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 8px;
+  color: var(--fabric-text-muted);
+}
 .fp-dropdown-list {
   position: absolute;
-  top: 100%;
+  top: calc(100% + 2px);
   left: 0;
   right: 0;
   max-height: 260px;
   overflow-y: auto;
-  background: var(--fabric-bg);
+  background: var(--fabric-white);
   border: 1px solid var(--fabric-border);
-  border-top: none;
-  border-radius: 0 0 4px 4px;
-  z-index: 100;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  z-index: 1000;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
 }
 .fp-dropdown-site-header {
   padding: 4px 10px 2px;
@@ -1754,14 +1795,31 @@
   background: rgba(87, 152, 188, 0.15);
   font-weight: 600;
 }
-.fp-dropdown-item-name {
+.fp-dropdown-item-main {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.fp-dropdown-item-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.fp-dropdown-item-detail {
+  color: var(--fabric-text-muted);
+  font-size: 10px;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .fp-dropdown-item-vlan {
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 10px;
   color: var(--fabric-text-muted);
   font-family: monospace;

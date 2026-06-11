@@ -1,6 +1,19 @@
 ---
+id: benchmark
 name: benchmark
+asset_type: skill
+audience: end-user
 description: Run ad-hoc network/compute benchmarks (iperf3, ping, fio, stress-ng) on existing FABRIC slice nodes.
+domains:
+  - fabric
+  - fablib
+  - testing
+tools:
+  - loomai
+  - claude-code
+  - opencode
+  - crush
+  - deepagents
 ---
 
 # Benchmarking existing FABRIC slice nodes

@@ -36,6 +36,16 @@
   gap: 8px;
 }
 
+.configure-dirty-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(255, 165, 0, 0.18);
+  color: #b56600;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .configure-close-btn {
   display: flex;
   align-items: center;
@@ -595,6 +605,20 @@
   color: #008e7a;
   font-weight: 600;
   flex-shrink: 0;
+}
+
+.project-toggle-pending {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(255, 165, 0, 0.18);
+  color: #b56600;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.project-toggle-row.project-pending-row {
+  outline: 1px dashed rgba(255, 165, 0, 0.6);
 }
 
 /* --- AI tool toggles --- */

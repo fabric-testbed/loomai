@@ -2,6 +2,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { SliceData, RecipeSummary } from '../types/fabric';
 import type { ContextMenuAction } from './CytoscapeGraph';
+import { getFacilityPortSlivers } from '../utils/fabricSlivers';
 import '../styles/sliver-view.css';
 import '../styles/context-menu.css';
 
@@ -54,7 +55,7 @@ const VM_COLUMNS: { key: VMSortKey; label: string }[] = [
 // --- Network rows ---
 
 interface NetRow {
-  type: 'network' | 'facility-port';
+  type: 'network' | 'facility-port' | 'port-mirror';
   typeLabel: string;
   name: string;
   site: string;
@@ -238,7 +239,7 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
         },
       });
     }
-    for (const fp of (sliceData.facility_ports ?? [])) {
+    for (const fp of getFacilityPortSlivers(sliceData)) {
       result.push({
         type: 'facility-port',
         typeLabel: 'FP',
@@ -250,11 +251,31 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
         interfaces: String(fp.interfaces?.length ?? 0),
         interfaceList: fp.interfaces?.map(i => `${i.node_name}:${i.network_name}`).join(', ') || '',
         clickData: {
-          element_type: 'facility_port',
+          element_type: 'facility-port',
           name: fp.name,
           site: fp.site || '',
           vlan: fp.vlan || '',
           bandwidth: fp.bandwidth || '',
+        },
+      });
+    }
+    for (const pm of (sliceData.port_mirrors ?? [])) {
+      result.push({
+        type: 'port-mirror',
+        typeLabel: 'Mirror',
+        name: pm.name,
+        site: '',
+        layerType: pm.mirror_direction || 'both',
+        subnet: '',
+        gateway: '',
+        interfaces: pm.mirror_interface_name && pm.receive_interface_name ? '2' : '',
+        interfaceList: [pm.mirror_interface_name, pm.receive_interface_name].filter(Boolean).join(' -> '),
+        clickData: {
+          element_type: 'port-mirror',
+          name: pm.name,
+          mirror_interface_name: pm.mirror_interface_name || '',
+          receive_interface_name: pm.receive_interface_name || '',
+          mirror_direction: pm.mirror_direction || '',
         },
       });
     }
@@ -469,13 +490,14 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
   const filteredCount = filteredVMs.length + filteredNets.length;
 
   return (
-    <div className="sliver-view" onClick={(e) => { if (e.target === e.currentTarget) onBackgroundClick(); }} data-help-id="sliver.table">
+    <div className="sliver-view" onClick={(e) => { if (e.target === e.currentTarget) onBackgroundClick(); }} data-help-id="sliver.table" data-testid="sliver-table-view">
       <div className="sliver-filter">
         <input
           type="text"
           placeholder="Filter by name, site, state, image..."
           value={filterText}
           onChange={e => setFilterText(e.target.value)}
+          data-testid="sliver-table-filter"
         />
         <span className="sliver-filter-count">
           {filteredCount} of {totalCount}
@@ -495,7 +517,7 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
             <div className="sliver-panel-empty">{vmRows.length === 0 ? 'No VM nodes' : 'No matches'}</div>
           ) : (
             <div className="sliver-table-wrapper">
-              <table className="sliver-table">
+              <table className="sliver-table" data-testid="vm-sliver-table">
                 <thead>
                   <tr>
                     <th className="sliver-checkbox-col">
@@ -524,6 +546,9 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
                       <tr
                         key={row.name}
                         className={`${isSelected(row.clickData) ? 'selected' : ''} ${multiSelected ? 'multi-selected' : ''}`}
+                        data-testid="vm-sliver-row"
+                        data-resource-name={row.name}
+                        data-site={row.site}
                         onClick={(e) => handleVmRowClick(e, row, idx)}
                         onContextMenu={(e) => handleVmContextMenu(e, row)}
                       >
@@ -599,7 +624,7 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
             <div className="sliver-panel-empty">{netRows.length === 0 ? 'No network services' : 'No matches'}</div>
           ) : (
             <div className="sliver-table-wrapper">
-              <table className="sliver-table">
+              <table className="sliver-table" data-testid="network-sliver-table">
                 <thead>
                   <tr>
                     {NET_COLUMNS.map(col => (
@@ -618,6 +643,10 @@ export default function SliverView({ sliceData, selectedElement, onRowClick, onB
                     <tr
                       key={`${row.type}-${row.name}`}
                       className={isSelected(row.clickData) ? 'selected' : ''}
+                      data-testid="network-sliver-row"
+                      data-resource-name={row.name}
+                      data-resource-type={row.type}
+                      data-site={row.site}
                       onClick={() => onRowClick(row.clickData)}
                       onContextMenu={(e) => handleNetContextMenu(e, row)}
                     >

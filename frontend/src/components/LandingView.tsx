@@ -16,7 +16,7 @@ interface LandingViewProps {
 
 const QUICK_LINKS: Array<{ view: TopView; icon: string; label: string; desc: string }> = [
   { view: 'infrastructure', icon: '\u25C9', label: 'FABRIC', desc: 'Topology editor, site map, slice management' },
-  { view: 'slices', icon: '\u25A6', label: 'Composite Slice', desc: 'Cross-testbed experiments spanning FABRIC and Chameleon' },
+  { view: 'slices', icon: '\u25A6', label: 'Federated Slice', desc: 'Cross-testbed experiments spanning FABRIC and Chameleon' },
   { view: 'artifacts', icon: '\u29C9', label: 'Marketplace', desc: 'Browse, download, and publish weaves and templates' },
   { view: 'jupyter', icon: '\uD83D\uDCD3', label: 'JupyterLab', desc: 'Notebooks with full FABlib access' },
 ];
@@ -183,7 +183,14 @@ export default function LandingView({ onNavigate, onOpenSettings, listLoaded, on
               <button
                 key={link.view}
                 className="landing-tile"
-                onClick={() => onNavigate(link.view)}
+                onClick={() => {
+                  if (link.view === 'jupyter') {
+                    const base = (typeof window !== 'undefined' && (window as any).__LOOMAI_BASE_PATH) || '';
+                    window.open(`${base}/jupyter/lab`, '_blank', 'noopener');
+                  } else {
+                    onNavigate(link.view);
+                  }
+                }}
               >
                 <span className="landing-tile-icon">{link.icon}</span>
                 <span className="landing-tile-label">{link.label}</span>
@@ -241,7 +248,10 @@ export default function LandingView({ onNavigate, onOpenSettings, listLoaded, on
                 <strong>Work with your slice</strong>
                 <p>
                   Right-click nodes to SSH in, transfer files with the Storage tab,
-                  write notebooks in <button className="landing-inline-link" onClick={() => onNavigate('jupyter')}>JupyterLab</button>,
+                  write notebooks in <button className="landing-inline-link" onClick={() => {
+                    const base = (typeof window !== 'undefined' && (window as any).__LOOMAI_BASE_PATH) || '';
+                    window.open(`${base}/jupyter/lab`, '_blank', 'noopener');
+                  }}>JupyterLab</button>,
                   or ask the LoomAI assistant to do it for you.
                 </p>
               </div>

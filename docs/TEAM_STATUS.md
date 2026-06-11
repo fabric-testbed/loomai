@@ -270,7 +270,7 @@
 
 - **Phase 2 — Infrastructure Map + AI Tool Maturity (2026-03-27):**
   - **Infrastructure map — live load indicators**: Site markers color-coded by CPU utilization (green <50%, orange 50-80%, red >80%, gray no data). Link thickness/color by bandwidth (low/medium/high). Tooltip with site name, utilization %, CPU load, traffic. Legend overlay in bottom-left. 2-minute auto-refresh for metrics, pauses when tab hidden.
-  - **Auto AI tool config propagation**: `propagate_ai_configs()` function re-seeds all 6 tools on settings save. Hooked into `PUT /api/settings` via BackgroundTasks. `POST /api/ai/propagate-config` endpoint for manual trigger. Each tool isolated in try/except.
+  - **Auto AI tool config propagation**: `propagate_ai_configs()` function re-seeds supported AI tool workspaces on settings save. Hooked into `PUT /api/settings` via BackgroundTasks. `POST /api/ai/propagate-config` endpoint for manual trigger. Each tool isolated in try/except.
   - **Uniform FABRIC/NRP model access**: Verified all tools configure both providers. Fixed bug in `_build_opencode_config()` where model dicts were used as keys instead of ID strings.
   - **Crush + Deep Agents in ai-eval**: Updated eval skill, ai-tools-evaluator agent, and Claude Code ai-eval command with evaluation criteria for Crush (.crush.json, skills, agents) and Deep Agents (config.json, AGENTS.md, skills, agents).
   - **AI seeding verification tests**: 30 new tests in `test_ai_seeding.py` covering all 5 tools (OpenCode, Aider, Claude, Crush, Deep Agents) + propagation tests.
@@ -282,9 +282,9 @@
   - **Settings view redesign**: Two-panel sectioned layout (sidebar + content). 9 sections: User Profile, SSH Keys, FABlib, Projects, LLMs, AI Tools, Chameleon, Appearance, Storage. Responsive (dropdown at < 768px). Removed "Advanced Settings" toggle — all settings directly accessible.
   - **Settings validation — live Test buttons**: `POST /api/settings/test/{setting_name}` endpoint (token, bastion_ssh, fablib, ai_server, nrp_server, project). `POST /api/settings/test-all` runs all tests concurrently. Frontend: per-section Test buttons with spinner/green-check/red-X results, "Test All" in sidebar.
   - **Cache UIS project/user queries**: `FabricCallManager` with 10-min TTL for `uis:people:{uuid}` and `uis:projects:{uuid}` lookups via sync httpx fetchers.
-  - **Help documentation update**: Added 21 entries for FABRIC view (8 sub-tabs), Chameleon view, AI assistant (conversations, health), Deep Agents, Jupyter AI, CLI. Updated overview (7 AI tools), titlebar, settings entries.
-  - **Guided tours update**: Updated discoverLoomai (FABRIC/Chameleon views, CLI, 6 AI tools), gettingStarted (6 tools), aiTools (6 tools, multi-conversation). Added `TourRequiredView` types for 'fabric' and 'chameleon'.
-  - **README update**: Features section expanded from 12 to 17 items (7 AI tools, CLI, caching, polling, monitoring, tours, performance, dark mode).
+  - **Help documentation update**: Added 21 entries for FABRIC view (8 sub-tabs), Chameleon view, AI assistant (conversations, health), Deep Agents, Jupyter AI, CLI. Updated overview, titlebar, and settings entries for the AI tool set current at the time.
+  - **Guided tours update**: Updated discoverLoomai (FABRIC/Chameleon views, CLI, then-current AI tools), gettingStarted, aiTools, and multi-conversation guidance. Added `TourRequiredView` types for 'fabric' and 'chameleon'.
+  - **README update**: Features section expanded from 12 to 17 items (AI tools, CLI, caching, polling, monitoring, tours, performance, dark mode).
   - **CONTRIBUTING.md**: New 153-line guide covering setup, structure, workflow, style, testing, PRs, architecture refs, Claude Code agents.
   - **Roadmap updated**: Marked help docs, guided tours, README, CONTRIBUTING as done.
 

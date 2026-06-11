@@ -10,7 +10,7 @@ import {
   type SplitDirection, type SplitNode, type LeafNode, type LayoutNode,
   type DropZone, type DragState, type ConsoleDragData,
   CONSOLE_DRAG_TYPE, nextNodeId,
-  findLeaf, findLeafByTab, collectAllLeaves,
+  findLeaf, findLeafByTab, collectAllLeaves, loadPersistedLayout,
   updateLeaf, splitLeaf, removeTabFromTree,
   addTabToFirstLeaf, addTabToLeafAtPosition, updateSplitSizes, computeDropZone,
 } from '../utils/consoleLayout';
@@ -84,22 +84,65 @@ interface BottomPanelProps {
 // Fixed tab IDs (non-terminal)
 const FIXED_TABS = ['slice-errors', 'errors', 'validation', 'log', 'recipes', 'local-terminal'] as const;
 
+// Extra local terminals persist across reloads (their shells live server-side in
+// tmux), keyed per panel so the tabs reappear and reattach.
+function loadExtraLocalTerms(panelId: string): string[] {
+  try {
+    const saved = localStorage.getItem(`fabric-extra-local-terms-${panelId}`);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed.filter((x): x is string => typeof x === 'string');
+    }
+  } catch { /* ignore */ }
+  return [];
+}
+
 export default React.memo(function BottomPanel({ terminals, onCloseTerminal, validationIssues, validationValid, sliceState, dirty, errors, onClearErrors, sliceErrors, bootConfigErrors, onClearBootConfigErrors, fullWidth = true, onToggleFullWidth, showWidthToggle = false, leftOffset = 0, rightOffset = 0, expanded, onExpandedChange, panelHeight, onPanelHeightChange, recipeConsole, recipeRunning, onClearRecipeConsole, sliceBootLogs, sliceBootRunning, onClearSliceBootLog, openBootLogSlices, onOpenBootLog, onCloseBootLog, panelId = 'bottom', excludeTabIds = [], onReceiveExternalTab }: BottomPanelProps) {
   const setExpanded = onExpandedChange;
   const setPanelHeight = onPanelHeightChange;
 
-  // --- Layout tree state ---
-  const [layout, setLayout] = useState<LayoutNode>(() => ({
-    type: 'leaf',
-    id: nextNodeId(),
-    tabIds: [...FIXED_TABS],
-    activeTabId: 'local-terminal',
-  }));
+  // --- Layout tree state (restored across browser reloads) ---
+  const [layout, setLayout] = useState<LayoutNode>(
+    () => loadPersistedLayout(panelId, [...FIXED_TABS, ...loadExtraLocalTerms(panelId)]),
+  );
   const [dragState, setDragState] = useState<DragState | null>(null);
 
-  // --- Extra local terminals ---
-  const [extraLocalTerminals, setExtraLocalTerminals] = useState<string[]>([]);
-  const localTermCounter = useRef(1);
+  // Persist the layout so console tabs keep their split positions after reload.
+  useEffect(() => {
+    try { localStorage.setItem(`fabric-console-layout-${panelId}`, JSON.stringify(layout)); }
+    catch { /* ignore */ }
+  }, [layout, panelId]);
+
+  // --- Extra local terminals (restored across reloads) ---
+  const [extraLocalTerminals, setExtraLocalTerminals] = useState<string[]>(() => loadExtraLocalTerms(panelId));
+  const localTermCounter = useRef(
+    loadExtraLocalTerms(panelId).reduce((max, id) => {
+      const m = /^local-term-(\d+)$/.exec(id);
+      return m ? Math.max(max, parseInt(m[1], 10)) : max;
+    }, 1),
+  );
+  useEffect(() => {
+    try {
+      localStorage.setItem(`fabric-extra-local-terms-${panelId}`, JSON.stringify(extraLocalTerminals));
+    } catch { /* ignore */ }
+  }, [extraLocalTerminals, panelId]);
+
+  // One-time on mount: make sure every always-present tab exists in a restored
+  // layout (guards against a fixed tab added in a newer build, or local-terminal
+  // state drifting from a previously-saved tree).
+  const reconciledOnMount = useRef(false);
+  useEffect(() => {
+    if (reconciledOnMount.current) return;
+    reconciledOnMount.current = true;
+    setLayout(prev => {
+      let tree: LayoutNode = prev;
+      const present = new Set(collectAllLeaves(tree).flatMap(l => l.tabIds));
+      for (const id of [...FIXED_TABS, ...extraLocalTerminals]) {
+        if (!present.has(id)) tree = addTabToFirstLeaf(tree, id);
+      }
+      return tree;
+    });
+  }, [extraLocalTerminals]);
 
   // (terminal group dropdown removed — each terminal gets its own tab)
 
@@ -154,8 +197,20 @@ export default React.memo(function BottomPanel({ terminals, onCloseTerminal, val
     });
   }, [makeDefaultLeaf]);
 
+  const closeBootLogTab = useCallback((tabId: string) => {
+    onCloseBootLog(tabId.slice(5));
+    setLayout(prev => {
+      const result = removeTabFromTree(prev, tabId);
+      return result || makeDefaultLeaf();
+    });
+  }, [makeDefaultLeaf, onCloseBootLog]);
+
   // --- Sync terminal additions/removals into layout tree ---
-  const prevTermIds = useRef<string[]>([]);
+  // Seed from terminals already in the restored layout so the first reconcile
+  // doesn't re-add (duplicate) tabs that persistence already placed.
+  const prevTermIds = useRef<string[]>(
+    collectAllLeaves(layout).flatMap(l => l.tabIds).filter(id => terminals.some(t => t.id === id)),
+  );
   useEffect(() => {
     const currentTermIds = terminals.map(t => t.id);
     const prevIds = prevTermIds.current;
@@ -172,10 +227,17 @@ export default React.memo(function BottomPanel({ terminals, onCloseTerminal, val
           if (tree) tree = removeTabFromTree(tree, tabId);
         }
 
-        // Add new terminals to the first leaf
+        // Add new terminals to the first leaf, then activate the newest one so
+        // an SSH button visibly opens the terminal instead of silently adding a
+        // background tab.
         if (tree) {
           for (const tabId of added) {
             tree = addTabToFirstLeaf(tree, tabId);
+          }
+          const lastAdded = added[added.length - 1];
+          const leaf = findLeafByTab(tree, lastAdded);
+          if (leaf) {
+            tree = updateLeaf(tree, leaf.id, l => ({ ...l, activeTabId: lastAdded }));
           }
         }
 
@@ -190,7 +252,9 @@ export default React.memo(function BottomPanel({ terminals, onCloseTerminal, val
   }, [terminals, makeDefaultLeaf]);
 
   // --- Sync boot log tab additions/removals into layout tree ---
-  const prevBootLogSlices = useRef<string[]>([]);
+  const prevBootLogSlices = useRef<string[]>(
+    openBootLogSlices.filter(sn => collectAllLeaves(layout).some(l => l.tabIds.includes(`boot:${sn}`))),
+  );
   useEffect(() => {
     const currentIds = openBootLogSlices.map(sn => `boot:${sn}`);
     const prevIds = prevBootLogSlices.current.map(sn => `boot:${sn}`);
@@ -239,13 +303,13 @@ export default React.memo(function BottomPanel({ terminals, onCloseTerminal, val
           if (tree) tree = removeTabFromTree(tree, tabId);
         }
         for (const tabId of nowIncluded) {
-          if (tree) tree = addTabToFirstLeaf(tree, tabId);
+          if (tree && allTabIds.includes(tabId)) tree = addTabToFirstLeaf(tree, tabId);
         }
         return tree || makeDefaultLeaf();
       });
     }
     prevExcludeTabIds.current = [...excludeTabIds];
-  }, [excludeTabIds, makeDefaultLeaf]);
+  }, [excludeTabIds, makeDefaultLeaf, allTabIds]);
 
   // --- activateTab helper ---
   const activateTab = useCallback((tabId: string) => {
@@ -341,24 +405,34 @@ export default React.memo(function BottomPanel({ terminals, onCloseTerminal, val
     }
   }, [allBootLines.length, layout]);
 
-  // If active tab was closed, fix it
+  // Drop stale tabs restored from old persisted layouts, then make sure each
+  // leaf has an active tab that still exists.
   useEffect(() => {
     setLayout(prev => {
       const leaves = collectAllLeaves(prev);
       let changed = false;
       let tree = prev;
       for (const leaf of leaves) {
-        if (!allTabIds.includes(leaf.activeTabId)) {
+        for (const tabId of leaf.tabIds) {
+          if (!allTabIds.includes(tabId)) {
+            changed = true;
+            const result = removeTabFromTree(tree, tabId);
+            tree = result || makeDefaultLeaf();
+          }
+        }
+      }
+      for (const leaf of collectAllLeaves(tree)) {
+        if (leaf.tabIds.length > 0 && !allTabIds.includes(leaf.activeTabId)) {
           changed = true;
           tree = updateLeaf(tree, leaf.id, l => ({
             ...l,
-            activeTabId: l.tabIds[0] || 'validation',
+            activeTabId: l.tabIds[0],
           }));
         }
       }
       return changed ? tree : prev;
     });
-  }, [allTabIds]);
+  }, [allTabIds, makeDefaultLeaf]);
 
   // --- Height resize ---
   const draggingRef = useRef(false);
@@ -832,7 +906,7 @@ export default React.memo(function BottomPanel({ terminals, onCloseTerminal, val
                     className="bp-tab-close"
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (tabId.startsWith('boot:')) onCloseBootLog(tabId.slice(5));
+                      if (tabId.startsWith('boot:')) closeBootLogTab(tabId);
                       else if (tabId.startsWith('local-term-')) closeLocalTerminal(tabId);
                       else { destroyTerminalSession(tabId); onCloseTerminal(tabId); }
                     }}
@@ -1280,4 +1354,3 @@ export function ValidationView({ issues, valid, sliceState, dirty }: { issues: V
     </div>
   );
 }
-

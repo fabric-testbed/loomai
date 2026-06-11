@@ -79,7 +79,34 @@ export interface ChameleonNetwork {
   site: string;
   status?: string;
   shared?: boolean;
+  vlan?: number | null;
+  physical_network?: string;
   subnet_details?: Array<{ id: string; cidr: string; name: string }>;
+}
+
+export interface ChameleonFacilityPortInterface {
+  name: string;
+  vlan_range: Array<string | number>;
+  local_name?: string;
+  device_name?: string;
+  allocated_vlans?: Array<string | number>;
+  region?: string;
+}
+
+export interface ChameleonFacilityPort {
+  name: string;
+  site: string;
+  fabric_site?: string;
+  chameleon_site?: string;
+  interfaces: ChameleonFacilityPortInterface[];
+}
+
+export interface ChameleonFacilityPortList {
+  chameleon_site: string;
+  fabric_site: string;
+  facility_ports: ChameleonFacilityPort[];
+  vlans: number[];
+  suggested_vlan?: number | null;
 }
 
 export interface ChameleonNodeTypeDetail {
@@ -102,6 +129,17 @@ export interface ChameleonDraftNode {
   image: string;
   count: number;
   site: string;
+  key_name?: string;
+  status?: string;
+  instance_id?: string;
+  floating_ip?: string;
+  management_ip?: string;
+  ssh_command?: string;
+  ssh_user?: string;
+  ip_addresses?: string[];
+  port_id?: string;
+  lease_id?: string;
+  reservation_id?: string;
   network?: { id: string; name: string } | null;
   interfaces?: Array<{ nic: number; network: { id: string; name: string } | null }>;
 }
@@ -130,25 +168,50 @@ export interface ChameleonDeployResult {
 
 export interface ChameleonSliceResource {
   resource_id: string;
-  type: 'instance' | 'lease' | 'network' | 'floating_ip';
+  provider?: 'chameleon' | string;
+  type: 'instance' | 'lease' | 'network' | 'floating_ip' | 'security_group';
+  resource_type?: string;
+  type_label?: string;
   id: string;
+  provider_id?: string;
   name: string;
   site: string;
+  ownership?: 'managed' | 'imported';
+  managed?: boolean;
+  created_by?: 'loomai' | 'external' | string;
+  delete_with_slice?: boolean;
+  attached_at?: string;
+  relationship?: Record<string, string>;
   node_type?: string;
   image?: string;
   lease_id?: string;
+  reservations?: ChameleonReservation[];
+  start_date?: string;
+  end_date?: string;
   cidr?: string;
   status?: string;
+  ip_addresses?: string[];
   floating_ip?: string;
+  floating_ip_id?: string;
+  management_ip?: string;
+  ssh_command?: string;
+  ssh_user?: string;
+  port_id?: string;
+  fixed_ip?: string;
   ssh_ready?: boolean;
+  planned_node_id?: string;
+  planned_node_name?: string;
+  key_name?: string;
 }
 
 export interface ChameleonSlice {
   id: string;
   name: string;
+  provider?: 'chameleon';
   state: string;  // "Draft" | "Deploying" | "Active" | "Error" | "Terminated"
   created: string;
   site?: string;  // Legacy single-site field
+  sites?: string[];
   // Design fields (from drafts):
   nodes: ChameleonDraftNode[];
   networks: ChameleonDraftNetwork[];

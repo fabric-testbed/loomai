@@ -5,7 +5,7 @@ Test infrastructure for the fabric-webgui project.
 ## Backend Tests
 
 **Framework**: pytest with FastAPI `TestClient`
-**Location**: `backend/tests/integration/` (18 test files)
+**Location**: `backend/tests/unit/`, `backend/tests/integration/`, and gated live E2E directories
 **Config**: `backend/pytest.ini` — `asyncio_mode = auto`, `testpaths = tests`
 
 ### Test Files
@@ -32,6 +32,9 @@ Test infrastructure for the fabric-webgui project.
 | `test_error_handler.py` | Error sanitization middleware |
 | `test_fabric_provision_mock.py` | Mock: single/multi node, NIC+FABNetv4, state, delete |
 | `test_fabric_hardware_mock.py` | Mock: GPU, NVMe, FPGA, ConnectX-5/6/7, L2STS, L2PTP, multi-site FABNetv4 |
+| `unit/test_terminal_sessions.py` · `unit/test_terminal_auth.py` | In-process PTY sessions (buffer/broadcast/detach/cull); single-use attach tickets |
+| `integration/test_terminals_routes.py` | Terminal create/list/ticket/delete, WS attach auth, ssh/chameleon argv builders |
+| `integration/test_settings_users_routes.py` | Secret masking via `GET/PUT /api/settings`; multi-user list + switch (AI-home swap) |
 
 ### Fixtures
 
@@ -52,28 +55,41 @@ pytest -v                       # verbose output
 
 ## Frontend Tests
 
-**Framework**: Playwright (E2E only, no unit tests)
-**Location**: `frontend/e2e/tests/` (6 spec files)
-**Config**: `frontend/e2e/playwright.config.ts`
+**Frameworks**: Vitest + Testing Library for component tests, Playwright for mocked/contract/live E2E.
+**Locations**: `frontend/src/__tests__/`, `frontend/e2e/tests/`
+**Configs**: `frontend/vitest.config.ts`, `frontend/e2e/playwright.config.ts`
 
 ### Test Files
 
 | File | Coverage Area |
 |------|--------------|
+| `src/__tests__/ConfigureView.test.tsx` | Settings load/save and validation controls |
+| `src/__tests__/LibrariesView.test.tsx` | Local artifacts, marketplace tab, blank artifact creation |
+| `src/__tests__/FileTransferView.test.tsx` | Container/VM file transfer controls and federated endpoint selector |
+| `src/__tests__/AIChatPanel.test.tsx` | Model selection persistence and streaming chat |
+| `src/__tests__/terminalStore.test.ts` | Persistent-terminal reattach: stored-id reuse on reload, shared-session adoption, stale fallback, destroy kills backend |
+| `src/__tests__/consoleLayout.persist.test.ts` | Console split-pane layout validation + restore from localStorage |
+| `terminals.mock.spec.ts` | Persistent terminals across reload (mocked `/api/terminals` control plane) |
 | `landing.spec.ts` | Landing page rendering |
 | `dark-mode.spec.ts` | Theme toggle, dark mode styles |
 | `slice-lifecycle.spec.ts` | Create, load, delete slices |
 | `topology-editor.spec.ts` | Add nodes, components, networks |
 | `infrastructure-view.spec.ts` | Infrastructure panel tabs |
 | `template-loading.spec.ts` | Load weave templates |
+| `shared-surfaces.mock.spec.ts` | Settings, artifact marketplace, FABRIC storage, and LoomAI chat using mocked APIs |
+| `fabric-workflow.mock.spec.ts` | FABRIC editor workflow using mocked APIs |
+| `chameleon-workflow.mock.spec.ts` | Chameleon editor workflow using mocked APIs |
+| `federated-workflow.mock.spec.ts` | Federated editor workflow using mocked APIs |
+| `backend-contract.contract.spec.ts` | Real backend contract harness with deterministic provider fakes |
 
 ### Configuration
 
 - **Browser**: Chromium only
 - **Parallel**: `fullyParallel: true` (serial in CI: `workers: 1`)
 - **Retries**: 1 retry in CI, 0 locally
-- **Base URL**: `http://localhost:3000`
-- **Startup**: Auto-starts `npm run dev` with 60-second timeout
+- **Mocked E2E**: `npm run e2e:mock` starts the frontend and intercepts backend APIs with `frontend/e2e/fixtures/api-mocks.ts`
+- **Backend contract**: `npm run e2e:contract` starts the backend with `LOOMAI_CONTRACT_MODE=1` and tests deterministic REST flows without live FABRIC, Chameleon, Artifact Manager, or AI calls
+- **Live E2E**: `npm run e2e:live` targets real services and should be treated as provisioning-capable
 - **Artifacts**: HTML report (never auto-opens), traces on first retry, screenshots on failure
 
 ### Running Frontend Tests
@@ -82,8 +98,12 @@ pytest -v                       # verbose output
 cd frontend
 npm install
 npx playwright install chromium  # first time only
-npx playwright test              # all tests
-npx playwright test dark-mode    # single file
+npx tsc --noEmit                 # typecheck
+npm test                         # Vitest component tests
+npm run e2e:mock                 # mocked Playwright browser suite
+npm run e2e:contract             # deterministic backend contract suite
+npm run e2e:live                 # live-service Playwright suite
+npx playwright test dark-mode    # single file/project default
 npx playwright test --headed     # watch in browser
 npx playwright show-report       # view HTML report
 ```
@@ -100,6 +120,8 @@ These tests create real slices on FABRIC and Chameleon, deploy them, and verify 
 | `tests/fabric/test_fabric_hardware_e2e.py` | Multi-site FABNetv4/L2STS/L2PTP ping, GPU+Ollama, NVMe r/w, FPGA PCI, ConnectX-5/6/7 | `fabric` | 1800s |
 | `tests/chameleon/test_chameleon_provision_e2e.py` | Deploy single/multi node, state transitions | `chameleon` | 900s |
 | `tests/composite/test_composite_e2e.py` | FABRIC-only, Chameleon-only, cross-testbed ping | `composite` | 1200s |
+| `tests/fabric/test_fabric_terminal_e2e.py` | Server-held SSH node terminal: attach over WS, run, detach + reattach (PTY persistence) | `fabric` | 1200s |
+| `tests/chameleon/test_chameleon_terminal_e2e.py` | Server-held SSH instance terminal: attach, run, detach + reattach | `chameleon` | 1800s |
 
 ```bash
 # FABRIC provisioning tests
@@ -130,6 +152,11 @@ pytest tests/chameleon/test_chameleon_provision_e2e.py -v -s -m chameleon --time
 
 # Composite provisioning tests (requires both FABRIC + Chameleon)
 pytest tests/composite/test_composite_e2e.py -v -s -m composite --timeout=1200
+
+# Terminal persistence over a real node/instance (server-held PTY: attach,
+# run, detach, reattach to the SAME shell). Needs the `websockets` dependency.
+pytest tests/fabric/test_fabric_terminal_e2e.py -v -s -m fabric --timeout=1200
+pytest tests/chameleon/test_chameleon_terminal_e2e.py -v -s -m chameleon --timeout=1800
 
 # Cross-testbed ping test only
 pytest tests/composite/test_composite_e2e.py -v -s -m composite -k ping --timeout=1200
@@ -268,10 +295,9 @@ No automated test pipeline. The only GitHub Actions workflow is `publish-to-publ
 ## Known Gaps
 
 - **No frontend unit tests** — only Playwright E2E
-- **WebSocket tests**: TODO comments in test files for:
+- **WebSocket tests**: partially covered now — terminal attach auth + a live attach are in `integration/test_terminals_routes.py`, and real-node attach/persistence in the `*_terminal_e2e.py` suites. Still TODO:
   - WebSocket proxy integration tests
   - SSE streaming response tests
   - Tool-calling loop tests
-  - Terminal WebSocket session tests
 - **No coverage reporting** — no `pytest-cov` or Istanbul/c8 configured
 - **No CI test gate** — PRs merge without automated test checks

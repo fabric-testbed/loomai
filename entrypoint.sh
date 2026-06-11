@@ -373,18 +373,32 @@ else
     JUPYTER_BASE_URL="/jupyter/"
 fi
 
+# Drop the JupyterLab launch into a small wrapper so we don't have to fight
+# supervisord's whitespace-based arg splitting (which broke the inline
+# --ServerApp.terminado_settings={'shell_command': ['/bin/bash']} arg by
+# splitting it into multiple positional values).
+cat > /usr/local/bin/start-jupyterlab.sh <<JLAUNCH
+#!/bin/bash
+set -e
+exec jupyter lab \\
+    --no-browser \\
+    --ip=0.0.0.0 \\
+    --port=8889 \\
+    --ServerApp.token= \\
+    --ServerApp.password= \\
+    --ServerApp.disable_check_xsrf=True \\
+    --ServerApp.allow_origin='*' \\
+    --ServerApp.allow_remote_access=True \\
+    --ServerApp.base_url="${JUPYTER_BASE_URL}" \\
+    --ServerApp.root_dir=/home/fabric/work \\
+    --ServerApp.terminado_settings="{'shell_command': ['/bin/bash']}"
+JLAUNCH
+chmod +x /usr/local/bin/start-jupyterlab.sh
+
 cat >> /etc/supervisor/conf.d/fabric-webui.conf <<JLAB
 
 [program:jupyterlab]
-command=jupyter lab --no-browser --ip=0.0.0.0 --port=8889
-    --ServerApp.token=
-    --ServerApp.password=
-    --ServerApp.disable_check_xsrf=True
-    --ServerApp.allow_origin=*
-    --ServerApp.allow_remote_access=True
-    --ServerApp.base_url=${JUPYTER_BASE_URL}
-    --ServerApp.root_dir=/home/fabric/work
-    --ServerApp.terminado_settings={'shell_command': ['/bin/bash']}
+command=/usr/local/bin/start-jupyterlab.sh
 directory=/home/fabric/work
 user=fabric
 autostart=true

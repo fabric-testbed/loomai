@@ -43,9 +43,48 @@ async function walkEntries(
   }
 }
 
+/** Node option for the VM/instance selector — unifies FABRIC and Chameleon. */
+interface VmNodeOption {
+  value: string;  // For FABRIC: node name; for Chameleon: "chi:{site}:{instance_id}:{name}"
+  label: string;  // Display name
+  username: string;  // Default SSH user (ubuntu for FABRIC, cc for Chameleon)
+  homeDir: string;
+}
+
 interface FileTransferViewProps {
   sliceName: string;
   sliceData: SliceData | null;
+  /** Optional: When in a multi-slice context (e.g. federated slice), pass a
+   * list of FABRIC slices whose nodes should appear in the selector. If
+   * provided, this overrides `sliceName`/`sliceData` for the FABRIC node list
+   * (the per-node `value` then encodes which member slice it belongs to). */
+  fabricSlices?: Array<{ sliceName: string; sliceData: SliceData | null }>;
+  /** Optional: Chameleon instances to merge into the node selector. When a
+   * Chameleon instance is selected, all VM file operations use the Chameleon
+   * API endpoints. */
+  chameleonInstances?: Array<{
+    instance_id: string;
+    site: string;
+    name: string;
+    status?: string;
+    floating_ip?: string;
+  }>;
+}
+
+/** Parse a chameleon node value into {site, instanceId, name}. */
+function parseChiNodeValue(value: string): { site: string; instanceId: string; name: string } | null {
+  if (!value.startsWith('chi:')) return null;
+  const parts = value.slice(4).split(':');
+  if (parts.length < 3) return null;
+  return { site: parts[0], instanceId: parts[1], name: parts.slice(2).join(':') };
+}
+
+/** Parse a multi-slice FABRIC node value into {sliceName, nodeName}. */
+function parseFabNodeValue(value: string): { sliceName: string; nodeName: string } | null {
+  if (!value.startsWith('fab:')) return null;
+  const idx = value.indexOf(':', 4);
+  if (idx === -1) return null;
+  return { sliceName: value.slice(4, idx), nodeName: value.slice(idx + 1) };
 }
 
 function humanSize(bytes: number): string {
@@ -56,7 +95,7 @@ function humanSize(bytes: number): string {
   return `${val < 10 ? val.toFixed(1) : Math.round(val)} ${units[i]}`;
 }
 
-export default function FileTransferView({ sliceName, sliceData }: FileTransferViewProps) {
+export default function FileTransferView({ sliceName, sliceData, fabricSlices, chameleonInstances }: FileTransferViewProps) {
   // Left panel state (container)
   const [leftPath, setLeftPath] = useState('');
   const [leftEntries, setLeftEntries] = useState<FileEntry[]>([]);
@@ -96,24 +135,106 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
   const [transferError, setTransferError] = useState('');
 
   const nodes = sliceData?.nodes ?? [];
-  const nodeNames = nodes.map((n) => n.name);
 
-  /** Get the home directory for a node based on its username. */
-  const getHomeDir = useCallback((nodeName: string) => {
-    const node = nodes.find((n) => n.name === nodeName);
-    const username = node?.username || 'ubuntu';
-    return `/home/${username}`;
-  }, [nodes]);
+  // Build a unified node list: FABRIC nodes first, then Chameleon instances.
+  // - Single FABRIC slice (default): value = plain node name; uses `sliceName` prop.
+  // - Multi-slice (composite): value = `fab:{slice_name}:{node_name}`.
+  // - Chameleon: value = `chi:{site}:{instance_id}:{name}`.
+  const vmNodeOptions: VmNodeOption[] = [
+    ...(fabricSlices && fabricSlices.length > 0
+      ? fabricSlices.flatMap((fs) =>
+          (fs.sliceData?.nodes || []).map((n: any) => ({
+            value: `fab:${fs.sliceName}:${n.name}`,
+            label: `${n.name}${n.site ? ` (${n.site})` : ''} — ${fs.sliceName}`,
+            username: n.username || 'ubuntu',
+            homeDir: `/home/${n.username || 'ubuntu'}`,
+          }))
+        )
+      : nodes.map((n: any) => ({
+          value: n.name,
+          label: n.site ? `${n.name} (${n.site})` : n.name,
+          username: n.username || 'ubuntu',
+          homeDir: `/home/${n.username || 'ubuntu'}`,
+        }))),
+    ...(chameleonInstances || []).map((inst) => ({
+      value: `chi:${inst.site}:${inst.instance_id}:${inst.name}`,
+      label: `${inst.name} (${inst.site}, Chameleon)`,
+      username: 'cc',
+      homeDir: '/home/cc',
+    })),
+  ];
+  const nodeNames = vmNodeOptions.map((o) => o.value);
 
-  // Auto-select first node and set its home dir
+  /** Get the home directory for a node/instance value. */
+  const getHomeDir = useCallback((nodeValue: string) => {
+    const opt = vmNodeOptions.find((o) => o.value === nodeValue);
+    return opt?.homeDir || '/home/ubuntu';
+  }, [vmNodeOptions]);
+
+  /** File operations adapter — routes to FABRIC or Chameleon API based on
+   * whether the selected node is a Chameleon instance, and which FABRIC
+   * member slice (when in multi-slice composite mode) the node belongs to. */
+  const makeFileOps = (nodeValue: string) => {
+    const chi = parseChiNodeValue(nodeValue);
+    if (chi) {
+      const { site, instanceId } = chi;
+      return {
+        list: (path: string) => api.listChameleonInstanceFiles(instanceId, site, path),
+        mkdir: (path: string) => api.chameleonMkdir(instanceId, site, path),
+        delete_: (path: string) => api.chameleonDelete(instanceId, site, path),
+        uploadDirect: (dest: string, files: FileList | File[]) => api.uploadDirectToChameleonInstance(instanceId, site, dest, files),
+        uploadDirectWithPaths: (dest: string, entries: Array<{ file: File; relativePath: string }>) =>
+          api.uploadDirectToChameleonInstanceWithPaths(instanceId, site, dest, entries),
+        downloadFile: (remotePath: string) => api.downloadDirectFromChameleonInstance(instanceId, site, remotePath),
+        downloadFolder: (remotePath: string) => api.downloadFolderFromChameleonInstance(instanceId, site, remotePath),
+        execute: (cmd: string) => api.executeOnChameleonInstance(instanceId, site, cmd),
+        read: (path: string) => api.readChameleonFileContent(instanceId, site, path),
+        write: (path: string, content: string) => api.writeChameleonFileContent(instanceId, site, path, content),
+        isChameleon: true,
+        instanceId,
+        site,
+        fabricSliceName: '',
+        fabricNodeName: '',
+      };
+    }
+    const fab = parseFabNodeValue(nodeValue);
+    const slice = fab ? fab.sliceName : sliceName;
+    const node = fab ? fab.nodeName : nodeValue;
+    return {
+      list: (path: string) => api.listVmFiles(slice, node, path),
+      mkdir: (path: string) => api.vmMkdir(slice, node, path),
+      delete_: (path: string) => api.vmDelete(slice, node, path),
+      uploadDirect: (dest: string, files: FileList | File[]) => api.uploadDirectToVm(slice, node, dest, files),
+      uploadDirectWithPaths: (dest: string, entries: Array<{ file: File; relativePath: string }>) =>
+        api.uploadDirectToVmWithPaths(slice, node, dest, entries),
+      downloadFile: (remotePath: string) => api.downloadDirectFromVm(slice, node, remotePath),
+      downloadFolder: (remotePath: string) => api.downloadFolderFromVm(slice, node, remotePath),
+      execute: (cmd: string) => api.executeOnVm(slice, node, cmd),
+      read: (path: string) => api.readVmFileContent(slice, node, path),
+      write: (path: string, content: string) => api.writeVmFileContent(slice, node, path, content),
+      isChameleon: false,
+      instanceId: '',
+      site: '',
+      fabricSliceName: slice,
+      fabricNodeName: node,
+    };
+  };
+
+  // Auto-select first node and set its home dir. Also reset if the current
+  // selection is no longer in the option list (e.g. user switched slices).
   useEffect(() => {
-    if (!vmNode && nodeNames.length > 0) {
+    if (nodeNames.length === 0) {
+      if (vmNode) setVmNode('');
+      return;
+    }
+    if (!vmNode || !nodeNames.includes(vmNode)) {
       const first = nodeNames[0];
       setVmNode(first);
       const home = getHomeDir(first);
       setRightPath(vmPathsRef.current[first] || home);
     }
-  }, [nodeNames, vmNode, getHomeDir]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeNames.join('|')]);
 
   // Save the current path whenever it changes so we can restore it
   useEffect(() => {
@@ -139,9 +260,16 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
 
   useEffect(() => { refreshLeft(); }, [refreshLeft]);
 
-  // Refresh right (VM)
+  // Refresh right (VM / Chameleon instance)
   const refreshRight = useCallback(async () => {
-    if (!sliceName || !vmNode) {
+    if (!vmNode) {
+      setRightEntries([]);
+      return;
+    }
+    // Plain FABRIC node values (not "chi:" or "fab:") require the sliceName prop.
+    const isChi = vmNode.startsWith('chi:');
+    const isFabExplicit = vmNode.startsWith('fab:');
+    if (!isChi && !isFabExplicit && !sliceName) {
       setRightEntries([]);
       return;
     }
@@ -149,13 +277,15 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
     setRightError('');
     setRightSelected(new Set());
     try {
-      const data = await api.listVmFiles(sliceName, vmNode, rightPath);
+      const ops = makeFileOps(vmNode);
+      const data = await ops.list(rightPath);
       setRightEntries(data);
     } catch (e: any) {
       setRightError(e.message);
     } finally {
       setRightLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sliceName, vmNode, rightPath]);
 
   useEffect(() => { refreshRight(); }, [refreshRight]);
@@ -296,7 +426,9 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
   const handleDropRight = async (e: React.DragEvent) => {
     e.preventDefault();
     setRightDragOver(false);
-    if (!sliceName || !vmNode) return;
+    if (!vmNode) return;
+    const ops = makeFileOps(vmNode);
+    if (!ops.isChameleon && !ops.fabricSliceName) return;
 
     const items = e.dataTransfer.items;
     if (!items || items.length === 0) return;
@@ -316,12 +448,12 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
         const fileEntries: Array<{ file: File; relativePath: string }> = [];
         await walkEntries(entryList, '', fileEntries);
         if (fileEntries.length > 0) {
-          await api.uploadDirectToVmWithPaths(sliceName, vmNode, rightPath, fileEntries);
+          await ops.uploadDirectWithPaths(rightPath, fileEntries);
           await refreshRight();
         }
       } else if (e.dataTransfer.files.length > 0) {
         // Plain files
-        await api.uploadDirectToVm(sliceName, vmNode, rightPath, e.dataTransfer.files);
+        await ops.uploadDirect(rightPath, e.dataTransfer.files);
         await refreshRight();
       }
     } catch (err: any) {
@@ -333,7 +465,9 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
 
   // --- Right panel: download from VM to desktop (files + folders) ---
   const handleDownloadRight = async () => {
-    if (!sliceName || !vmNode || rightSelected.size === 0) return;
+    if (!vmNode || rightSelected.size === 0) return;
+    const ops = makeFileOps(vmNode);
+    if (!ops.isChameleon && !ops.fabricSliceName) return;
     setRightLoading(true);
     setRightError('');
     try {
@@ -342,9 +476,9 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
         if (!entry) continue;
         const remotePath = rightPath === '/' ? `/${name}` : `${rightPath}/${name}`;
         if (entry.type === 'dir') {
-          await api.downloadFolderFromVm(sliceName, vmNode, remotePath);
+          await ops.downloadFolder(remotePath);
         } else {
-          await api.downloadDirectFromVm(sliceName, vmNode, remotePath);
+          await ops.downloadFile(remotePath);
         }
       }
     } catch (err: any) {
@@ -356,11 +490,13 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
 
   // --- Right panel: upload from desktop to VM ---
   const handleVmUpload = async (fileList: FileList | File[]) => {
-    if (!sliceName || !vmNode) return;
+    if (!vmNode) return;
+    const ops = makeFileOps(vmNode);
+    if (!ops.isChameleon && !ops.fabricSliceName) return;
     setRightLoading(true);
     setRightError('');
     try {
-      await api.uploadDirectToVm(sliceName, vmNode, rightPath, fileList);
+      await ops.uploadDirect(rightPath, fileList);
       await refreshRight();
     } catch (err: any) {
       setRightError(err.message);
@@ -375,11 +511,13 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
 
   // --- Right panel: new folder on VM ---
   const handleVmCreateFolder = async () => {
-    if (!sliceName || !vmNode || !vmNewFolderName.trim()) return;
+    if (!vmNode || !vmNewFolderName.trim()) return;
+    const ops = makeFileOps(vmNode);
+    if (!ops.isChameleon && !ops.fabricSliceName) return;
     setRightError('');
     try {
       const newPath = rightPath === '/' ? `/${vmNewFolderName.trim()}` : `${rightPath}/${vmNewFolderName.trim()}`;
-      await api.vmMkdir(sliceName, vmNode, newPath);
+      await ops.mkdir(newPath);
       setVmNewFolderName('');
       setShowVmNewFolder(false);
       await refreshRight();
@@ -390,13 +528,15 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
 
   // --- Right panel: delete on VM ---
   const handleDeleteRight = async () => {
-    if (!sliceName || !vmNode || rightSelected.size === 0) return;
+    if (!vmNode || rightSelected.size === 0) return;
+    const ops = makeFileOps(vmNode);
+    if (!ops.isChameleon && !ops.fabricSliceName) return;
     setRightLoading(true);
     setRightError('');
     try {
       for (const name of rightSelected) {
         const remotePath = rightPath === '/' ? `/${name}` : `${rightPath}/${name}`;
-        await api.vmDelete(sliceName, vmNode, remotePath);
+        await ops.delete_(remotePath);
       }
       await refreshRight();
     } catch (err: any) {
@@ -406,9 +546,17 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
     }
   };
 
-  // --- Transfer: Container → VM ---
+  // --- Transfer: Container → VM (FABRIC only — uses bastion-tunneled scp) ---
   const handleTransferRight = async () => {
-    if (!sliceName || !vmNode || leftSelected.size === 0) return;
+    if (!vmNode || leftSelected.size === 0) return;
+    if (vmNode.startsWith('chi:')) {
+      setRightError('Container→VM transfer is not supported for Chameleon instances. Drag files from your desktop instead.');
+      return;
+    }
+    const ops = makeFileOps(vmNode);
+    const slice = ops.fabricSliceName;
+    const node = ops.fabricNodeName;
+    if (!slice || !node) return;
     const items = Array.from(leftSelected);
     setTransferring(true);
     setTransferDir('right');
@@ -420,7 +568,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
         const name = items[i];
         const source = leftPath ? `${leftPath}/${name}` : name;
         const dest = rightPath === '/' ? `/${name}` : `${rightPath}/${name}`;
-        await api.uploadToVm(sliceName, vmNode, source, dest);
+        await api.uploadToVm(slice, node, source, dest);
         setTransferCurrent(i + 1);
       }
       await refreshRight();
@@ -431,9 +579,17 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
     }
   };
 
-  // --- Transfer: VM → Container ---
+  // --- Transfer: VM → Container (FABRIC only — uses bastion-tunneled scp) ---
   const handleTransferLeft = async () => {
-    if (!sliceName || !vmNode || rightSelected.size === 0) return;
+    if (!vmNode || rightSelected.size === 0) return;
+    if (vmNode.startsWith('chi:')) {
+      setRightError('VM→Container transfer is not supported for Chameleon instances. Download to your desktop instead.');
+      return;
+    }
+    const ops = makeFileOps(vmNode);
+    const slice = ops.fabricSliceName;
+    const node = ops.fabricNodeName;
+    if (!slice || !node) return;
     const items = Array.from(rightSelected);
     setTransferring(true);
     setTransferDir('left');
@@ -444,7 +600,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
       for (let i = 0; i < items.length; i++) {
         const name = items[i];
         const remotePath = rightPath === '/' ? `/${name}` : `${rightPath}/${name}`;
-        await api.downloadVmFile(sliceName, vmNode, remotePath, leftPath);
+        await api.downloadVmFile(slice, node, remotePath, leftPath);
         setTransferCurrent(i + 1);
       }
       await refreshLeft();
@@ -522,7 +678,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
   const rightEditableName = rightSelected.size === 1 ? Array.from(rightSelected)[0] : null;
 
   return (
-    <div className="ftv-outer" data-help-id="files.view">
+    <div className="ftv-outer" data-help-id="files.view" data-testid="file-transfer-view">
     <div className="file-transfer-view">
       {/* ============ LEFT PANEL: Container ============ */}
       <div className={`ftv-panel ftv-left ${dragOver ? 'fb-dropzone-active' : ''}`}
@@ -551,7 +707,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
                   <button onClick={() => { setShowNewFolder(false); setNewFolderName(''); }}>Cancel</button>
                 </div>
               ) : (
-                <button onClick={() => setShowNewFolder(true)}>New Folder</button>
+                <button onClick={() => setShowNewFolder(true)} data-testid="local-new-folder">New Folder</button>
               )}
               <button onClick={handleDownloadLeft} disabled={leftSelected.size === 0}>Download</button>
               <button onClick={handleDeleteLeft} disabled={leftSelected.size === 0}>Delete</button>
@@ -581,6 +737,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
           onClick={handleTransferRight}
           disabled={!leftHasSelection || !vmNode || transferring}
           title="Transfer selected to VM →"
+          data-testid="transfer-to-vm"
         >
           →
         </button>
@@ -609,6 +766,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
           onClick={handleTransferLeft}
           disabled={!rightHasSelection || !vmNode || transferring}
           title="← Transfer selected to Local"
+          data-testid="transfer-to-local"
         >
           ←
         </button>
@@ -622,12 +780,18 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
         onDrop={handleDropRight}
       >
         {editingVmFile && vmNode ? (
-          <FileEditor
-            filePath={editingVmFile}
-            vmContext={{ sliceName, nodeName: vmNode }}
-            onClose={() => { setEditingVmFile(null); refreshRight(); }}
-            dark={isDark}
-          />
+          (() => {
+            const ops = makeFileOps(vmNode);
+            return (
+              <FileEditor
+                filePath={editingVmFile}
+                readFile={ops.read}
+                writeFile={ops.write}
+                onClose={() => { setEditingVmFile(null); refreshRight(); }}
+                dark={isDark}
+              />
+            );
+          })()
         ) : (
           <>
             <div className="ftv-panel-header">
@@ -635,6 +799,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
               <select
                 className="ftv-node-select"
                 value={vmNode}
+                data-testid="vm-node-select"
                 onChange={(e) => {
                   const n = e.target.value;
                   setVmNode(n);
@@ -642,11 +807,10 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
                   setRightSelected(new Set());
                 }}
               >
-                {nodeNames.length === 0 && <option value="">No nodes</option>}
-                {nodeNames.map((n) => {
-                  const node = sliceData?.nodes.find((nd) => nd.name === n);
-                  return <option key={n} value={n}>{n}{node?.site ? ` (${node.site})` : ''}</option>;
-                })}
+                {vmNodeOptions.length === 0 && <option value="">No nodes</option>}
+                {vmNodeOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
               </select>
             </div>
             <div className="fb-breadcrumbs">
@@ -667,7 +831,7 @@ export default function FileTransferView({ sliceName, sliceData }: FileTransferV
                   <button onClick={() => { setShowVmNewFolder(false); setVmNewFolderName(''); }}>Cancel</button>
                 </div>
               ) : (
-                <button onClick={() => setShowVmNewFolder(true)} disabled={!vmNode}>New Folder</button>
+                <button onClick={() => setShowVmNewFolder(true)} disabled={!vmNode} data-testid="vm-new-folder">New Folder</button>
               )}
               <button onClick={handleDownloadRight} disabled={rightSelected.size === 0 || rightLoading || !vmNode}>Download</button>
               <button onClick={handleDeleteRight} disabled={rightSelected.size === 0 || rightLoading || !vmNode}>Delete</button>
@@ -769,6 +933,8 @@ function FileTable({
               <tr
                 key={entry.name}
                 className={`fb-row ${selected.has(entry.name) ? 'selected' : ''}`}
+                data-testid={mode === 'container' ? 'local-file-row' : 'vm-file-row'}
+                data-file-name={entry.name}
                 onClick={(e) => onClick(entry.name, e)}
                 onDoubleClick={() => onDoubleClick(entry)}
               >
@@ -783,4 +949,3 @@ function FileTable({
     </div>
   );
 }
-

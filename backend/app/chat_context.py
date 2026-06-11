@@ -82,10 +82,11 @@ PROFILE_TIERS = {
         # 800 chars drops network/interface details the LLM needs for follow-ups.
         "tool_result_max": 2000,
         "summarize_at": 0.70,
-        # Bumped from 25 → 30 to absorb the expanded CORE_TOOLS set below without
-        # squeezing non-core tools out. Token cost on a 256K-context model is
-        # immaterial (~10% more prompt tokens per live probe).
-        "max_tools": 30,
+        # Keep the full CORE_TOOLS set available for standard-tier models.
+        # The assistant quality evals cover this so roadmap-critical tools
+        # (create_weave, search_examples, Chameleon, Federated) do not silently
+        # fall out of the filtered schema as the tool list grows.
+        "max_tools": 39,
         "temperature": 0.5,
         "supports_tools": True,
     },
@@ -98,7 +99,7 @@ PROFILE_TIERS = {
         "system_prompt": "full",
         "tool_result_max": 2000,
         "summarize_at": 0.85,
-        "max_tools": 37,
+        "max_tools": 43,
         "temperature": 0.5,
         "supports_tools": True,
     },
@@ -597,6 +598,9 @@ CORE_TOOLS = {
     "search_examples",
     # Chameleon core
     "list_chameleon_leases", "list_chameleon_sites", "create_chameleon_lease",
+    "list_chameleon_slices", "deploy_chameleon_slice",
+    # Federated/composite core
+    "list_composite_slices", "get_composite_slice",
 }
 
 

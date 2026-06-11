@@ -1,5 +1,6 @@
 /* Graph context menu */
-.graph-context-menu {
+.graph-context-menu,
+.help-context-menu {
   position: fixed;
   z-index: 1000;
   background: var(--fabric-white);
@@ -12,11 +13,13 @@
   font-family: 'Montserrat', sans-serif;
 }
 
-[data-theme="dark"] .graph-context-menu {
+[data-theme="dark"] .graph-context-menu,
+[data-theme="dark"] .help-context-menu {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
-.graph-context-menu-item {
+.graph-context-menu-item,
+.help-context-menu-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -32,7 +35,8 @@
   box-shadow: none;
   border-radius: 0;
 }
-.graph-context-menu-item:hover {
+.graph-context-menu-item:hover,
+.help-context-menu-item:hover {
   background: var(--fabric-bg-tint);
   box-shadow: none;
 }
@@ -43,11 +47,13 @@
 .graph-context-menu-item.danger:hover {
   background: #c9392a;
 }
-.graph-context-menu-item:disabled {
+.graph-context-menu-item:disabled,
+.help-context-menu-item:disabled {
   opacity: 0.4;
   cursor: default;
 }
-.graph-context-menu-item:disabled:hover {
+.graph-context-menu-item:disabled:hover,
+.help-context-menu-item:disabled:hover {
   background: none;
 }
 

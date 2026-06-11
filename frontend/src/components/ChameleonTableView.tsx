@@ -143,7 +143,7 @@ export default React.memo(function ChameleonTableView({
 
   const arrow = (col: SortCol) => sortCol === col ? (sortDir === 'asc' ? ' \u25B2' : ' \u25BC') : '';
 
-  const hasIp = (inst: ChameleonInstance) => !!(inst.floating_ip || inst.ip_addresses.length > 0);
+  const hasFloatingIp = (inst: ChameleonInstance) => !!inst.floating_ip;
 
   return (
     <div className="chi-table-view">
@@ -221,7 +221,7 @@ export default React.memo(function ChameleonTableView({
                 <td className="chi-table-image" title={inst.image}>{inst.image}</td>
                 <td>{formatDate(inst.created)}</td>
                 <td>
-                  {inst.status === 'ACTIVE' && hasIp(inst) && (
+                  {inst.status === 'ACTIVE' && hasFloatingIp(inst) && (
                     <button
                       className="chi-ssh-btn"
                       onClick={() => onInstanceAction(inst.id, inst.site, 'ssh')}
@@ -265,7 +265,7 @@ export default React.memo(function ChameleonTableView({
           style={{ left: menu.x, top: menu.y }}
         >
           <div className="graph-context-menu-label">{menu.instance.name}</div>
-          {menu.instance.status === 'ACTIVE' && hasIp(menu.instance) && (
+          {menu.instance.status === 'ACTIVE' && hasFloatingIp(menu.instance) && (
             <button className="graph-context-menu-item" onClick={() => handleMenuAction('ssh')}>
               SSH
             </button>

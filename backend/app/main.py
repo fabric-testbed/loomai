@@ -29,7 +29,7 @@ for _uv_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
     # messages bubble up to root which already has the timestamped formatter.
     _uv_logger.propagate = True
 
-from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, recipes, experiments, http_proxy, tunnels, ai_terminal, ai_chat, ai_agents, ai_rag, jupyter, artifacts, chameleon, trovi, schedule, composite, monitoring
+from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, recipes, experiments, http_proxy, tunnels, ai_terminal, ai_chat, ai_agents, ai_rag, jupyter, artifacts, chameleon, chameleon_files, trovi, schedule, composite, monitoring
 from app.auth import router as auth_router, AuthMiddleware, is_auth_enabled
 from app.tunnel_manager import get_tunnel_manager
 
@@ -50,9 +50,19 @@ def _startup_storage():
 
     storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
 
+    # --- 0) Relocate per-user storage: {storage}/users/ -> {storage}/.loomai/users/ ---
+    try:
+        from app.routes.config import relocate_users_to_loomai
+        relocate_users_to_loomai()
+    except Exception:
+        logger.warning("User-storage relocation failed", exc_info=True)
+
     # --- 1) Migrate artifacts from old per-type dirs to my_artifacts/ ---
     artifacts_dir = os.path.join(storage, "my_artifacts")
-    os.makedirs(artifacts_dir, exist_ok=True)
+    # In multi-user mode my_artifacts is a symlink to the active user's dir;
+    # never makedirs over a symlink (a dangling one would otherwise crash here).
+    if not os.path.islink(artifacts_dir):
+        os.makedirs(artifacts_dir, exist_ok=True)
 
     # Migrate from old work/my_artifacts/ layout
     old_work_artifacts = os.path.join(storage, "work", "my_artifacts")
@@ -121,7 +131,7 @@ def _startup_storage():
                 pass
 
     # --- 4) Migrate per-user data into the flat base directory ---
-    users_dir = os.path.join(storage, "users")
+    users_dir = os.path.join(storage, ".loomai", "users")
     if os.path.isdir(users_dir):
         for user_uuid in list(os.listdir(users_dir)):
             udir = os.path.join(users_dir, user_uuid)
@@ -381,6 +391,24 @@ async def lifespan(app: FastAPI):
                 logger.warning("Periodic Claude config backup failed: %s", e)
             await asyncio.sleep(300)  # Every 5 minutes
 
+    # Cull idle tmux-backed terminal sessions (no attached client, idle too long)
+    async def _terminal_cull_loop():
+        from app import terminal_sessions
+        try:
+            idle_hours = float(os.environ.get("LOOMAI_TERMINAL_IDLE_HOURS", "12"))
+        except ValueError:
+            idle_hours = 12.0
+        max_idle = int(idle_hours * 3600)
+        await asyncio.sleep(300)  # let things settle after startup
+        while True:
+            try:
+                killed = terminal_sessions.prune_idle(max_idle)
+                if killed:
+                    logger.info("Culled %d idle terminal session(s)", killed)
+            except Exception as e:
+                logger.warning("Terminal cull failed: %s", e)
+            await asyncio.sleep(1800)  # every 30 minutes
+
     # Background reservation checker — auto-submit slices when scheduled time arrives
     async def _reservation_checker():
         await asyncio.sleep(15)  # Let the server finish starting
@@ -420,19 +448,24 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("RAG index build failed (non-fatal): %s", e, exc_info=True)
 
-    task = asyncio.create_task(_cleanup_loop())
-    cache_task = asyncio.create_task(_site_cache_warmer())
-    backup_task = asyncio.create_task(_claude_config_backup_loop())
-    reservation_task = asyncio.create_task(_reservation_checker())
-    model_task = asyncio.create_task(_model_discovery())
-    rag_task = asyncio.create_task(_rag_index_build())
+    disable_background_jobs = (
+        os.environ.get("LOOMAI_DISABLE_BACKGROUND_JOBS", "").strip() == "1"
+        or os.environ.get("LOOMAI_CONTRACT_MODE", "").strip() == "1"
+    )
+    background_tasks = []
+    if not disable_background_jobs:
+        background_tasks = [
+            asyncio.create_task(_cleanup_loop()),
+            asyncio.create_task(_site_cache_warmer()),
+            asyncio.create_task(_claude_config_backup_loop()),
+            asyncio.create_task(_terminal_cull_loop()),
+            asyncio.create_task(_reservation_checker()),
+            asyncio.create_task(_model_discovery()),
+            asyncio.create_task(_rag_index_build()),
+        ]
     yield
-    task.cancel()
-    cache_task.cancel()
-    backup_task.cancel()
-    reservation_task.cancel()
-    model_task.cancel()
-    rag_task.cancel()
+    for task in background_tasks:
+        task.cancel()
     mgr.close_all()
 
     # Close shared httpx connection pools
@@ -457,7 +490,7 @@ async def lifespan(app: FastAPI):
 _enable_docs = os.environ.get("LOOMAI_ENABLE_DOCS", "").strip() == "1"
 _docs_kwargs = {} if _enable_docs else {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
-app = FastAPI(title="LoomAI API", version="0.6.0", lifespan=lifespan, **_docs_kwargs)
+app = FastAPI(title="LoomAI API", version="0.7.0", lifespan=lifespan, **_docs_kwargs)
 
 from app.error_handler import install_error_handlers
 install_error_handlers(app)
@@ -502,10 +535,15 @@ app.include_router(tunnels.router)
 app.include_router(jupyter.router)
 app.include_router(artifacts.router)
 app.include_router(chameleon.router)
+app.include_router(chameleon_files.router)
 app.include_router(trovi.router)
 app.include_router(schedule.router, prefix="/api")
 app.include_router(composite.router)
+app.include_router(composite.federated_router)
 app.include_router(monitoring.router)
+if os.environ.get("LOOMAI_CONTRACT_MODE", "").strip() == "1":
+    from app.routes import contract_test
+    app.include_router(contract_test.router)
 
 # Serve frontend static files in production
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")

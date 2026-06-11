@@ -16,7 +16,7 @@ import {
   navigateToView, clickBarTab, isAuthenticated,
   waitForSliceState, deleteSliceViaApi, cleanupAllE2ESlices,
   rightClickNodeInGraph, execOnNode, waitForSSHReady,
-  requireFabricResources,
+  requireFabricResources, e2eResourceName, selectSliceFromBar,
 } from '../helpers/gui-helpers';
 
 const API = 'http://localhost:8000/api';
@@ -90,7 +90,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
 
   test('FABRIC: refresh button updates topology state from Configuring to StableOK', async ({ page }) => {
     await requireFabricResources(test);
-    const name = `e2e-ref-fab-${Date.now().toString(36)}`;
+    const name = e2eResourceName('ref-fab');
 
     // Create and submit slice via API
     await page.request.post(`${API}/slices?name=${encodeURIComponent(name)}`);
@@ -106,7 +106,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
       const opts = await select.locator('option').allTextContents();
       expect(opts.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 15000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await page.waitForTimeout(2000);
     await clickBarTab(page, 'fabric-bar', 'Topology');
     await page.waitForTimeout(2000);
@@ -120,7 +120,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
     await page.waitForTimeout(3000);
 
     // Re-select the slice (refresh may reset selection)
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await page.waitForTimeout(2000);
     await clickBarTab(page, 'fabric-bar', 'Topology');
     await page.waitForTimeout(2000);
@@ -139,9 +139,9 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
 
     // Right-click the graph to verify terminal is available
     await rightClickNodeInGraph(page);
-    const menu = page.locator('.graph-context-menu');
+    const menu = page.getByTestId('topology-context-menu');
     if (await menu.isVisible({ timeout: 3000 }).catch(() => false)) {
-      const termItem = page.locator('.graph-context-menu-item', { hasText: /Open Terminal/ });
+      const termItem = page.getByTestId('topology-context-open-terminal');
       const hasTerm = await termItem.isVisible({ timeout: 2000 }).catch(() => false);
       expect(hasTerm).toBeTruthy();
       console.log('Right-click terminal menu item is available');
@@ -152,7 +152,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
 
   test('FABRIC: refresh after external state change shows updated state', async ({ page }) => {
     await requireFabricResources(test);
-    const name = `e2e-ref-ext-${Date.now().toString(36)}`;
+    const name = e2eResourceName('ref-ext');
 
     // Create slice via API, submit, wait for StableOK
     await page.request.post(`${API}/slices?name=${encodeURIComponent(name)}`);
@@ -169,7 +169,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
       const opts = await select.locator('option').allTextContents();
       expect(opts.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 15000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await page.waitForTimeout(2000);
 
     // Verify state is StableOK in Slices tab
@@ -201,8 +201,8 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
 
   test('Composite: refresh updates member states and graph', async ({ page }) => {
     await requireFabricResources(test);
-    const compName = `e2e-ref-comp-${Date.now().toString(36)}`;
-    const fabName = `e2e-ref-cfab-${Date.now().toString(36)}`;
+    const compName = e2eResourceName('ref-comp');
+    const fabName = e2eResourceName('ref-cfab');
 
     // Create FABRIC slice + submit
     await page.request.post(`${API}/slices?name=${encodeURIComponent(fabName)}`);
@@ -275,8 +275,8 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
 
   test('Composite: refresh after FABRIC member deleted shows Degraded state', async ({ page }) => {
     await requireFabricResources(test);
-    const compName = `e2e-ref-deg-${Date.now().toString(36)}`;
-    const fabName = `e2e-ref-dfab-${Date.now().toString(36)}`;
+    const compName = e2eResourceName('ref-deg');
+    const fabName = e2eResourceName('ref-dfab');
 
     // Create and submit
     await page.request.post(`${API}/slices?name=${encodeURIComponent(fabName)}`);
@@ -320,7 +320,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
 
   test('FABRIC: right-click terminal works on StableOK node after refresh', async ({ page }) => {
     await requireFabricResources(test);
-    const name = `e2e-ref-term-${Date.now().toString(36)}`;
+    const name = e2eResourceName('ref-term');
 
     // Create, submit, wait for StableOK, wait for SSH
     await page.request.post(`${API}/slices?name=${encodeURIComponent(name)}`);
@@ -344,7 +344,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
       const opts = await select.locator('option').allTextContents();
       expect(opts.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 15000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await page.waitForTimeout(3000);
     await clickBarTab(page, 'fabric-bar', 'Topology');
     await page.waitForTimeout(3000);
@@ -364,7 +364,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
     ]) {
       await canvas.click({ button: 'right', position: pos });
       await page.waitForTimeout(500);
-      if (await page.locator('.graph-context-menu').isVisible().catch(() => false)) {
+      if (await page.getByTestId('topology-context-menu').isVisible().catch(() => false)) {
         menuVisible = true;
         break;
       }
@@ -372,7 +372,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
 
     if (menuVisible) {
       // "Open Terminal" should be available (node has management_ip)
-      const termItem = page.locator('.graph-context-menu-item', { hasText: /Open Terminal/ });
+      const termItem = page.getByTestId('topology-context-open-terminal');
       const hasTerm = await termItem.isVisible({ timeout: 2000 }).catch(() => false);
       expect(hasTerm).toBeTruthy();
 

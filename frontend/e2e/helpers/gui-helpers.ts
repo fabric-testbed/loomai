@@ -2,11 +2,78 @@ import { Page, APIRequestContext, expect } from '@playwright/test';
 
 const BASE_URL = 'http://localhost:3000';
 const API_URL = 'http://localhost:8000/api';
+const PREFERRED_CHAMELEON_NODE_TYPES = [
+  'compute_skylake',
+  'compute_cascadelake',
+  'compute_cascadelake_r',
+  'compute_icelake_r650',
+  'compute_icelake_r750',
+  'compute_zen3',
+  'compute_haswell_ib',
+  'compute_haswell',
+];
+const PREFERRED_CHAMELEON_IMAGES = ['CC-Ubuntu22.04', 'CC-Ubuntu24.04'];
 
 // Track slice IDs created during tests for cleanup
 const createdFabricSlices: string[] = [];
 const createdChameleonSlices: string[] = [];
 const createdCompositeSlices: string[] = [];
+
+function currentWorkerPrefix(): string | null {
+  if (process.env.E2E_WORKER_SCOPED_CLEANUP !== '1') return null;
+  const worker = process.env.TEST_WORKER_INDEX ?? process.env.TEST_PARALLEL_INDEX;
+  const run = process.env.E2E_RUN_ID?.replace(/[^a-zA-Z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  return `e2e-${run ? `${run}-` : ''}w${worker ?? '0'}-`;
+}
+
+function shouldCleanupE2EResource(name?: string): boolean {
+  if (!name?.startsWith('e2e-')) return false;
+  const workerPrefix = currentWorkerPrefix();
+  if (workerPrefix) return name.startsWith(workerPrefix);
+  return process.env.E2E_WORKER_SCOPED_CLEANUP !== '1';
+}
+
+export function e2eResourceName(label: string): string {
+  const workerPrefix = currentWorkerPrefix();
+  const safeLabel = label.replace(/[^a-zA-Z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  const prefix = workerPrefix || 'e2e-';
+  return `${prefix}${safeLabel}-${Date.now().toString(36)}`;
+}
+
+function isArmChameleonNodeType(nodeType: any): boolean {
+  const value = `${nodeType?.cpu_arch || ''} ${nodeType?.node_type || nodeType?.name || nodeType || ''}`.toLowerCase();
+  return value.includes('arm') || value.includes('aarch64');
+}
+
+function isGpuChameleonNodeType(nodeType: any): boolean {
+  const value = `${nodeType?.gpu || ''} ${nodeType?.node_type || nodeType?.name || nodeType || ''}`.toLowerCase();
+  return value.includes('gpu');
+}
+
+function chameleonNodeTypeName(nodeType: any): string {
+  return nodeType?.node_type || nodeType?.name || nodeType || '';
+}
+
+export function chooseChameleonNodeType(nodeTypes: any[]): string {
+  const reservable = nodeTypes.filter(nt => (nt?.reservable ?? nt?.available ?? 1) > 0);
+  const candidates = reservable.length > 0 ? reservable : nodeTypes;
+  const x86Compute = candidates.filter(nt => !isArmChameleonNodeType(nt) && !isGpuChameleonNodeType(nt));
+  for (const preferred of PREFERRED_CHAMELEON_NODE_TYPES) {
+    if (x86Compute.some(nt => chameleonNodeTypeName(nt) === preferred)) return preferred;
+  }
+  return chameleonNodeTypeName(x86Compute[0] || candidates[0] || 'compute_skylake');
+}
+
+export function chooseChameleonImage(images: any[]): string {
+  const active = images.filter(img => !img?.status || String(img.status).toLowerCase() === 'active');
+  const candidates = active.length > 0 ? active : images;
+  for (const preferred of PREFERRED_CHAMELEON_IMAGES) {
+    const match = candidates.find(img => img?.name === preferred || img?.id === preferred);
+    if (match) return match.id || match.name;
+  }
+  const nonCuda = candidates.find(img => !`${img?.name || ''} ${img?.id || ''}`.toLowerCase().includes('cuda'));
+  return nonCuda?.id || nonCuda?.name || 'CC-Ubuntu22.04';
+}
 
 /**
  * Navigate to a specific view (FABRIC, Chameleon, Composite).
@@ -20,7 +87,7 @@ export async function navigateToView(page: Page, view: 'fabric' | 'chameleon' | 
   const labels: Record<string, RegExp> = {
     fabric: /FABRIC/i,
     chameleon: /Chameleon/i,
-    composite: /Composite/i,
+    composite: /Composite|Federated/i,
   };
   const option = page.locator('.title-pill-option', { hasText: labels[view] });
   if (!await option.isVisible({ timeout: 3000 })) return false;
@@ -180,8 +247,7 @@ export async function findAvailableChameleonSite(): Promise<{ site: string; node
         const ntData = await ntResp.json();
         const nodeTypes = ntData.node_types || ntData;
         if (nodeTypes && nodeTypes.length > 0) {
-          const nodeType = nodeTypes[0]?.name || nodeTypes[0];
-          return { site: siteName, nodeType };
+          return { site: siteName, nodeType: chooseChameleonNodeType(nodeTypes) };
         }
       } catch { continue; }
     }
@@ -244,7 +310,7 @@ export async function rightClickNodeInGraph(page: Page, nodeName?: string): Prom
   await page.waitForTimeout(500);
 
   // Check if context menu appeared
-  const menu = page.locator('.graph-context-menu');
+  const menu = page.getByTestId('topology-context-menu');
   return menu.isVisible({ timeout: 3000 }).catch(() => false);
 }
 
@@ -253,7 +319,7 @@ export async function rightClickNodeInGraph(page: Page, nodeName?: string): Prom
  * Returns true if the terminal tab appears in the bottom panel.
  */
 export async function openTerminalFromContextMenu(page: Page): Promise<boolean> {
-  const menuItem = page.locator('.graph-context-menu-item', { hasText: /Open Terminal/ });
+  const menuItem = page.getByTestId('topology-context-open-terminal');
   if (!await menuItem.isVisible({ timeout: 3000 })) return false;
 
   await menuItem.click();
@@ -287,7 +353,7 @@ export async function hasTerminalTab(page: Page): Promise<boolean> {
 export async function execOnNode(
   sliceName: string, nodeName: string, command: string, timeout = 60000,
 ): Promise<{ stdout: string; stderr: string }> {
-  const resp = await fetch(`${API_URL}/api/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/execute`, {
+  const resp = await fetch(`${API_URL}/files/vm/${encodeURIComponent(sliceName)}/${encodeURIComponent(nodeName)}/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ command }),
@@ -363,7 +429,7 @@ export async function deleteSliceViaApi(sliceName: string) {
  */
 export async function deleteChameleonSliceViaApi(sliceId: string) {
   try {
-    await fetch(`${API_URL}/chameleon/slices/${encodeURIComponent(sliceId)}`, { method: 'DELETE' });
+    await fetch(`${API_URL}/chameleon/slices/${encodeURIComponent(sliceId)}?delete_resources=true`, { method: 'DELETE' });
   } catch { /* best effort */ }
 }
 
@@ -399,18 +465,36 @@ export async function waitForChameleonSliceActive(
   pollMs = 15000,
 ): Promise<boolean> {
   const start = Date.now();
+  let lastSummary = 'no draft response yet';
   while (Date.now() - start < timeoutMs) {
     try {
-      const resp = await fetch(`${API_URL}/chameleon/slices/${encodeURIComponent(sliceId)}`);
-      if (!resp.ok) { await new Promise(r => setTimeout(r, pollMs)); continue; }
+      const resp = await fetch(`${API_URL}/chameleon/drafts/${encodeURIComponent(sliceId)}`);
+      if (!resp.ok) {
+        lastSummary = `GET draft returned ${resp.status}`;
+        await new Promise(r => setTimeout(r, pollMs));
+        continue;
+      }
       const data = await resp.json();
       const resources = data.resources || [];
+      const leases = resources.filter((r: any) => r.type === 'lease');
       const instances = resources.filter((r: any) => r.type === 'instance');
+      lastSummary = JSON.stringify({
+        state: data.state,
+        leases: leases.map((l: any) => ({ id: l.id, site: l.site, status: l.status })),
+        instances: instances.map((i: any) => ({ id: i.id, name: i.name, site: i.site, status: i.status, image: i.image })),
+        resources: resources.map((r: any) => ({ type: r.type, id: r.id, site: r.site, status: r.status })),
+      });
       if (instances.length > 0 && instances.every((i: any) => i.status === 'ACTIVE')) return true;
-      if (instances.some((i: any) => i.status === 'ERROR')) return false;
-    } catch { /* continue polling */ }
+      if (data.state === 'Error' || leases.some((l: any) => l.status === 'ERROR') || instances.some((i: any) => i.status === 'ERROR')) {
+        console.warn(`Chameleon slice ${sliceId} entered error state: ${lastSummary}`);
+        return false;
+      }
+    } catch (error: any) {
+      lastSummary = `poll failed: ${error?.message || error}`;
+    }
     await new Promise(r => setTimeout(r, pollMs));
   }
+  console.warn(`Timed out waiting for Chameleon slice ${sliceId} ACTIVE: ${lastSummary}`);
   return false;
 }
 
@@ -459,7 +543,7 @@ export async function cleanupAllE2ESlices(request: APIRequestContext) {
     if (resp.ok()) {
       const slices = await resp.json();
       for (const s of slices) {
-        if (s.name?.startsWith('e2e-') && s.state === 'Draft') {
+        if (shouldCleanupE2EResource(s.name)) {
           await request.delete(`${API_URL}/slices/${encodeURIComponent(s.name)}`).catch(() => {});
         }
       }
@@ -472,7 +556,7 @@ export async function cleanupAllE2ESlices(request: APIRequestContext) {
     if (resp.ok()) {
       const slices = await resp.json();
       for (const s of slices) {
-        if (s.name?.startsWith('e2e-')) {
+        if (shouldCleanupE2EResource(s.name)) {
           await request.delete(`${API_URL}/composite/slices/${s.id}`).catch(() => {});
         }
       }
@@ -485,8 +569,8 @@ export async function cleanupAllE2ESlices(request: APIRequestContext) {
     if (resp.ok()) {
       const slices = await resp.json();
       for (const s of slices) {
-        if (s.name?.startsWith('e2e-')) {
-          await request.delete(`${API_URL}/chameleon/slices/${s.id}`).catch(() => {});
+        if (shouldCleanupE2EResource(s.name)) {
+          await request.delete(`${API_URL}/chameleon/slices/${s.id}?delete_resources=true`).catch(() => {});
         }
       }
     }

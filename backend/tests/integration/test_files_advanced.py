@@ -18,11 +18,11 @@ import pytest
 
 class TestListFilesAdvanced:
     def test_list_root_returns_known_dirs(self, client, storage_dir):
+        # The browse root sits one level above the storage dir, which appears in it.
         resp = client.get("/api/files?path=.")
         assert resp.status_code == 200
         names = [e["name"] for e in resp.json()]
-        assert "my_artifacts" in names
-        assert "my_slices" in names
+        assert storage_dir.name in names
 
     def test_list_nonexistent_dir_returns_404(self, client):
         resp = client.get("/api/files?path=nonexistent_dir")
@@ -37,16 +37,16 @@ class TestListFilesAdvanced:
         assert ".provisions" not in names
         assert ".boot-config" not in names
 
-    def test_list_shows_file_metadata(self, client, storage_dir):
-        (storage_dir / "info.txt").write_text("data")
+    def test_list_shows_file_metadata(self, client, browse_root):
+        (browse_root / "info.txt").write_text("data")
         resp = client.get("/api/files?path=.")
         entry = next(e for e in resp.json() if e["name"] == "info.txt")
         assert entry["type"] == "file"
         assert entry["size"] == 4
         assert "modified" in entry
 
-    def test_list_subdir(self, client, storage_dir):
-        sub = storage_dir / "my_artifacts" / "sub"
+    def test_list_subdir(self, client, browse_root):
+        sub = browse_root / "my_artifacts" / "sub"
         sub.mkdir(parents=True, exist_ok=True)
         (sub / "a.txt").write_text("hello")
         resp = client.get("/api/files?path=my_artifacts/sub")
@@ -60,17 +60,17 @@ class TestListFilesAdvanced:
 # ---------------------------------------------------------------------------
 
 class TestMkdirAdvanced:
-    def test_mkdir_in_root(self, client, storage_dir):
+    def test_mkdir_in_root(self, client, browse_root):
         resp = client.post("/api/files/mkdir", json={"name": "new_folder"})
         assert resp.status_code == 200
         assert resp.json()["created"] == "new_folder"
-        assert (storage_dir / "new_folder").is_dir()
+        assert (browse_root / "new_folder").is_dir()
 
-    def test_mkdir_nested(self, client, storage_dir):
+    def test_mkdir_nested(self, client, browse_root):
         resp = client.post("/api/files/mkdir?path=my_artifacts",
                            json={"name": "nested_dir"})
         assert resp.status_code == 200
-        assert (storage_dir / "my_artifacts" / "nested_dir").is_dir()
+        assert (browse_root / "my_artifacts" / "nested_dir").is_dir()
 
     def test_mkdir_idempotent(self, client, storage_dir):
         """Creating the same dir twice should not error."""
@@ -88,25 +88,25 @@ class TestReadFileAdvanced:
         resp = client.get("/api/files/content?path=no_such_file.txt")
         assert resp.status_code == 404
 
-    def test_read_returns_content_and_path(self, client, storage_dir):
-        (storage_dir / "readme.md").write_text("# Hello")
+    def test_read_returns_content_and_path(self, client, browse_root):
+        (browse_root / "readme.md").write_text("# Hello")
         resp = client.get("/api/files/content?path=readme.md")
         assert resp.status_code == 200
         data = resp.json()
         assert data["content"] == "# Hello"
         assert data["path"] == "readme.md"
 
-    def test_read_large_file_rejected(self, client, storage_dir):
+    def test_read_large_file_rejected(self, client, browse_root):
         """Files > 5 MB should be rejected."""
-        big = storage_dir / "big.bin"
+        big = browse_root / "big.bin"
         big.write_bytes(b"x" * (6 * 1024 * 1024))
         resp = client.get("/api/files/content?path=big.bin")
         assert resp.status_code == 400
         assert "too large" in resp.json()["detail"].lower()
 
-    def test_read_binary_file_with_replace_errors(self, client, storage_dir):
+    def test_read_binary_file_with_replace_errors(self, client, browse_root):
         """Binary files should be read with errors='replace' (no crash)."""
-        (storage_dir / "binary.dat").write_bytes(b"\xff\xfe\x00\x01")
+        (browse_root / "binary.dat").write_bytes(b"\xff\xfe\x00\x01")
         resp = client.get("/api/files/content?path=binary.dat")
         assert resp.status_code == 200
 
@@ -116,18 +116,18 @@ class TestReadFileAdvanced:
 # ---------------------------------------------------------------------------
 
 class TestWriteFileAdvanced:
-    def test_write_creates_file(self, client, storage_dir):
+    def test_write_creates_file(self, client, browse_root):
         resp = client.put("/api/files/content",
                           json={"path": "new.txt", "content": "new content"})
         assert resp.status_code == 200
-        assert (storage_dir / "new.txt").read_text() == "new content"
+        assert (browse_root / "new.txt").read_text() == "new content"
 
-    def test_write_overwrites_existing(self, client, storage_dir):
-        (storage_dir / "over.txt").write_text("old")
+    def test_write_overwrites_existing(self, client, browse_root):
+        (browse_root / "over.txt").write_text("old")
         resp = client.put("/api/files/content",
                           json={"path": "over.txt", "content": "replaced"})
         assert resp.status_code == 200
-        assert (storage_dir / "over.txt").read_text() == "replaced"
+        assert (browse_root / "over.txt").read_text() == "replaced"
 
     def test_write_returns_status(self, client, storage_dir):
         resp = client.put("/api/files/content",
@@ -142,14 +142,14 @@ class TestWriteFileAdvanced:
 # ---------------------------------------------------------------------------
 
 class TestDeleteFileAdvanced:
-    def test_delete_file(self, client, storage_dir):
-        (storage_dir / "deleteme.txt").write_text("bye")
+    def test_delete_file(self, client, browse_root):
+        (browse_root / "deleteme.txt").write_text("bye")
         resp = client.delete("/api/files?path=deleteme.txt")
         assert resp.status_code == 200
-        assert not (storage_dir / "deleteme.txt").exists()
+        assert not (browse_root / "deleteme.txt").exists()
 
-    def test_delete_directory(self, client, storage_dir):
-        d = storage_dir / "rmdir"
+    def test_delete_directory(self, client, browse_root):
+        d = browse_root / "rmdir"
         d.mkdir()
         (d / "child.txt").write_text("x")
         resp = client.delete("/api/files?path=rmdir")
@@ -170,7 +170,7 @@ class TestDeleteFileAdvanced:
 # ---------------------------------------------------------------------------
 
 class TestUploadFiles:
-    def test_upload_single_file(self, client, storage_dir):
+    def test_upload_single_file(self, client, browse_root):
         content = b"file content here"
         resp = client.post(
             "/api/files/upload?path=.",
@@ -178,7 +178,7 @@ class TestUploadFiles:
         )
         assert resp.status_code == 200
         assert "upload.txt" in resp.json()["uploaded"]
-        assert (storage_dir / "upload.txt").read_bytes() == content
+        assert (browse_root / "upload.txt").read_bytes() == content
 
     def test_upload_multiple_files(self, client, storage_dir):
         resp = client.post(
@@ -193,8 +193,8 @@ class TestUploadFiles:
         assert "a.txt" in uploaded
         assert "b.txt" in uploaded
 
-    def test_upload_to_subdir(self, client, storage_dir):
-        sub = storage_dir / "uploads"
+    def test_upload_to_subdir(self, client, browse_root):
+        sub = browse_root / "uploads"
         sub.mkdir()
         resp = client.post(
             "/api/files/upload?path=uploads",
@@ -209,8 +209,8 @@ class TestUploadFiles:
 # ---------------------------------------------------------------------------
 
 class TestDownloadFile:
-    def test_download_existing_file(self, client, storage_dir):
-        (storage_dir / "dl.txt").write_text("download me")
+    def test_download_existing_file(self, client, browse_root):
+        (browse_root / "dl.txt").write_text("download me")
         resp = client.get("/api/files/download?path=dl.txt")
         assert resp.status_code == 200
         assert resp.content == b"download me"
@@ -225,8 +225,8 @@ class TestDownloadFile:
 # ---------------------------------------------------------------------------
 
 class TestDownloadFolder:
-    def test_download_folder_as_zip(self, client, storage_dir):
-        folder = storage_dir / "zipme"
+    def test_download_folder_as_zip(self, client, browse_root):
+        folder = browse_root / "zipme"
         folder.mkdir()
         (folder / "a.txt").write_text("aaa")
         (folder / "b.txt").write_text("bbb")
@@ -242,9 +242,9 @@ class TestDownloadFolder:
         resp = client.get("/api/files/download-folder?path=no_such_dir")
         assert resp.status_code == 404
 
-    def test_download_folder_excludes_hidden(self, client, storage_dir):
+    def test_download_folder_excludes_hidden(self, client, browse_root):
         """Internal dirs (.provisions etc) should be excluded from zip."""
-        folder = storage_dir / "zipme2"
+        folder = browse_root / "zipme2"
         folder.mkdir()
         (folder / "visible.txt").write_text("yes")
         prov = folder / ".provisions"

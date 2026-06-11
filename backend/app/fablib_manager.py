@@ -10,6 +10,11 @@ from fabrictestbed_extensions.fablib.fablib import FablibManager
 
 _lock = threading.Lock()
 _fablib: Optional[FablibManager] = None
+_contract_fablib = None
+
+
+def _contract_mode() -> bool:
+    return os.environ.get("LOOMAI_CONTRACT_MODE", "").strip() == "1"
 
 def _default_config_dir() -> str:
     from app.settings_manager import get_config_dir
@@ -137,6 +142,8 @@ def get_slice_key_path(config_dir: str, key_name: str) -> Tuple[str, str]:
 
 def is_configured() -> bool:
     """Check whether minimum FABRIC config files exist."""
+    if _contract_mode():
+        return True
     from app.settings_manager import get_token_path, get_config_dir
     config_dir = get_config_dir()
     rc_path = os.path.join(config_dir, "fabric_rc")
@@ -145,9 +152,14 @@ def is_configured() -> bool:
 
 def reset_fablib() -> None:
     """Reset the FABlib singleton so it will be re-created on next access."""
-    global _fablib
+    global _fablib, _contract_fablib
     with _lock:
         _fablib = None
+        if _contract_fablib is not None:
+            _contract_fablib.reset()
+            _contract_fablib = None
+    if _contract_mode():
+        return
     # Re-load fabric_rc env vars so FABlib picks up new settings
     from app.settings_manager import get_config_dir
     config_dir = get_config_dir()
@@ -174,7 +186,13 @@ def get_fablib() -> FablibManager:
 
     Raises RuntimeError if FABRIC is not yet configured.
     """
-    global _fablib
+    global _fablib, _contract_fablib
+    if _contract_mode():
+        with _lock:
+            if _contract_fablib is None:
+                from app.contract_fabric import FakeFablibManager
+                _contract_fablib = FakeFablibManager()
+            return _contract_fablib
     if _fablib is None:
         with _lock:
             if _fablib is None:

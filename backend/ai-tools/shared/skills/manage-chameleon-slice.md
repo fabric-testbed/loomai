@@ -35,12 +35,68 @@ loomai chameleon drafts deploy --id <draft-id> --hours 4
 3. `create_chameleon_instance(site, lease_id, reservation_id, image, name)` — launch each
 4. Associate floating IPs for SSH access (via CLI)
 
+### Option 4: Via LoomAI REST API
+Use this from weaves or agent-authored scripts so Chameleon auth remains owned
+by the backend:
+
+```python
+import os
+import requests
+
+BASE = os.environ.get("LOOMAI_API_URL") or "http://127.0.0.1:8000/api"
+site = "CHI@TACC"
+
+# Create a LoomAI Chameleon slice record.
+chi_slice = requests.post(
+    f"{BASE}/chameleon/slices",
+    json={"name": "my-experiment", "site": site},
+    timeout=60,
+).json()
+
+# Add a planned server to a draft/slice topology.
+requests.post(f"{BASE}/chameleon/drafts/{chi_slice['id']}/nodes", json={
+    "name": "node1",
+    "site": site,
+    "node_type": "compute_haswell",
+    "image": "CC-Ubuntu24.04",
+    "interfaces": [
+        {"nic": 0, "network": {"name": "sharednet1"}},
+        {"nic": 1, "network": {"name": "fabnetv4"}},
+    ],
+}, timeout=60)
+
+# Deploy the draft; LoomAI creates the lease and launches instances.
+requests.post(
+    f"{BASE}/chameleon/drafts/{chi_slice['id']}/deploy",
+    json={"duration_hours": 4, "full_deploy": True},
+    timeout=60,
+)
+```
+
+For direct OpenStack API code, search RAG for
+`chameleon/openstack_api_patterns.py`. It includes Blazar lease payloads, Nova
+server scheduler hints, Neutron floating-IP/security-group payloads, and
+FABNetv4 route-metric cloud-init.
+
 ## Multi-NIC Configuration
 Each bare-metal node typically has 2 NICs:
 - **NIC 0** → `sharednet1` (external SSH via floating IP)
 - **NIC 1** → `fabnetv4` (cross-testbed traffic to FABRIC) or experiment network
 
 Configure per-NIC networks in the WebUI editor's Servers tab.
+
+For any server that uses `fabnetv4`, include route-metric cloud-init/netplan
+userdata at boot. This applies even when `fabnetv4` is the only attached
+network. In the common `sharednet1 + fabnetv4` public-SSH layout, set
+`sharednet1` to route metric `50` and `fabnetv4` to route metric `500`; this
+prevents floating-IP SSH replies from leaving through FABNet. Preserve the
+FABNet `10.128.0.0/10` route. Common Ubuntu 22/24 names are `eno1np0` for
+`sharednet1` and `eno2np1` for `fabnetv4`, but verify with `ip link` for new
+images or hardware.
+
+FABNet-only Chameleon nodes may accept floating IPs at some sites, but for
+reliable public SSH plus FABNet dataplane connectivity, prefer
+`sharednet1 + fabnetv4` with explicit route metrics.
 
 ## SSH Access
 ```bash

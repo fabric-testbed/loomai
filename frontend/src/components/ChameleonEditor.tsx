@@ -1,14 +1,68 @@
 'use client';
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import CytoscapeGraph from './CytoscapeGraph';
 import ChameleonNodeTypeComboBox from './editor/ChameleonNodeTypeComboBox';
 import ChameleonImageComboBox from './editor/ChameleonImageComboBox';
+import { CompactResourceTable, FilterBox, InlineActions, matchesFilter } from './editor/ChameleonEditorUi';
 import * as api from '../api/client';
-import type { ChameleonSite, ChameleonImage, ChameleonDraft, ChameleonNodeTypeDetail, ChameleonNetwork } from '../types/chameleon';
+import type { ChameleonSite, ChameleonImage, ChameleonDraft, ChameleonNodeTypeDetail, ChameleonNetwork, ChameleonSliceResource } from '../types/chameleon';
 
 // --- Floating IP helpers (supports old string[] and new {node_id, nic}[] formats) ---
 type FipEntry = string | { node_id: string; nic: number };
+type ChameleonGraphData = { nodes: any[]; edges: any[] };
+type ChameleonKeypair = {
+  name?: string;
+  fingerprint?: string;
+  type?: string;
+  _site?: string;
+};
+
+const PREFERRED_X86_NODE_TYPES = [
+  'compute_skylake',
+  'compute_cascadelake',
+  'compute_cascadelake_r',
+  'compute_icelake_r650',
+  'compute_icelake_r750',
+  'compute_zen3',
+  'compute_haswell_ib',
+  'compute_haswell',
+];
+const PREFERRED_X86_IMAGES = ['CC-Ubuntu22.04', 'CC-Ubuntu24.04'];
+const PREFERRED_ARM_IMAGES = ['CC-Ubuntu22.04-ARM64', 'CC-Ubuntu24.04-ARM64', 'CC-Ubuntu26.04-ARM64'];
+
+function isArmNodeType(nodeType?: ChameleonNodeTypeDetail): boolean {
+  const arch = `${nodeType?.cpu_arch || ''} ${nodeType?.node_type || ''}`.toLowerCase();
+  return arch.includes('arm') || arch.includes('aarch64');
+}
+
+function isGpuNodeType(nodeType?: ChameleonNodeTypeDetail): boolean {
+  const value = `${nodeType?.gpu || ''} ${nodeType?.node_type || ''}`.toLowerCase();
+  return value.includes('gpu');
+}
+
+function chooseDefaultNodeType(nodeTypes: ChameleonNodeTypeDetail[]): string {
+  const reservable = nodeTypes.filter(nt => (nt.reservable ?? 0) > 0);
+  const candidates = reservable.length > 0 ? reservable : nodeTypes;
+  const x86Compute = candidates.filter(nt => !isArmNodeType(nt) && !isGpuNodeType(nt));
+  for (const preferred of PREFERRED_X86_NODE_TYPES) {
+    if (x86Compute.some(nt => nt.node_type === preferred)) return preferred;
+  }
+  return x86Compute[0]?.node_type || candidates[0]?.node_type || '';
+}
+
+function chooseDefaultImage(images: ChameleonImage[], nodeType?: ChameleonNodeTypeDetail): string {
+  if (images.length === 0) return '';
+  const active = images.filter(img => !img.status || img.status.toLowerCase() === 'active');
+  const candidates = active.length > 0 ? active : images;
+  const preferredNames = isArmNodeType(nodeType) ? PREFERRED_ARM_IMAGES : PREFERRED_X86_IMAGES;
+  for (const name of preferredNames) {
+    const match = candidates.find(img => img.name === name || img.id === name);
+    if (match) return match.id || match.name;
+  }
+  const nonCuda = candidates.find(img => !`${img.name} ${img.id}`.toLowerCase().includes('cuda'));
+  return nonCuda?.id || nonCuda?.name || candidates[0].id || candidates[0].name;
+}
 
 function fipHasNode(fips: FipEntry[], nodeId: string): boolean {
   return fips.some(e => typeof e === 'string' ? e === nodeId : e.node_id === nodeId);
@@ -154,6 +208,15 @@ function ChameleonBootConfigPanel({ sliceId, nodeName }: { sliceId: string; node
 // --- Types ---
 
 type EditorState = 'empty' | 'drafting' | 'deploying' | 'deployed';
+type ChiEditorTab = 'leases' | 'servers' | 'networks' | 'ips' | 'resources';
+type ConfirmAction = {
+  title: string;
+  message: string;
+  details?: string[];
+  onConfirm: () => void | Promise<void>;
+  danger?: boolean;
+  confirmLabel?: string;
+};
 
 interface ChameleonEditorProps {
   sites: ChameleonSite[];
@@ -177,6 +240,8 @@ interface ChameleonEditorProps {
   recipes?: any[];
   /** When true, auto-refresh graph every 30s to pick up live instance state. */
   autoRefresh?: boolean;
+  /** Optional terminal opener for live Chameleon instances. */
+  onOpenTerminal?: (instance: { id: string; name: string; site: string }) => void;
 }
 
 // --- Helpers ---
@@ -199,13 +264,66 @@ function stateLabel(state: EditorState): string {
   }
 }
 
+function stableGraphValue(value: any): any {
+  if (Array.isArray(value)) return value.map(stableGraphValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.keys(value).sort().reduce<Record<string, any>>((acc, key) => {
+    const next = value[key];
+    if (next !== undefined) acc[key] = stableGraphValue(next);
+    return acc;
+  }, {});
+}
+
+function graphElementKey(element: any): string {
+  return String(element?.data?.id || element?.id || '');
+}
+
+function graphSignature(graph: ChameleonGraphData | null): string {
+  if (!graph) return '';
+  const nodes = [...(graph.nodes || [])]
+    .sort((a, b) => graphElementKey(a).localeCompare(graphElementKey(b)))
+    .map(stableGraphValue);
+  const edges = [...(graph.edges || [])]
+    .sort((a, b) => graphElementKey(a).localeCompare(graphElementKey(b)))
+    .map(stableGraphValue);
+  return JSON.stringify({ nodes, edges });
+}
+
+function shortId(value?: string): string {
+  if (!value) return '';
+  return value.length > 12 ? `${value.slice(0, 12)}...` : value;
+}
+
+function resourceSite(resource: Partial<ChameleonSliceResource> | any, fallback = 'CHI@TACC'): string {
+  return resource?.site || resource?._site || fallback;
+}
+
+function resourceProviderId(resource: Partial<ChameleonSliceResource> | any): string {
+  return resource?.provider_id || resource?.id || resource?.floating_ip_id || resource?.resource_id || '';
+}
+
+function resourceDisplayName(resource: Partial<ChameleonSliceResource> | any): string {
+  return resource?.name || resource?.floating_ip || resource?.floating_ip_address || resourceProviderId(resource) || 'resource';
+}
+
+function networkCidrs(network: ChameleonNetwork | any): string {
+  return (network?.subnet_details || []).map((s: any) => s.cidr || s.name).filter(Boolean).join(', ');
+}
+
 // --- Component ---
 
-export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly, formsOnly, draftId: externalDraftId, onDraftUpdated, draftData: externalDraftData, draftVersion, onContextAction, recipes, autoRefresh }: ChameleonEditorProps) {
+export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly, formsOnly, draftId: externalDraftId, onDraftUpdated, draftData: externalDraftData, draftVersion, onContextAction, recipes, autoRefresh, onOpenTerminal }: ChameleonEditorProps) {
   // Core state
   const [state, setState] = useState<EditorState>('empty');
   const [draft, setDraft] = useState<ChameleonDraft | null>(null);
-  const [graphData, setGraphData] = useState<{ nodes: any[]; edges: any[] } | null>(null);
+  const [graphData, setGraphData] = useState<ChameleonGraphData | null>(null);
+  const graphSignatureRef = useRef('');
+  const setGraphDataIfChanged = useCallback((next: ChameleonGraphData | null) => {
+    const nextSignature = graphSignature(next);
+    if (nextSignature === graphSignatureRef.current) return;
+    graphSignatureRef.current = nextSignature;
+    setGraphData(next);
+  }, []);
 
   // Dark mode detection
   const [dark, setDark] = useState(false);
@@ -227,6 +345,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
   const [nodeType, setNodeType] = useState('');
   const [nodeImage, setNodeImage] = useState('');
   const [nodeCount, setNodeCount] = useState(1);
+  const [nodeKeyName, setNodeKeyName] = useState('');
   const [addingNode, setAddingNode] = useState(false);
 
   // Network form
@@ -245,13 +364,19 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
   const [durationHours, setDurationHours] = useState(24);
   const [deploying, setDeploying] = useState(false);
   const [deployStatus, setDeployStatus] = useState('');
-  const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; onConfirm: () => void; danger?: boolean } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  // Lease selection mode: 'new' = create a new lease at submit, 'existing' = use a pre-selected lease
+  const [leaseMode, setLeaseMode] = useState<'new' | 'existing'>('new');
+  // Per-site existing lease selection: { siteName: leaseId }
+  const [selectedExistingLeases, setSelectedExistingLeases] = useState<Record<string, string>>({});
 
   // Site data (node types, images) — cached per site
   const [nodeTypes, setNodeTypes] = useState<ChameleonNodeTypeDetail[]>([]);
   const [allImages, setAllImages] = useState<ChameleonImage[]>([]);
   const [loadingData, setLoadingData] = useState(false);
   const siteDataCache = React.useRef<Record<string, { nodeTypes: ChameleonNodeTypeDetail[]; images: ChameleonImage[] }>>({});
+  const [keypairsBySite, setKeypairsBySite] = useState<Record<string, ChameleonKeypair[]>>({});
+  const [loadingKeypairsBySite, setLoadingKeypairsBySite] = useState<Record<string, boolean>>({});
 
   // Filter images by selected node type's architecture (e.g., ARM images only for ARM nodes)
   const selectedNodeTypeDetail = useMemo(() => nodeTypes.find(nt => nt.node_type === nodeType), [nodeTypes, nodeType]);
@@ -273,7 +398,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
   }, [allImages, selectedNodeTypeDetail]);
 
   // Side panel editor tab
-  const [chiEditorTab, setChiEditorTab] = useState<'leases' | 'servers' | 'networks'>('servers');
+  const [chiEditorTab, setChiEditorTab] = useState<ChiEditorTab>('servers');
 
   // Reservation management
   const [extendHoursMap, setExtendHoursMap] = useState<Record<string, number>>({});
@@ -288,12 +413,36 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
   const [addingExistingServer, setAddingExistingServer] = useState(false);
   const [selectedUnaffiliated, setSelectedUnaffiliated] = useState('');
 
+  // Live resource inventory used by Networks/IPs/Resources tabs.
+  const [floatingIps, setFloatingIps] = useState<any[]>([]);
+  const [securityGroups, setSecurityGroups] = useState<any[]>([]);
+  const [loadingInventory, setLoadingInventory] = useState(false);
+  const [resourceBusy, setResourceBusy] = useState('');
+
+  // Network management.
+  const [newRealNetName, setNewRealNetName] = useState('');
+  const [newRealNetSite, setNewRealNetSite] = useState('');
+  const [newRealNetCidr, setNewRealNetCidr] = useState('');
+  const [selectedExistingNetResource, setSelectedExistingNetResource] = useState('');
+
+  // Floating IP management.
+  const [allocFipSite, setAllocFipSite] = useState('');
+  const [selectedFipId, setSelectedFipId] = useState('');
+  const [selectedFipTargetPort, setSelectedFipTargetPort] = useState('');
+
+  // Per-tab filters keep high-cardinality resource tabs scannable.
+  const [leaseFilter, setLeaseFilter] = useState('');
+  const [serverFilter, setServerFilter] = useState('');
+  const [networkFilter, setNetworkFilter] = useState('');
+  const [ipFilter, setIpFilter] = useState('');
+  const [resourceFilter, setResourceFilter] = useState('');
+
   // Auto-reset image when filtered images change and current selection is invalid
   useEffect(() => {
     if (images.length > 0 && nodeImage && !images.find(img => img.id === nodeImage || img.name === nodeImage)) {
-      setNodeImage(images[0].id);
+      setNodeImage(chooseDefaultImage(images, selectedNodeTypeDetail));
     }
-  }, [images, nodeImage]);
+  }, [images, nodeImage, selectedNodeTypeDetail]);
 
   // Graph layout
   const [layout, setLayout] = useState('dagre');
@@ -317,34 +466,44 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
       if (draft && state === 'drafting') {
         setDraft(null);
         setState('empty');
-        setGraphData(null);
+        setGraphDataIfChanged(null);
       }
       return;
     }
-    // If already loaded this draft, skip
-    if (draft?.id === externalDraftId) return;
-    // Load the draft
+    // Always clear graph immediately on slice switch so stale topology disappears
+    setGraphDataIfChanged(null);
+    // If parent already provided externalDraftData for this id, use it directly
+    if (externalDraftData && externalDraftData.id === externalDraftId) {
+      setDraft(externalDraftData);
+      setState(externalDraftData.state === 'Active' ? 'deployed' : externalDraftData.state === 'Deploying' ? 'deploying' : 'drafting');
+      buildLocalGraph(externalDraftData);
+      api.getChameleonDraftGraph(externalDraftId).then(g => setGraphDataIfChanged(g)).catch(() => setGraphDataIfChanged(null));
+      return;
+    }
+    // Otherwise load fresh
     api.getChameleonDraft(externalDraftId).then(d => {
       setDraft(d);
       setState('drafting');
-      // Load graph
-      api.getChameleonDraftGraph(externalDraftId).then(g => setGraphData(g)).catch(() => setGraphData(null));
+      buildLocalGraph(d);
+      api.getChameleonDraftGraph(externalDraftId).then(g => setGraphDataIfChanged(g)).catch(() => setGraphDataIfChanged(null));
     }).catch(err => {
       onError?.(`Failed to load draft: ${err.message}`);
     });
   }, [externalDraftId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync external draft data changes — triggered by draftVersion counter
-  // Every time the side panel adds/removes a node or network, draftVersion increments
+  // Every time the side panel adds/removes a node, polling updates state, etc.
   useEffect(() => {
     if (!externalDraftData || !externalDraftId) return;
     setDraft(externalDraftData);
     setState(externalDraftData.state === 'Active' ? 'deployed' : externalDraftData.state === 'Deploying' ? 'deploying' : 'drafting');
-    // Immediately update graph from local data (instant visual feedback)
-    buildLocalGraph(externalDraftData);
-    // Then fetch enriched graph from backend (live status colors, IPs)
-    api.getChameleonDraftGraph(externalDraftId).then(g => setGraphData(g)).catch(() => {});
-  }, [draftVersion, externalDraftId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!graphSignatureRef.current) {
+      buildLocalGraph(externalDraftData);
+    }
+    // Fetch enriched graph from backend, but keep the current graph object when
+    // polling returns the same topology/status payload.
+    api.getChameleonDraftGraph(externalDraftId).then(g => setGraphDataIfChanged(g)).catch(() => {});
+  }, [draftVersion, externalDraftId, externalDraftData, setGraphDataIfChanged]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Derive sites from draft nodes (or fall back to legacy draft.site)
   const draftSites = useMemo(() => {
@@ -359,6 +518,12 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
     if (!nodeSite && configuredSites.length > 0) setNodeSite(configuredSites[0].name);
   }, [nodeSite, configuredSites]);
 
+  useEffect(() => {
+    const preferred = draftSites[0] || configuredSites[0]?.name || '';
+    if (preferred && !newRealNetSite) setNewRealNetSite(preferred);
+    if (preferred && !allocFipSite) setAllocFipSite(preferred);
+  }, [draftSites, configuredSites, newRealNetSite, allocFipSite]);
+
   // Load node types and images when the per-node site changes (with caching)
   const effectiveSite = nodeSite || configuredSites[0]?.name || '';
   useEffect(() => {
@@ -366,10 +531,12 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
     // Check cache first
     const cached = siteDataCache.current[effectiveSite];
     if (cached) {
+      const defaultNodeType = chooseDefaultNodeType(cached.nodeTypes);
+      const defaultNodeTypeDetail = cached.nodeTypes.find(nt => nt.node_type === defaultNodeType);
       setNodeTypes(cached.nodeTypes);
       setAllImages(cached.images);
-      if (cached.nodeTypes.length > 0) setNodeType(cached.nodeTypes[0].node_type);
-      if (cached.images.length > 0) setNodeImage(cached.images[0].id);
+      if (defaultNodeType) setNodeType(defaultNodeType);
+      if (cached.images.length > 0) setNodeImage(chooseDefaultImage(cached.images, defaultNodeTypeDetail));
       return;
     }
     setLoadingData(true);
@@ -377,13 +544,53 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
       api.getChameleonNodeTypesDetail(effectiveSite).then(d => d.node_types || []).catch(() => []),
       api.getChameleonImages(effectiveSite).catch(() => []),
     ]).then(([nt, img]) => {
+      const defaultNodeType = chooseDefaultNodeType(nt);
+      const defaultNodeTypeDetail = nt.find(t => t.node_type === defaultNodeType);
       siteDataCache.current[effectiveSite] = { nodeTypes: nt, images: img };
       setNodeTypes(nt);
       setAllImages(img);
-      if (nt.length > 0) setNodeType(nt[0].node_type);
-      if (img.length > 0) setNodeImage(img[0].id);
+      if (defaultNodeType) setNodeType(defaultNodeType);
+      if (img.length > 0) setNodeImage(chooseDefaultImage(img, defaultNodeTypeDetail));
     }).finally(() => setLoadingData(false));
   }, [effectiveSite]);
+
+  const loadKeypairsForSite = useCallback(async (siteName: string) => {
+    if (!siteName) return;
+    setLoadingKeypairsBySite(prev => ({ ...prev, [siteName]: true }));
+    try {
+      const keypairs = await api.listChameleonKeypairs(siteName);
+      setKeypairsBySite(prev => ({ ...prev, [siteName]: keypairs || [] }));
+    } catch {
+      setKeypairsBySite(prev => ({ ...prev, [siteName]: [] }));
+    } finally {
+      setLoadingKeypairsBySite(prev => ({ ...prev, [siteName]: false }));
+    }
+  }, []);
+
+  const getKeypairNamesForSite = useCallback((siteName: string, selectedKey = ''): string[] => {
+    const names = Array.from(new Set(
+      (keypairsBySite[siteName] || [])
+        .map(keypair => keypair.name || '')
+        .filter(Boolean),
+    ));
+    if (selectedKey && !names.includes(selectedKey)) names.push(selectedKey);
+    return names;
+  }, [keypairsBySite]);
+
+  useEffect(() => {
+    const sitesToLoad = new Set([effectiveSite, ...draftSites].filter(Boolean));
+    for (const siteName of sitesToLoad) {
+      if (keypairsBySite[siteName] === undefined && !loadingKeypairsBySite[siteName]) {
+        void loadKeypairsForSite(siteName);
+      }
+    }
+  }, [
+    effectiveSite,
+    draftSites,
+    keypairsBySite,
+    loadingKeypairsBySite,
+    loadKeypairsForSite,
+  ]);
 
   // Fetch existing networks from all sites in draft
   useEffect(() => {
@@ -392,14 +599,140 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
       .then(results => setExistingNetworks(results.flat()));
   }, [draftSites.join(',')]);
 
-  // Fetch available leases when Leases tab is shown
+  const inventorySites = useMemo(
+    () => draftSites.length > 0 ? draftSites : configuredSites.map(s => s.name),
+    [draftSites, configuredSites],
+  );
+
+  const refreshResourceInventory = useCallback(async () => {
+    const sitesToLoad = inventorySites.length > 0 ? inventorySites : undefined;
+    setLoadingInventory(true);
+    try {
+      const [networkResults, fipResults, sgResults] = await Promise.all([
+        sitesToLoad
+          ? Promise.all(sitesToLoad.map(s => api.listChameleonNetworks(s).catch(() => [] as ChameleonNetwork[]))).then(r => r.flat())
+          : api.listChameleonNetworks().catch(() => [] as ChameleonNetwork[]),
+        sitesToLoad
+          ? Promise.all(sitesToLoad.map(s => api.listChameleonFloatingIps(s).catch(() => [] as any[]))).then(r => r.flat())
+          : api.listChameleonFloatingIps().catch(() => [] as any[]),
+        sitesToLoad
+          ? Promise.all(sitesToLoad.map(s => api.listChameleonSecurityGroups(s).catch(() => [] as any[]))).then(r => r.flat())
+          : api.listChameleonSecurityGroups().catch(() => [] as any[]),
+      ]);
+      setExistingNetworks(networkResults);
+      setFloatingIps(fipResults);
+      setSecurityGroups(sgResults);
+    } finally {
+      setLoadingInventory(false);
+    }
+  }, [inventorySites.join(',')]);
+
+  useEffect(() => {
+    if (!formsOnly) return;
+    if (!['networks', 'ips', 'resources'].includes(chiEditorTab)) return;
+    refreshResourceInventory().catch((e: any) => onError?.(e?.message || 'Failed to refresh Chameleon resources'));
+  }, [formsOnly, chiEditorTab, refreshResourceInventory, onError]);
+
+  // Fetch available leases when Leases tab is shown (or refresh on demand)
+  const refreshAvailableLeases = useCallback(async () => {
+    if (draftSites.length === 0) return;
+    setLoadingLeases(true);
+    try {
+      const results = await Promise.all(draftSites.map(s => api.listChameleonLeases(s).catch(() => [] as any[])));
+      setAvailableLeases(results.flat());
+    } finally {
+      setLoadingLeases(false);
+    }
+  }, [draftSites.join(',')]);
+
   useEffect(() => {
     if (chiEditorTab !== 'leases' || !formsOnly || draftSites.length === 0) return;
-    setLoadingLeases(true);
-    Promise.all(draftSites.map(s => api.listChameleonLeases(s).catch(() => [] as any[])))
-      .then(results => setAvailableLeases(results.flat()))
-      .finally(() => setLoadingLeases(false));
-  }, [chiEditorTab, formsOnly, draftSites.join(',')]);
+    refreshAvailableLeases();
+  }, [chiEditorTab, formsOnly, draftSites.join(','), refreshAvailableLeases]);
+
+  // Pre-create lease state
+  const [precreating, setPrecreating] = useState(false);
+  const [precreateStatus, setPrecreateStatus] = useState('');
+
+  // Edit-in-place state for existing nodes
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  const [editNodeName, setEditNodeName] = useState('');
+  const [editNodeType, setEditNodeType] = useState('');
+  const [editNodeImage, setEditNodeImage] = useState('');
+  const [editNodeKeyName, setEditNodeKeyName] = useState('');
+  const [savingNodeEdit, setSavingNodeEdit] = useState(false);
+
+  const startEditNode = useCallback((node: any) => {
+    setEditingNodeId(node.id);
+    setEditNodeName(node.name || '');
+    setEditNodeType(node.node_type || '');
+    setEditNodeImage(node.image || '');
+    setEditNodeKeyName(node.key_name || '');
+    // Load site data so the type/image dropdowns are populated for this node's site
+    if (node.site && node.site !== nodeSite) {
+      setNodeSite(node.site);
+    }
+  }, [nodeSite]);
+
+  const cancelEditNode = useCallback(() => {
+    setEditingNodeId(null);
+    setEditNodeName('');
+    setEditNodeType('');
+    setEditNodeImage('');
+    setEditNodeKeyName('');
+  }, []);
+
+  const saveNodeEdit = useCallback(async () => {
+    if (!draft || !editingNodeId) return;
+    setSavingNodeEdit(true);
+    try {
+      const updated = await api.updateChameleonDraftNode(draft.id, editingNodeId, {
+        name: editNodeName,
+        node_type: editNodeType,
+        image: editNodeImage,
+        key_name: editNodeKeyName || '',
+      });
+      setDraft(updated);
+      onDraftUpdated?.(updated);
+      refreshGraph(draft.id);
+      cancelEditNode();
+    } catch (e: any) {
+      onError?.(e?.message || 'Failed to update node');
+    } finally {
+      setSavingNodeEdit(false);
+    }
+  }, [draft, editingNodeId, editNodeName, editNodeType, editNodeImage, editNodeKeyName, onDraftUpdated, onError, cancelEditNode]);
+
+  const handlePrecreateLease = useCallback(async () => {
+    if (!draft) return;
+    setPrecreating(true);
+    setPrecreateStatus('Creating lease(s)...');
+    try {
+      const result = await api.precreateLeasesForDraft(draft.id, {
+        lease_name: leaseName || draft.name,
+        duration_hours: durationHours,
+      });
+      // Refresh available leases so the new ones appear in the dropdown
+      await refreshAvailableLeases();
+      // Switch to "existing lease" mode and pre-select the newly created leases
+      const newSelections: Record<string, string> = {};
+      for (const l of result.leases) {
+        newSelections[l.site] = l.lease_id;
+      }
+      setSelectedExistingLeases(prev => ({ ...prev, ...newSelections }));
+      setLeaseMode('existing');
+      const count = result.leases.length;
+      setPrecreateStatus(`Created ${count} lease${count !== 1 ? 's' : ''}. Click Submit to deploy.`);
+      if (result.errors && result.errors.length) {
+        onError?.(result.errors.join('; '));
+      }
+    } catch (e: any) {
+      setPrecreateStatus('');
+      onError?.(e?.message || 'Failed to pre-create lease');
+    } finally {
+      setPrecreating(false);
+    }
+  }, [draft, leaseName, durationHours, refreshAvailableLeases, onError]);
 
   // Auto-generate node name
   useEffect(() => {
@@ -412,17 +745,17 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
   // Refresh graph data
   const refreshGraph = useCallback(async (draftId?: string) => {
     const id = draftId || draft?.id;
-    if (!id) { setGraphData(null); return; }
+    if (!id) { setGraphDataIfChanged(null); return; }
     try {
       const g = await api.getChameleonDraftGraph(id);
-      setGraphData(g);
+      setGraphDataIfChanged(g);
     } catch {
       // If graph endpoint fails, build a simple graph from draft data
       if (draft) {
         buildLocalGraph(draft);
       }
     }
-  }, [draft]);
+  }, [draft, setGraphDataIfChanged]);
 
   // Auto-refresh graph every 30s when enabled (picks up live instance state)
   useEffect(() => {
@@ -453,6 +786,19 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
         data: {
           id: `node-${n.id}`,
           label,
+          element_type: 'chameleon_instance',
+          testbed: 'Chameleon',
+          draft_id: d.id,
+          node_id: n.id,
+          planned_node_id: n.id,
+          name: n.name,
+          site: n.site || '',
+          status: n.status || 'DRAFT',
+          instance_id: n.instance_id || '',
+          floating_ip: n.floating_ip || '',
+          ip: n.management_ip || '',
+          node_type: n.node_type || '',
+          image: n.image || '',
           parent: n.site ? `site-${n.site}` : undefined,
           bg_color: '#e8f5e9',
           bg_color_dark: '#1a3a30',
@@ -466,7 +812,16 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
     // Add networks from legacy d.networks[] array
     (d.networks || []).forEach(net => {
       nodes.push({
-        data: { id: `net-${net.id}`, label: net.name },
+        data: {
+          id: `net-${net.id}`,
+          label: net.name,
+          element_type: 'network',
+          testbed: 'Chameleon',
+          draft_id: d.id,
+          network_id: net.id,
+          deletable: 'true',
+          name: net.name,
+        },
         classes: 'network-l2',
       });
       (net.connected_nodes || []).forEach(nodeId => {
@@ -511,7 +866,17 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
           if (!seenNets.has(netNodeId)) {
             seenNets.add(netNodeId);
             nodes.push({
-              data: { id: netNodeId, label: ifc.network.name, element_type: 'network', name: ifc.network.name },
+              data: {
+                id: netNodeId,
+                label: ifc.network.name,
+                element_type: 'network',
+                testbed: 'Chameleon',
+                draft_id: d.id,
+                network_id: ifc.network.id,
+                deletable: 'false',
+                name: ifc.network.name,
+                net_type: isFabNet ? 'FABNetv4' : '',
+              },
               classes: isFabNet ? 'network-l3 chameleon-draft-net' : 'network-l2 chameleon-draft-net',
             });
             if (isFabNet) fabnetNodeIds.push(netNodeId);
@@ -539,8 +904,8 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
       });
     }
 
-    setGraphData({ nodes, edges });
-  }, []);
+    setGraphDataIfChanged({ nodes, edges });
+  }, [setGraphDataIfChanged]);
 
   // --- Handlers ---
 
@@ -573,7 +938,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
           // Ignore — draft may not exist on server
         }
         setDraft(null);
-        setGraphData(null);
+        setGraphDataIfChanged(null);
         setState('empty');
         setNodeName('');
         setNetName('');
@@ -595,6 +960,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
         image: nodeImage || 'CC-Ubuntu22.04',
         count: nodeCount,
         site: nodeSite || effectiveSite,
+        ...(nodeKeyName ? { key_name: nodeKeyName } : {}),
       });
       setDraft(updated);
       onDraftUpdated?.(updated);
@@ -606,6 +972,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
       const idx = (updated.nodes?.length || 0) + 1;
       setNodeName(`node${idx}`);
       setNodeCount(1);
+      setNodeKeyName('');
       // Auto-assign floating IP to new node (best-effort)
       const newNode = updated.nodes[updated.nodes.length - 1];
       if (newNode) {
@@ -620,20 +987,35 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
     } finally {
       setAddingNode(false);
     }
-  }, [draft, nodeName, nodeType, nodeImage, nodeCount, nodeSite, effectiveSite, refreshGraph, onError]);
+  }, [draft, nodeName, nodeType, nodeImage, nodeCount, nodeSite, effectiveSite, nodeKeyName, refreshGraph, onError]);
 
   const handleRemoveNode = useCallback(async (nodeId: string) => {
     if (!draft) return;
-    try {
-      const updated = await api.removeChameleonDraftNode(draft.id, nodeId);
-      setDraft(updated);
-      onDraftUpdated?.(updated);
-      buildLocalGraph(updated);
-      refreshGraph(draft.id);
-    } catch (e: any) {
-      onError?.(e.message || 'Failed to remove node');
+    const node = draft.nodes.find(n => n.id === nodeId);
+    const details: string[] = [];
+    if (fipHasNode(draft.floating_ips || [], nodeId)) details.push('Floating IP intent for this server will be cleared.');
+    for (const net of draft.networks || []) {
+      if ((net.connected_nodes || []).includes(nodeId)) details.push(`Draft network membership will be removed: ${net.name}`);
     }
-  }, [draft, refreshGraph, onError]);
+    setConfirmAction({
+      title: 'Remove From Draft',
+      message: `Remove planned server "${node?.name || nodeId}" from this Chameleon slice draft? This does not delete any live Chameleon instance.`,
+      details,
+      danger: true,
+      confirmLabel: 'Remove from draft',
+      onConfirm: async () => {
+        try {
+          const updated = await api.removeChameleonDraftNode(draft.id, nodeId);
+          setDraft(updated);
+          onDraftUpdated?.(updated);
+          buildLocalGraph(updated);
+          refreshGraph(draft.id);
+        } catch (e: any) {
+          onError?.(e.message || 'Failed to remove node');
+        }
+      },
+    });
+  }, [draft, refreshGraph, buildLocalGraph, onDraftUpdated, onError]);
 
   const handleAddNetwork = useCallback(async () => {
     if (!draft || !netName.trim()) return;
@@ -658,16 +1040,25 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
 
   const handleRemoveNetwork = useCallback(async (networkId: string) => {
     if (!draft) return;
-    try {
-      const updated = await api.removeChameleonDraftNetwork(draft.id, networkId);
-      setDraft(updated);
-      onDraftUpdated?.(updated);
-      buildLocalGraph(updated);
-      refreshGraph(draft.id);
-    } catch (e: any) {
-      onError?.(e.message || 'Failed to remove network');
-    }
-  }, [draft, refreshGraph, onError]);
+    const network = draft.networks.find(n => n.id === networkId);
+    setConfirmAction({
+      title: 'Remove Draft Network',
+      message: `Remove draft network "${network?.name || networkId}" from this Chameleon slice? This only edits LoomAI draft topology.`,
+      danger: true,
+      confirmLabel: 'Remove from draft',
+      onConfirm: async () => {
+        try {
+          const updated = await api.removeChameleonDraftNetwork(draft.id, networkId);
+          setDraft(updated);
+          onDraftUpdated?.(updated);
+          buildLocalGraph(updated);
+          refreshGraph(draft.id);
+        } catch (e: any) {
+          onError?.(e.message || 'Failed to remove network');
+        }
+      },
+    });
+  }, [draft, refreshGraph, buildLocalGraph, onDraftUpdated, onError]);
 
   const handleToggleNetNode = useCallback((nodeId: string) => {
     setNetConnected(prev =>
@@ -678,16 +1069,27 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
   const handleDeploy = useCallback(async () => {
     if (!draft) return;
     setDeploying(true);
-    setDeployStatus('Creating lease...');
     setState('deploying');
     try {
-      const result = await api.deployChameleonDraft(draft.id, {
+      const params: any = {
         lease_name: leaseName || draft.name,
         duration_hours: durationHours,
-      });
+      };
+      if (leaseMode === 'existing') {
+        // Validate: every site in the draft must have a selected existing lease
+        const missingSites = draftSites.filter(s => !selectedExistingLeases[s]);
+        if (missingSites.length > 0) {
+          throw new Error(`Select an existing lease for: ${missingSites.join(', ')}`);
+        }
+        params.existing_lease_ids = selectedExistingLeases;
+        setDeployStatus('Attaching existing lease...');
+      } else {
+        setDeployStatus('Creating lease...');
+      }
+      const result = await api.deployChameleonDraft(draft.id, params);
       const leaseCount = result.leases?.length || 0;
       const firstLease = result.leases?.[0];
-      setDeployStatus(`${leaseCount} lease${leaseCount !== 1 ? 's' : ''} created${firstLease ? ` (${firstLease.status})` : ''}`);
+      setDeployStatus(`${leaseCount} lease${leaseCount !== 1 ? 's' : ''} ${leaseMode === 'existing' ? 'attached' : 'created'}${firstLease ? ` (${firstLease.status})` : ''}`);
       setState('deployed');
       onDeployed?.(firstLease?.lease_id || '');
     } catch (e: any) {
@@ -697,7 +1099,407 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
     } finally {
       setDeploying(false);
     }
-  }, [draft, leaseName, durationHours, onDeployed, onError]);
+  }, [draft, leaseName, durationHours, leaseMode, selectedExistingLeases, draftSites, onDeployed, onError]);
+
+  const applyUpdatedDraft = useCallback((updated: ChameleonDraft, options?: { refresh?: boolean }) => {
+    setDraft(updated);
+    onDraftUpdated?.(updated);
+    buildLocalGraph(updated);
+    if (options?.refresh !== false) refreshGraph(updated.id);
+  }, [buildLocalGraph, onDraftUpdated, refreshGraph]);
+
+  const sliceResources = draft?.resources || [];
+  const leaseResources = useMemo(
+    () => sliceResources.filter(r => r.type === 'lease'),
+    [sliceResources],
+  );
+  const instanceResources = useMemo(
+    () => sliceResources.filter(r => r.type === 'instance'),
+    [sliceResources],
+  );
+  const networkResources = useMemo(
+    () => sliceResources.filter(r => r.type === 'network'),
+    [sliceResources],
+  );
+  const floatingIpResources = useMemo(
+    () => sliceResources.filter(r => r.type === 'floating_ip'),
+    [sliceResources],
+  );
+  const securityGroupResources = useMemo(
+    () => sliceResources.filter(r => r.type === 'security_group'),
+    [sliceResources],
+  );
+
+  const trackedNetworkIds = useMemo(
+    () => new Set(networkResources.map(r => resourceProviderId(r)).filter(Boolean)),
+    [networkResources],
+  );
+  const trackedFloatingIpIds = useMemo(
+    () => new Set(floatingIpResources.map(r => resourceProviderId(r)).filter(Boolean)),
+    [floatingIpResources],
+  );
+  const trackedSecurityGroupIds = useMemo(
+    () => new Set(securityGroupResources.map(r => resourceProviderId(r)).filter(Boolean)),
+    [securityGroupResources],
+  );
+
+  const liveServerTargets = useMemo(
+    () => instanceResources
+      .filter(r => resourceProviderId(r))
+      .map(r => ({
+        id: resourceProviderId(r),
+        name: r.name || resourceProviderId(r),
+        site: resourceSite(r),
+        portId: r.port_id || '',
+        floatingIp: r.floating_ip || '',
+        ip: (r.ip_addresses || [])[0] || r.management_ip || '',
+        status: r.status || '',
+      })),
+    [instanceResources],
+  );
+
+  const filteredLeaseResources = useMemo(
+    () => leaseResources.filter(r => matchesFilter(leaseFilter, [
+      r.name, r.id, r.provider_id, r.resource_id, r.status, r.site, r.ownership,
+    ])),
+    [leaseResources, leaseFilter],
+  );
+  const filteredAvailableLeases = useMemo(
+    () => availableLeases.filter(lease => matchesFilter(leaseFilter, [
+      lease.name, lease.id, lease.status, lease.site, lease._site,
+      lease.reservations?.map((r: any) => [r.resource_type, r.min, r.max]),
+    ])),
+    [availableLeases, leaseFilter],
+  );
+  const filteredPlannedNodes = useMemo(
+    () => (draft?.nodes || []).filter(n => matchesFilter(serverFilter, [
+      n.name, n.id, n.site, n.node_type, n.image, n.interfaces?.map((ifc: any) => ifc.network?.name),
+    ])),
+    [draft, serverFilter],
+  );
+  const filteredInstanceResources = useMemo(
+    () => instanceResources.filter(r => matchesFilter(serverFilter, [
+      r.name, resourceProviderId(r), r.site, r.status, r.ownership, r.floating_ip,
+      r.management_ip, r.ip_addresses,
+    ])),
+    [instanceResources, serverFilter],
+  );
+  const filteredUnaffiliatedInstances = useMemo(
+    () => unaffiliatedInstances.filter(inst => matchesFilter(serverFilter, [
+      inst.name, inst.id, inst.site, inst.status, inst.floating_ip, inst.ip_addresses,
+    ])),
+    [unaffiliatedInstances, serverFilter],
+  );
+  const filteredExistingNetworkResources = useMemo(
+    () => existingNetworks
+      .filter(n => !trackedNetworkIds.has(n.id))
+      .filter(n => matchesFilter(networkFilter, [
+        n.name, n.id, n.site, n.status, n.shared ? 'shared' : 'private', networkCidrs(n),
+      ])),
+    [existingNetworks, trackedNetworkIds, networkFilter],
+  );
+  const filteredNetworkResources = useMemo(
+    () => networkResources.filter(r => matchesFilter(networkFilter, [
+      r.name, resourceProviderId(r), r.site, r.status, r.ownership, r.cidr,
+    ])),
+    [networkResources, networkFilter],
+  );
+  const filteredDraftNetworks = useMemo(
+    () => (draft?.networks || []).filter(n => matchesFilter(networkFilter, [
+      n.name, n.id, n.connected_nodes,
+    ])),
+    [draft, networkFilter],
+  );
+  const filteredIpIntentNodes = useMemo(
+    () => (draft?.nodes || []).filter(n => matchesFilter(ipFilter, [
+      n.name, n.id, n.site, n.interfaces?.map((ifc: any) => ifc.network?.name),
+    ])),
+    [draft, ipFilter],
+  );
+  const filteredFloatingIps = useMemo(
+    () => floatingIps
+      .filter(ip => !trackedFloatingIpIds.has(ip.id))
+      .filter(ip => matchesFilter(ipFilter, [
+        ip.floating_ip_address, ip.id, ip.status, ip.site, ip._site, ip.port_id,
+      ])),
+    [floatingIps, trackedFloatingIpIds, ipFilter],
+  );
+  const filteredFloatingIpResources = useMemo(
+    () => floatingIpResources.filter(r => matchesFilter(ipFilter, [
+      r.name, resourceProviderId(r), r.floating_ip, r.site, r.status, r.ownership, r.port_id,
+    ])),
+    [floatingIpResources, ipFilter],
+  );
+  const filteredSliceResources = useMemo(
+    () => sliceResources.filter(r => matchesFilter(resourceFilter, [
+      r.type, resourceDisplayName(r), resourceProviderId(r), r.site, r.status, r.ownership,
+      r.managed ? 'managed' : 'imported', r.delete_with_slice ? 'delete with slice' : 'detach only',
+    ])),
+    [sliceResources, resourceFilter],
+  );
+  const filteredAttachableSecurityGroups = useMemo(
+    () => securityGroups
+      .filter(sg => !trackedSecurityGroupIds.has(sg.id))
+      .filter(sg => matchesFilter(resourceFilter, [
+        sg.name, sg.id, sg.site, sg._site, sg.description, (sg.security_group_rules || []).length,
+      ])),
+    [securityGroups, trackedSecurityGroupIds, resourceFilter],
+  );
+
+  const leaseDetachDetails = useCallback((lease: ChameleonSliceResource): string[] => {
+    const leaseId = lease.id || lease.provider_id || lease.lease_id;
+    if (!leaseId) return [];
+    return sliceResources
+      .filter(r => r.resource_id !== lease.resource_id && (r.lease_id === leaseId || r.relationship?.lease_id === leaseId))
+      .map(r => `${r.type}: ${resourceDisplayName(r)} (${shortId(resourceProviderId(r))})`);
+  }, [sliceResources]);
+
+  const plannedNodeRemovalDetails = useCallback((nodeId: string): string[] => {
+    const details: string[] = [];
+    if (fipHasNode(draft?.floating_ips || [], nodeId)) details.push('Floating IP intent for this server will be cleared.');
+    for (const net of draft?.networks || []) {
+      if ((net.connected_nodes || []).includes(nodeId)) details.push(`Draft network membership will be removed: ${net.name}`);
+    }
+    return details;
+  }, [draft]);
+
+  const confirmEditorAction = useCallback((action: ConfirmAction) => {
+    setConfirmAction(action);
+  }, []);
+
+  const detachSliceResource = useCallback(async (resource: ChameleonSliceResource) => {
+    if (!draft || !resource.resource_id) return;
+    setResourceBusy(resource.resource_id);
+    try {
+      const updated = await api.removeChameleonSliceResource(draft.id, resource.resource_id);
+      applyUpdatedDraft(updated);
+    } catch (e: any) {
+      onError?.(e?.message || 'Failed to detach resource');
+    } finally {
+      setResourceBusy('');
+    }
+  }, [draft, applyUpdatedDraft, onError]);
+
+  const deleteSliceResource = useCallback(async (resource: ChameleonSliceResource) => {
+    if (!draft) return;
+    const id = resourceProviderId(resource);
+    const site = resourceSite(resource);
+    setResourceBusy(resource.resource_id || id);
+    try {
+      if (resource.type === 'lease') {
+        await api.deleteChameleonLease(id, site);
+      } else if (resource.type === 'instance') {
+        await api.deleteChameleonInstance(id, site);
+      } else if (resource.type === 'network') {
+        await api.deleteChameleonNetwork(id, site);
+      } else if (resource.type === 'floating_ip') {
+        await api.releaseChameleonFloatingIp(id, site);
+      } else if (resource.type === 'security_group') {
+        await api.deleteChameleonSecurityGroup(id, site);
+      }
+      if (resource.resource_id) {
+        const updated = await api.removeChameleonSliceResource(draft.id, resource.resource_id);
+        applyUpdatedDraft(updated);
+      }
+      await refreshResourceInventory();
+    } catch (e: any) {
+      onError?.(e?.message || 'Failed to delete resource');
+    } finally {
+      setResourceBusy('');
+    }
+  }, [draft, applyUpdatedDraft, refreshResourceInventory, onError]);
+
+  const toggleDeleteWithSlice = useCallback(async (resource: ChameleonSliceResource) => {
+    if (!draft) return;
+    setResourceBusy(resource.resource_id || resourceProviderId(resource));
+    try {
+      const updated = await api.addChameleonSliceResource(draft.id, {
+        ...resource,
+        delete_with_slice: !resource.delete_with_slice,
+      });
+      applyUpdatedDraft(updated, { refresh: false });
+    } catch (e: any) {
+      onError?.(e?.message || 'Failed to update resource cleanup setting');
+    } finally {
+      setResourceBusy('');
+    }
+  }, [draft, applyUpdatedDraft, onError]);
+
+  const handleCreateTrackedNetwork = useCallback(async () => {
+    if (!draft || !newRealNetName.trim() || !newRealNetSite) return;
+    setResourceBusy('create-network');
+    try {
+      const net = await api.createChameleonNetwork({
+        site: newRealNetSite,
+        name: newRealNetName.trim(),
+        cidr: newRealNetCidr.trim() || undefined,
+      });
+      const updated = await api.addChameleonSliceResource(draft.id, {
+        type: 'network',
+        id: net.id,
+        name: net.name,
+        site: net.site,
+        status: net.status,
+        cidr: networkCidrs(net),
+        ownership: 'managed',
+        managed: true,
+        delete_with_slice: true,
+      });
+      applyUpdatedDraft(updated);
+      setNewRealNetName('');
+      setNewRealNetCidr('');
+      await refreshResourceInventory();
+    } catch (e: any) {
+      onError?.(e?.message || 'Failed to create network');
+    } finally {
+      setResourceBusy('');
+    }
+  }, [draft, newRealNetName, newRealNetSite, newRealNetCidr, applyUpdatedDraft, refreshResourceInventory, onError]);
+
+  const handleAttachExistingNetworkResource = useCallback(async () => {
+    if (!draft || !selectedExistingNetResource) return;
+    const net = existingNetworks.find(n => n.id === selectedExistingNetResource);
+    if (!net) return;
+    setResourceBusy(`network:${net.id}`);
+    try {
+      const updated = await api.addChameleonSliceResource(draft.id, {
+        type: 'network',
+        id: net.id,
+        name: net.name,
+        site: net.site,
+        status: net.status,
+        cidr: networkCidrs(net),
+        ownership: 'imported',
+        managed: false,
+        delete_with_slice: false,
+      });
+      applyUpdatedDraft(updated);
+      setSelectedExistingNetResource('');
+    } catch (e: any) {
+      onError?.(e?.message || 'Failed to attach network');
+    } finally {
+      setResourceBusy('');
+    }
+  }, [draft, selectedExistingNetResource, existingNetworks, applyUpdatedDraft, onError]);
+
+  const handleAllocateTrackedFloatingIp = useCallback(async () => {
+    if (!draft || !allocFipSite) return;
+    setResourceBusy('allocate-fip');
+    try {
+      const fip = await api.allocateChameleonFloatingIp(allocFipSite);
+      const updated = await api.addChameleonSliceResource(draft.id, {
+        type: 'floating_ip',
+        id: fip.id,
+        name: fip.floating_ip_address || fip.id,
+        site: fip._site || allocFipSite,
+        status: fip.status,
+        floating_ip: fip.floating_ip_address,
+        floating_ip_id: fip.id,
+        port_id: fip.port_id || '',
+        ownership: 'managed',
+        managed: true,
+        delete_with_slice: true,
+      });
+      applyUpdatedDraft(updated, { refresh: false });
+      await refreshResourceInventory();
+    } catch (e: any) {
+      onError?.(e?.message || 'Failed to allocate floating IP');
+    } finally {
+      setResourceBusy('');
+    }
+  }, [draft, allocFipSite, applyUpdatedDraft, refreshResourceInventory, onError]);
+
+  const handleAttachFloatingIpResource = useCallback(async () => {
+    if (!draft || !selectedFipId) return;
+    const fip = floatingIps.find(ip => ip.id === selectedFipId);
+    if (!fip) return;
+    setResourceBusy(`fip:${selectedFipId}`);
+    try {
+      const site = resourceSite(fip, allocFipSite || draftSites[0] || 'CHI@TACC');
+      const associated = selectedFipTargetPort
+        ? await api.associateChameleonFloatingIp(fip.id, site, selectedFipTargetPort)
+        : fip;
+      const updated = await api.addChameleonSliceResource(draft.id, {
+        type: 'floating_ip',
+        id: fip.id,
+        name: associated.floating_ip_address || fip.floating_ip_address || fip.id,
+        site,
+        status: associated.status || fip.status,
+        floating_ip: associated.floating_ip_address || fip.floating_ip_address,
+        floating_ip_id: fip.id,
+        port_id: associated.port_id || selectedFipTargetPort || fip.port_id || '',
+        ownership: 'imported',
+        managed: false,
+        delete_with_slice: false,
+      });
+      applyUpdatedDraft(updated, { refresh: false });
+      setSelectedFipId('');
+      setSelectedFipTargetPort('');
+      await refreshResourceInventory();
+    } catch (e: any) {
+      onError?.(e?.message || 'Failed to attach floating IP');
+    } finally {
+      setResourceBusy('');
+    }
+  }, [draft, selectedFipId, selectedFipTargetPort, floatingIps, allocFipSite, draftSites, applyUpdatedDraft, refreshResourceInventory, onError]);
+
+  const handleAttachSecurityGroupResource = useCallback(async (sg: any) => {
+    if (!draft) return;
+    const id = sg.id || '';
+    if (!id) return;
+    setResourceBusy(`sg:${id}`);
+    try {
+      const updated = await api.addChameleonSliceResource(draft.id, {
+        type: 'security_group',
+        id,
+        name: sg.name || id,
+        site: resourceSite(sg, draftSites[0] || 'CHI@TACC'),
+        status: '',
+        ownership: 'imported',
+        managed: false,
+        delete_with_slice: false,
+      });
+      applyUpdatedDraft(updated, { refresh: false });
+    } catch (e: any) {
+      onError?.(e?.message || 'Failed to attach security group');
+    } finally {
+      setResourceBusy('');
+    }
+  }, [draft, draftSites, applyUpdatedDraft, onError]);
+
+  const renderInterfaceControls = (n: any) => {
+    const siteNets = existingNetworks.filter(net => net.site === (n.site || draft?.site));
+    const ifaces = (n as any).interfaces || [{ nic: 0, network: (n as any).network || null }, { nic: 1, network: null }];
+    return ifaces.map((ifc: any, ifcIdx: number) => (
+      <div key={ifcIdx} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, marginTop: ifcIdx > 0 ? 2 : 0 }}>
+        <span style={{ fontWeight: 600, color: 'var(--fabric-text-muted)', minWidth: 36 }}>NIC {ifc.nic ?? ifcIdx}:</span>
+        <select
+          style={{ flex: 1, fontSize: 10, padding: '2px 4px', borderRadius: 3, border: '1px solid var(--fabric-border)', background: 'var(--fabric-bg)', color: 'var(--fabric-text)' }}
+          value={ifc.network?.id || ''}
+          onChange={async (e) => {
+            if (!draft) return;
+            const netId = e.target.value;
+            const net = netId ? siteNets.find(sn => sn.id === netId) : null;
+            const network = net ? { id: net.id, name: net.name } : null;
+            const updated_ifaces = ifaces.map((f: any, i: number) => i === ifcIdx ? { ...f, network } : f);
+            try {
+              const updated = await api.updateChameleonNodeInterfaces(draft.id, n.id, updated_ifaces);
+              applyUpdatedDraft(updated);
+            } catch (err: any) {
+              onError?.(err?.message || 'Failed to update interface');
+            }
+          }}
+        >
+          <option value="">-- Unconnected --</option>
+          {siteNets.map(sn => (
+            <option key={sn.id} value={sn.id}>
+              {sn.name}{sn.shared ? ' (shared)' : ''}{networkCidrs(sn) ? ` [${networkCidrs(sn)}]` : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+    ));
+  };
 
   // --- Render ---
 
@@ -743,16 +1545,19 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
   // When formsOnly, render tabbed editor (like FABRIC's Slice/Slivers pattern).
   if (formsOnly) {
     return (
-      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }} data-testid="chameleon-editor">
         {(!draft || state === 'empty') ? (
           <div style={{ padding: 16, textAlign: 'center', color: 'var(--fabric-text-muted)', fontSize: 12 }}>
             Select or create a draft from the Chameleon bar to start editing.
           </div>
         ) : (
           <>
-            <div className="editor-top-tabs">
-              <button className={chiEditorTab === 'leases' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('leases')}>Leases</button>
-              <button className={chiEditorTab === 'servers' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('servers')}>Servers</button>
+            <div className="editor-top-tabs" data-testid="chameleon-editor-tabs">
+              <button className={chiEditorTab === 'leases' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('leases')} data-testid="chameleon-editor-tab" data-chameleon-tab="leases">Leases</button>
+              <button className={chiEditorTab === 'servers' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('servers')} data-testid="chameleon-editor-tab" data-chameleon-tab="servers">Servers</button>
+              <button className={chiEditorTab === 'networks' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('networks')} data-testid="chameleon-editor-tab" data-chameleon-tab="networks">Networks</button>
+              <button className={chiEditorTab === 'ips' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('ips')} data-testid="chameleon-editor-tab" data-chameleon-tab="ips">IPs</button>
+              <button className={chiEditorTab === 'resources' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('resources')} data-testid="chameleon-editor-tab" data-chameleon-tab="resources">Resources</button>
             </div>
             <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
               {chiEditorTab === 'leases' && (
@@ -764,35 +1569,129 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                     <div><strong>Servers:</strong> {draft.nodes.length} planned{draft.resources?.filter(r => r.type === 'instance').length ? `, ${draft.resources.filter(r => r.type === 'instance').length} deployed` : ''}</div>
                     {draftSites.length > 0 && <div><strong>Sites:</strong> {draftSites.join(', ')}</div>}
                   </div>
+                  <FilterBox
+                    value={leaseFilter}
+                    onChange={setLeaseFilter}
+                    placeholder="Search leases by name, site, status, ID..."
+                    resultCount={filteredLeaseResources.length + filteredAvailableLeases.length}
+                    totalCount={leaseResources.length + availableLeases.length}
+                    testId="chameleon-lease-filter"
+                  />
 
                   {/* Pre-submit configuration */}
                   {draft.state === 'Draft' && draft.nodes.length > 0 && (
                     <div style={{ borderTop: '1px solid var(--fabric-border)', paddingTop: 8, marginBottom: 8 }}>
                       <h5 style={{ fontSize: 11, fontWeight: 700, margin: '0 0 6px', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fabric-text-muted)' }}>Reservation</h5>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                        <label style={{ fontSize: 11, fontWeight: 500, minWidth: 60 }}>Duration:</label>
-                        <input
-                          type="number"
-                          className="chi-form-input"
-                          min={1}
-                          max={168}
-                          value={durationHours}
-                          onChange={e => setDurationHours(Number(e.target.value))}
-                          style={{ width: 60, fontSize: 11 }}
-                        />
-                        <span style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>hours</span>
+
+                      {/* Lease mode toggle */}
+                      <div style={{ display: 'flex', gap: 8, marginBottom: 8, fontSize: 11 }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                          <input
+                            type="radio"
+                            name="leaseMode"
+                            value="new"
+                            checked={leaseMode === 'new'}
+                            onChange={() => setLeaseMode('new')}
+                            style={{ accentColor: '#39B54A' }}
+                          />
+                          Create new lease
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                          <input
+                            type="radio"
+                            name="leaseMode"
+                            value="existing"
+                            checked={leaseMode === 'existing'}
+                            onChange={() => setLeaseMode('existing')}
+                            style={{ accentColor: '#39B54A' }}
+                          />
+                          Use existing lease
+                        </label>
                       </div>
-                      <div style={{ fontSize: 10, color: 'var(--fabric-text-muted)', marginBottom: 4 }}>
-                        {draft.nodes.length} server{draft.nodes.length !== 1 ? 's' : ''} across {draftSites.length} site{draftSites.length !== 1 ? 's' : ''} will be reserved.
-                      </div>
-                      <div style={{ fontSize: 10, color: 'var(--fabric-text-muted)' }}>
-                        Click <strong>Submit</strong> in the toolbar to create the reservation and deploy.
+
+                      {leaseMode === 'new' ? (
+                        <>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                            <label style={{ fontSize: 11, fontWeight: 500, minWidth: 60 }}>Duration:</label>
+                            <input
+                              type="number"
+                              className="chi-form-input"
+                              min={1}
+                              max={168}
+                              value={durationHours}
+                              onChange={e => setDurationHours(Number(e.target.value))}
+                              style={{ width: 60, fontSize: 11 }}
+                            />
+                            <span style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>hours</span>
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--fabric-text-muted)', marginBottom: 6 }}>
+                            {draft.nodes.length} server{draft.nodes.length !== 1 ? 's' : ''} across {draftSites.length} site{draftSites.length !== 1 ? 's' : ''} will be reserved.
+                          </div>
+                          <button
+                            className="chi-editor-deploy-btn"
+                            style={{ width: '100%', fontSize: 11, padding: '6px 8px', marginBottom: 4 }}
+                            disabled={precreating || draft.nodes.length === 0}
+                            onClick={handlePrecreateLease}
+                            title="Create the Chameleon lease now (separately from slice deployment). The lease will be selected for use when you click Submit."
+                          >
+                            {precreating ? 'Creating lease...' : 'Pre-create lease for slice'}
+                          </button>
+                          {precreateStatus && (
+                            <div style={{ fontSize: 10, color: 'var(--fabric-text-muted)', marginBottom: 4 }}>
+                              {precreateStatus}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ fontSize: 10, color: 'var(--fabric-text-muted)', marginBottom: 6 }}>
+                            Pick an existing lease for each site:
+                          </div>
+                          {draftSites.length === 0 && (
+                            <div style={{ fontSize: 11, color: 'var(--fabric-coral)', marginBottom: 4 }}>
+                              No sites in draft. Add servers first.
+                            </div>
+                          )}
+                          {draftSites.map(site => {
+                            const siteLeases = availableLeases.filter(l =>
+                              (l.site || l._site || '') === site && (l.status === 'ACTIVE' || l.status === 'PENDING' || l.status === 'STARTING')
+                            );
+                            return (
+                              <div key={site} style={{ marginBottom: 6 }}>
+                                <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--fabric-text-muted)', marginBottom: 2 }}>
+                                  {site}
+                                </label>
+                                <select
+                                  className="chi-form-input"
+                                  value={selectedExistingLeases[site] || ''}
+                                  onChange={e => setSelectedExistingLeases(prev => ({ ...prev, [site]: e.target.value }))}
+                                  style={{ width: '100%', fontSize: 11 }}
+                                >
+                                  <option value="">— select a lease —</option>
+                                  {siteLeases.map(lease => (
+                                    <option key={lease.id} value={lease.id}>
+                                      {lease.name} ({lease.status})
+                                    </option>
+                                  ))}
+                                </select>
+                                {siteLeases.length === 0 && !loadingLeases && (
+                                  <div style={{ fontSize: 9, color: 'var(--fabric-text-muted)', marginTop: 2 }}>
+                                    No active leases at {site}. Switch to "Create new lease".
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
+                      <div style={{ fontSize: 10, color: 'var(--fabric-text-muted)', marginTop: 4 }}>
+                        Click <strong>Submit</strong> in the toolbar to deploy.
                       </div>
                     </div>
                   )}
 
                   {/* Existing lease management */}
-                  {(draft.resources || []).filter(r => r.type === 'lease').length === 0 ? (
+                  {leaseResources.length === 0 ? (
                     draft.state !== 'Draft' ? (
                       <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', padding: '8px 0', borderTop: '1px solid var(--fabric-border)' }}>
                         No active leases.
@@ -802,10 +1701,10 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                     <>
                       <div style={{ borderTop: '1px solid var(--fabric-border)', paddingTop: 8 }}>
                         <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>
-                          Leases ({(draft.resources || []).filter(r => r.type === 'lease').length})
+                          Leases ({filteredLeaseResources.length}/{leaseResources.length})
                         </h5>
                       </div>
-                      {(draft.resources || []).filter(r => r.type === 'lease').map(lease => (
+                      {filteredLeaseResources.map(lease => (
                         <div key={lease.resource_id} style={{ border: '1px solid var(--fabric-border)', borderRadius: 6, padding: 8, marginBottom: 8 }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                             <span style={{ fontWeight: 600, fontSize: 12 }}>{lease.name}</span>
@@ -846,26 +1745,44 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                               {extendingLease === lease.resource_id ? 'Extending...' : 'Extend'}
                             </button>
                           </div>
-                          <button
-                            className="chi-action-btn chi-action-btn-danger"
-                            style={{ fontSize: 10, width: '100%' }}
-                            disabled={deletingLease === lease.resource_id}
-                            onClick={async () => {
-                              setDeletingLease(lease.resource_id);
-                              try {
-                                await api.deleteChameleonLease(lease.id, lease.site);
-                                const updated = await api.removeChameleonSliceResource(draft.id, lease.resource_id);
-                                setDraft(updated);
-                                onDraftUpdated?.(updated);
-                              } catch (e: any) {
-                                onError?.(e.message || 'Failed to delete lease');
-                              } finally {
-                                setDeletingLease('');
-                              }
-                            }}
-                          >
-                            {deletingLease === lease.resource_id ? 'Deleting...' : 'Delete Lease'}
-                          </button>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button
+                              className="chi-action-btn"
+                              style={{ fontSize: 10, flex: 1 }}
+                              disabled={resourceBusy === lease.resource_id}
+                              onClick={() => confirmEditorAction({
+                                title: 'Detach Lease From Slice',
+                                message: `Detach lease "${lease.name}" from this Chameleon slice? The lease will remain in Chameleon.`,
+                                details: leaseDetachDetails(lease),
+                                confirmLabel: 'Detach from slice',
+                                onConfirm: () => detachSliceResource(lease),
+                              })}
+                            >
+                              Detach from slice
+                            </button>
+                            <button
+                              className="chi-action-btn chi-action-btn-danger"
+                              style={{ fontSize: 10, flex: 1 }}
+                              disabled={deletingLease === lease.resource_id || resourceBusy === lease.resource_id}
+                              onClick={() => confirmEditorAction({
+                                title: 'Delete Lease From Chameleon',
+                                message: `Delete lease "${lease.name}" from Chameleon and detach it from this slice? This cannot be undone.`,
+                                details: leaseDetachDetails(lease),
+                                danger: true,
+                                confirmLabel: 'Delete from Chameleon',
+                                onConfirm: async () => {
+                                  setDeletingLease(lease.resource_id);
+                                  try {
+                                    await deleteSliceResource(lease);
+                                  } finally {
+                                    setDeletingLease('');
+                                  }
+                                },
+                              })}
+                            >
+                              {deletingLease === lease.resource_id ? 'Deleting...' : 'Delete lease'}
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </>
@@ -876,12 +1793,13 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                     <h5 style={{ fontSize: 11, fontWeight: 700, margin: '0 0 6px', textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fabric-text-muted)' }}>
                       Available Leases {loadingLeases && '...'}
                     </h5>
-                    {availableLeases.length === 0 && !loadingLeases ? (
+                    {filteredAvailableLeases.length === 0 && !loadingLeases ? (
                       <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', padding: '4px 0' }}>
-                        No leases found at {draftSites.join(', ') || 'any site'}.
+                        {availableLeases.length === 0 ? `No leases found at ${draftSites.join(', ') || 'any site'}.` : 'No leases match the current search.'}
                       </div>
                     ) : (
-                      availableLeases.map(lease => {
+                      filteredAvailableLeases.map(lease => {
+                        const leaseSite = lease.site || lease._site || '';
                         const sliceLeaseIds = new Set((draft.resources || []).filter(r => r.type === 'lease').map(r => r.id));
                         const isIncluded = sliceLeaseIds.has(lease.id);
                         return (
@@ -898,13 +1816,8 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                                 try {
                                   let updated;
                                   if (e.target.checked) {
-                                    updated = await api.addChameleonSliceResource(draft.id, {
-                                      type: 'lease',
-                                      id: lease.id,
-                                      name: lease.name,
-                                      site: lease.site || '',
-                                      status: lease.status,
-                                    });
+                                    await api.importChameleonReservation(draft.id, leaseSite, lease.id, { include_lease: true });
+                                    updated = await api.getChameleonDraft(draft.id);
                                   } else {
                                     const res = (draft.resources || []).find(r => r.type === 'lease' && r.id === lease.id);
                                     if (res) {
@@ -929,7 +1842,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                                 </span>
                               </div>
                               <div style={{ fontSize: 10, color: 'var(--fabric-text-muted)' }}>
-                                {lease.site && <span>@ {lease.site}</span>}
+                                {leaseSite && <span>@ {leaseSite}</span>}
                                 {lease.reservations?.[0] && (
                                   <span style={{ marginLeft: 6 }}>
                                     {lease.reservations[0].resource_type === 'physical:host' ? lease.reservations[0].min || 1 : ''} node{(lease.reservations[0].min || 1) !== 1 ? 's' : ''}
@@ -947,29 +1860,133 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
               {chiEditorTab === 'servers' && (
                 <div>
                   <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>Add Server</h5>
-                  <select className="chi-form-input" value={nodeSite} onChange={e => { setNodeSite(e.target.value); setNodeType(''); setNodeImage(''); }} style={{ marginBottom: 4, fontSize: 11 }}>
+                  <select className="chi-form-input" value={nodeSite} onChange={e => { setNodeSite(e.target.value); setNodeType(''); setNodeImage(''); setNodeKeyName(''); }} style={{ marginBottom: 4, fontSize: 11 }} data-testid="chameleon-server-site-select">
                     {configuredSites.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
                   </select>
                   <ChameleonNodeTypeComboBox nodeTypes={nodeTypes} value={nodeType} onSelect={setNodeType} disabled={loadingData} compact />
                   <div style={{ marginTop: 4 }}>
                     <ChameleonImageComboBox images={images} value={nodeImage} onSelect={setNodeImage} disabled={loadingData} compact />
                   </div>
-                  <button className="chi-editor-deploy-btn" disabled={!nodeType || !nodeImage || addingNode} onClick={handleAddNode} style={{ marginTop: 4 }}>
+                  <select
+                    className="chi-form-input"
+                    value={nodeKeyName}
+                    onChange={e => setNodeKeyName(e.target.value)}
+                    style={{ marginTop: 4, fontSize: 11 }}
+                    data-testid="chameleon-server-key-select"
+                    disabled={!!loadingKeypairsBySite[effectiveSite]}
+                  >
+                    <option value="">Use site default SSH key</option>
+                    {getKeypairNamesForSite(effectiveSite, nodeKeyName).map(keyName => (
+                      <option key={keyName} value={keyName}>{keyName}</option>
+                    ))}
+                  </select>
+                  <button className="chi-editor-deploy-btn" disabled={!nodeType || !nodeImage || addingNode} onClick={handleAddNode} style={{ marginTop: 4 }} data-testid="chameleon-add-server">
                     {addingNode ? 'Adding...' : '+ Add Server'}
                   </button>
+                  <div style={{ marginTop: 10 }}>
+                    <FilterBox
+                      value={serverFilter}
+                      onChange={setServerFilter}
+                      placeholder="Search servers by name, site, type, status, IP..."
+                      resultCount={filteredPlannedNodes.length + filteredInstanceResources.length + filteredUnaffiliatedInstances.length}
+                      totalCount={draft.nodes.length + instanceResources.length + unaffiliatedInstances.length}
+                      testId="chameleon-server-filter"
+                    />
+                  </div>
                   {draft.nodes.length > 0 ? (
                     <div style={{ marginTop: 12 }}>
-                      <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 4px' }}>Servers ({draft.nodes.length})</h5>
-                      {draft.nodes.map(n => {
+                      <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 4px' }}>Planned Servers ({filteredPlannedNodes.length}/{draft.nodes.length})</h5>
+                      {filteredPlannedNodes.length === 0 ? (
+                        <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginTop: 8 }}>No planned servers match the current search.</div>
+                      ) : filteredPlannedNodes.map(n => {
                         const siteNets = existingNetworks.filter(net => net.site === (n.site || draft.site));
                         return (
-                          <div key={n.id} className="chi-editor-item" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 4 }}>
+                          <div
+                            key={n.id}
+                            className="chi-editor-item"
+                            style={{ flexDirection: 'column', alignItems: 'stretch', gap: 4 }}
+                            data-testid="chameleon-planned-server-row"
+                            data-node-id={n.id}
+                            data-node-name={n.name}
+                            data-site={n.site || ''}
+                          >
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                               <span style={{ fontWeight: 600, flex: 1 }}>{n.name}</span>
                               <span style={{ fontSize: 10, color: 'var(--fabric-text-muted)' }}>{n.node_type}</span>
+                              <span style={{ fontSize: 9, color: 'var(--fabric-text-muted)' }}>
+                                key: {n.key_name || 'site default'}
+                              </span>
                               {n.site && <span style={{ fontSize: 9, color: 'var(--fabric-success, #39B54A)' }}>@{n.site}</span>}
-                              <button className="chi-editor-item-remove" onClick={() => handleRemoveNode(n.id)}>×</button>
+                              <button
+                                className="chi-editor-item-remove"
+                                style={{ color: 'var(--fabric-primary, #5798bc)', fontSize: 12 }}
+                                title="Edit this server"
+                                onClick={() => editingNodeId === n.id ? cancelEditNode() : startEditNode(n)}
+                              >
+                                {editingNodeId === n.id ? '\u2715' : '\u270E'}
+                              </button>
+                              <button className="chi-editor-item-remove" title="Delete this server" onClick={() => handleRemoveNode(n.id)}>×</button>
                             </div>
+                            {editingNodeId === n.id && (
+                              <div style={{ borderTop: '1px solid var(--fabric-border)', paddingTop: 6, marginTop: 4 }}>
+                                <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--fabric-text-muted)', marginBottom: 4 }}>Edit Server</div>
+                                <input
+                                  className="chi-form-input"
+                                  type="text"
+                                  placeholder="Name"
+                                  value={editNodeName}
+                                  onChange={e => setEditNodeName(e.target.value)}
+                                  style={{ marginBottom: 4, fontSize: 11, width: '100%' }}
+                                />
+                                <ChameleonNodeTypeComboBox
+                                  nodeTypes={nodeTypes}
+                                  value={editNodeType}
+                                  onSelect={setEditNodeType}
+                                  disabled={loadingData || savingNodeEdit}
+                                  compact
+                                />
+                                <div style={{ marginTop: 4 }}>
+                                  <ChameleonImageComboBox
+                                    images={images}
+                                    value={editNodeImage}
+                                    onSelect={setEditNodeImage}
+                                    disabled={loadingData || savingNodeEdit}
+                                    compact
+                                  />
+                                </div>
+                                <select
+                                  className="chi-form-input"
+                                  value={editNodeKeyName}
+                                  onChange={e => setEditNodeKeyName(e.target.value)}
+                                  style={{ marginTop: 4, fontSize: 11, width: '100%' }}
+                                  data-testid="chameleon-server-edit-key-select"
+                                  disabled={savingNodeEdit || !!loadingKeypairsBySite[n.site || draft.site || effectiveSite]}
+                                >
+                                  <option value="">Use site default SSH key</option>
+                                  {getKeypairNamesForSite(n.site || draft.site || effectiveSite, editNodeKeyName).map(keyName => (
+                                    <option key={keyName} value={keyName}>{keyName}</option>
+                                  ))}
+                                </select>
+                                <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                                  <button
+                                    className="chi-editor-deploy-btn"
+                                    style={{ flex: 1, fontSize: 11 }}
+                                    disabled={savingNodeEdit || !editNodeType || !editNodeImage}
+                                    onClick={saveNodeEdit}
+                                  >
+                                    {savingNodeEdit ? 'Saving...' : 'Save'}
+                                  </button>
+                                  <button
+                                    className="chi-editor-deploy-btn"
+                                    style={{ fontSize: 11, background: 'var(--fabric-text-muted)' }}
+                                    disabled={savingNodeEdit}
+                                    onClick={cancelEditNode}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
                             {/* Network interface dropdowns — one per NIC */}
                             {((n as any).interfaces || [{ nic: 0, network: (n as any).network || null }, { nic: 1, network: null }]).map((ifc: any, ifcIdx: number) => (
                               <div key={ifcIdx} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, marginTop: ifcIdx > 0 ? 2 : 0 }}>
@@ -1037,8 +2054,95 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                   ) : (
                     <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginTop: 8 }}>No servers yet. Select a type and image above.</div>
                   )}
-                  {/* Add Existing Server — appears when slice has resources (Active state) */}
-                  {draft.resources && draft.resources.length > 0 && (
+                  {instanceResources.length > 0 && (
+                    <div style={{ marginTop: 12, borderTop: '1px solid var(--fabric-border)', paddingTop: 8 }}>
+                      <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 4px' }}>Live / Imported Servers ({filteredInstanceResources.length}/{instanceResources.length})</h5>
+                      <CompactResourceTable
+                        items={filteredInstanceResources}
+                        getKey={(resource) => resource.resource_id || resourceProviderId(resource)}
+                        emptyLabel="No live or imported servers match the current search."
+                        testId="chameleon-live-server-table"
+                        getRowTestId={() => 'chameleon-live-server-row'}
+                        getRowAttributes={(resource) => ({
+                          'data-resource-id': resource.resource_id,
+                          'data-provider-id': resourceProviderId(resource),
+                          'data-resource-name': resourceDisplayName(resource),
+                          'data-site': resourceSite(resource),
+                        })}
+                        columns={[
+                          { key: 'name', label: 'Name', render: (resource) => resource.name || shortId(resourceProviderId(resource)) },
+                          { key: 'site', label: 'Site', width: '82px', render: (resource) => resourceSite(resource) },
+                          {
+                            key: 'status',
+                            label: 'Status',
+                            width: '70px',
+                            render: (resource) => (
+                              <span className={`chi-status ${statusClass(resource.status || 'UNKNOWN')}`} style={{ fontSize: 9 }}>
+                                {resource.status || 'UNKNOWN'}
+                              </span>
+                            ),
+                          },
+                          {
+                            key: 'ip',
+                            label: 'IP',
+                            render: (resource) => resource.floating_ip || resource.management_ip || (resource.ip_addresses || [])[0] || '-',
+                          },
+                          { key: 'owner', label: 'Owner', width: '62px', render: (resource) => resource.ownership || 'managed' },
+                          {
+                            key: 'actions',
+                            label: 'Actions',
+                            render: (resource) => {
+                              const id = resourceProviderId(resource);
+                              const site = resourceSite(resource);
+                              const fip = resource.floating_ip || '';
+                              const busy = resourceBusy === (resource.resource_id || id);
+                              return (
+                                <InlineActions>
+                                  {onOpenTerminal && id && fip && resource.status === 'ACTIVE' && (
+                                    <button className="chi-editor-deploy-btn" style={{ fontSize: 10, padding: '2px 8px' }} onClick={() => onOpenTerminal?.({ id, name: resource.name || id, site })}>
+                                      Terminal
+                                    </button>
+                                  )}
+                                  <button className="chi-action-btn" style={{ fontSize: 10 }} onClick={() => setChiEditorTab('ips')}>
+                                    Manage IP
+                                  </button>
+                                  <button
+                                    className="chi-action-btn"
+                                    style={{ fontSize: 10 }}
+                                    disabled={busy}
+                                    onClick={() => confirmEditorAction({
+                                      title: 'Detach Server From Slice',
+                                      message: `Detach server "${resource.name || id}" from this slice? The Chameleon instance will keep running.`,
+                                      confirmLabel: 'Detach from slice',
+                                      onConfirm: () => detachSliceResource(resource),
+                                    })}
+                                  >
+                                    Detach from slice
+                                  </button>
+                                  <button
+                                    className="chi-action-btn chi-action-btn-danger"
+                                    style={{ fontSize: 10 }}
+                                    disabled={busy}
+                                    onClick={() => confirmEditorAction({
+                                      title: 'Delete Server From Chameleon',
+                                      message: `Delete server "${resource.name || id}" from Chameleon and detach it from this slice? This cannot be undone.`,
+                                      danger: true,
+                                      confirmLabel: 'Delete from Chameleon',
+                                      onConfirm: () => deleteSliceResource(resource),
+                                    })}
+                                  >
+                                    Delete from Chameleon
+                                  </button>
+                                </InlineActions>
+                              );
+                            },
+                          },
+                        ]}
+                      />
+                    </div>
+                  )}
+                  {/* Add Existing Server */}
+                  {draft && (
                     <div style={{ marginTop: 12, borderTop: '1px solid var(--fabric-border)', paddingTop: 8 }}>
                       <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>Add Existing Server</h5>
                       <button
@@ -1058,52 +2162,74 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                           }
                         }}
                       >
-                        {loadingUnaffiliated ? 'Searching...' : 'Find Unaffiliated Servers'}
+                        {loadingUnaffiliated ? 'Searching...' : 'Find Unattached Project Servers'}
                       </button>
                       {unaffiliatedInstances.length > 0 && (
-                        <>
-                          <select
-                            className="chi-form-input"
-                            value={selectedUnaffiliated}
-                            onChange={e => setSelectedUnaffiliated(e.target.value)}
-                            style={{ marginBottom: 4, fontSize: 11 }}
-                          >
-                            <option value="">-- Select Server --</option>
-                            {unaffiliatedInstances.map(inst => (
-                              <option key={inst.id} value={inst.id}>
-                                {inst.name} ({inst.site} - {inst.status})
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            className="chi-editor-deploy-btn"
-                            style={{ width: '100%' }}
-                            disabled={!selectedUnaffiliated || addingExistingServer}
-                            onClick={async () => {
-                              if (!draft || !selectedUnaffiliated) return;
-                              setAddingExistingServer(true);
-                              try {
-                                const inst = unaffiliatedInstances.find(i => i.id === selectedUnaffiliated);
-                                const updated = await api.addChameleonSliceResource(draft.id, {
-                                  type: 'instance',
-                                  id: selectedUnaffiliated,
-                                  name: inst?.name || 'server',
-                                  site: inst?.site || '',
-                                });
-                                setDraft(updated);
-                                onDraftUpdated?.(updated);
-                                setSelectedUnaffiliated('');
-                                setUnaffiliatedInstances([]);
-                              } catch (e: any) {
-                                onError?.(e.message || 'Failed to add server to slice');
-                              } finally {
-                                setAddingExistingServer(false);
-                              }
-                            }}
-                          >
-                            {addingExistingServer ? 'Adding...' : 'Add to Slice'}
-                          </button>
-                        </>
+                        <CompactResourceTable
+                          items={filteredUnaffiliatedInstances}
+                          getKey={(inst) => inst.id}
+                          emptyLabel="No unattached servers match the current search."
+                          testId="chameleon-unattached-server-table"
+                          getRowTestId={() => 'chameleon-unattached-server-row'}
+                          getRowAttributes={(inst) => ({
+                            'data-provider-id': inst.id,
+                            'data-resource-name': inst.name,
+                            'data-site': inst.site,
+                          })}
+                          columns={[
+                            { key: 'name', label: 'Name', render: (inst) => inst.name || shortId(inst.id) },
+                            { key: 'site', label: 'Site', width: '82px', render: (inst) => inst.site || '-' },
+                            {
+                              key: 'status',
+                              label: 'Status',
+                              width: '70px',
+                              render: (inst) => <span className={`chi-status ${statusClass(inst.status || 'UNKNOWN')}`} style={{ fontSize: 9 }}>{inst.status || 'UNKNOWN'}</span>,
+                            },
+                            { key: 'ip', label: 'IP', render: (inst) => inst.floating_ip || (inst.ip_addresses || [])[0] || '-' },
+                            {
+                              key: 'action',
+                              label: 'Action',
+                              width: '92px',
+                              render: (inst) => (
+                                <button
+                                  className="chi-editor-deploy-btn"
+                                  style={{ fontSize: 11, padding: '2px 8px' }}
+                                  disabled={addingExistingServer}
+                                  onClick={async () => {
+                                    if (!draft) return;
+                                    setAddingExistingServer(true);
+                                    setSelectedUnaffiliated(inst.id);
+                                    try {
+                                      const updated = await api.addChameleonSliceResource(draft.id, {
+                                        type: 'instance',
+                                        id: inst.id,
+                                        name: inst?.name || 'server',
+                                        site: inst?.site || '',
+                                        status: inst?.status,
+                                        image: inst?.image,
+                                        ip_addresses: inst?.ip_addresses,
+                                        floating_ip: inst?.floating_ip,
+                                        port_id: inst?.port_id,
+                                        ownership: 'imported',
+                                        managed: false,
+                                        delete_with_slice: false,
+                                      });
+                                      applyUpdatedDraft(updated);
+                                      setSelectedUnaffiliated('');
+                                      setUnaffiliatedInstances(prev => prev.filter(i => i.id !== inst.id));
+                                    } catch (e: any) {
+                                      onError?.(e.message || 'Failed to add server to slice');
+                                    } finally {
+                                      setAddingExistingServer(false);
+                                    }
+                                  }}
+                                >
+                                  {addingExistingServer && selectedUnaffiliated === inst.id ? 'Adding...' : 'Attach'}
+                                </button>
+                              ),
+                            },
+                          ]}
+                        />
                       )}
                     </div>
                   )}
@@ -1111,57 +2237,52 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
               )}
               {chiEditorTab === 'networks' && (
                 <div>
-                  <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>Attach to Existing Network</h5>
-                  <select className="chi-form-input" value={selectedExistingNet} onChange={e => setSelectedExistingNet(e.target.value)}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <h5 style={{ fontSize: 11, fontWeight: 600, margin: 0 }}>Create Chameleon Network</h5>
+                    <button className="chi-action-btn" style={{ fontSize: 10 }} onClick={() => refreshResourceInventory()} disabled={loadingInventory}>
+                      {loadingInventory ? 'Refreshing...' : 'Refresh'}
+                    </button>
+                  </div>
+                  <FilterBox
+                    value={networkFilter}
+                    onChange={setNetworkFilter}
+                    placeholder="Search networks by name, site, CIDR, status..."
+                    resultCount={filteredExistingNetworkResources.length + filteredNetworkResources.length + filteredDraftNetworks.length}
+                    totalCount={existingNetworks.filter(n => !trackedNetworkIds.has(n.id)).length + networkResources.length + draft.networks.length}
+                    testId="chameleon-network-filter"
+                  />
+                  <input className="chi-form-input" value={newRealNetName} onChange={e => setNewRealNetName(e.target.value)} placeholder="Network name" style={{ marginBottom: 4 }} />
+                  <select className="chi-form-input" value={newRealNetSite} onChange={e => setNewRealNetSite(e.target.value)} style={{ marginBottom: 4, fontSize: 11 }}>
+                    {configuredSites.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                  </select>
+                  <input className="chi-form-input" value={newRealNetCidr} onChange={e => setNewRealNetCidr(e.target.value)} placeholder="Optional CIDR, e.g. 192.168.100.0/24" style={{ marginBottom: 4 }} />
+                  <button className="chi-editor-deploy-btn" disabled={!newRealNetName.trim() || !newRealNetSite || resourceBusy === 'create-network'} onClick={handleCreateTrackedNetwork}>
+                    {resourceBusy === 'create-network' ? 'Creating...' : 'Create and track network'}
+                  </button>
+
+                  <div style={{ borderBottom: '1px solid var(--fabric-border)', margin: '12px 0' }} />
+                  <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>Attach Existing Network</h5>
+                  <select className="chi-form-input" value={selectedExistingNetResource} onChange={e => setSelectedExistingNetResource(e.target.value)}>
                     <option value="">-- Select Network --</option>
-                    {existingNetworks.map(n => (
+                    {filteredExistingNetworkResources.map(n => (
                       <option key={n.id} value={n.id}>
-                        {n.name}{n.shared ? ' (shared)' : ''}{n.subnet_details?.[0]?.cidr ? ` \u2014 ${n.subnet_details[0].cidr}` : ''}
+                        {n.name}{n.shared ? ' (shared)' : ''}{networkCidrs(n) ? ` - ${networkCidrs(n)}` : ''} @ {n.site}
                       </option>
                     ))}
                   </select>
-                  {selectedExistingNet && draft && draft.nodes.length > 0 && (
-                    <>
-                      <label style={{ fontSize: 10, fontWeight: 600, display: 'block', marginTop: 6, marginBottom: 2 }}>Connect Nodes:</label>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        {draft.nodes.map(n => (
-                          <label key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer' }}>
-                            <input type="checkbox" checked={existingNetNodes.includes(n.id)} onChange={e => {
-                              if (e.target.checked) setExistingNetNodes(prev => [...prev, n.id]);
-                              else setExistingNetNodes(prev => prev.filter(id => id !== n.id));
-                            }} />
-                            {n.name}
-                          </label>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                  <button className="chi-editor-deploy-btn" disabled={!selectedExistingNet} onClick={async () => {
-                    if (!draft || !selectedExistingNet) return;
-                    const net = existingNetworks.find(n => n.id === selectedExistingNet);
-                    try {
-                      const updated = await api.addChameleonDraftNetwork(draft.id, {
-                        name: net?.name || 'existing-net',
-                        connected_nodes: existingNetNodes,
-                      });
-                      setDraft(updated);
-                      onDraftUpdated?.(updated);
-                      refreshGraph(draft.id);
-                      setSelectedExistingNet('');
-                      setExistingNetNodes([]);
-                    } catch (e: any) { onError?.(e.message); }
-                  }} style={{ marginTop: 4 }}>
-                    Attach Network
+                  <button className="chi-editor-deploy-btn" disabled={!selectedExistingNetResource || resourceBusy.startsWith('network:')} onClick={handleAttachExistingNetworkResource} style={{ marginTop: 4 }}>
+                    Attach to slice
                   </button>
+
                   <div style={{ borderBottom: '1px solid var(--fabric-border)', margin: '12px 0' }} />
-                  <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>Add Network</h5>
-                  <input className="chi-form-input" value={netName} onChange={e => setNetName(e.target.value)} placeholder="Network name" />
+                  <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>Plan Draft Network</h5>
+                  <input className="chi-form-input" value={netName} onChange={e => setNetName(e.target.value)} placeholder="Draft network name" data-testid="chameleon-draft-network-name" />
                   {draft.nodes.length > 0 && (
                     <>
                       <label style={{ fontSize: 10, fontWeight: 600, display: 'block', marginTop: 6, marginBottom: 2 }}>Connect Nodes:</label>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         {draft.nodes.map(n => (
-                          <label key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer' }}>
+                          <label key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer' }} data-testid="chameleon-draft-network-node-option" data-node-id={n.id} data-node-name={n.name}>
                             <input type="checkbox" checked={netConnected.includes(n.id)} onChange={(e) => {
                               if (e.target.checked) setNetConnected(prev => [...prev, n.id]);
                               else setNetConnected(prev => prev.filter(id => id !== n.id));
@@ -1172,21 +2293,381 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                       </div>
                     </>
                   )}
-                  <button className="chi-editor-deploy-btn" disabled={!netName || addingNet} onClick={handleAddNetwork} style={{ marginTop: 4 }}>
-                    {addingNet ? 'Adding...' : '+ Add Network'}
+                  <button className="chi-editor-deploy-btn" disabled={!netName || addingNet} onClick={handleAddNetwork} style={{ marginTop: 4 }} data-testid="chameleon-add-draft-network">
+                    {addingNet ? 'Adding...' : '+ Add draft network'}
                   </button>
-                  {draft.networks.length > 0 ? (
-                    <div style={{ marginTop: 12 }}>
-                      <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 4px' }}>Networks ({draft.networks.length})</h5>
-                      {draft.networks.map(n => (
-                        <div key={n.id} className="chi-editor-item">
-                          <span>{n.name}</span>
-                          <button className="chi-editor-item-remove" onClick={() => handleRemoveNetwork(n.id)}>×</button>
+
+                  {draft.nodes.length > 0 && (
+                    <div style={{ marginTop: 12, borderTop: '1px solid var(--fabric-border)', paddingTop: 8 }}>
+                      <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 4px' }}>NIC Connections</h5>
+                      {draft.nodes.map(n => (
+                        <div
+                          key={n.id}
+                          className="chi-editor-item"
+                          style={{ flexDirection: 'column', alignItems: 'stretch', gap: 4 }}
+                          data-testid="chameleon-nic-row"
+                          data-node-id={n.id}
+                          data-node-name={n.name}
+                          data-site={n.site}
+                        >
+                          <div style={{ fontWeight: 600, fontSize: 11 }}>{n.name} <span style={{ color: 'var(--fabric-text-muted)', fontWeight: 400 }}>@ {n.site}</span></div>
+                          {renderInterfaceControls(n)}
                         </div>
                       ))}
                     </div>
+                  )}
+
+                  {networkResources.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 4px' }}>Tracked Chameleon Networks ({filteredNetworkResources.length}/{networkResources.length})</h5>
+                      <CompactResourceTable
+                        items={filteredNetworkResources}
+                        getKey={(resource) => resource.resource_id || resourceProviderId(resource)}
+                        emptyLabel="No tracked networks match the current search."
+                        testId="chameleon-tracked-network-table"
+                        getRowTestId={() => 'chameleon-tracked-network-row'}
+                        getRowAttributes={(resource) => ({
+                          'data-resource-id': resource.resource_id,
+                          'data-provider-id': resourceProviderId(resource),
+                          'data-resource-name': resourceDisplayName(resource),
+                          'data-site': resourceSite(resource),
+                        })}
+                        columns={[
+                          { key: 'name', label: 'Name', render: (resource) => resource.name || shortId(resourceProviderId(resource)) },
+                          { key: 'site', label: 'Site', width: '82px', render: (resource) => resourceSite(resource) },
+                          { key: 'cidr', label: 'CIDR', render: (resource) => resource.cidr || '-' },
+                          { key: 'owner', label: 'Owner', width: '62px', render: (resource) => resource.ownership || 'managed' },
+                          {
+                            key: 'actions',
+                            label: 'Actions',
+                            render: (resource) => {
+                              const id = resourceProviderId(resource);
+                              const busy = resourceBusy === (resource.resource_id || id);
+                              return (
+                                <InlineActions>
+                                  <button className="chi-action-btn" style={{ fontSize: 10 }} disabled={busy} onClick={() => confirmEditorAction({
+                                    title: 'Detach Network From Slice',
+                                    message: `Detach network "${resource.name || id}" from this slice? The Neutron network will remain in Chameleon.`,
+                                    confirmLabel: 'Detach from slice',
+                                    onConfirm: () => detachSliceResource(resource),
+                                  })}>Detach from slice</button>
+                                  <button className="chi-action-btn chi-action-btn-danger" style={{ fontSize: 10 }} disabled={busy} onClick={() => confirmEditorAction({
+                                    title: 'Delete Network From Chameleon',
+                                    message: `Delete network "${resource.name || id}" from Chameleon and detach it from this slice? This can affect attached ports.`,
+                                    details: ['Any server NIC using this network may lose connectivity.'],
+                                    danger: true,
+                                    confirmLabel: 'Delete from Chameleon',
+                                    onConfirm: () => deleteSliceResource(resource),
+                                  })}>Delete from Chameleon</button>
+                                </InlineActions>
+                              );
+                            },
+                          },
+                        ]}
+                      />
+                    </div>
+                  )}
+
+                  {draft.networks.length > 0 ? (
+                    <div style={{ marginTop: 12 }}>
+                      <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 4px' }}>Draft Networks ({filteredDraftNetworks.length}/{draft.networks.length})</h5>
+                      <CompactResourceTable
+                        items={filteredDraftNetworks}
+                        getKey={(network) => network.id}
+                        emptyLabel="No draft networks match the current search."
+                        testId="chameleon-draft-network-table"
+                        getRowTestId={() => 'chameleon-draft-network-row'}
+                        getRowAttributes={(network) => ({
+                          'data-network-id': network.id,
+                          'data-network-name': network.name,
+                        })}
+                        columns={[
+                          { key: 'name', label: 'Name', render: (network) => network.name },
+                          {
+                            key: 'members',
+                            label: 'Connected',
+                            render: (network) => `${(network.connected_nodes || []).length} server${(network.connected_nodes || []).length === 1 ? '' : 's'}`,
+                          },
+                          {
+                            key: 'actions',
+                            label: 'Actions',
+                            width: '86px',
+                            render: (network) => (
+                              <button className="chi-action-btn chi-action-btn-danger" style={{ fontSize: 10 }} title="Remove from draft" onClick={() => handleRemoveNetwork(network.id)}>
+                                Remove from draft
+                              </button>
+                            ),
+                          },
+                        ]}
+                      />
+                    </div>
                   ) : (
-                    <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginTop: 8 }}>No networks yet. Enter a name above.</div>
+                    <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginTop: 8 }}>No draft networks yet.</div>
+                  )}
+                </div>
+              )}
+              {chiEditorTab === 'ips' && (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <h5 style={{ fontSize: 11, fontWeight: 600, margin: 0 }}>Floating IP Intent</h5>
+                    <button className="chi-action-btn" style={{ fontSize: 10 }} onClick={() => refreshResourceInventory()} disabled={loadingInventory}>
+                      {loadingInventory ? 'Refreshing...' : 'Refresh'}
+                    </button>
+                  </div>
+                  <FilterBox
+                    value={ipFilter}
+                    onChange={setIpFilter}
+                    placeholder="Search IPs by address, node, site, status, port..."
+                    resultCount={filteredIpIntentNodes.length + filteredFloatingIps.length + filteredFloatingIpResources.length}
+                    totalCount={draft.nodes.length + floatingIps.filter(ip => !trackedFloatingIpIds.has(ip.id)).length + floatingIpResources.length}
+                    testId="chameleon-ip-filter"
+                  />
+                  {draft.nodes.length > 0 ? filteredIpIntentNodes.map(n => (
+                    <div
+                      key={n.id}
+                      className="chi-editor-item"
+                      style={{ flexDirection: 'column', alignItems: 'stretch', gap: 4 }}
+                      data-testid="chameleon-floating-ip-intent-row"
+                      data-node-id={n.id}
+                      data-node-name={n.name}
+                    >
+                      <div style={{ fontWeight: 600, fontSize: 11 }}>{n.name}</div>
+                      <select
+                        value={fipHasNode(draft.floating_ips || [], n.id) ? String(fipGetNic(draft.floating_ips || [], n.id)) : 'none'}
+                        onChange={async (e) => {
+                          const val = e.target.value;
+                          const newFips = val === 'none'
+                            ? fipRemove(draft.floating_ips || [], n.id)
+                            : fipAdd(draft.floating_ips || [], n.id, parseInt(val));
+                          try {
+                            const updated = await api.setDraftFloatingIps(draft.id, newFips);
+                            applyUpdatedDraft(updated, { refresh: false });
+                          } catch (err: any) {
+                            onError?.(err?.message || 'Failed to update floating IP intent');
+                          }
+                        }}
+                        style={{ fontSize: 10, padding: '2px 4px', borderRadius: 3, border: '1px solid var(--fabric-border)' }}
+                      >
+                        <option value="none">No floating IP on deploy</option>
+                        {(n.interfaces || []).map((ifc: any, idx: number) => (
+                          <option key={idx} value={String(ifc.nic ?? idx)}>NIC {ifc.nic ?? idx}{ifc.network ? ` (${ifc.network.name})` : ''}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )) : (
+                    <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>Add planned servers before setting deploy-time floating IP intent.</div>
+                  )}
+
+                  <div style={{ borderBottom: '1px solid var(--fabric-border)', margin: '12px 0' }} />
+                  <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>Allocate Floating IP</h5>
+                  <select className="chi-form-input" value={allocFipSite} onChange={e => setAllocFipSite(e.target.value)} style={{ marginBottom: 4, fontSize: 11 }}>
+                    {configuredSites.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                  </select>
+                  <button className="chi-editor-deploy-btn" disabled={!allocFipSite || resourceBusy === 'allocate-fip'} onClick={handleAllocateTrackedFloatingIp}>
+                    {resourceBusy === 'allocate-fip' ? 'Allocating...' : 'Allocate and track IP'}
+                  </button>
+
+                  <div style={{ borderBottom: '1px solid var(--fabric-border)', margin: '12px 0' }} />
+                  <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>Attach Existing Floating IP</h5>
+                  <select className="chi-form-input" value={selectedFipId} onChange={e => setSelectedFipId(e.target.value)} style={{ marginBottom: 4 }}>
+                    <option value="">-- Select floating IP --</option>
+                    {filteredFloatingIps.map(ip => (
+                      <option key={ip.id} value={ip.id}>{ip.floating_ip_address || ip.id} ({ip.status || 'UNKNOWN'}) @ {resourceSite(ip, '')}</option>
+                    ))}
+                  </select>
+                  <select className="chi-form-input" value={selectedFipTargetPort} onChange={e => setSelectedFipTargetPort(e.target.value)} style={{ marginBottom: 4 }}>
+                    <option value="">Track only / unattached</option>
+                    {liveServerTargets.filter(t => t.portId).map(target => (
+                      <option key={target.portId} value={target.portId}>{target.name} NIC port {shortId(target.portId)}</option>
+                    ))}
+                  </select>
+                  <button className="chi-editor-deploy-btn" disabled={!selectedFipId || resourceBusy.startsWith('fip:')} onClick={handleAttachFloatingIpResource}>
+                    Attach to slice
+                  </button>
+
+                  {floatingIpResources.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 4px' }}>Tracked Floating IPs ({filteredFloatingIpResources.length}/{floatingIpResources.length})</h5>
+                      <CompactResourceTable
+                        items={filteredFloatingIpResources}
+                        getKey={(resource) => resource.resource_id || resourceProviderId(resource)}
+                        emptyLabel="No tracked floating IPs match the current search."
+                        testId="chameleon-floating-ip-table"
+                        getRowTestId={() => 'chameleon-floating-ip-row'}
+                        getRowAttributes={(resource) => ({
+                          'data-resource-id': resource.resource_id,
+                          'data-provider-id': resourceProviderId(resource),
+                          'data-resource-name': resourceDisplayName(resource),
+                          'data-site': resourceSite(resource),
+                        })}
+                        columns={[
+                          {
+                            key: 'ip',
+                            label: 'IP',
+                            render: (resource) => <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{resource.floating_ip || resource.name || shortId(resourceProviderId(resource))}</span>,
+                          },
+                          { key: 'site', label: 'Site', width: '82px', render: (resource) => resourceSite(resource) },
+                          { key: 'port', label: 'Port', render: (resource) => resource.port_id ? shortId(resource.port_id) : 'unattached' },
+                          { key: 'owner', label: 'Owner', width: '62px', render: (resource) => resource.ownership || 'managed' },
+                          {
+                            key: 'actions',
+                            label: 'Actions',
+                            render: (resource) => {
+                              const id = resourceProviderId(resource);
+                              const busy = resourceBusy === (resource.resource_id || id);
+                              return (
+                                <InlineActions>
+                                  {resource.port_id && (
+                                    <button className="chi-action-btn" style={{ fontSize: 10 }} disabled={busy} onClick={() => confirmEditorAction({
+                                      title: 'Disassociate Floating IP',
+                                      message: `Disassociate ${resource.floating_ip || resource.name} from its current port? The IP allocation remains.`,
+                                      confirmLabel: 'Disassociate IP',
+                                      onConfirm: async () => {
+                                        await api.associateChameleonFloatingIp(id, resourceSite(resource), '');
+                                        if (draft) {
+                                          const updated = await api.addChameleonSliceResource(draft.id, { ...resource, port_id: '' });
+                                          applyUpdatedDraft(updated, { refresh: false });
+                                        }
+                                        await refreshResourceInventory();
+                                      },
+                                    })}>Disassociate IP</button>
+                                  )}
+                                  <button className="chi-action-btn" style={{ fontSize: 10 }} disabled={busy} onClick={() => confirmEditorAction({
+                                    title: 'Detach Floating IP From Slice',
+                                    message: `Detach floating IP "${resource.floating_ip || resource.name || id}" from slice tracking? The IP allocation remains in Chameleon.`,
+                                    confirmLabel: 'Detach from slice',
+                                    onConfirm: () => detachSliceResource(resource),
+                                  })}>Detach from slice</button>
+                                  <button className="chi-action-btn chi-action-btn-danger" style={{ fontSize: 10 }} disabled={busy} onClick={() => confirmEditorAction({
+                                    title: 'Release Floating IP',
+                                    message: `Release floating IP "${resource.floating_ip || resource.name || id}" from Chameleon and detach it from this slice?`,
+                                    danger: true,
+                                    confirmLabel: 'Release floating IP',
+                                    onConfirm: () => deleteSliceResource(resource),
+                                  })}>Release floating IP</button>
+                                </InlineActions>
+                              );
+                            },
+                          },
+                        ]}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+              {chiEditorTab === 'resources' && (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <h5 style={{ fontSize: 11, fontWeight: 600, margin: 0 }}>Slice Resource Inventory</h5>
+                    <button className="chi-action-btn" style={{ fontSize: 10 }} onClick={() => refreshResourceInventory()} disabled={loadingInventory}>
+                      {loadingInventory ? 'Refreshing...' : 'Refresh'}
+                    </button>
+                  </div>
+                  <FilterBox
+                    value={resourceFilter}
+                    onChange={setResourceFilter}
+                    placeholder="Search resources by type, name, site, status, owner, ID..."
+                    resultCount={filteredSliceResources.length + filteredAttachableSecurityGroups.length}
+                    totalCount={sliceResources.length + securityGroups.filter(sg => !trackedSecurityGroupIds.has(sg.id)).length}
+                    testId="chameleon-resource-filter"
+                  />
+                  {sliceResources.length === 0 ? (
+                    <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>No tracked Chameleon resources in this slice.</div>
+                  ) : (
+                    <CompactResourceTable
+                      items={filteredSliceResources}
+                      getKey={(resource) => resource.resource_id || resourceProviderId(resource)}
+                      emptyLabel="No tracked resources match the current search."
+                      testId="chameleon-resource-table"
+                      getRowTestId={() => 'chameleon-resource-row'}
+                      getRowAttributes={(resource) => ({
+                        'data-resource-id': resource.resource_id,
+                        'data-provider-id': resourceProviderId(resource),
+                        'data-resource-name': resourceDisplayName(resource),
+                        'data-resource-type': resource.type,
+                        'data-site': resourceSite(resource, ''),
+                      })}
+                      columns={[
+                        { key: 'type', label: 'Type', width: '78px', render: (resource) => <span style={{ fontWeight: 700, textTransform: 'uppercase', color: 'var(--fabric-text-muted)' }}>{resource.type}</span> },
+                        { key: 'name', label: 'Name', render: (resource) => resourceDisplayName(resource) },
+                        {
+                          key: 'status',
+                          label: 'Status',
+                          width: '70px',
+                          render: (resource) => <span className={`chi-status ${statusClass(resource.status || 'UNKNOWN')}`} style={{ fontSize: 9 }}>{resource.status || 'UNKNOWN'}</span>,
+                        },
+                        { key: 'site', label: 'Site', width: '82px', render: (resource) => resourceSite(resource, '-') },
+                        { key: 'owner', label: 'Owner', width: '70px', render: (resource) => resource.ownership || (resource.managed ? 'managed' : 'imported') },
+                        { key: 'cleanup', label: 'Cleanup', width: '88px', render: (resource) => resource.delete_with_slice ? 'Delete' : 'Detach' },
+                        { key: 'id', label: 'Provider ID', render: (resource) => <span style={{ fontFamily: 'monospace' }}>{shortId(resourceProviderId(resource))}</span> },
+                        {
+                          key: 'actions',
+                          label: 'Actions',
+                          render: (resource) => {
+                            const id = resourceProviderId(resource);
+                            const busy = resourceBusy === (resource.resource_id || id);
+                            const details = resource.type === 'lease' ? leaseDetachDetails(resource) : [];
+                            return (
+                              <InlineActions>
+                                <button className="chi-action-btn" style={{ fontSize: 10 }} disabled={busy} onClick={() => toggleDeleteWithSlice(resource)}>
+                                  {resource.delete_with_slice ? 'Set detach only' : 'Delete with slice'}
+                                </button>
+                                <button className="chi-action-btn" style={{ fontSize: 10 }} disabled={busy} onClick={() => confirmEditorAction({
+                                  title: `Detach ${resource.type} From Slice`,
+                                  message: `Detach "${resourceDisplayName(resource)}" from this slice? The Chameleon resource will remain.`,
+                                  details,
+                                  confirmLabel: 'Detach from slice',
+                                  onConfirm: () => detachSliceResource(resource),
+                                })}>Detach from slice</button>
+                                {['lease', 'instance', 'network', 'floating_ip', 'security_group'].includes(resource.type) && (
+                                  <button className="chi-action-btn chi-action-btn-danger" style={{ fontSize: 10 }} disabled={busy} onClick={() => confirmEditorAction({
+                                    title: `Delete ${resource.type} From Chameleon`,
+                                    message: `Delete "${resourceDisplayName(resource)}" from Chameleon and detach it from this slice? This cannot be undone.`,
+                                    details,
+                                    danger: true,
+                                    confirmLabel: 'Delete from Chameleon',
+                                    onConfirm: () => deleteSliceResource(resource),
+                                  })}>Delete from Chameleon</button>
+                                )}
+                              </InlineActions>
+                            );
+                          },
+                        },
+                      ]}
+                    />
+                  )}
+                  {securityGroups.filter(sg => !trackedSecurityGroupIds.has(sg.id)).length > 0 && (
+                    <div style={{ marginTop: 12, borderTop: '1px solid var(--fabric-border)', paddingTop: 8 }}>
+                      <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 4px' }}>Attach Project Security Group</h5>
+                      <CompactResourceTable
+                        items={filteredAttachableSecurityGroups}
+                        getKey={(sg) => sg.id}
+                        emptyLabel="No project security groups match the current search."
+                        testId="chameleon-security-group-table"
+                        getRowTestId={() => 'chameleon-security-group-row'}
+                        getRowAttributes={(sg) => ({
+                          'data-provider-id': sg.id,
+                          'data-resource-name': sg.name,
+                          'data-site': resourceSite(sg, ''),
+                        })}
+                        columns={[
+                          { key: 'name', label: 'Name', render: (sg) => sg.name || shortId(sg.id) },
+                          { key: 'site', label: 'Site', width: '82px', render: (sg) => resourceSite(sg, '-') },
+                          { key: 'rules', label: 'Rules', width: '58px', render: (sg) => (sg.security_group_rules || []).length },
+                          { key: 'id', label: 'ID', render: (sg) => <span style={{ fontFamily: 'monospace' }}>{shortId(sg.id)}</span> },
+                          {
+                            key: 'action',
+                            label: 'Action',
+                            width: '92px',
+                            render: (sg) => (
+                              <button className="chi-editor-deploy-btn" style={{ fontSize: 11, padding: '2px 8px' }} disabled={resourceBusy === `sg:${sg.id}`} onClick={() => handleAttachSecurityGroupResource(sg)}>
+                                {resourceBusy === `sg:${sg.id}` ? 'Attaching...' : 'Attach'}
+                              </button>
+                            ),
+                          },
+                        ]}
+                      />
+                    </div>
                   )}
                 </div>
               )}
@@ -1247,6 +2728,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
               value={newDraftName}
               onChange={e => setNewDraftName(e.target.value)}
               placeholder="my-experiment"
+              data-testid="chameleon-draft-name"
             />
             <p style={{ fontSize: 11, color: 'var(--fabric-text-muted)', margin: '8px 0 0' }}>
               Sites are selected per-node when adding servers.
@@ -1256,6 +2738,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
               style={{ marginTop: 12, width: '100%' }}
               onClick={handleCreateDraft}
               disabled={!newDraftName.trim()}
+              data-testid="chameleon-create-draft"
             >
               Create Draft
             </button>
@@ -1264,7 +2747,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
 
         {/* --- Draft Header --- */}
         {state !== 'empty' && draft && (
-          <div className="chi-editor-section chi-editor-header">
+          <div className="chi-editor-section chi-editor-header" data-testid="chameleon-draft-header" data-draft-id={draft.id} data-draft-name={draft.name}>
             <div className="chi-editor-header-row">
               <span className="chi-editor-draft-name">{draft.name}</span>
               <span className={`chi-status ${statusClass(stateLabel(state))}`}>{stateLabel(state)}</span>
@@ -1281,6 +2764,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                 className="chi-action-btn chi-action-btn-danger"
                 style={{ marginTop: 6, fontSize: 10 }}
                 onClick={handleDeleteDraft}
+                data-testid="chameleon-discard-draft"
               >
                 Discard Draft
               </button>
@@ -1299,15 +2783,29 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
               value={nodeName}
               onChange={e => setNodeName(e.target.value)}
               placeholder="node1"
+              data-testid="chameleon-node-name"
             />
             <label className="chi-form-label">Site</label>
-            <select className="chi-form-input" value={nodeSite} onChange={e => { setNodeSite(e.target.value); setNodeType(''); setNodeImage(''); }}>
+            <select className="chi-form-input" value={nodeSite} onChange={e => { setNodeSite(e.target.value); setNodeType(''); setNodeImage(''); setNodeKeyName(''); }} data-testid="chameleon-node-site">
               {configuredSites.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
             </select>
             <label className="chi-form-label">Node Type {loadingData && '(loading...)'}</label>
             <ChameleonNodeTypeComboBox nodeTypes={nodeTypes} value={nodeType} onSelect={setNodeType} disabled={loadingData} />
             <label className="chi-form-label">Image</label>
             <ChameleonImageComboBox images={images} value={nodeImage} onSelect={setNodeImage} disabled={loadingData} />
+            <label className="chi-form-label">SSH Key</label>
+            <select
+              className="chi-form-input"
+              value={nodeKeyName}
+              onChange={e => setNodeKeyName(e.target.value)}
+              data-testid="chameleon-node-key"
+              disabled={!!loadingKeypairsBySite[effectiveSite]}
+            >
+              <option value="">Use site default SSH key</option>
+              {getKeypairNamesForSite(effectiveSite, nodeKeyName).map(keyName => (
+                <option key={keyName} value={keyName}>{keyName}</option>
+              ))}
+            </select>
             <div className="chi-editor-form-row">
               <label className="chi-form-label">Count</label>
               <input
@@ -1315,16 +2813,18 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                 type="number"
                 min={1}
                 max={20}
-                value={nodeCount}
-                onChange={e => setNodeCount(Number(e.target.value))}
-                style={{ width: 70 }}
-              />
+              value={nodeCount}
+              onChange={e => setNodeCount(Number(e.target.value))}
+              style={{ width: 70 }}
+              data-testid="chameleon-node-count"
+            />
             </div>
             <button
               className="chi-editor-deploy-btn"
               style={{ marginTop: 8, width: '100%' }}
               onClick={handleAddNode}
               disabled={addingNode || !nodeName.trim() || !nodeType}
+              data-testid="chameleon-node-submit"
             >
               {addingNode ? 'Adding...' : 'Add Node'}
             </button>
@@ -1337,11 +2837,12 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
             <h4 className="chi-editor-section-title">Nodes ({(draft.nodes || []).length})</h4>
             <div className="chi-editor-item-list">
               {(draft.nodes || []).map(n => (
-                <div key={n.id} className="chi-editor-item">
+                <div key={n.id} className="chi-editor-item" data-testid="chameleon-draft-node-row" data-node-id={n.id} data-node-name={n.name}>
                   <div className="chi-editor-item-info">
                     <span className="chi-editor-item-name">{n.name}</span>
                     <span className="chi-editor-item-meta">
                       {n.node_type} / {n.image}{n.count > 1 ? ` x${n.count}` : ''}
+                      {' '}| key: {n.key_name || 'site default'}
                     </span>
                   </div>
                   <select
@@ -1392,11 +2893,12 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
               value={netName}
               onChange={e => setNetName(e.target.value)}
               placeholder="my-network"
+              data-testid="chameleon-network-name"
             />
             <label className="chi-form-label">Connected Nodes</label>
             <div className="chi-editor-checkbox-list">
               {(draft.nodes || []).map(n => (
-                <label key={n.id} className="chi-editor-checkbox">
+                <label key={n.id} className="chi-editor-checkbox" data-testid="chameleon-network-node-option" data-node-id={n.id} data-node-name={n.name}>
                   <input
                     type="checkbox"
                     checked={netConnected.includes(n.id)}
@@ -1411,6 +2913,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
               style={{ marginTop: 8, width: '100%' }}
               onClick={handleAddNetwork}
               disabled={addingNet || !netName.trim() || netConnected.length === 0}
+              data-testid="chameleon-network-submit"
             >
               {addingNet ? 'Adding...' : 'Add Network'}
             </button>
@@ -1423,7 +2926,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
             <h4 className="chi-editor-section-title">Networks ({(draft.networks || []).length})</h4>
             <div className="chi-editor-item-list">
               {(draft.networks || []).map(net => (
-                <div key={net.id} className="chi-editor-item">
+                <div key={net.id} className="chi-editor-item" data-testid="chameleon-draft-network-row" data-network-id={net.id} data-network-name={net.name}>
                   <div className="chi-editor-item-info">
                     <span className="chi-editor-item-name">{net.name}</span>
                     <span className="chi-editor-item-meta">
@@ -1521,7 +3024,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
               style={{ width: '100%', marginTop: 8 }}
               onClick={() => {
                 setDraft(null);
-                setGraphData(null);
+                setGraphDataIfChanged(null);
                 setState('empty');
                 setShowDeploy(false);
                 setDeployStatus('');
@@ -1595,10 +3098,15 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
           <div className="toolbar-modal" onClick={e => e.stopPropagation()}>
             <h4>{confirmAction.title}</h4>
             <p>{confirmAction.message}</p>
+            {confirmAction.details && confirmAction.details.length > 0 && (
+              <ul style={{ margin: '8px 0', paddingLeft: 18, fontSize: 12, color: 'var(--fabric-text-muted)' }}>
+                {confirmAction.details.map((detail, idx) => <li key={idx}>{detail}</li>)}
+              </ul>
+            )}
             <div className="toolbar-modal-actions">
               <button onClick={() => setConfirmAction(null)}>Cancel</button>
-              <button className={confirmAction.danger ? 'danger' : 'primary'} onClick={() => { confirmAction.onConfirm(); setConfirmAction(null); }}>
-                {confirmAction.danger ? 'Discard' : 'Confirm'}
+              <button className={confirmAction.danger ? 'danger' : 'primary'} onClick={() => { void confirmAction.onConfirm(); setConfirmAction(null); }}>
+                {confirmAction.confirmLabel || (confirmAction.danger ? 'Delete' : 'Confirm')}
               </button>
             </div>
           </div>

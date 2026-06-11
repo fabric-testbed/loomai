@@ -188,6 +188,15 @@ export default React.memo(function GeoView({ sliceData, selectedElement, onNodeC
   const [showChameleonInstances, setShowChameleonInstances] = useState(true);
   const [detailCollapsed, setDetailCollapsed] = useState(false);
   const [mapDark, setMapDark] = useState(() => localStorage.getItem('map-theme') === 'dark');
+  const mapKeyRef = useRef(`geo-map-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+  useEffect(() => {
+    return () => {
+      document.querySelectorAll<HTMLElement>('.geo-map-container .leaflet-container').forEach((el) => {
+        delete (el as any)._leaflet_id;
+      });
+    };
+  }, []);
 
   const toggleMapDark = () => {
     setMapDark(prev => {
@@ -298,6 +307,7 @@ export default React.memo(function GeoView({ sliceData, selectedElement, onNodeC
           </button>
         </div>
         <MapContainer
+          key={mapKeyRef.current}
           center={[38, -95]}
           zoom={3}
           style={{ width: '100%', height: '100%' }}

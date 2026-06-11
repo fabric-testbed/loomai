@@ -424,7 +424,8 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
       data.map(s => {
         const site = s.site || s._site || 'CHI@TACC';
         const fip = s.floating_ip || '';
-        const hasAnyIp = fip || (s.ip_addresses && s.ip_addresses.length > 0);
+        const openTerminal = onOpenTerminal;
+        const canSsh = Boolean(fip && openTerminal && s.status === 'ACTIVE');
         return [
           s.name,
           site,
@@ -432,8 +433,8 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
           (s.ip_addresses || []).join(', '),
           fip ? <span style={{ fontFamily: 'monospace', color: 'var(--fabric-teal, #008e7a)', fontWeight: 600 }}>{fip}</span> : <span style={{ color: 'var(--fabric-text-muted)' }}>—</span>,
           <span className="chi-os-row-actions">
-            {hasAnyIp && onOpenTerminal && s.status === 'ACTIVE' && (
-              <button className="chi-os-btn chi-os-btn-sm" style={{ color: '#39B54A' }} onClick={() => onOpenTerminal({ id: s.id, name: s.name, site })} title="Open SSH terminal">SSH</button>
+            {canSsh && (
+              <button className="chi-os-btn chi-os-btn-sm" style={{ color: '#39B54A' }} onClick={() => openTerminal?.({ id: s.id, name: s.name, site })} title="Open SSH terminal">SSH</button>
             )}
             {!fip && s.status === 'ACTIVE' && (
               <button className="chi-os-btn chi-os-btn-sm" style={{ color: 'var(--fabric-teal, #008e7a)' }} onClick={() => handleAssignFloatingIp(s.id, site)} title="Allocate and assign a floating IP">+ FIP</button>
@@ -483,7 +484,7 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
             if (!sliceId) return;
             try {
               const result = await api.importChameleonReservation(sliceId, l._site || 'CHI@TACC', l.id);
-              alert(`Imported ${result.imported} instance(s): ${result.instances?.join(', ') || 'none'}`);
+              alert(`Attached lease and imported ${result.imported} instance(s): ${result.instances?.join(', ') || 'none'}`);
             } catch (e: any) { onError?.(`Import failed: ${e}`); }
           }} title="Import instances from this lease into a slice">Import</button>
           <button className="chi-os-btn chi-os-btn-sm chi-os-btn-danger" onClick={() => handleDeleteLease(l.id, l._site || 'CHI@TACC')} title="Delete">Delete</button>
@@ -645,6 +646,11 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
 
   return (
     <div className="chi-os-view">
+      <div className="chi-os-scope-bar">
+        <span className="chi-os-scope-title">Project Inventory</span>
+        <span className="chi-os-scope-badge">Advanced</span>
+      </div>
+
       {/* Sub-tab bar */}
       <div className="chi-os-tabs">
         {OS_TABS.map(t => (
@@ -669,8 +675,9 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
         <button
           className={`chi-action-btn${autoRefresh ? ' chi-action-btn-active' : ''}`}
           style={{ fontSize: 10, padding: '2px 8px' }}
+          disabled={!AUTO_REFRESH_TABS.includes(activeTab)}
           onClick={() => setAutoRefresh(v => !v)}
-          title={autoRefresh ? 'Disable auto-refresh' : 'Enable auto-refresh (30s)'}
+          title={AUTO_REFRESH_TABS.includes(activeTab) ? (autoRefresh ? 'Disable auto-refresh' : 'Enable auto-refresh (30s)') : 'Auto-refresh is available for live state tabs'}
         >{autoRefresh ? '\u25CF Auto' : '\u25CB Auto'}</button>
         <input
           className="chi-os-filter"
@@ -699,15 +706,6 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
         )}
         {activeTab === 'security-groups' && (
           <button className="chi-os-btn chi-os-btn-primary" onClick={() => setShowCreateSg(true)}>+ Create Security Group</button>
-        )}
-        <button className="chi-os-btn" onClick={() => setRefreshKey(k => k + 1)} disabled={loading} title="Refresh">
-          {loading ? 'Loading...' : '\u21BB Refresh'}
-        </button>
-        {AUTO_REFRESH_TABS.includes(activeTab) && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', marginLeft: 4 }}>
-            <input type="checkbox" checked={autoRefresh} onChange={() => setAutoRefresh(v => !v)} />
-            Auto
-          </label>
         )}
       </div>
 

@@ -4,7 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { buildWsUrl } from '../utils/wsUrl';
-import { getAiModels, getClaudeConfigFiles, updateClaudeConfigFile, triggerClaudeBackup, resetToolConfig, browseAiFolders, type ClaudeConfigFile, type FolderBrowseResult } from '../api/client';
+import { getAiModels, getClaudeConfigFiles, updateClaudeConfigFile, triggerClaudeBackup, resetToolConfig, browseAiFolders, createAiTerminal, mintTerminalTicket, deleteTerminal, type ClaudeConfigFile, type FolderBrowseResult } from '../api/client';
 import '../styles/terminal-companion.css';
 
 const TERM_THEME = {
@@ -187,7 +187,65 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
     }
   }, [toolId, loadClaudeConfig]);
 
-  const restartSession = useCallback(() => {
+  // Resolve a persistent tmux-backed AI session and attach to it. Reuses the
+  // tab's stored session id (reload/view-switch → reattach); `forceNew` (the
+  // "New Session" button) discards it and creates a fresh session.
+  const connectAiSession = useCallback(async (term: Terminal, forceNew: boolean) => {
+    const key = `loomai.term.ai.${toolId}`;
+    const read = () => { try { return localStorage.getItem(key); } catch { return null; } };
+    const store = (v: string) => { try { localStorage.setItem(key, v); } catch { /* ignore */ } };
+    const clear = () => { try { localStorage.removeItem(key); } catch { /* ignore */ } };
+
+    let id = '';
+    let ticket = '';
+    try {
+      const existing = read();
+      if (forceNew && existing) {
+        try { await deleteTerminal(existing); } catch { /* ignore */ }
+        clear();
+      } else if (existing) {
+        try {
+          const t = await mintTerminalTicket(existing);
+          id = existing;
+          ticket = t.ticket;
+        } catch {
+          clear(); // stale (culled/killed) — create a fresh one below
+        }
+      }
+      if (!id) {
+        const model = hasModelPicker ? selectedModelRef.current : '';
+        const cwd = toolId === 'claude' ? selectedFolderRef.current : '';
+        const meta = await createAiTerminal(toolId, model, cwd);
+        id = meta.id;
+        ticket = meta.ticket || '';
+        store(id);
+      }
+    } catch (err) {
+      term.writeln(`\r\n\x1b[31m[${info.name}] failed to start: ${err}\x1b[0m`);
+      return;
+    }
+
+    const url = buildWsUrl(
+      `/ws/terminal/attach/${encodeURIComponent(id)}?ticket=${encodeURIComponent(ticket)}`,
+    );
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+    ws.onopen = () => {
+      setConnected(true);
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    };
+    ws.onmessage = (event) => term.write(event.data);
+    ws.onerror = () => {
+      setConnected(false);
+      term.writeln('\r\n\x1b[31mWebSocket error.\x1b[0m');
+    };
+    ws.onclose = () => {
+      setConnected(false);
+      term.writeln('\r\n\x1b[33mConnection closed.\x1b[0m');
+    };
+  }, [toolId, info.name, hasModelPicker]);
+
+  const restartSession = useCallback((forceNew = false) => {
     // Close existing connection and terminal
     if (wsRef.current) {
       wsRef.current.close();
@@ -216,43 +274,15 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
 
     term.writeln(`\x1b[36m[${info.name}] Connecting...\x1b[0m`);
 
-    const params = new URLSearchParams();
-    if (hasModelPicker && selectedModelRef.current) {
-      params.set('model', selectedModelRef.current);
-    }
-    if (toolId === 'claude' && selectedFolderRef.current) {
-      params.set('cwd', selectedFolderRef.current);
-    }
-    const qs = params.toString() ? `?${params.toString()}` : '';
-    const wsUrl = buildWsUrl(`/ws/terminal/ai/${encodeURIComponent(toolId)}${qs}`);
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setConnected(true);
-      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-    };
-
-    ws.onmessage = (event) => {
-      term.write(event.data);
-    };
-
-    ws.onerror = () => {
-      setConnected(false);
-      term.writeln('\r\n\x1b[31mWebSocket error.\x1b[0m');
-    };
-
-    ws.onclose = () => {
-      setConnected(false);
-      term.writeln('\r\n\x1b[33mConnection closed.\x1b[0m');
-    };
-
+    // Keystrokes always go to the current ws (reassigned once the attach connects).
     term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'input', data }));
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'input', data }));
       }
     });
-  }, [toolId, info.name]);
+
+    void connectAiSession(term, forceNew);
+  }, [toolId, info.name, connectAiSession]);
 
   useEffect(() => {
     restartSession();
@@ -405,7 +435,7 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
               )}
             </div>
           )}
-          <button className="tc-new-session-btn" onClick={restartSession} title="Restart terminal session">
+          <button className="tc-new-session-btn" onClick={() => restartSession(true)} title="Restart terminal session">
             <PlusIcon />
             New Session
           </button>

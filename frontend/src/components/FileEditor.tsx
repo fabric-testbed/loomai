@@ -27,8 +27,13 @@ interface FileEditorProps {
   filePath: string;
   onClose: () => void;
   dark?: boolean;
-  /** If set, reads/writes via VM SSH instead of container storage. */
+  /** If set, reads/writes via FABRIC VM SSH instead of container storage. */
   vmContext?: VmContext;
+  /** Optional custom read/write functions. If provided, these override
+   * vmContext and the default container storage path — use this for
+   * Chameleon instances or any other backend with a custom file API. */
+  readFile?: (path: string) => Promise<{ content: string }>;
+  writeFile?: (path: string, content: string) => Promise<unknown>;
 }
 
 const TEXT_EXTENSIONS = new Set([
@@ -80,7 +85,7 @@ function getLanguageExtension(filename: string) {
   }
 }
 
-export default React.memo(function FileEditor({ filePath, onClose, dark, vmContext }: FileEditorProps) {
+export default React.memo(function FileEditor({ filePath, onClose, dark, vmContext, readFile, writeFile }: FileEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -98,7 +103,9 @@ export default React.memo(function FileEditor({ filePath, onClose, dark, vmConte
     setSaving(true);
     setError('');
     try {
-      if (vmContext) {
+      if (writeFile) {
+        await writeFile(filePath, content);
+      } else if (vmContext) {
         await api.writeVmFileContent(vmContext.sliceName, vmContext.nodeName, filePath, content);
       } else {
         await api.writeFileContent(filePath, content);
@@ -112,7 +119,7 @@ export default React.memo(function FileEditor({ filePath, onClose, dark, vmConte
     } finally {
       setSaving(false);
     }
-  }, [filePath, vmContext]);
+  }, [filePath, vmContext, writeFile]);
 
   // Load file content and create editor
   useEffect(() => {
@@ -123,7 +130,9 @@ export default React.memo(function FileEditor({ filePath, onClose, dark, vmConte
       setLoading(true);
       setError('');
       try {
-        const resp = vmContext
+        const resp = readFile
+          ? await readFile(filePath)
+          : vmContext
           ? await api.readVmFileContent(vmContext.sliceName, vmContext.nodeName, filePath)
           : await api.readFileContent(filePath);
         const content = resp.content;
@@ -191,7 +200,7 @@ export default React.memo(function FileEditor({ filePath, onClose, dark, vmConte
       viewRef.current?.destroy();
       viewRef.current = null;
     };
-  }, [filePath, filename, dark, vmContext]);
+  }, [filePath, filename, dark, vmContext, readFile]);
 
   // Listen for Ctrl+S custom event
   useEffect(() => {

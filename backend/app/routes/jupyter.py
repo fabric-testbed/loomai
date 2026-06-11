@@ -494,33 +494,6 @@ async def jupyter_status():
     return {"port": None, "status": "stopped"}
 
 
-class ThemeRequest(BaseModel):
-    theme: str  # "dark" or "light"
-
-
-@router.post("/api/jupyter/theme")
-async def set_jupyter_theme(req: ThemeRequest):
-    """Set JupyterLab theme via its settings API."""
-    running = (_jupyter_proc is not None and _jupyter_proc.poll() is None) or _is_jupyter_listening()
-    if not running:
-        return {"status": "not_running"}
-
-    jlab_theme = "JupyterLab Dark" if req.theme == "dark" else "JupyterLab Light"
-    settings_url = f"http://127.0.0.1:{_jupyter_port()}{_jupyter_base_url()}lab/api/settings/@jupyterlab/apputils-extension:themes"
-
-    try:
-        r = await fabric_client.put(
-            settings_url,
-            json={"raw": json.dumps({"theme": jlab_theme})},
-        )
-        r.raise_for_status()
-    except Exception as e:
-        logger.warning("Failed to set JupyterLab theme: %s", e)
-        return {"status": "error", "detail": str(e)}
-
-    return {"status": "ok", "theme": jlab_theme}
-
-
 # ---------------------------------------------------------------------------
 # Notebook artifact lifecycle — launch, reset, status, publish-fork
 # ---------------------------------------------------------------------------
@@ -563,11 +536,16 @@ def _read_artifact_uuid(artifact_dir: str) -> str:
 
 
 @router.post("/api/notebooks/{name}/launch")
-async def launch_notebook(name: str):
+async def launch_notebook(name: str, force_refresh: bool = False):
     """Launch a notebook artifact in JupyterLab.
 
     - Ensures a working copy exists in work/notebooks/{name}/
     - If no working copy exists, copies from work/my_artifacts/{name}/
+    - If ``force_refresh=true``, blows away any existing working copy
+      first and re-copies from the artifact dir. Used immediately after
+      a fresh "Get" so the JupyterLab view shows the newly extracted
+      files instead of a stale working copy. Manual launches keep the
+      existing working copy so user edits aren't clobbered.
     - Starts JupyterLab if not running
     - Returns the URL path to open in the iframe
     """
@@ -576,8 +554,11 @@ async def launch_notebook(name: str):
     if not os.path.isdir(artifact_dir):
         raise HTTPException(status_code=404, detail=f"Notebook artifact '{name}' not found")
 
-    # Create working copy if it doesn't exist
+    # Create (or refresh) working copy
     work_dir = os.path.join(_notebooks_workdir(), safe)
+    if force_refresh and os.path.isdir(work_dir):
+        shutil.rmtree(work_dir, ignore_errors=True)
+        logger.info("Removed stale notebook workspace %s (force_refresh)", work_dir)
     if not os.path.isdir(work_dir):
         shutil.copytree(artifact_dir, work_dir)
         logger.info("Created notebook workspace %s from %s", work_dir, artifact_dir)

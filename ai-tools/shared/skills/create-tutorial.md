@@ -1,3 +1,22 @@
+---
+id: create-tutorial
+name: create-tutorial
+asset_type: skill
+audience: end-user
+description: Create a Jupyter notebook tutorial for a FABRIC weave artifact
+domains:
+  - weave
+  - jupyter
+  - documentation
+tools:
+  - loomai
+  - claude-code
+  - opencode
+  - crush
+  - deepagents
+  - jupyter-ai
+---
+
 # Create a Tutorial Notebook
 
 Create a Jupyter notebook tutorial for a FABRIC weave artifact, using consistent

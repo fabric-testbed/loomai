@@ -15,6 +15,7 @@ suggest-shell-commands: true
 # FABRIC context — Aider will read these as reference files (read-only)
 read:
   - AGENTS.md
+  - AI_ASSETS.md
 
 # File patterns to never edit (uses .aiderignore file, gitignore syntax)
 aiderignore: .aiderignore

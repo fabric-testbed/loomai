@@ -95,7 +95,7 @@ loomai slices delete my-exp --force               # Delete
 
 ```bash
 loomai artifacts list --remote                    # Browse all
-loomai artifacts search "iperf" --tags networking # Search
+loomai artifacts search "iperf" --tags experiment # Search
 loomai artifacts show <uuid>                      # Details
 loomai artifacts get <uuid> --name My_Weave       # Download
 ```
@@ -106,7 +106,7 @@ loomai artifacts get <uuid> --name My_Weave       # Download
 loomai artifacts publish My_Weave \
   --title "My Experiment" \
   --description "A network benchmarking weave" \
-  --tags networking,benchmark
+  --tags example,experiment
 ```
 
 ## Delete All Dead Slices

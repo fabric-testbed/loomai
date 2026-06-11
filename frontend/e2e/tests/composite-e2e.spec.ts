@@ -39,27 +39,28 @@ test.describe('Composite View — GUI Tests', () => {
     expect(options.some(o => o.includes(name))).toBeTruthy();
   });
 
-  test('composite editor has three tabs: Composite, FABRIC, Chameleon', async ({ page }) => {
+  test('composite editor has three tabs: Federated, FABRIC, Chameleon', async ({ page }) => {
     const ok = await navigateToView(page, 'composite');
     if (!ok) { test.skip(); return; }
     await createSliceViaBar(page, 'composite-bar', `e2e-comp-tabs-${Date.now().toString(36)}`);
     await page.waitForTimeout(2000);
     const editorTabs = page.locator('.editor-top-tabs');
     if (await editorTabs.isVisible({ timeout: 5000 })) {
-      await expect(editorTabs.getByText('Composite').first()).toBeVisible();
+      await expect(editorTabs.getByText('Federated').first()).toBeVisible();
       await expect(editorTabs.getByText('FABRIC').first()).toBeVisible();
       // Chameleon tab only if Chameleon enabled
     }
   });
 
-  test('Composite tab shows FABRIC and Chameleon slice pickers', async ({ page }) => {
+  test('Federated tab shows subslice management affordances', async ({ page }) => {
     const ok = await navigateToView(page, 'composite');
     if (!ok) { test.skip(); return; }
     await createSliceViaBar(page, 'composite-bar', `e2e-comp-pick-${Date.now().toString(36)}`);
     await page.waitForTimeout(2000);
-    await clickEditorTab(page, 'Composite');
-    // Should show "FABRIC Slices" section
-    await expect(page.getByText('FABRIC Slices').first()).toBeVisible({ timeout: 5000 });
+    await clickEditorTab(page, 'Federated');
+    await expect(page.getByText('Subslices').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Connections').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('federated-add-subslice')).toBeVisible({ timeout: 5000 });
   });
 
   test('FABRIC tab shows slice controls and + New button', async ({ page }) => {

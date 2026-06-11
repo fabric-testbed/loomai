@@ -86,12 +86,59 @@ def verify_password(password: str) -> bool:
 _session_secret: bytes | None = None
 
 
+def _secret_file_path() -> str:
+    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    return os.path.join(storage, ".loomai", "session_secret")
+
+
 def _get_session_secret() -> bytes:
-    """Return a per-process secret (regenerated on container restart)."""
+    """Return the server signing secret, persisted across restarts.
+
+    Stored at ``{STORAGE_DIR}/.loomai/session_secret`` (0600) so login
+    sessions and terminal attach tickets survive a backend restart. Falls
+    back to an in-memory secret only if the file can't be created.
+    """
     global _session_secret  # noqa: PLW0603
-    if _session_secret is None:
+    if _session_secret is not None:
+        return _session_secret
+
+    path = _secret_file_path()
+    try:
+        with open(path, "rb") as f:
+            # Raw 32 random bytes — never strip(), it can corrupt a secret that
+            # happens to start/end with a whitespace byte.
+            data = f.read()
+        if len(data) >= 32:
+            _session_secret = data
+            return _session_secret
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.warning("Could not read session secret (%s); using ephemeral secret", e)
         _session_secret = os.urandom(32)
+        return _session_secret
+
+    # Generate and persist a new secret
+    secret = os.urandom(32)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Write atomically-ish, then lock down perms
+        with open(path, "wb") as f:
+            f.write(secret)
+        os.chmod(path, 0o600)
+        _session_secret = secret
+    except OSError as e:
+        logger.warning("Could not persist session secret (%s); using ephemeral secret", e)
+        _session_secret = secret
     return _session_secret
+
+
+def get_server_secret() -> bytes:
+    """Public accessor for the persistent server signing secret.
+
+    Shared by the login session cookie and terminal attach tickets.
+    """
+    return _get_session_secret()
 
 
 def _make_session_token() -> str:
@@ -122,15 +169,74 @@ def auth_status():
     return {"auth_enabled": is_auth_enabled()}
 
 
+@router.get("/check")
+def auth_check():
+    """Lightweight gate for nginx ``auth_request`` on the embedded-tool proxies
+    (Jupyter/Aider/OpenCode/web tunnels).
+
+    Returns 200 only when the request is authenticated. ``AuthMiddleware``
+    handles the rejection: this path is not in ``_PUBLIC_PATHS``, so an
+    unauthenticated caller is turned away with 401 before reaching here, while
+    an authenticated caller (or any request when auth is disabled) gets 200.
+    """
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Login brute-force protection (per client IP, escalating lockout)
+# ---------------------------------------------------------------------------
+
+_LOGIN_MAX_FAILS = 5
+_LOGIN_LOCKOUT_BASE = 30      # seconds; doubles past the threshold, capped at 1h
+_login_fails: dict[str, dict] = {}
+
+
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _login_lockout_remaining(ip: str) -> float:
+    rec = _login_fails.get(ip)
+    if rec:
+        return max(0.0, rec["until"] - time.time())
+    return 0.0
+
+
+def _login_record_fail(ip: str) -> None:
+    if len(_login_fails) > 1024:                       # bound memory
+        now = time.time()
+        for k in [k for k, v in _login_fails.items() if v["until"] < now]:
+            _login_fails.pop(k, None)
+    rec = _login_fails.setdefault(ip, {"count": 0, "until": 0.0})
+    rec["count"] += 1
+    if rec["count"] >= _LOGIN_MAX_FAILS:
+        over = rec["count"] - _LOGIN_MAX_FAILS
+        rec["until"] = time.time() + min(_LOGIN_LOCKOUT_BASE * (2 ** over), 3600)
+
+
 @router.post("/login")
 async def auth_login(request: Request):
-    """Validate password and set session cookie."""
+    """Validate password and set session cookie (rate-limited per IP)."""
+    ip = _client_ip(request)
+    wait = _login_lockout_remaining(ip)
+    if wait > 0:
+        return JSONResponse(
+            {"error": "Too many failed attempts. Try again later."},
+            status_code=429,
+            headers={"Retry-After": str(int(wait) + 1)},
+        )
+
     body = await request.json()
     password = body.get("password", "")
 
     if not verify_password(password):
+        _login_record_fail(ip)
         return JSONResponse({"error": "Invalid password"}, status_code=401)
 
+    _login_fails.pop(ip, None)                          # reset on success
     token = _make_session_token()
     resp = JSONResponse({"ok": True})
     resp.set_cookie(

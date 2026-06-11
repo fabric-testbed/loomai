@@ -4,7 +4,8 @@ Two distinct agent systems operate in this project: **Claude Code slash commands
 
 ## Claude Code Slash Commands
 
-13 slash commands available for development work. These are defined as skills in `ai-tools/claude-code/skills/`.
+34 slash-command files are available for development work. These are defined
+in `.claude/commands/`; the table below lists the core routing commands.
 
 | Command | Role | Key Files |
 |---------|------|-----------|
@@ -32,7 +33,13 @@ Agents share state through `docs/TEAM_STATUS.md`, which tracks:
 
 ## In-Container AI Tool Agents
 
-8 agent personas defined in `backend/ai-tools/shared/agents/`. These are available to the in-container AI tools (LoomAI, Aider, OpenCode, Crush, Deep Agents) for FABRIC-specific expertise.
+22 shared agent prompt files are defined in
+`backend/ai-tools/shared/agents/`. They provide FABRIC, FABlib, Chameleon,
+Federated, LoomAI-development, QA, and release expertise. Tool support differs:
+LoomAI uses selectable agents and RAG context; OpenCode, Crush, and Deep
+Agents receive shared agent files; Claude Code receives project/command
+context; Aider, Codex, and Antigravity receive workspace `AGENTS.md` context.
+The table below lists the original core user-facing personas.
 
 | Agent | File | Expertise |
 |-------|------|-----------|
@@ -47,7 +54,11 @@ Agents share state through `docs/TEAM_STATUS.md`, which tracks:
 
 ## In-Container AI Tool Skills
 
-29 skills defined in `backend/ai-tools/shared/skills/`. These provide step-by-step instructions for common FABRIC operations.
+41 skills are defined in `backend/ai-tools/shared/skills/`. These provide
+step-by-step instructions for common FABRIC, Chameleon, Federated, LoomAI
+development, and AI-tool maintenance operations. The table below lists the
+core FABRIC skills; see `AI_ASSET_INVENTORY.md` for the current full
+inventory.
 
 | Skill | File | Purpose |
 |-------|------|---------|
@@ -87,8 +98,8 @@ All shared FABRIC context for in-container AI tools lives under `backend/ai-tool
 
 | Directory | Contents |
 |-----------|----------|
-| `backend/ai-tools/shared/skills/` | 29 skill files (`.md`) — step-by-step instructions and recipes |
-| `backend/ai-tools/shared/agents/` | 8 agent persona files (`.md`) — role definitions with expertise areas |
+| `backend/ai-tools/shared/skills/` | 41 skill files (`.md`) — step-by-step instructions and recipes |
+| `backend/ai-tools/shared/agents/` | 22 agent prompt files (`.md`) — role definitions with expertise areas |
 
 ### Per-Tool Workspace Seeding
 
@@ -96,10 +107,15 @@ When a tool session starts, `_setup_*_workspace()` functions in `backend/app/rou
 
 | Tool | Skills destination | Agents destination |
 |------|-------------------|-------------------|
+| LoomAI Assistant | RAG context + selectable assistant behavior | `/api/ai/chat/agents` personas |
+| OpenCode | `.opencode/skills/<name>/SKILL.md` | `.opencode/agent-prompts/` |
 | Crush | `.crush/skills/` | `.crush/agents/` |
 | Deep Agents | `.deepagents/skills/` | `.deepagents/agents/` |
-| Claude Code | `.claude/commands/<name>.md` (as slash commands) | `AGENTS.md` (workspace root) |
-| Aider / OpenCode | Available via `FABRIC_AI.md` context file | Available via `FABRIC_AI.md` context file |
+| Claude Code | `.claude/commands/<name>.md` (as slash commands) | `AGENTS.md` and `CLAUDE.md` |
+| Aider | `AGENTS.md` read-only context | `AGENTS.md` read-only context |
+| Codex | `AGENTS.md` context | `AGENTS.md` context |
+| Antigravity | `AGENTS.md` context | `AGENTS.md` context |
+| Jupyter AI | copied reference skills under `~/.jupyter/fabric_context/` | copied reference agents under `~/.jupyter/fabric_context/` |
 
 ### Background Model Discovery
 
@@ -116,6 +132,8 @@ On startup, the backend discovers the first healthy LLM and persists it as the s
 1. **Create a `.md` file** in the appropriate directory:
    - Skills: `backend/ai-tools/shared/skills/<name>.md`
    - Agents: `backend/ai-tools/shared/agents/<name>.md`
-2. **Follow the format**: Skills use frontmatter (`name:` and `description:`) followed by markdown body with instructions. Agents are persona definitions with expertise areas and behavioral guidelines.
+2. **Follow the format**: Skills and agents use canonical Markdown frontmatter
+   (see `AI_ASSET_FORMAT.md`) followed by a markdown body with
+   instructions, expertise areas, and behavioral guidelines.
 3. **Rebuild or restart** the container so that `_setup_*_workspace()` functions pick up the new files on next tool session start.
 4. **Review with `/update_skills`** — this Claude Code slash command audits all skills for quality, token efficiency, and consistency.

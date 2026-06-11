@@ -4,7 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { buildWsUrl } from '../utils/wsUrl';
-import { getConfig, getAiTools, getToolInstallStatus, type ToolInstallInfo } from '../api/client';
+import { getConfig, getAiTools, getToolInstallStatus, createAiTerminal, mintTerminalTicket, type ToolInstallInfo } from '../api/client';
 import ContainerFileBrowser from './ContainerFileBrowser';
 import TerminalCompanionView from './TerminalCompanionView';
 import OpenCodeWebView from './OpenCodeWebView';
@@ -356,43 +356,72 @@ function AITerminalPane({ toolId, tabId }: { toolId: string; tabId: string }) {
 
     term.writeln(`\x1b[36m[ai] Launching ${toolId}...\x1b[0m`);
 
-    const wsUrl = buildWsUrl(`/ws/terminal/ai/${encodeURIComponent(toolId)}`);
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    let cancelled = false;
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-    };
-
-    ws.onmessage = (event) => {
-      term.write(event.data);
-    };
-
-    ws.onerror = () => {
-      term.writeln('\r\n\x1b[31mWebSocket error.\x1b[0m');
-    };
-
-    ws.onclose = () => {
-      term.writeln('\r\n\x1b[33mConnection closed.\x1b[0m');
-    };
-
+    // Keystrokes go to the current ws (assigned once the attach connects).
     term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'input', data }));
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'input', data }));
       }
     });
 
+    // Resolve a persistent tmux-backed session and attach. Reuses the per-tool
+    // stored session (reattach on reload; shared with TerminalCompanionView via
+    // the same key) or creates a new one.
+    (async () => {
+      const key = `loomai.term.ai.${toolId}`;
+      const read = () => { try { return localStorage.getItem(key); } catch { return null; } };
+      const storeId = (v: string) => { try { localStorage.setItem(key, v); } catch { /* ignore */ } };
+      const clearId = () => { try { localStorage.removeItem(key); } catch { /* ignore */ } };
+
+      let id = '';
+      let ticket = '';
+      try {
+        const existing = read();
+        if (existing) {
+          try {
+            const t = await mintTerminalTicket(existing);
+            id = existing;
+            ticket = t.ticket;
+          } catch {
+            clearId();
+          }
+        }
+        if (!id) {
+          const meta = await createAiTerminal(toolId);
+          id = meta.id;
+          ticket = meta.ticket || '';
+          storeId(id);
+        }
+      } catch (err) {
+        term.writeln(`\r\n\x1b[31m[ai] failed to start: ${err}\x1b[0m`);
+        return;
+      }
+      if (cancelled) return;
+
+      const url = buildWsUrl(
+        `/ws/terminal/attach/${encodeURIComponent(id)}?ticket=${encodeURIComponent(ticket)}`,
+      );
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+      ws.onopen = () => ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      ws.onmessage = (event) => term.write(event.data);
+      ws.onerror = () => term.writeln('\r\n\x1b[31mWebSocket error.\x1b[0m');
+      ws.onclose = () => term.writeln('\r\n\x1b[33mConnection closed.\x1b[0m');
+    })();
+
     const resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
       }
     });
     resizeObserver.observe(containerRef.current);
 
     return () => {
+      cancelled = true;
       resizeObserver.disconnect();
-      ws.close();
+      if (wsRef.current) wsRef.current.close();
       term.dispose();
       termRef.current = null;
       fitRef.current = null;

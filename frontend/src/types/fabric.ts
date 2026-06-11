@@ -84,6 +84,91 @@ export interface CyGraph {
   edges: CyEdge[];
 }
 
+export interface FederatedMember {
+  provider: string;
+  slice_id: string;
+  name?: string;
+  role?: string;
+  state?: string;
+  testbed?: string;
+  resource_ids?: string[];
+  site?: string;
+  endpoint_type?: string;
+  interface?: string;
+  interface_id?: string;
+  network?: string;
+  network_id?: string;
+  network_name?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface FederatedConnectionEndpoint {
+  provider: string;
+  slice_id?: string;
+  resource_id?: string;
+  node?: string;
+  interface?: string;
+  site?: string;
+  network?: string;
+  vlan?: string | number;
+  facility_port?: string;
+  physical_network?: string;
+  cidr?: string;
+  bandwidth?: string | number;
+}
+
+export interface FederatedConnection {
+  id?: string;
+  type: 'fabnetv4_l3' | 'facility_port_l2' | 'fabnetv4' | 'l2_stitch' | string;
+  endpoint_a?: FederatedConnectionEndpoint;
+  endpoint_b?: FederatedConnectionEndpoint;
+  source?: FederatedConnectionEndpoint;
+  target?: FederatedConnectionEndpoint;
+  fabric_slice?: string;
+  fabric_node?: string;
+  chameleon_slice?: string;
+  chameleon_node?: string;
+  vlan?: string | number;
+  facility_port?: string;
+  fabric_site?: string;
+  chameleon_site?: string;
+  physical_network?: string;
+  cidr?: string;
+  bandwidth?: string | number;
+  state?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface FederatedConnectionPlan {
+  id?: string;
+  type: 'fabnetv4_l3' | 'facility_port_l2' | string;
+  status: string;
+  fabric_slice?: string;
+  fabric_node?: string;
+  chameleon_slice?: string;
+  chameleon_node?: string;
+  vlan?: string | number;
+  facility_port?: string;
+  actions?: string[];
+  message?: string;
+}
+
+export interface FederatedSlice {
+  id: string;
+  name: string;
+  kind?: 'federated' | 'composite' | string;
+  state: string;
+  created?: string;
+  updated?: string;
+  fabric_slices: string[];
+  chameleon_slices: string[];
+  members: FederatedMember[];
+  cross_connections: FederatedConnection[];
+  fabric_member_summaries?: any[];
+  chameleon_member_summaries?: any[];
+  other_member_summaries?: any[];
+}
+
 export interface SliceFacilityPort {
   name: string;
   site: string;
@@ -482,11 +567,26 @@ export interface LoomAISettings {
     enabled: boolean;
     default_site?: string;
     ssh_key_file?: string;
+    password_auth?: {
+      username?: string;
+      password?: string;
+    };
     sites: Record<string, {
+      auth_type?: 'application_credential' | 'password';
       auth_url?: string;
+      default_key_name?: string;
       app_credential_id?: string;
       app_credential_secret?: string;
       project_id?: string;
+      project_name?: string;
+      project_domain_name?: string;
+      identity_provider?: string;
+      protocol?: string;
+      discovery_endpoint?: string;
+      client_id?: string;
+      client_secret?: string;
+      access_token_type?: string;
+      openid_scope?: string;
     }>;
   };
   services: {

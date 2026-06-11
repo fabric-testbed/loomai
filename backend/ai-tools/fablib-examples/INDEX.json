@@ -1,5 +1,59 @@
 [
   {
+    "file": "experiments/federated_slice_weave_pattern.py",
+    "title": "Federated Slice and Weave Registration Pattern",
+    "tags": [
+      "federated-slice",
+      "composite-slice",
+      "weave",
+      "cross-facility",
+      "cross-testbed",
+      "fabric",
+      "chameleon",
+      "fabnetv4",
+      "facility-port",
+      "l2",
+      "vlan",
+      "members",
+      "connection-intent",
+      "rag",
+      "future-facilities"
+    ],
+    "description": "Canonical pattern for new cross-facility weaves and agents: create a Federated Slice entry, add FABRIC and Chameleon provider members, add FABNetv4 L3 or Facility Port L2 connection intent, and make the Federated Slice view show sub-slice state immediately. Documents the legacy submit-composite path that automatically materializes a Federated Slice for FABRIC drafts with attached Chameleon nodes."
+  },
+  {
+    "file": "networking/chameleon_fabnetv4_route_metrics.py",
+    "title": "Chameleon FABNetv4 Route Metrics for Public SSH and Cross-Testbed Traffic",
+    "tags": ["chameleon", "fabnetv4", "sharednet1", "floating-ip", "route-metric", "cloud-init", "userdata", "netplan", "cross-testbed", "asymmetric-routing"],
+    "description": "Validated Chameleon cloud-init/netplan pattern for any server attached to fabnetv4. Sets sharednet1 default route metric 50 and fabnetv4 metric 500 for dual-NIC public SSH, and shows the FABNet-only single-NIC variant. Prevents asymmetric routing when floating-IP SSH enters sharednet1 while replies try to leave via fabnetv4."
+  },
+  {
+    "file": "chameleon/openstack_api_patterns.py",
+    "title": "Chameleon OpenStack API Patterns for Leases, Servers, Networks, and Floating IPs",
+    "tags": [
+      "chameleon",
+      "openstack",
+      "api",
+      "python-chi",
+      "blazar",
+      "nova",
+      "neutron",
+      "lease",
+      "reservation",
+      "server",
+      "instance",
+      "network",
+      "floating-ip",
+      "security-group",
+      "userdata",
+      "fabnetv4",
+      "route-metric",
+      "loomai-rest",
+      "agentic-rag"
+    ],
+    "description": "Grounded examples for using Chameleon APIs from LoomAI agents and weaves: LoomAI REST calls, backend get_session direct OpenStack calls, Blazar lease payloads, Nova server scheduler_hints, Neutron networks/subnets/floating IPs/security groups, and FABNetv4 route-metric user_data."
+  },
+  {
     "file": "experiments/weave_lifecycle_template.py",
     "title": "Weave Lifecycle Template — Golden Pattern for start/stop/monitor",
     "tags": ["weave", "lifecycle", "start", "stop", "monitor", "template", "mac", "fabnetv4", "re-fetch", "submit", "progress"],

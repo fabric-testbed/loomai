@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -19,8 +20,8 @@ from app.fablib_manager import get_fablib
 from app.fablib_executor import run_in_fablib_pool
 from app.fabric_call_manager import get_call_manager
 from app.user_context import get_user_storage
-from app.slice_serializer import slice_to_dict, check_has_errors
-from app.graph_builder import build_graph, STATE_COLORS, DEFAULT_STATE
+from app.slice_serializer import slice_to_dict, check_has_errors, get_slice_facility_ports, serialize_facility_port
+from app.graph_builder import build_graph, STATE_COLORS, DEFAULT_STATE, STATE_COLORS_DARK, DEFAULT_STATE_DARK
 from app.site_resolver import resolve_sites
 from app.routes.resources import get_cached_sites, get_fresh_sites
 from app.slice_registry import (
@@ -57,12 +58,14 @@ def _resolve_slice_name(slice_id: str) -> str:
     name = resolve_slice_id(slice_id)
     if name:
         return name
-    # Check if it matches a draft in memory (drafts also use UUIDs)
+    # Check if it matches a draft in memory (drafts also use UUIDs). Snapshot
+    # the keys because persistent draft restore can add entries concurrently.
     with _draft_lock:
-        for draft_name, _obj in _draft_slices.items():
-            draft_uuid = get_slice_uuid(draft_name)
-            if draft_uuid == slice_id:
-                return draft_name
+        draft_names = list(_draft_slices.keys())
+    for draft_name in draft_names:
+        draft_uuid = get_slice_uuid(draft_name)
+        if draft_uuid == slice_id:
+            return draft_name
     # Backward compat: treat as literal name
     return slice_id
 
@@ -213,8 +216,9 @@ def _load_persistent_drafts() -> None:
             except Exception:
                 pass
         # Skip if already in memory
-        if name in _draft_slices:
-            continue
+        with _draft_lock:
+            if name in _draft_slices:
+                continue
         # Skip if registry has a non-draft UUID — this draft was submitted
         existing_uuid = get_slice_uuid(name)
         if existing_uuid and not existing_uuid.startswith("draft-"):
@@ -225,16 +229,19 @@ def _load_persistent_drafts() -> None:
             import uuid as _uuid_mod
             slice_obj = fablib.new_slice(name=name)
             slice_obj.load(topo_path)
-            _draft_slices[name] = slice_obj
-            _draft_is_new[name] = True
-            if groups:
-                _draft_site_groups[name] = groups
-            if ip_hints:
-                _draft_ip_hints[name] = ip_hints
-            if l3_config:
-                _draft_l3_config[name] = l3_config
-            if draft_pid:
-                _draft_project_id[name] = draft_pid
+            with _draft_lock:
+                if name in _draft_slices:
+                    continue
+                _draft_slices[name] = slice_obj
+                _draft_is_new[name] = True
+                if groups:
+                    _draft_site_groups[name] = groups
+                if ip_hints:
+                    _draft_ip_hints[name] = ip_hints
+                if l3_config:
+                    _draft_l3_config[name] = l3_config
+                if draft_pid:
+                    _draft_project_id[name] = draft_pid
             # Reuse existing draft UUID if present, otherwise generate one
             draft_uuid = existing_uuid if existing_uuid and existing_uuid.startswith("draft-") else f"draft-{_uuid_mod.uuid4()}"
             register_slice(name, uuid=draft_uuid, state="Draft", project_id=draft_pid)
@@ -353,48 +360,15 @@ def _get_slice_obj(name: str):
     return fablib.get_slice(name=name)
 
 
-# Serialization cache: keyed on (slice_name, cache_key), stores serialized dict.
-# Invalidated on any mutation (add/remove node, submit, modify).
-_serialize_cache: dict[str, tuple[str, dict[str, Any]]] = {}  # name -> (cache_key, data)
-
-
-def _invalidate_serialize_cache(name: str):
-    """Invalidate the serialization cache for a slice after mutations."""
-    _serialize_cache.pop(name, None)
+def _invalidate_slice_read_caches(name: str) -> None:
+    """Invalidate cached read models that can feed standalone or federated graphs."""
+    get_call_manager().invalidate_prefix(f"slice:{name}")
 
 
 def _serialize(slice_obj, dirty: bool = False) -> dict[str, Any]:
     data = slice_to_dict(slice_obj)
     name = data.get("name", "")
-    state = data.get("state", "")
     is_new = _is_new_draft(name) if _is_draft(name) else False
-
-    # Check if Chameleon slice nodes exist for this slice (bypass cache if so)
-    _has_chi_nodes = False
-    try:
-        from app.routes.chameleon import _chameleon_slice_nodes
-        _has_chi_nodes = bool(_chameleon_slice_nodes.get(name))
-    except ImportError:
-        pass
-
-    # Build a cache key that includes state + node instantiation/interface data
-    # so stale cache entries are bypassed when user_data or IPs/MACs change.
-    _node_sigs = []
-    for nd in data.get("nodes", []):
-        ud = nd.get("user_data", {}).get("fablib_data", {})
-        inst = ud.get("instantiated", "")
-        rs = nd.get("reservation_state", "")
-        # Include interface MACs as part of the fingerprint
-        iface_macs = "|".join(i.get("mac", "") for i in nd.get("interfaces", []))
-        _node_sigs.append(f"{nd.get('name')}:{rs}:{inst}:{iface_macs}")
-    cache_key = f"{state}|{'|'.join(_node_sigs)}"
-
-    # Check serialization cache for stable, non-dirty slices
-    # Skip cache when Chameleon nodes are attached (they change independently)
-    if not dirty and not is_new and not _has_chi_nodes:
-        cached = _serialize_cache.get(name)
-        if cached and cached[0] == cache_key:
-            return cached[1]
 
     # Mark as "Draft" for genuinely new local slices (never submitted to FABRIC).
     # Draft slices have a "draft-*" UUID — they should always show as Draft until submitted.
@@ -435,11 +409,6 @@ def _serialize(slice_obj, dirty: bool = False) -> dict[str, Any]:
         pass  # Chameleon module not available
     graph = build_graph(data)
     result = {**data, "graph": graph}
-
-    # Cache the result for stable, non-dirty slices
-    # Skip caching when Chameleon nodes are attached (they change independently)
-    if not dirty and not is_new and not _has_chi_nodes:
-        _serialize_cache[name] = (cache_key, result)
 
     return result
 
@@ -496,6 +465,9 @@ class UpdateNodeRequest(BaseModel):
     ram: Optional[int] = None
     disk: Optional[int] = None
     image: Optional[str] = None
+    image_type: Optional[str] = None
+    username: Optional[str] = None
+    instance_type: Optional[str] = None
 
 
 class CreateFacilityPortRequest(BaseModel):
@@ -505,11 +477,23 @@ class CreateFacilityPortRequest(BaseModel):
     bandwidth: int = 10
 
 
+class UpdateFacilityPortRequest(BaseModel):
+    site: Optional[str] = None
+    vlan: Optional[str] = None
+    bandwidth: Optional[int] = None
+
+
 class CreatePortMirrorRequest(BaseModel):
     name: str
     mirror_interface_name: str       # interface to mirror (string name)
     receive_interface_name: str      # interface to receive capture (string name)
     mirror_direction: str = "both"   # "both" | "ingress" | "egress"
+
+
+class UpdatePortMirrorRequest(BaseModel):
+    mirror_interface_name: str
+    receive_interface_name: str
+    mirror_direction: str = "both"
 
 
 class ResolveSitesRequest(BaseModel):
@@ -790,12 +774,20 @@ async def get_slice(slice_name: str, max_age: float = Query(0, ge=0)) -> dict[st
     """
     slice_name = _resolve_slice_name(slice_name)
     def _do():
+        registry_uuid = get_slice_uuid(slice_name)
+        if registry_uuid.startswith("draft-"):
+            if not _is_draft(slice_name):
+                _load_persistent_drafts()
+            draft = _get_draft(slice_name)
+            if draft is not None:
+                return _serialize(draft)
+
         # New drafts (never submitted) — serve from memory.
         # Safety net: if the registry already has a UUID for this name, the
         # draft was submitted externally (e.g. by an AI tool) — skip the draft
         # and fall through to the FABRIC lookup below.
-        if _is_new_draft(slice_name):
-            existing_uuid = get_slice_uuid(slice_name)
+        if _is_draft(slice_name) and _is_new_draft(slice_name):
+            existing_uuid = registry_uuid
             if not existing_uuid or existing_uuid.startswith("draft-"):
                 slice_obj = _get_draft(slice_name)
                 if slice_obj is not None:
@@ -808,7 +800,7 @@ async def get_slice(slice_name: str, max_age: float = Query(0, ge=0)) -> dict[st
         # Submitted slices — always pull fresh from FABRIC by UUID
         fablib = get_fablib()
         _ensure_project_id(fablib)
-        uuid = get_slice_uuid(slice_name)
+        uuid = registry_uuid
         slice_obj = None
         if uuid:
             try:
@@ -1033,12 +1025,375 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
     raise HTTPException(status_code=400, detail="No pending changes to submit")
 
 
+async def _run_post_boot_config_after_stable(slice_name: str) -> None:
+    """Background task: wait for a FABRIC slice to reach StableOK, then run
+    post_boot_config to configure auto-mode networks (IPs, routes).
+
+    Called by submit_composite_slice when the slice has any network with
+    ip_mode='auto'. Mirrors the logic of the standalone
+    /slices/{name}/post-boot-config endpoint.
+    """
+    import asyncio as _asyncio
+
+    # Wait up to 15 minutes for StableOK
+    poll_interval = 15
+    max_attempts = 60  # 15 min / 15s
+    for attempt in range(max_attempts):
+        await _asyncio.sleep(poll_interval)
+        try:
+            def _get_state():
+                slice_obj = _get_slice_obj(slice_name)
+                return str(slice_obj.get_state()) if slice_obj and slice_obj.get_state() else ""
+            state = await run_in_fablib_pool(_get_state)
+            if state in ("StableOK", "Active"):
+                logger.info(
+                    "Composite post_boot_config: slice '%s' reached %s, running config",
+                    slice_name, state,
+                )
+                break
+            if state in ("StableError", "Dead", "Closing"):
+                logger.warning(
+                    "Composite post_boot_config: slice '%s' entered %s, aborting",
+                    slice_name, state,
+                )
+                return
+        except Exception as e:
+            logger.debug("Composite post_boot_config: waiting for %s: %s", slice_name, e)
+    else:
+        logger.warning(
+            "Composite post_boot_config: slice '%s' did not reach StableOK within %ds",
+            slice_name, poll_interval * max_attempts,
+        )
+        return
+
+    # Run post_boot_config + FABNet aggregate routes (same logic as the endpoint)
+    def _do_post_boot():
+        slice_obj = _get_slice_obj(slice_name)
+        if not slice_obj:
+            return
+        try:
+            slice_obj.post_boot_config()
+            logger.info("Composite post_boot_config: completed for '%s'", slice_name)
+        except Exception as e:
+            logger.error("Composite post_boot_config: failed for '%s': %s", slice_name, e)
+            return
+
+        # Add FABNet aggregate routes so nodes can reach all FABNet subnets
+        fablib = get_fablib()
+        _fabnet_v4 = {"FABNetv4", "FABNetv4Ext", "IPv4", "IPv4Ext"}
+        _fabnet_v6 = {"FABNetv6", "FABNetv6Ext", "IPv6", "IPv6Ext"}
+        _fabnet_all = _fabnet_v4 | _fabnet_v6
+        for net in slice_obj.get_networks():
+            net_type = str(net.get_type()) if net.get_type() else ""
+            if net_type not in _fabnet_all:
+                continue
+            try:
+                gw = net.get_gateway()
+                if not gw:
+                    continue
+                subnet = fablib.FABNETV4_SUBNET if net_type in _fabnet_v4 else fablib.FABNETV6_SUBNET
+                seen_nodes: set[str] = set()
+                for iface in net.get_interfaces():
+                    node = iface.get_node()
+                    node_name = node.get_name()
+                    if node_name in seen_nodes:
+                        continue
+                    seen_nodes.add(node_name)
+                    dev = iface.get_os_interface()
+                    try:
+                        cmd = f"sudo ip route replace {subnet} via {gw} dev {dev}"
+                        node.execute(cmd)
+                        logger.info(
+                            "Composite post_boot_config: route %s via %s dev %s on '%s'",
+                            subnet, gw, dev, node_name,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Composite post_boot_config: route on '%s' failed: %s",
+                            node_name, e,
+                        )
+            except Exception as e:
+                logger.warning(
+                    "Composite post_boot_config: network '%s': %s",
+                    net.get_name(), e,
+                )
+
+    try:
+        await run_in_fablib_pool(_do_post_boot)
+    except Exception as e:
+        logger.warning("Composite post_boot_config: background task failed: %s", e)
+
+
+async def _deploy_chameleon_instances_for_composite(
+    slice_name: str,
+    chameleon_nodes: list[dict],
+    lease_id: str,
+    site: str,
+) -> None:
+    """Background task: wait for a composite-slice Chameleon lease to become
+    ACTIVE, then launch instances and assign floating IPs to any node with
+    floating_ip=True.
+    """
+    from app.chameleon_executor import run_in_chi_pool
+    from app.chameleon_manager import get_session
+    from app.routes.chameleon import (
+        _chameleon_slices,
+        _chameleon_slices_lock,
+        _now_iso,
+        _persist_slices,
+        _slice_sites,
+    )
+    import asyncio as _asyncio
+
+    def _update_legacy_chameleon_member(
+        *,
+        state: str | None = None,
+        lease_status: str | None = None,
+        instance: dict[str, Any] | None = None,
+        node_name: str = "",
+        floating_ip: str = "",
+        error: str = "",
+    ) -> None:
+        with _chameleon_slices_lock:
+            chi = next(
+                (
+                    s for s in _chameleon_slices.values()
+                    if s.get("metadata", {}).get("source") == "legacy_submit_composite"
+                    and s.get("metadata", {}).get("fabric_slice_name") == slice_name
+                ),
+                None,
+            )
+            if not chi:
+                return
+            if state:
+                chi["state"] = state
+            if error:
+                chi["error"] = error
+                chi["state"] = "Error"
+            if lease_status:
+                for resource in chi.get("resources", []):
+                    if resource.get("type") == "lease" and resource.get("id") == lease_id:
+                        resource["status"] = lease_status
+                        break
+            if instance:
+                instance_id = instance.get("id", "")
+                status = instance.get("status", "BUILD")
+                resources = [
+                    r for r in chi.get("resources", [])
+                    if not (r.get("type") == "instance" and r.get("id") == instance_id)
+                ]
+                resources.append({
+                    "type": "instance",
+                    "id": instance_id,
+                    "name": node_name or instance.get("name", ""),
+                    "status": status,
+                    "site": site,
+                    "floating_ip": floating_ip,
+                    "ownership": "managed",
+                })
+                chi["resources"] = resources
+                for node in chi.get("nodes", []):
+                    if node.get("name") == (node_name or instance.get("name")):
+                        node["status"] = status
+                        node["instance_id"] = instance_id
+                        if floating_ip:
+                            node["floating_ip"] = floating_ip
+            elif floating_ip and node_name:
+                for resource in chi.get("resources", []):
+                    if resource.get("type") == "instance" and resource.get("name") == node_name:
+                        resource["floating_ip"] = floating_ip
+                for node in chi.get("nodes", []):
+                    if node.get("name") == node_name:
+                        node["floating_ip"] = floating_ip
+            chi["updated"] = _now_iso()
+            chi["sites"] = _slice_sites(chi)
+            _persist_slices()
+
+    if not site:
+        logger.warning("Composite: no site for Chameleon lease %s", lease_id)
+        _update_legacy_chameleon_member(error=f"No site for Chameleon lease {lease_id}")
+        return
+
+    try:
+        # Wait for lease ACTIVE (up to 5 min)
+        lease_reservations: list[dict] = []
+        _update_legacy_chameleon_member(state="Deploying", lease_status="PENDING")
+        for _ in range(60):
+            await _asyncio.sleep(5)
+            try:
+                lease_data = await run_in_chi_pool(
+                    lambda s=site, lid=lease_id: get_session(s).api_get(
+                        "reservation", f"/leases/{lid}"
+                    )
+                )
+                lease_obj = lease_data.get("lease", lease_data)
+                status = lease_obj.get("status", "")
+                if status == "ACTIVE":
+                    lease_reservations = lease_obj.get("reservations", [])
+                    _update_legacy_chameleon_member(state="Deploying", lease_status="ACTIVE")
+                    break
+                if status == "ERROR":
+                    logger.warning(
+                        "Composite: Chameleon lease %s entered ERROR state", lease_id
+                    )
+                    _update_legacy_chameleon_member(error=f"Chameleon lease {lease_id} entered ERROR", lease_status="ERROR")
+                    return
+            except Exception as e:
+                logger.debug("Composite: waiting for lease %s: %s", lease_id, e)
+        if not lease_reservations:
+            logger.warning("Composite: lease %s did not become ACTIVE", lease_id)
+            _update_legacy_chameleon_member(error=f"Chameleon lease {lease_id} did not become ACTIVE")
+            return
+
+        reservation_id = lease_reservations[0].get("id", "")
+        if not reservation_id:
+            _update_legacy_chameleon_member(error=f"Chameleon lease {lease_id} has no reservation id")
+            return
+
+        # Launch instances for each Chameleon node
+        session = get_session(site)
+        for node in chameleon_nodes:
+            if node.get("site") != site:
+                continue
+            image_id = node.get("image_id", "")
+            node_name = node.get("name", "")
+            needs_fip = bool(node.get("floating_ip", False))
+            try:
+                from app.settings_manager import resolve_chameleon_key_name
+                key_name = resolve_chameleon_key_name(site, node, fallback="loomai-key")
+            except Exception:
+                key_name = str(node.get("key_name", "") or "").strip() or "loomai-key"
+            try:
+                server_body = {
+                    "server": {
+                        "name": node_name,
+                        "imageRef": image_id or "CC-Ubuntu22.04",
+                        "flavorRef": "baremetal",
+                        "min_count": 1,
+                        "max_count": 1,
+                        "key_name": key_name,
+                    },
+                    "os:scheduler_hints": {"reservation": reservation_id},
+                }
+                result = await run_in_chi_pool(
+                    lambda b=server_body: session.api_post("compute", "/servers", b)
+                )
+                server = result.get("server", result)
+                instance_id = server.get("id", "")
+                if not instance_id:
+                    continue
+                logger.info(
+                    "Composite: launched Chameleon instance %s for %s",
+                    instance_id, node_name,
+                )
+                _update_legacy_chameleon_member(
+                    state="Deploying",
+                    instance={**server, "id": instance_id, "status": server.get("status", "BUILD")},
+                    node_name=node_name,
+                )
+
+                if needs_fip:
+                    # Wait for the instance to become ACTIVE, then assign floating IP
+                    active = False
+                    last_status = server.get("status", "BUILD")
+                    for _ in range(90):
+                        await _asyncio.sleep(10)
+                        try:
+                            srv = await run_in_chi_pool(
+                                lambda iid=instance_id: session.api_get(
+                                    "compute", f"/servers/{iid}"
+                                )
+                            )
+                            st = srv.get("server", srv).get("status", "")
+                            if st and st != last_status:
+                                last_status = st
+                                _update_legacy_chameleon_member(
+                                    state="Active" if st == "ACTIVE" else "Deploying",
+                                    instance={"id": instance_id, "name": node_name, "status": st},
+                                    node_name=node_name,
+                                )
+                            if st == "ACTIVE":
+                                active = True
+                                break
+                            if st == "ERROR":
+                                _update_legacy_chameleon_member(
+                                    error=f"Chameleon instance {instance_id} entered ERROR",
+                                    instance={"id": instance_id, "name": node_name, "status": "ERROR"},
+                                    node_name=node_name,
+                                )
+                                break
+                        except Exception:
+                            pass
+                    if not active:
+                        logger.warning(
+                            "Composite: instance %s not ACTIVE, skipping FIP", instance_id,
+                        )
+                        continue
+
+                    try:
+                        def _assign_fip():
+                            nets = session.api_get("network", "/v2.0/networks")
+                            ext_net_id = None
+                            for net in nets.get("networks", []):
+                                if (
+                                    net.get("router:external")
+                                    or net.get("name", "").lower() == "public"
+                                ):
+                                    ext_net_id = net["id"]
+                                    break
+                            if not ext_net_id:
+                                return None
+                            ports = session.api_get(
+                                "network", f"/v2.0/ports?device_id={instance_id}",
+                            )
+                            port_list = ports.get("ports", [])
+                            if not port_list:
+                                return None
+                            port_id = port_list[0]["id"]
+                            fip_resp = session.api_post(
+                                "network", "/v2.0/floatingips", {
+                                    "floatingip": {
+                                        "floating_network_id": ext_net_id,
+                                        "port_id": port_id,
+                                    },
+                                },
+                            )
+                            return fip_resp.get("floatingip", fip_resp).get(
+                                "floating_ip_address", ""
+                            )
+                        fip = await run_in_chi_pool(_assign_fip)
+                        if fip:
+                            logger.info(
+                                "Composite: assigned floating IP %s to %s", fip, node_name,
+                            )
+                            _update_legacy_chameleon_member(
+                                state="Active",
+                                instance={"id": instance_id, "name": node_name, "status": "ACTIVE"},
+                                node_name=node_name,
+                                floating_ip=fip,
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "Composite: FIP assignment for %s failed: %s", node_name, e,
+                        )
+            except Exception as e:
+                logger.warning(
+                    "Composite: launch instance for %s failed: %s", node_name, e,
+                )
+                _update_legacy_chameleon_member(error=f"Launch instance for {node_name} failed: {e}")
+    except Exception as e:
+        logger.warning("Composite: background deploy failed for %s: %s", slice_name, e)
+        _update_legacy_chameleon_member(error=f"Background deploy failed: {e}")
+
+
 @router.post("/slices/{slice_name}/submit-composite")
 async def submit_composite_slice(slice_name: str) -> dict[str, Any]:
     """Submit a composite slice with both FABRIC and Chameleon resources.
 
     If the slice has Chameleon nodes attached, this orchestrates parallel
     submission of the FABRIC slice and creation of a Chameleon lease.
+    A background task then launches Chameleon instances and assigns floating
+    IPs to any node with floating_ip=True.
     If no Chameleon nodes exist, falls back to normal FABRIC submit.
     """
     slice_name = _resolve_slice_name(slice_name)
@@ -1056,13 +1411,27 @@ async def submit_composite_slice(slice_name: str) -> dict[str, Any]:
         return await submit_slice(slice_name)
 
     # --- Composite submission: FABRIC + Chameleon in parallel ---
+    federated_slice: dict[str, Any] | None = None
+    try:
+        from app.routes.composite import create_or_update_legacy_federated_slice
+        federated_slice = create_or_update_legacy_federated_slice(
+            slice_name,
+            fabric_ref=get_slice_uuid(slice_name) or slice_name,
+            chameleon_nodes=chameleon_nodes,
+            chameleon_status="Deploying",
+        )
+    except Exception:
+        logger.warning("Composite submit: failed to materialize federated slice for '%s'", slice_name, exc_info=True)
 
     async def _submit_fabric() -> dict[str, Any]:
         """Submit the FABRIC portion of the slice."""
         return await submit_slice(slice_name)
 
     async def _create_chameleon_lease() -> dict[str, Any]:
-        """Create a Chameleon lease for the Chameleon nodes in the slice."""
+        """Create a Chameleon lease for the Chameleon nodes in the slice,
+        then spawn a background task that launches instances and assigns
+        floating IPs to any node marked with floating_ip=True.
+        """
         # Lazy imports to avoid circular dependencies
         from app.chameleon_executor import run_in_chi_pool
         from app.routes.chameleon import _require_enabled
@@ -1117,7 +1486,17 @@ async def submit_composite_slice(slice_name: str) -> dict[str, Any]:
                 return all_results[0]
             return {"id": None, "status": "FAILED", "error": "No Chameleon leases created"}
 
-        return await run_in_chi_pool(_create)
+        lease_result = await run_in_chi_pool(_create)
+
+        # Spawn a background task that waits for the lease, launches instances,
+        # and assigns floating IPs to any node with floating_ip=True.
+        lease_id = lease_result.get("id") if isinstance(lease_result, dict) else None
+        if lease_id:
+            asyncio.create_task(
+                _deploy_chameleon_instances_for_composite(slice_name, chameleon_nodes, lease_id, lease_result.get("_site", ""))
+            )
+
+        return lease_result
 
     # Run FABRIC submit and Chameleon lease creation in parallel
     fabric_result: dict[str, Any] | Exception
@@ -1130,6 +1509,16 @@ async def submit_composite_slice(slice_name: str) -> dict[str, Any]:
     )
     fabric_result = results[0]
     chameleon_result = results[1]
+
+    # If FABRIC submit succeeded AND any network has ip_mode='auto',
+    # spawn a background task to run post_boot_config after StableOK.
+    if not isinstance(fabric_result, Exception):
+        fabric_networks = fabric_result.get("networks", []) if isinstance(fabric_result, dict) else []
+        has_auto_net = any(n.get("ip_mode") == "auto" for n in fabric_networks)
+        if has_auto_net:
+            asyncio.create_task(
+                _run_post_boot_config_after_stable(slice_name)
+            )
 
     # Build composite response
     response: dict[str, Any] = {
@@ -1155,6 +1544,24 @@ async def submit_composite_slice(slice_name: str) -> dict[str, Any]:
         response["chameleon_lease_id"] = chameleon_result.get("id")
         response["chameleon_status"] = chameleon_result.get("status", "PENDING")
 
+    try:
+        from app.routes.composite import create_or_update_legacy_federated_slice
+        fabric_ref = get_slice_uuid(slice_name) or slice_name
+        if isinstance(fabric_result, dict):
+            fabric_ref = fabric_result.get("id") or fabric_ref
+        federated_slice = create_or_update_legacy_federated_slice(
+            slice_name,
+            fabric_ref=fabric_ref,
+            chameleon_nodes=chameleon_nodes,
+            chameleon_status=response.get("chameleon_status"),
+            chameleon_lease=chameleon_result if isinstance(chameleon_result, dict) else None,
+        )
+    except Exception:
+        logger.warning("Composite submit: failed to update federated slice for '%s'", slice_name, exc_info=True)
+    if federated_slice:
+        response["federated_slice"] = federated_slice
+        response["federated_slice_id"] = federated_slice.get("id")
+
     return response
 
 
@@ -1166,16 +1573,24 @@ async def refresh_slice(slice_name: str) -> dict[str, Any]:
     current draft without hitting FABRIC — there is nothing to refresh.
     """
     slice_name = _resolve_slice_name(slice_name)
-    # Check if this is a new draft with no UUID — nothing to refresh from FABRIC
-    if _is_draft(slice_name) and _is_new_draft(slice_name):
-        uuid = get_slice_uuid(slice_name)
-        if not uuid:
+    # Check if this is a new draft with no FABRIC UUID — nothing to refresh
+    # from FABRIC. Local draft UUIDs are registry ids, not orchestrator ids.
+    uuid = get_slice_uuid(slice_name)
+    if (not uuid and _is_draft(slice_name) and _is_new_draft(slice_name)) or uuid.startswith("draft-"):
+        def _draft_do():
+            if not _is_draft(slice_name):
+                _load_persistent_drafts()
             draft = _get_draft(slice_name)
-            if draft is not None:
-                return _serialize(draft)
+            if draft is None:
+                raise FileNotFoundError(f"Draft slice not found: {slice_name}")
+            return _serialize(draft)
+
+        try:
+            return await run_in_fablib_pool(_draft_do)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e))
 
     # Drop any draft — reload fresh from FABRIC
-    _invalidate_serialize_cache(slice_name)
     draft_backup, is_new_backup = _pop_draft(slice_name)
     site_groups_backup = _get_site_groups(slice_name)
 
@@ -1247,8 +1662,9 @@ async def get_sliver_states(
     """
     slice_name = _resolve_slice_name(slice_name)
 
-    # Drafts have no slivers
-    if _is_new_draft(slice_name):
+    # New drafts have no FABRIC slivers. _is_new_draft() defaults true for
+    # unknown names, so only apply it to slices that are actually in memory.
+    if _is_draft(slice_name) and _is_new_draft(slice_name):
         return {"slice_name": slice_name, "slice_state": "Draft", "nodes": []}
 
     mgr = get_call_manager()
@@ -1273,12 +1689,19 @@ def _fetch_sliver_states(slice_name: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Slice not found: {e}")
 
     state = str(slice_obj.get_state())
+    try:
+        sid = str(slice_obj.get_slice_id()) if slice_obj.get_slice_id() else uuid
+        update_slice_state(slice_name, state, uuid=sid or uuid, has_errors=check_has_errors(slice_obj))
+    except Exception:
+        logger.debug("Failed to update registry from sliver poll for '%s'", slice_name, exc_info=True)
     nodes: list[dict[str, Any]] = []
     for node in slice_obj.get_nodes():
         try:
             rs = str(node.get_reservation_state())
         except Exception:
             rs = ""
+        state_colors = STATE_COLORS.get(rs, DEFAULT_STATE)
+        state_colors_dark = STATE_COLORS_DARK.get(rs, DEFAULT_STATE_DARK)
         try:
             mgmt_ip = node.get_management_ip() or ""
         except Exception:
@@ -1292,7 +1715,10 @@ def _fetch_sliver_states(slice_name: str) -> dict[str, Any]:
             "reservation_state": rs,
             "site": getattr(node, "get_site", lambda: "")() or "",
             "management_ip": mgmt_ip,
-            "state_color": STATE_COLORS.get(rs, DEFAULT_STATE)["border"],
+            "state_bg": state_colors["bg"],
+            "state_color": state_colors["border"],
+            "state_bg_dark": state_colors_dark.get("bg", ""),
+            "state_color_dark": state_colors_dark.get("border", ""),
             "error_message": err_msg,
         })
     return {"slice_name": slice_name, "slice_state": state, "nodes": nodes}
@@ -1507,10 +1933,19 @@ async def renew_slice(slice_name: str, body: RenewRequest) -> dict[str, Any]:
     slice_name = _resolve_slice_name(slice_name)
     from datetime import datetime
 
+    from datetime import timezone
+
     try:
         end_dt = datetime.fromisoformat(body.end_date.replace("Z", "+00:00"))
     except Exception:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {body.end_date}")
+
+    # FABlib's slice.renew() expects a string in "%Y-%m-%d %H:%M:%S %z" form
+    # and calls strptime on it internally — passing a datetime triggers
+    # "strptime() argument 1 must be str, not datetime.datetime".
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
+    end_date_str = end_dt.strftime("%Y-%m-%d %H:%M:%S %z")
 
     def _do():
         fablib = get_fablib()
@@ -1523,7 +1958,7 @@ async def renew_slice(slice_name: str, body: RenewRequest) -> dict[str, Any]:
                 slice_obj = fablib.get_slice(name=slice_name)
         else:
             slice_obj = fablib.get_slice(name=slice_name)
-        slice_obj.renew(end_dt)
+        slice_obj.renew(end_date_str)
         slice_obj.update()
         return _serialize(slice_obj)
 
@@ -1533,7 +1968,26 @@ async def renew_slice(slice_name: str, body: RenewRequest) -> dict[str, Any]:
         raise
     except Exception as e:
         logger.exception("renew_slice failed for %s", slice_name)
-        raise HTTPException(status_code=500, detail=str(e))
+        # FABlib raises OrchestratorHTTPError whose str() looks like
+        # "500: HTTP request failed\n{...JSON...}". The JSON payload's
+        # errors[0].details holds the human-readable reason (e.g. a PDP
+        # policy violation). Surface that to the UI instead of letting the
+        # generic 500 handler mask it as "internal error".
+        msg = str(e)
+        try:
+            import json as _json
+            m = re.search(r"\{.*\}", msg, re.DOTALL)
+            if m:
+                payload = _json.loads(m.group(0))
+                errors = payload.get("errors") or []
+                if errors and isinstance(errors[0], dict):
+                    detail = errors[0].get("details") or errors[0].get("message") or msg
+                    raise HTTPException(status_code=400, detail=detail.strip())
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=msg[:300])
 
 
 @router.post("/slices/{slice_name}/archive")
@@ -1717,6 +2171,7 @@ def add_node(slice_name: str, req: CreateNodeRequest) -> dict[str, Any]:
     slice_name = _resolve_slice_name(slice_name)
     try:
         slice_obj = _get_slice_obj(slice_name)
+        is_new_draft = _is_new_draft(slice_name)
         kwargs: dict[str, Any] = {
             "name": req.name,
             "cores": req.cores,
@@ -1744,6 +2199,8 @@ def add_node(slice_name: str, req: CreateNodeRequest) -> dict[str, Any]:
                     model=comp_def.get("model", "NIC_Basic"),
                     name=comp_def.get("name", ""),
                 )
+        if _is_draft(slice_name):
+            _store_draft(slice_name, slice_obj, is_new=is_new_draft)
         return _serialize(slice_obj, dirty=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1783,8 +2240,20 @@ def update_node(slice_name: str, node_name: str, req: UpdateNodeRequest) -> dict
             cap_kwargs["disk"] = req.disk
         if cap_kwargs:
             node.set_capacities(**cap_kwargs)
-        if req.image is not None:
-            node.set_image(req.image)
+        if req.image is not None or req.image_type is not None or req.username is not None:
+            image = req.image if req.image is not None else node.get_image()
+            try:
+                node.set_image(
+                    image,
+                    username=req.username,
+                    image_type=req.image_type or "qcow2",
+                )
+            except TypeError:
+                node.set_image(image)
+                if req.username is not None and hasattr(node, "set_username"):
+                    node.set_username(req.username)
+        if req.instance_type is not None and hasattr(node, "set_instance_type"):
+            node.set_instance_type(req.instance_type)
         return _serialize(slice_obj, dirty=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1798,8 +2267,11 @@ def add_component(slice_name: str, node_name: str, req: CreateComponentRequest) 
     slice_name = _resolve_slice_name(slice_name)
     try:
         slice_obj = _get_slice_obj(slice_name)
+        is_new_draft = _is_new_draft(slice_name)
         node = slice_obj.get_node(name=node_name)
         node.add_component(model=req.model, name=req.name)
+        if _is_draft(slice_name):
+            _store_draft(slice_name, slice_obj, is_new=is_new_draft)
         return _serialize(slice_obj, dirty=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1823,6 +2295,246 @@ def remove_component(slice_name: str, node_name: str, comp_name: str) -> dict[st
 
 class AddFabnetRequest(BaseModel):
     net_type: str = "IPv4"  # "IPv4" | "IPv6"
+
+
+def _fabric_network_is_fabnetv4(net: dict[str, Any]) -> bool:
+    net_type = str(net.get("type", ""))
+    net_name = str(net.get("name", ""))
+    return net_type in {"IPv4", "FABNetv4", "FABNetv4Ext", "IPv4Ext"} or "fabnetv4" in net_name.lower()
+
+
+def _fabric_node_has_fabnetv4(serialized: dict[str, Any], node_name: str) -> bool:
+    for network in serialized.get("networks", []):
+        if not _fabric_network_is_fabnetv4(network):
+            continue
+        for iface in network.get("interfaces", []):
+            if iface.get("node_name") == node_name:
+                return True
+    for node in serialized.get("nodes", []):
+        if node.get("name") != node_name:
+            continue
+        for iface in node.get("interfaces", []):
+            if "fabnetv4" in str(iface.get("network_name", "")).lower():
+                return True
+    return False
+
+
+def _store_default_fabnetv4_l3_configs(slice_name: str, serialized: dict[str, Any]) -> None:
+    try:
+        default_subnet = str(get_fablib().FABNETV4_SUBNET)
+    except Exception:
+        default_subnet = "10.128.0.0/10"
+    for network in serialized.get("networks", []):
+        if not _fabric_network_is_fabnetv4(network):
+            continue
+        _store_l3_config(slice_name, network.get("name", "fabnetv4"), {
+            "mode": "auto",
+            "route_mode": "default_fabnet",
+            "custom_routes": [],
+            "default_fabnet_subnet": default_subnet,
+        })
+
+
+def prepare_slice_for_fabnetv4(slice_ref: str, node_names: list[str] | None = None) -> dict[str, Any]:
+    """Attach FABNetv4 to selected FABRIC draft nodes before federated submit."""
+    slice_name = _resolve_slice_name(slice_ref)
+    slice_obj = _get_slice_obj(slice_name)
+    before = slice_to_dict(slice_obj)
+    selected = set(node_names or [])
+    nodes = [
+        node for node in before.get("nodes", [])
+        if not selected or node.get("name") in selected
+    ]
+    if selected and len(nodes) != len(selected):
+        found = {node.get("name") for node in nodes}
+        missing = sorted(selected - found)
+        raise HTTPException(status_code=400, detail=f"FABRIC nodes not found for FABNetv4: {', '.join(missing)}")
+
+    updated_nodes: list[dict[str, Any]] = []
+    for node_info in nodes:
+        node_name = node_info.get("name", "")
+        if not node_name:
+            continue
+        if _fabric_node_has_fabnetv4(before, node_name):
+            updated_nodes.append({"name": node_name, "status": "already-connected"})
+            continue
+        fab_node = slice_obj.get_node(name=node_name)
+        try:
+            fab_node.add_fabnet(net_type="IPv4")
+        except AttributeError:
+            comp_name = f"{node_name}-fabnetv4"
+            comp = fab_node.add_component(model="NIC_Basic", name=comp_name)
+            interfaces = comp.get_interfaces() if hasattr(comp, "get_interfaces") else []
+            iface = interfaces[0] if interfaces else None
+            if iface and hasattr(iface, "set_mode"):
+                iface.set_mode("auto")
+            net_name = f"fabnetv4-{node_name}"
+            slice_obj.add_l3network(name=net_name, interfaces=[iface] if iface else [], type="IPv4")
+        updated_nodes.append({"name": node_name, "status": "attached"})
+
+    after = slice_to_dict(slice_obj)
+    _store_default_fabnetv4_l3_configs(slice_name, after)
+    if _is_draft(slice_name) and _is_new_draft(slice_name):
+        _persist_draft(slice_name, slice_obj)
+    return {
+        "slice": slice_name,
+        "updated_nodes": updated_nodes,
+        "fabnetv4_networks": [
+            {"name": net.get("name", ""), "type": net.get("type", "")}
+            for net in after.get("networks", [])
+            if _fabric_network_is_fabnetv4(net)
+        ],
+    }
+
+
+def _fabric_slug(value: str) -> str:
+    return "".join(ch.lower() if ch.isalnum() else "-" for ch in str(value)).strip("-")
+
+
+def _cache_facility_port(slice_obj, fp_obj) -> None:
+    """Keep current FABlib's facility cache in sync after draft mutations."""
+    if fp_obj is None or not hasattr(slice_obj, "facilities"):
+        return
+    try:
+        name = fp_obj.get_name()
+    except Exception:
+        name = ""
+    if not name:
+        return
+    try:
+        if isinstance(slice_obj.facilities, dict):
+            slice_obj.facilities[name] = fp_obj
+    except Exception:
+        pass
+
+
+def _uncache_facility_port(slice_obj, fp_name: str) -> None:
+    """Remove a facility port from FABlib's local facility cache when present."""
+    if not fp_name or not hasattr(slice_obj, "facilities"):
+        return
+    try:
+        if isinstance(slice_obj.facilities, dict):
+            slice_obj.facilities.pop(fp_name, None)
+    except Exception:
+        pass
+
+
+def _facility_port_vlan(fp_obj) -> str:
+    try:
+        return str(fp_obj.get_vlan() or "")
+    except Exception:
+        pass
+    try:
+        return str(serialize_facility_port(fp_obj).get("vlan", "") or "")
+    except Exception:
+        return ""
+
+
+def _facility_port_site(fp_obj) -> str:
+    try:
+        return str(fp_obj.get_site() or "")
+    except Exception:
+        pass
+    try:
+        return str(serialize_facility_port(fp_obj).get("site", "") or "")
+    except Exception:
+        return ""
+
+
+def _facility_port_bandwidth(fp_obj, default: int = 10) -> int:
+    try:
+        return int(str(fp_obj.get_bandwidth() or default).split()[0])
+    except Exception:
+        pass
+    try:
+        value = serialize_facility_port(fp_obj).get("bandwidth", "")
+        return int(str(value or default).split()[0])
+    except Exception:
+        return default
+
+
+def prepare_slice_for_facility_port_l2(
+    slice_ref: str,
+    *,
+    facility_port: str = "",
+    fabric_site: str = "",
+    vlan: str | int | None = None,
+    node_name: str = "",
+    network_name: str = "",
+    bandwidth: int | str | None = None,
+) -> dict[str, Any]:
+    """Add a FABRIC facility port and optional L2 network before federated submit."""
+    if vlan in (None, ""):
+        raise HTTPException(status_code=400, detail="VLAN is required for Facility Port L2")
+
+    slice_name = _resolve_slice_name(slice_ref)
+    slice_obj = _get_slice_obj(slice_name)
+    selected_node = None
+    if node_name:
+        try:
+            selected_node = slice_obj.get_node(name=node_name)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"FABRIC node not found for Facility Port L2: {node_name}")
+
+    if not fabric_site and selected_node is not None and hasattr(selected_node, "get_site"):
+        fabric_site = selected_node.get_site()
+    if not fabric_site:
+        raise HTTPException(status_code=400, detail="FABRIC site is required for Facility Port L2")
+
+    vlan_str = str(vlan)
+    fp_name = facility_port or f"chameleon-{_fabric_slug(fabric_site)}-{vlan_str}"
+    net_name = network_name or f"fp-l2-{_fabric_slug(fp_name)}-{vlan_str}"
+    serialized_before = slice_to_dict(slice_obj)
+
+    fp_obj = None
+    for fp in get_slice_facility_ports(slice_obj):
+        if getattr(fp, "get_name", lambda: "")() == fp_name:
+            fp_obj = fp
+            break
+
+    existing_fp = any(fp.get("name") == fp_name for fp in serialized_before.get("facility_ports", []))
+    fp_status = "already-present" if existing_fp else "added"
+    if not existing_fp and fp_obj is None:
+        kwargs: dict[str, Any] = {"name": fp_name, "site": fabric_site, "vlan": vlan_str}
+        if bandwidth not in (None, ""):
+            kwargs["bandwidth"] = int(bandwidth)
+        fp_obj = slice_obj.add_facility_port(**kwargs)
+        _cache_facility_port(slice_obj, fp_obj)
+
+    if fp_obj is None:
+        for fp in get_slice_facility_ports(slice_obj):
+            if getattr(fp, "get_name", lambda: "")() == fp_name:
+                fp_obj = fp
+                break
+
+    network_status = ""
+    if selected_node is not None:
+        existing_network = any(net.get("name") == net_name for net in serialized_before.get("networks", []))
+        if existing_network:
+            network_status = "already-present"
+        else:
+            comp_name = f"fp-l2-{vlan_str}"
+            comp = selected_node.add_component(model="NIC_Basic", name=comp_name)
+            node_ifaces = comp.get_interfaces() if hasattr(comp, "get_interfaces") else []
+            interfaces = [iface for iface in node_ifaces[:1] if iface is not None]
+            fp_ifaces = fp_obj.get_interfaces() if fp_obj is not None and hasattr(fp_obj, "get_interfaces") else []
+            interfaces.extend(iface for iface in fp_ifaces[:1] if iface is not None)
+            slice_obj.add_l2network(name=net_name, interfaces=interfaces, type="L2Bridge")
+            network_status = "added"
+
+    if _is_draft(slice_name) and _is_new_draft(slice_name):
+        _persist_draft(slice_name, slice_obj)
+    _invalidate_slice_read_caches(slice_name)
+    return {
+        "slice": slice_name,
+        "facility_port": fp_name,
+        "facility_port_status": fp_status,
+        "fabric_site": fabric_site,
+        "vlan": vlan_str,
+        "node": node_name,
+        "network": net_name if selected_node is not None else "",
+        "network_status": network_status,
+    }
 
 
 @router.post("/slices/{slice_name}/nodes/{node_name}/fabnet")
@@ -1871,8 +2583,59 @@ def add_facility_port(slice_name: str, req: CreateFacilityPortRequest) -> dict[s
             kwargs["vlan"] = req.vlan
         if req.bandwidth:
             kwargs["bandwidth"] = req.bandwidth
-        slice_obj.add_facility_port(**kwargs)
+        fp_obj = slice_obj.add_facility_port(**kwargs)
+        _cache_facility_port(slice_obj, fp_obj)
+        _invalidate_slice_read_caches(slice_name)
         return _serialize(slice_obj, dirty=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/slices/{slice_name}/facility-ports/{fp_name}")
+def update_facility_port(slice_name: str, fp_name: str, req: UpdateFacilityPortRequest) -> dict[str, Any]:
+    """Replace a draft facility port while preserving its network attachment."""
+    slice_name = _resolve_slice_name(slice_name)
+    try:
+        slice_obj = _get_slice_obj(slice_name)
+        target_fp = None
+        for fp in get_slice_facility_ports(slice_obj):
+            if fp.get_name() == fp_name:
+                target_fp = fp
+                break
+        if target_fp is None:
+            raise HTTPException(status_code=404, detail=f"Facility port '{fp_name}' not found")
+
+        old_iface_names = {_interface_name(iface) for iface in target_fp.get_interfaces()}
+        attached_network_names: list[str] = []
+        for net in slice_obj.get_network_services():
+            if any(_interface_name(iface) in old_iface_names for iface in net.get_interfaces()):
+                attached_network_names.append(net.get_name())
+
+        site = req.site if req.site is not None else _facility_port_site(target_fp)
+        vlan = req.vlan if req.vlan is not None else _facility_port_vlan(target_fp)
+        bandwidth = req.bandwidth if req.bandwidth is not None else _facility_port_bandwidth(target_fp)
+
+        target_fp.delete()
+        _uncache_facility_port(slice_obj, fp_name)
+        new_fp = slice_obj.add_facility_port(name=fp_name, site=site, vlan=vlan or "", bandwidth=bandwidth)
+        _cache_facility_port(slice_obj, new_fp)
+        new_ifaces = list(new_fp.get_interfaces() or [])
+        if new_ifaces:
+            new_iface = new_ifaces[0]
+            for net_name in attached_network_names:
+                try:
+                    net = slice_obj.get_network(name=net_name)
+                    if hasattr(net, "add_interface"):
+                        net.add_interface(new_iface)
+                    elif hasattr(net, "_interfaces"):
+                        net._interfaces.append(new_iface)
+                except Exception:
+                    pass
+
+        _invalidate_slice_read_caches(slice_name)
+        return _serialize(slice_obj, dirty=True)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1884,9 +2647,11 @@ def remove_facility_port(slice_name: str, fp_name: str) -> dict[str, Any]:
     try:
         slice_obj = _get_slice_obj(slice_name)
         # Get facility port by name and delete
-        for fp in slice_obj.get_facility_ports():
+        for fp in get_slice_facility_ports(slice_obj):
             if fp.get_name() == fp_name:
                 fp.delete()
+                _uncache_facility_port(slice_obj, fp_name)
+                _invalidate_slice_read_caches(slice_name)
                 return _serialize(slice_obj, dirty=True)
         raise HTTPException(status_code=404, detail=f"Facility port '{fp_name}' not found")
     except HTTPException:
@@ -1919,6 +2684,47 @@ def add_port_mirror(slice_name: str, req: CreatePortMirrorRequest) -> dict[str, 
 
         slice_obj.add_port_mirror_service(
             name=req.name,
+            mirror_interface_name=req.mirror_interface_name,
+            receive_interface=receive_iface,
+            mirror_direction=req.mirror_direction,
+        )
+        return _serialize(slice_obj, dirty=True)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/slices/{slice_name}/port-mirrors/{pm_name}")
+def update_port_mirror(slice_name: str, pm_name: str, req: UpdatePortMirrorRequest) -> dict[str, Any]:
+    """Replace a port mirror service under the same name."""
+    slice_name = _resolve_slice_name(slice_name)
+    if req.mirror_direction not in ("both", "ingress", "egress"):
+        raise HTTPException(status_code=400, detail="mirror_direction must be 'both', 'ingress', or 'egress'")
+    try:
+        slice_obj = _get_slice_obj(slice_name)
+        removed = False
+        if hasattr(slice_obj, 'get_port_mirror_services'):
+            for pm in (slice_obj.get_port_mirror_services() or []):
+                if pm.get_name() == pm_name:
+                    pm.delete()
+                    removed = True
+                    break
+        if not removed:
+            for svc in (slice_obj.get_network_services() or []):
+                if svc.get_name() == pm_name and "PortMirror" in str(svc.get_type()):
+                    svc.delete()
+                    removed = True
+                    break
+        if not removed:
+            raise HTTPException(status_code=404, detail=f"Port mirror '{pm_name}' not found")
+
+        receive_iface = _resolve_slice_interface(slice_obj, req.receive_interface_name)
+        if receive_iface is None:
+            raise HTTPException(status_code=404, detail=f"Receive interface '{req.receive_interface_name}' not found")
+
+        slice_obj.add_port_mirror_service(
+            name=pm_name,
             mirror_interface_name=req.mirror_interface_name,
             receive_interface=receive_iface,
             mirror_direction=req.mirror_direction,
@@ -1970,10 +2776,9 @@ def add_network(slice_name: str, req: CreateNetworkRequest) -> dict[str, Any]:
         # Resolve interface objects from names
         ifaces = []
         for iface_name in req.interfaces:
-            for node in slice_obj.get_nodes():
-                for iface in node.get_interfaces():
-                    if iface.get_name() == iface_name:
-                        ifaces.append(iface)
+            iface = _resolve_slice_interface(slice_obj, iface_name)
+            if iface is not None:
+                ifaces.append(iface)
 
         _fabnet_to_l3 = {
             "FABNetv4": "IPv4", "FABNetv6": "IPv6",
@@ -2026,17 +2831,76 @@ def add_network(slice_name: str, req: CreateNetworkRequest) -> dict[str, Any]:
 class UpdateNetworkRequest(BaseModel):
     subnet: Optional[str] = None
     gateway: Optional[str] = None
-    ip_mode: str = "none"             # "auto" | "config" | "none"
+    ip_mode: Optional[str] = None     # "auto" | "config" | "none"
     interface_ips: Dict[str, str] = {}
+    interfaces: Optional[List[str]] = None
+    vlan: Optional[str] = None
+
+
+def _resolve_slice_interface(slice_obj, iface_name: str):
+    """Resolve a node or facility-port interface by FABlib interface name."""
+    for node in slice_obj.get_nodes():
+        for iface in node.get_interfaces():
+            if iface.get_name() == iface_name:
+                return iface
+    for fp in get_slice_facility_ports(slice_obj):
+        for iface in fp.get_interfaces():
+            if iface.get_name() == iface_name:
+                return iface
+    return None
+
+
+def _interface_name(iface) -> str:
+    try:
+        return iface.get_name()
+    except Exception:
+        return ""
+
+
+def _set_network_interfaces(net, target_ifaces: list) -> None:
+    """Reconcile a FABlib network service's interface membership."""
+    current = list(net.get_interfaces() or [])
+    current_by_name = {_interface_name(iface): iface for iface in current}
+    target_by_name = {_interface_name(iface): iface for iface in target_ifaces}
+
+    for name, iface in current_by_name.items():
+        if name and name not in target_by_name:
+            if hasattr(net, "remove_interface"):
+                net.remove_interface(iface)
+            elif hasattr(net, "_interfaces"):
+                net._interfaces = [i for i in net._interfaces if _interface_name(i) != name]
+
+    refreshed = list(net.get_interfaces() or [])
+    refreshed_names = {_interface_name(iface) for iface in refreshed}
+    for name, iface in target_by_name.items():
+        if name and name not in refreshed_names:
+            if hasattr(net, "add_interface"):
+                net.add_interface(iface)
+            elif hasattr(net, "_interfaces"):
+                net._interfaces.append(iface)
 
 
 @router.put("/slices/{slice_name}/networks/{net_name}")
 def update_network(slice_name: str, net_name: str, req: UpdateNetworkRequest) -> dict[str, Any]:
-    """Update IP mode, subnet, and per-interface IPs on an existing L2 network."""
+    """Update membership, IP mode, subnet, and per-interface IPs on a network."""
     slice_name = _resolve_slice_name(slice_name)
     try:
         slice_obj = _get_slice_obj(slice_name)
         net = slice_obj.get_network(name=net_name)
+
+        if req.interfaces is not None:
+            target_ifaces = []
+            missing = []
+            for iface_name in req.interfaces:
+                iface = _resolve_slice_interface(slice_obj, iface_name)
+                if iface is None:
+                    missing.append(iface_name)
+                else:
+                    target_ifaces.append(iface)
+            if missing:
+                raise HTTPException(status_code=404, detail=f"Interface(s) not found: {', '.join(missing)}")
+            _set_network_interfaces(net, target_ifaces)
+
         ifaces = net.get_interfaces()
 
         # Update subnet/gateway
@@ -2044,23 +2908,30 @@ def update_network(slice_name: str, net_name: str, req: UpdateNetworkRequest) ->
             net.set_subnet(req.subnet)
         if req.gateway:
             net.set_gateway(req.gateway)
-
-        # Reset all interface modes first
-        for iface in ifaces:
-            iface.set_mode("none")
-
-        # Apply new mode
-        if req.ip_mode == "auto" and req.subnet:
+        if req.vlan:
             for iface in ifaces:
-                iface.set_mode("auto")
-        elif req.ip_mode == "config":
+                if hasattr(iface, "set_vlan"):
+                    iface.set_vlan(req.vlan)
+
+        if req.ip_mode is not None:
+            # Reset all interface modes first
             for iface in ifaces:
-                iface_name = iface.get_name()
-                if iface_name in req.interface_ips:
-                    iface.set_mode("config")
-                    iface.set_ip_addr(addr=req.interface_ips[iface_name])
+                iface.set_mode("none")
+
+            # Apply new mode
+            if req.ip_mode == "auto" and req.subnet:
+                for iface in ifaces:
+                    iface.set_mode("auto")
+            elif req.ip_mode == "config":
+                for iface in ifaces:
+                    iface_name = iface.get_name()
+                    if iface_name in req.interface_ips:
+                        iface.set_mode("config")
+                        iface.set_ip_addr(addr=req.interface_ips[iface_name])
 
         return _serialize(slice_obj, dirty=True)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

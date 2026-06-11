@@ -38,7 +38,7 @@ FABRIC Artifact Marketplace so other users can discover and use it.
        "description": "Brief summary for UI cards (5-255 chars)",
        "description_long": "Full detailed description of what this artifact deploys, how it works, prerequisites, expected behavior, and configuration notes.",
        "visibility": "author",
-       "tags": ["networking", "monitoring"]
+       "tags": ["example", "experiment"]
      }'
    ```
 
@@ -52,8 +52,12 @@ FABRIC Artifact Marketplace so other users can discover and use it.
    - `"project"` — Visible to a specific project
    - `"public"` — Visible to all FABRIC users
 
-   **Tags:** Optional list of searchable keywords. Category tags
-   (`loomai:weave`, `loomai:vm`, `loomai:recipe`) are auto-added.
+   **Tags:** Optional searchable labels. Use only tags returned by
+   `GET /api/artifacts/valid-tags` or `loomai artifacts tags`. Current allowed
+   tags are `chameleon`, `education`, `example`, `experiment`,
+   `experiment pattern`, `loomai:recipe`, `loomai:vm`, `loomai:weave`,
+   `reproducible research`, and `tutorial`. Category tags (`loomai:weave`,
+   `loomai:vm`, `loomai:recipe`) are auto-added for LoomAI categories.
 
 5. **Verify publication**:
    ```bash
@@ -66,6 +70,7 @@ FABRIC Artifact Marketplace so other users can discover and use it.
 ## Notes
 
 - Category tags (`loomai:weave`, `loomai:vm`, `loomai:recipe`) are auto-added on publish.
+- Do not invent free-form tags. Use only tags from `/api/artifacts/valid-tags`.
 - Use `description` for a brief summary (5–255 chars, shown on UI cards).
 - Use `description_long` for full documentation of the artifact.
 - Published artifacts appear in the Marketplace tab of the Artifacts view.

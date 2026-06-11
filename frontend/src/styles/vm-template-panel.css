@@ -187,6 +187,34 @@
   white-space: nowrap;
 }
 
+.vmt-card-badge {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.vmt-card-badge-trovi {
+  background: rgba(57, 181, 74, 0.15);
+  color: #39B54A;
+  border: 1px solid rgba(57, 181, 74, 0.4);
+}
+
+.vmt-card-badge-notebook {
+  background: rgba(87, 152, 188, 0.15);
+  color: var(--fabric-primary, #5798bc);
+  border: 1px solid rgba(87, 152, 188, 0.3);
+}
+
+.vmt-card-badge-weave {
+  background: rgba(87, 152, 188, 0.15);
+  color: var(--fabric-primary, #5798bc);
+  border: 1px solid rgba(87, 152, 188, 0.4);
+}
+
 .vmt-card-desc {
   font-size: 11px;
   color: var(--fabric-text-muted);

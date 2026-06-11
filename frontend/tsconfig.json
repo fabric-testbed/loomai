@@ -19,6 +19,9 @@
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true,
     "incremental": true,
+    "types": [
+      "vitest/globals"
+    ],
     "plugins": [
       {
         "name": "next"
@@ -34,9 +37,38 @@
     "resolveJsonModule": true
   },
   "include": [
-    "src",
+    ".next-e2e-3100/types/**/*.ts",
+    ".next-e2e-3101/types/**/*.ts",
+    ".next-e2e-3105/types/**/*.ts",
+    ".next-e2e-3106/types/**/*.ts",
+    ".next-e2e-3107/types/**/*.ts",
+    ".next-e2e-3108/types/**/*.ts",
+    ".next-e2e-3109/types/**/*.ts",
+    ".next-e2e-3110/types/**/*.ts",
+    ".next-e2e-3111/types/**/*.ts",
+    ".next-e2e-3112/types/**/*.ts",
+    ".next-e2e-3113/types/**/*.ts",
+    ".next-e2e-3114/types/**/*.ts",
+    ".next-e2e-3115/types/**/*.ts",
+    ".next-e2e-3116/types/**/*.ts",
+    ".next-e2e-3117/types/**/*.ts",
+    ".next-e2e-3118/types/**/*.ts",
+    ".next-e2e-3119/types/**/*.ts",
+    ".next-e2e-3120/types/**/*.ts",
+    ".next-e2e-31206/types/**/*.ts",
+    ".next-e2e-3121/types/**/*.ts",
+    ".next-e2e-3190/types/**/*.ts",
+    ".next-e2e-3191/types/**/*.ts",
+    ".next-e2e-3196/types/**/*.ts",
+    ".next-e2e-3197/types/**/*.ts",
+    ".next-e2e-36941/types/**/*.ts",
+    ".next-e2e-36942/types/**/*.ts",
+    ".next-e2e-41656/types/**/*.ts",
+    ".next-e2e-41657/types/**/*.ts",
+    ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next/types/**/*.ts"
+    "src",
+    ".next-e2e-3198/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

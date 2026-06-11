@@ -19,7 +19,7 @@ WORKDIR /app
 COPY backend/requirements.txt .
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc python3-dev libffi-dev libssl-dev \
-    openssh-client git nginx supervisor tmux sudo curl \
+    openssh-client git nginx supervisor tmux sudo curl bubblewrap \
     vim nano less htop strace tree jq wget rsync zip unzip \
     iputils-ping dnsutils net-tools traceroute ripgrep \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
@@ -147,6 +147,7 @@ COPY --from=frontend-build /app/dist /usr/share/nginx/html
 # Copy backend code (changes most often — last for best cache)
 COPY backend/app/ app/
 COPY backend/scripts/ scripts/
+COPY backend/default_artifacts/ default_artifacts/
 COPY frontend/src/version.ts /app/VERSION
 
 # Set up fabric user home and storage

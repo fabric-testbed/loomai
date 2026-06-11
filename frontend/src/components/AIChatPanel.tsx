@@ -837,7 +837,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
           setSelectedModel(val);
           try { localStorage.setItem('loomai-chat-selected-model', val); } catch { /* ignore */ }
           apiSetDefaultModel(val).catch(() => { /* best-effort */ });
-        }} title="Model" data-help-id="ai-chat.model" disabled={streaming}>
+        }} title="Model" data-help-id="ai-chat.model" data-testid="ai-chat-model-select" disabled={streaming}>
           {fabricModels.length === 0 && nrpModels.length === 0 && <option value="">Loading...</option>}
           {fabricModels.length > 0 && (
             <optgroup label="FABRIC AI Models">
@@ -891,6 +891,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
           }}
           disabled={refreshingModels || streaming}
           title="Refresh model list from FABRIC AI and NRP"
+          data-testid="ai-chat-refresh-models"
           style={{ marginLeft: 4, padding: '2px 8px', fontSize: 11, cursor: refreshingModels ? 'wait' : 'pointer' }}
         >
           {refreshingModels ? '\u21BB...' : '\u21BB'}
@@ -909,7 +910,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
           </div>
         )}
         {messages.map((msg, i) => (
-          <div key={i} className={`ai-chat-msg ${msg.role === 'user' ? 'user' : 'assistant'}`}>
+          <div key={i} className={`ai-chat-msg ${msg.role === 'user' ? 'user' : 'assistant'}`} data-testid="ai-chat-message">
             <span className="ai-chat-msg-role">{msg.role === 'user' ? 'You' : 'AI'}</span>
             <div className="ai-chat-msg-bubble">
               {streaming && i === messages.length - 1 && msg.toolCalls && msg.toolCalls.length > 0 && (() => {
@@ -976,17 +977,18 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
           placeholder={streaming ? 'Working...' : 'Ask about FABRIC...'}
           disabled={streaming}
           rows={1}
+          data-testid="ai-chat-input"
         />
         {streaming ? (
           <button className="ai-chat-stop-btn" onClick={handleStop} title="Stop" data-help-id="ai-chat.stop">{'\u25A0'}</button>
         ) : (
-          <button className="ai-chat-send-btn" onClick={handleSend} disabled={!input.trim()} title="Send (Enter)" data-help-id="ai-chat.send">{'\u2191'}</button>
+          <button className="ai-chat-send-btn" onClick={handleSend} disabled={!input.trim()} title="Send (Enter)" data-help-id="ai-chat.send" data-testid="ai-chat-send">{'\u2191'}</button>
         )}
       </div>
 
       {/* API key modal — shown when user selects a model from a provider without a key */}
       {showKeyModal && (
-        <div className="ai-chat-key-modal-overlay" onClick={() => setShowKeyModal(null)}>
+        <div className="ai-chat-key-modal-overlay" onClick={() => setShowKeyModal(null)} data-testid="ai-model-key-modal">
           <div className="ai-chat-key-modal" onClick={e => e.stopPropagation()}>
             <h3>API Key Required</h3>
             <p>

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from unittest.mock import MagicMock, patch, mock_open
 
@@ -30,6 +31,13 @@ def _isolate_run_manager(tmp_path):
 
     with patch("app.run_manager.get_user_storage", return_value=str(tmp_path)):
         yield tmp_path
+        # Let any monitor threads finish (or park) while storage is still
+        # patched, so they don't race the next test's meta.json read or hit the
+        # real storage path after the patch is removed.
+        for ar in list(rm._active_runs.values()):
+            t = getattr(ar, "thread", None)
+            if t is not None and t.is_alive():
+                t.join(timeout=1.0)
 
     # Restore
     rm._active_runs.clear()
@@ -81,7 +89,10 @@ class TestStartRun:
         mock_proc = MagicMock()
         mock_proc.pid = 12345
         mock_proc.returncode = None
-        mock_proc.wait = MagicMock()  # Block forever
+        # Block like a live process so the monitor thread parks in wait()
+        # instead of racing to finalize meta.json (status stays "running").
+        _running = threading.Event()  # never set
+        mock_proc.wait = MagicMock(side_effect=lambda *a, **k: _running.wait())
 
         with patch("app.run_manager.subprocess.Popen", return_value=mock_proc), \
              patch("app.run_manager.os.getpgid", return_value=12345), \

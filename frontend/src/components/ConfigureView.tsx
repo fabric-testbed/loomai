@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import * as api from '../api/client';
 import type { ConfigStatus, ProjectInfo, SliceKeySet, LoomAISettings, ToolConfigStatus, UserInfo } from '../types/fabric';
 import type { SettingTestResult, ToolInstallInfo } from '../api/client';
@@ -15,6 +15,33 @@ interface SectionDef {
   icon: string;
 }
 
+type ChameleonAuthType = 'application_credential' | 'password';
+type ChameleonKeypair = {
+  name?: string;
+  fingerprint?: string;
+  type?: string;
+  _site?: string;
+  has_private_key?: boolean;
+  private_key_path?: string;
+};
+type ChameleonSiteSettings = {
+  auth_type?: ChameleonAuthType;
+  auth_url?: string;
+  default_key_name?: string;
+  app_credential_id?: string;
+  app_credential_secret?: string;
+  project_id?: string;
+  project_name?: string;
+  project_domain_name?: string;
+  identity_provider?: string;
+  protocol?: string;
+  discovery_endpoint?: string;
+  client_id?: string;
+  client_secret?: string;
+  access_token_type?: string;
+  openid_scope?: string;
+};
+
 const SECTIONS: SectionDef[] = [
   { id: 'profile',    label: 'User Profile',  icon: '\u2302' },   // ⌂
   { id: 'ssh',        label: 'SSH Keys',       icon: '\u{1F511}' }, // key emoji fallback: 🔑
@@ -27,6 +54,21 @@ const SECTIONS: SectionDef[] = [
   { id: 'appearance', label: 'Appearance',      icon: '\u263C' },   // ☼
   { id: 'storage',    label: 'Storage',         icon: '\u25A8' },   // ▨
 ];
+
+function serializeChameleonSitesForDirty(sites?: Record<string, ChameleonSiteSettings | Record<string, unknown>>): string {
+  const normalized = Object.fromEntries(
+    Object.entries(sites || {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([siteName, siteCfg]) => {
+        const { username: _legacyUsername, password: _legacyPassword, ...siteWithoutPassword } = siteCfg as Record<string, unknown>;
+        const sortedSite = Object.fromEntries(
+          Object.entries(siteWithoutPassword).sort(([a], [b]) => a.localeCompare(b)),
+        );
+        return [siteName, sortedSite];
+      }),
+  );
+  return JSON.stringify(normalized);
+}
 
 /* ---------- Component ---------- */
 interface ConfigureViewProps {
@@ -55,6 +97,13 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   const [keySets, setKeySets] = useState<SliceKeySet[]>([]);
   const [newKeyName, setNewKeyName] = useState('');
   const [showAddKeySet, setShowAddKeySet] = useState(false);
+  // Track selected key files + paste-mode contents so we can show a clear
+  // "file loaded" indicator and disable Upload Pair until both are present.
+  const [sliceKeyMode, setSliceKeyMode] = useState<'file' | 'paste'>('file');
+  const [sliceKeyPrivName, setSliceKeyPrivName] = useState('');
+  const [sliceKeyPubName, setSliceKeyPubName] = useState('');
+  const [sliceKeyPrivText, setSliceKeyPrivText] = useState('');
+  const [sliceKeyPubText, setSliceKeyPubText] = useState('');
 
   // Advanced settings
   const [credmgrHost, setCredmgrHost] = useState('cm.fabric-testbed.net');
@@ -125,9 +174,19 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
 
   // Chameleon Cloud
   const [chameleonEnabled, setChameleonEnabled] = useState(false);
-  const [chameleonSites, setChameleonSites] = useState<Record<string, { auth_url?: string; app_credential_id?: string; app_credential_secret?: string; project_id?: string }>>({});
+  const [chameleonSites, setChameleonSites] = useState<Record<string, ChameleonSiteSettings>>({});
+  const [chameleonPasswordUsername, setChameleonPasswordUsername] = useState('');
+  const [chameleonPassword, setChameleonPassword] = useState('');
+  const [chameleonPasswordProjects, setChameleonPasswordProjects] = useState<api.ChameleonPasswordProjectOption[]>([]);
+  const [selectedChameleonPasswordProject, setSelectedChameleonPasswordProject] = useState('');
+  const [loadingChameleonProjects, setLoadingChameleonProjects] = useState(false);
+  const [chameleonProjectLookupMessage, setChameleonProjectLookupMessage] = useState('');
   const [chameleonTestResults, setChameleonTestResults] = useState<Record<string, { ok: boolean; error: string; latency_ms: number }>>({});
   const [chameleonSshKey, setChameleonSshKey] = useState('');
+  const [chameleonKeypairsBySite, setChameleonKeypairsBySite] = useState<Record<string, ChameleonKeypair[]>>({});
+  const [loadingChameleonKeypairs, setLoadingChameleonKeypairs] = useState<Record<string, boolean>>({});
+  const [uploadingChameleonKey, setUploadingChameleonKey] = useState<Record<string, boolean>>({});
+  const [chameleonKeyUploadMessages, setChameleonKeyUploadMessages] = useState<Record<string, { type: 'success' | 'error'; text: string }>>({});
 
   // Test results state
   const [testResults, setTestResults] = useState<Record<string, SettingTestResult | null>>({});
@@ -199,6 +258,9 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
       if (s.chameleon) {
         setChameleonEnabled(s.chameleon.enabled || false);
         setChameleonSites(s.chameleon.sites || {});
+        const legacyPasswordSite = Object.values(s.chameleon.sites || {}).find((site: any) => site.username || site.password) as any;
+        setChameleonPasswordUsername(s.chameleon.password_auth?.username || legacyPasswordSite?.username || '');
+        setChameleonPassword(s.chameleon.password_auth?.password || legacyPasswordSite?.password || '');
         setChameleonSshKey(s.chameleon.ssh_key_file || '');
       }
       setJupyterPort(s.services.jupyter_port);
@@ -267,13 +329,31 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     loadInstallStatus();
   }, [loadStatus, loadKeySets, loadSettings, loadToolConfigs, loadUsers, loadModels, loadAgents, loadSkills, loadInstallStatus]);
 
-  // Load projects when token is available
+  // Load projects when token is available.
+  //
+  // We try the Core-API endpoint (/api/projects via listUserProjects) first
+  // because /api/config/projects reads from the JWT — and once the user has
+  // saved a project, FABlib refreshes the token with a project-scoped JWT
+  // whose `projects` claim only contains that one project. Falling back to
+  // the JWT endpoint when Core API is unavailable (e.g. fablib not yet
+  // configured on first login) gives us bastion_login + projects from the
+  // freshly-uploaded token.
   const loadProjects = useCallback(async () => {
+    try {
+      api.invalidateUserProjectsCache();
+      const data = await api.listUserProjects(true);
+      setProjects(data.projects);
+      if (data.projects.length > 0) {
+        setSelectedProject((prev) => prev || data.projects[0].uuid);
+      }
+      return;
+    } catch {
+      // fall through to the JWT endpoint
+    }
     try {
       const data = await api.getProjects();
       setProjects(data.projects);
       if (data.bastion_login) setBastionLogin(data.bastion_login);
-      // Only default to first project if no project is already set from settings
       if (data.projects.length > 0) {
         setSelectedProject((prev) => prev || data.projects[0].uuid);
       }
@@ -373,27 +453,52 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     }
   };
 
+  const resetSliceKeyForm = () => {
+    setShowAddKeySet(false);
+    setNewKeyName('');
+    setSliceKeyPrivName('');
+    setSliceKeyPubName('');
+    setSliceKeyPrivText('');
+    setSliceKeyPubText('');
+    setSliceKeyMode('file');
+    if (slicePrivKeyRef.current) slicePrivKeyRef.current.value = '';
+    if (slicePubKeyRef.current) slicePubKeyRef.current.value = '';
+  };
+
   const handleSliceKeyUpload = async (keyName: string) => {
-    const privFile = slicePrivKeyRef.current?.files?.[0];
-    const pubFile = slicePubKeyRef.current?.files?.[0];
-    if (!privFile || !pubFile) {
-      setMessage({ text: 'Select both private and public key files', type: 'error' });
-      return;
+    let privFile: File | undefined;
+    let pubFile: File | undefined;
+
+    if (sliceKeyMode === 'paste') {
+      const priv = sliceKeyPrivText.trim();
+      const pub = sliceKeyPubText.trim();
+      if (!priv || !pub) {
+        setMessage({ text: 'Paste both the private and public key text before uploading.', type: 'error' });
+        return;
+      }
+      // Pasted private keys typically end with a newline; ensure that.
+      privFile = new File([priv + '\n'], `${keyName}_priv`, { type: 'text/plain' });
+      pubFile = new File([pub + '\n'], `${keyName}_pub.pub`, { type: 'text/plain' });
+    } else {
+      privFile = slicePrivKeyRef.current?.files?.[0];
+      pubFile = slicePubKeyRef.current?.files?.[0];
+      if (!privFile || !pubFile) {
+        setMessage({ text: 'Choose both a private-key file and a public-key file before uploading.', type: 'error' });
+        return;
+      }
     }
+
     setLoading(true);
     try {
       await api.uploadSliceKeys(privFile, pubFile, keyName);
-      setMessage({ text: `Slice keys uploaded to set '${keyName}'`, type: 'success' });
+      setMessage({ text: `Slice keys uploaded to set '${keyName}'.`, type: 'success' });
       await loadStatus();
       await loadKeySets();
-      setShowAddKeySet(false);
-      setNewKeyName('');
+      resetSliceKeyForm();
     } catch (err: any) {
       setMessage({ text: `Slice key upload failed: ${err.message}`, type: 'error' });
     } finally {
       setLoading(false);
-      if (slicePrivKeyRef.current) slicePrivKeyRef.current.value = '';
-      if (slicePubKeyRef.current) slicePubKeyRef.current.value = '';
     }
   };
 
@@ -451,6 +556,12 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     }
     setSaving(true);
     try {
+      const chameleonSitesForSave = Object.fromEntries(
+        Object.entries(chameleonSites).map(([siteName, siteCfg]) => {
+          const { username: _legacyUsername, password: _legacyPassword, ...siteWithoutPassword } = siteCfg as any;
+          return [siteName, siteWithoutPassword];
+        }),
+      );
       // Build unified settings object
       const updatedSettings: LoomAISettings = {
         schema_version: settings?.schema_version ?? 1,
@@ -493,7 +604,11 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           enabled: chameleonEnabled,
           default_site: settings?.chameleon?.default_site || 'CHI@TACC',
           ssh_key_file: chameleonSshKey,
-          sites: chameleonSites,
+          password_auth: {
+            username: chameleonPasswordUsername,
+            password: chameleonPassword,
+          },
+          sites: chameleonSitesForSave,
         },
         services: {
           jupyter_port: jupyterPort,
@@ -507,6 +622,12 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
 
       // Save via unified settings API (writes settings.json + regenerates fabric_rc + ssh_config)
       await api.saveSettings(updatedSettings);
+
+      // The API-key fields are write-only — clear local input state once
+      // it's been sent to the server, otherwise hasUnsavedChanges keeps
+      // flagging "Unsaved" after a successful save.
+      setLitellmApiKey('');
+      setNrpApiKey('');
 
       // Also save via legacy endpoint to ensure FABlib reset happens
       const result = await api.saveConfig({
@@ -526,11 +647,14 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
       });
       if (result.configured) {
         setMessage({ text: 'Configuration saved! FABRIC is ready.', type: 'success' });
-        await loadStatus();
+        // Refresh settings too so the dirty-diff baseline matches what we
+        // just wrote — otherwise the "Unsaved" badge stays orange after a
+        // successful save.
+        await Promise.all([loadStatus(), loadSettings(), loadProjects()]);
         onConfigured();
       } else {
         setMessage({ text: 'Configuration saved but some items are still missing.', type: 'error' });
-        await loadStatus();
+        await Promise.all([loadStatus(), loadSettings(), loadProjects()]);
       }
     } catch (err: any) {
       setMessage({ text: `Save failed: ${err.message}`, type: 'error' });
@@ -544,7 +668,13 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     setTestingKeys((prev) => new Set(prev).add(key));
     setTestResults((prev) => ({ ...prev, [key]: null }));
     try {
-      const result = await api.testSetting(key);
+      // For the "project" test, validate the currently-selected row (which
+      // may not yet be saved) instead of the saved active project. This makes
+      // the Test Project button match the row the user actually clicked.
+      const body = key === 'project' && selectedProject
+        ? { project_id: selectedProject }
+        : undefined;
+      const result = await api.testSetting(key, body);
       setTestResults((prev) => ({ ...prev, [key]: result }));
     } catch (err: any) {
       setTestResults((prev) => ({ ...prev, [key]: { ok: false, message: err.message } }));
@@ -593,74 +723,240 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     ? new Date(status.token_info.exp * 1000).toLocaleString()
     : null;
 
+  // Dirty tracking — compares primary form fields against the loaded
+  // settings baseline. Used to (a) disable Save when nothing changed and
+  // (b) warn before closing the Settings overlay with pending edits.
+  const hasUnsavedChanges = useMemo(() => {
+    if (!settings) return false;
+    if (selectedProject !== (settings.fabric.project_id || '')) return true;
+    if (bastionLogin !== (settings.fabric.bastion_username || '')) return true;
+    if (credmgrHost !== settings.fabric.hosts.credmgr) return true;
+    if (orchestratorHost !== settings.fabric.hosts.orchestrator) return true;
+    if (coreApiHost !== settings.fabric.hosts.core_api) return true;
+    if (bastionHost !== settings.fabric.hosts.bastion) return true;
+    if (amHost !== settings.fabric.hosts.artifact_manager) return true;
+    if (logLevel !== settings.fabric.logging.level) return true;
+    if (sshCommandLine !== settings.fabric.ssh_command_line) return true;
+    if (aiServerUrl !== settings.ai.ai_server_url) return true;
+    if (nrpServerUrl !== settings.ai.nrp_server_url) return true;
+    if (compositeViewEnabled !== !!settings.views?.composite_enabled) return true;
+    if (chameleonEnabled !== !!settings.chameleon?.enabled) return true;
+    if (chameleonSshKey !== (settings.chameleon?.ssh_key_file || '')) return true;
+    if (chameleonPasswordUsername !== (settings.chameleon?.password_auth?.username || '')) return true;
+    if (chameleonPassword !== (settings.chameleon?.password_auth?.password || '')) return true;
+    if (serializeChameleonSitesForDirty(chameleonSites) !== serializeChameleonSitesForDirty(settings.chameleon?.sites)) return true;
+    const baselineAvoid = new Set(settings.fabric.avoid_sites || []);
+    if (baselineAvoid.size !== avoidSet.size) return true;
+    for (const s of avoidSet) if (!baselineAvoid.has(s)) return true;
+    if (litellmApiKey) return true;  // any new key input means pending change
+    if (nrpApiKey) return true;
+    return false;
+  }, [
+    settings, selectedProject, bastionLogin,
+    credmgrHost, orchestratorHost, coreApiHost, bastionHost, amHost,
+    logLevel, sshCommandLine, aiServerUrl, nrpServerUrl,
+    compositeViewEnabled, chameleonEnabled, chameleonSshKey, chameleonPasswordUsername,
+    chameleonPassword, chameleonSites, avoidSet,
+    litellmApiKey, nrpApiKey,
+  ]);
+
+  const requestClose = useCallback(() => {
+    if (!onClose) return;
+    if (hasUnsavedChanges) {
+      const ok = window.confirm('You have unsaved settings changes. Discard them and close?');
+      if (!ok) return;
+    }
+    onClose();
+  }, [hasUnsavedChanges, onClose]);
+
+  // Warn on browser tab close / reload when there are pending edits.
+  useEffect(() => {
+    if (!hasUnsavedChanges) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [hasUnsavedChanges]);
+
   const effectiveKeyName = showAddKeySet && newKeyName.trim() ? newKeyName.trim() : 'default';
+
+  const loadChameleonKeypairs = useCallback(async (siteName: string) => {
+    if (!siteName) return;
+    setLoadingChameleonKeypairs(prev => ({ ...prev, [siteName]: true }));
+    try {
+      const keypairs = await api.listChameleonKeypairs(siteName);
+      setChameleonKeypairsBySite(prev => ({ ...prev, [siteName]: keypairs || [] }));
+    } catch {
+      setChameleonKeypairsBySite(prev => ({ ...prev, [siteName]: [] }));
+    } finally {
+      setLoadingChameleonKeypairs(prev => ({ ...prev, [siteName]: false }));
+    }
+  }, []);
+
+  const handleChameleonKeypairPrivateKeyUpload = useCallback(async (siteName: string, keyName: string, file: File) => {
+    const uploadKey = `${siteName}::${keyName}`;
+    setUploadingChameleonKey(prev => ({ ...prev, [uploadKey]: true }));
+    setChameleonKeyUploadMessages(prev => ({ ...prev, [uploadKey]: { type: 'success', text: 'Uploading...' } }));
+    try {
+      await api.uploadChameleonKeypairPrivateKey(siteName, keyName, file);
+      setChameleonKeyUploadMessages(prev => ({ ...prev, [uploadKey]: { type: 'success', text: 'Private key saved' } }));
+      await loadChameleonKeypairs(siteName);
+    } catch (e: any) {
+      setChameleonKeyUploadMessages(prev => ({ ...prev, [uploadKey]: { type: 'error', text: e?.message || 'Upload failed' } }));
+    } finally {
+      setUploadingChameleonKey(prev => ({ ...prev, [uploadKey]: false }));
+    }
+  }, [loadChameleonKeypairs]);
+
+  useEffect(() => {
+    if (!chameleonEnabled || activeSection !== 'chameleon') return;
+    for (const siteName of Object.keys(chameleonSites)) {
+      if (chameleonKeypairsBySite[siteName] === undefined && !loadingChameleonKeypairs[siteName]) {
+        void loadChameleonKeypairs(siteName);
+      }
+    }
+  }, [
+    activeSection,
+    chameleonEnabled,
+    chameleonSites,
+    chameleonKeypairsBySite,
+    loadingChameleonKeypairs,
+    loadChameleonKeypairs,
+  ]);
+
+  const applyChameleonPasswordProject = (projectName: string) => {
+    setSelectedChameleonPasswordProject(projectName);
+    const project = chameleonPasswordProjects.find(p => p.name === projectName);
+    if (!project) return;
+    setChameleonSites(prev => {
+      const next = { ...prev };
+      for (const [siteName, projectId] of Object.entries(project.sites)) {
+        if (next[siteName]) {
+          next[siteName] = { ...next[siteName], project_id: projectId };
+        }
+      }
+      return next;
+    });
+    setChameleonProjectLookupMessage(`Set project ID for ${project.site_count} site${project.site_count === 1 ? '' : 's'}.`);
+  };
+
+  const loadChameleonPasswordProjects = async () => {
+    if (!chameleonPasswordUsername.trim() || !chameleonPassword) {
+      setChameleonProjectLookupMessage('Enter the Chameleon username and password first.');
+      return;
+    }
+    setLoadingChameleonProjects(true);
+    setChameleonProjectLookupMessage('');
+    try {
+      const result = await api.listChameleonPasswordAuthProjects({
+        username: chameleonPasswordUsername.trim(),
+        password: chameleonPassword,
+        sites: Object.keys(chameleonSites),
+      });
+      setChameleonPasswordProjects(result.projects);
+      setSelectedChameleonPasswordProject('');
+      const failed = Object.entries(result.sites).filter(([, value]) => !value.ok);
+      if (result.projects.length === 0) {
+        setChameleonProjectLookupMessage(failed.length ? `No projects found. ${failed.length} site lookup failed.` : 'No projects found.');
+      } else if (failed.length) {
+        setChameleonProjectLookupMessage(`Loaded ${result.projects.length} project names. ${failed.length} site lookup failed.`);
+      } else {
+        setChameleonProjectLookupMessage(`Loaded ${result.projects.length} project names.`);
+      }
+    } catch (e: any) {
+      setChameleonProjectLookupMessage(`Project lookup failed: ${e.message}`);
+    } finally {
+      setLoadingChameleonProjects(false);
+    }
+  };
+
+  /* ---------- User add/switch/delete ---------- */
+
+  const handleAddUser = async () => {
+    try {
+      const { login_url } = await api.getLoginUrl();
+      window.open(login_url, 'fabric-login', 'width=600,height=700');
+      setMessage({ text: 'Complete login in the popup to add the user…', type: 'success' });
+    } catch (err: any) {
+      setMessage({ text: `Could not start login: ${err.message}`, type: 'error' });
+    }
+  };
 
   /* ---------- Section renderers ---------- */
 
-  const renderProfile = () => (
+  const renderProfile = () => {
+    const activeUser = registeredUsers.find((u) => u.is_active);
+    // Multi-user is standalone-only; in K8s (sub-path deployment) each user has
+    // their own pod, so hide the in-container user switcher.
+    const multiUser = !(typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH);
+    return (
     <>
-      {/* User Accounts — only show when 2+ users registered */}
-      {registeredUsers.length >= 2 && (
-        <div className="configure-section">
-          <h3>User Accounts</h3>
-          <p>Switch between registered FABRIC identities. To add a new user, upload or paste their token below.</p>
-          <div className="user-account-list">
+      {/* User selector — choose the active FABRIC identity, add another, or delete one */}
+      {multiUser && (
+      <div className="configure-section">
+        <h3>User</h3>
+        <p>
+          Select the active FABRIC identity, add another, or delete one. Each user's
+          tokens, keys, slices, artifacts, and settings are stored separately.
+        </p>
+        <div className="user-selector-row" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <select
+            className="user-selector"
+            value={activeUser?.uuid || '__add__'}
+            disabled={switchingUser}
+            onChange={async (e) => {
+              const val = e.target.value;
+              if (val === '__add__') { handleAddUser(); return; }
+              if (val === activeUser?.uuid) return;
+              setSwitchingUser(true);
+              try {
+                await api.switchUser(val);
+                const u = registeredUsers.find((x) => x.uuid === val);
+                setMessage({ text: `Switched to ${u?.name || u?.email || val}`, type: 'success' });
+                await Promise.all([loadStatus(), loadUsers(), loadSettings(), loadKeySets()]);
+                await loadProjects();
+              } catch (err: any) {
+                setMessage({ text: `Switch failed: ${err.message}`, type: 'error' });
+              } finally {
+                setSwitchingUser(false);
+              }
+            }}
+          >
             {registeredUsers.map((u) => (
-              <div
-                key={u.uuid}
-                className={`user-account-row${u.is_active ? ' active' : ''}`}
-              >
-                <div className="user-account-info">
-                  <span className="user-account-name">{u.name || 'Unknown'}</span>
-                  <span className="user-account-email">{u.email}</span>
-                  <span className="user-account-uuid">{u.uuid.slice(0, 8)}...</span>
-                </div>
-                <div className="user-account-actions">
-                  {u.is_active ? (
-                    <span className="user-account-active-badge">Active</span>
-                  ) : (
-                    <>
-                      <button
-                        className="btn primary btn-sm"
-                        disabled={switchingUser}
-                        onClick={async () => {
-                          setSwitchingUser(true);
-                          try {
-                            await api.switchUser(u.uuid);
-                            setMessage({ text: `Switched to ${u.name || u.email}`, type: 'success' });
-                            await Promise.all([loadStatus(), loadUsers(), loadSettings(), loadKeySets()]);
-                            await loadProjects();
-                          } catch (err: any) {
-                            setMessage({ text: `Switch failed: ${err.message}`, type: 'error' });
-                          } finally {
-                            setSwitchingUser(false);
-                          }
-                        }}
-                      >
-                        {switchingUser ? 'Switching...' : 'Switch'}
-                      </button>
-                      <button
-                        className="btn btn-sm btn-danger"
-                        onClick={async () => {
-                          if (!confirm(`Remove ${u.name || u.email}? This will unregister the user. Their data will remain on disk.`)) return;
-                          try {
-                            await api.removeUser(u.uuid);
-                            setMessage({ text: `Removed ${u.name || u.email}`, type: 'success' });
-                            await loadUsers();
-                          } catch (err: any) {
-                            setMessage({ text: `Remove failed: ${err.message}`, type: 'error' });
-                          }
-                        }}
-                      >
-                        Remove
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
+              <option key={u.uuid} value={u.uuid}>
+                {u.name || u.email || `${u.uuid.slice(0, 8)}…`}
+                {u.name && u.email ? ` (${u.email})` : ''}
+              </option>
             ))}
-          </div>
+            <option value="__add__">➕ Add a user…</option>
+          </select>
+          {switchingUser && <span className="muted">Switching…</span>}
+          {activeUser && (
+            <button
+              className="btn btn-sm btn-danger"
+              disabled={switchingUser}
+              onClick={async () => {
+                if (!confirm(
+                  `Delete ${activeUser.name || activeUser.email || activeUser.uuid}? This permanently `
+                  + `removes their folder — tokens, keys, slices, artifacts, and settings.`,
+                )) return;
+                try {
+                  await api.removeUser(activeUser.uuid, true);
+                  setMessage({ text: 'User deleted', type: 'success' });
+                  await Promise.all([loadUsers(), loadStatus(), loadSettings(), loadKeySets()]);
+                  await loadProjects();
+                } catch (err: any) {
+                  setMessage({ text: `Delete failed: ${err.message}`, type: 'error' });
+                }
+              }}
+            >
+              Delete user
+            </button>
+          )}
         </div>
+      </div>
       )}
 
       {/* Token upload */}
@@ -740,6 +1036,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
         <p>Your FABRIC bastion login username (auto-detected from token when possible).</p>
         <input
           type="text"
+          data-testid="configure-bastion-login"
           value={bastionLogin}
           onChange={(e) => setBastionLogin(e.target.value)}
           placeholder="e.g. user_name_0001234567"
@@ -747,7 +1044,8 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
         />
       </div>
     </>
-  );
+    );
+  };
 
   const renderSSHKeys = () => (
     <>
@@ -855,7 +1153,11 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
               Add Key Set
             </button>
           </div>
-        ) : (
+        ) : (() => {
+          const filesReady = !!sliceKeyPrivName && !!sliceKeyPubName;
+          const pasteReady = !!sliceKeyPrivText.trim() && !!sliceKeyPubText.trim();
+          const uploadReady = sliceKeyMode === 'file' ? filesReady : pasteReady;
+          return (
           <div className="add-key-set-form">
             <div className="btn-row">
               <input
@@ -865,40 +1167,114 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                 placeholder="Key set name (e.g. project-x)"
                 style={{ flex: 1, marginBottom: 0 }}
               />
-              <button className="btn" onClick={() => { setShowAddKeySet(false); setNewKeyName(''); }}>
-                Cancel
-              </button>
+              <button className="btn" onClick={resetSliceKeyForm}>Cancel</button>
             </div>
-            <input ref={slicePrivKeyRef} type="file" className="file-input-hidden" />
-            <input ref={slicePubKeyRef} type="file" className="file-input-hidden" />
-            <div className="btn-row" style={{ marginTop: 8 }}>
+
+            <p style={{ fontSize: 11, color: 'var(--fabric-text-muted)', margin: '8px 0 4px' }}>
+              Provide both the private and public halves of an SSH key pair. You can either upload the files or paste their contents directly.
+            </p>
+
+            <div className="btn-row" style={{ marginTop: 0, gap: 4 }}>
               <button
-                className="btn"
-                onClick={() => slicePrivKeyRef.current?.click()}
+                type="button"
+                className={`btn-sm${sliceKeyMode === 'file' ? ' primary' : ''}`}
+                onClick={() => setSliceKeyMode('file')}
                 disabled={loading}
-              >
-                Private Key
-              </button>
+              >Upload files</button>
               <button
-                className="btn"
-                onClick={() => slicePubKeyRef.current?.click()}
+                type="button"
+                className={`btn-sm${sliceKeyMode === 'paste' ? ' primary' : ''}`}
+                onClick={() => setSliceKeyMode('paste')}
                 disabled={loading}
-              >
-                Public Key
-              </button>
+              >Paste text</button>
+            </div>
+
+            <input
+              ref={slicePrivKeyRef}
+              type="file"
+              className="file-input-hidden"
+              onChange={(e) => setSliceKeyPrivName(e.target.files?.[0]?.name || '')}
+            />
+            <input
+              ref={slicePubKeyRef}
+              type="file"
+              className="file-input-hidden"
+              onChange={(e) => setSliceKeyPubName(e.target.files?.[0]?.name || '')}
+            />
+
+            {sliceKeyMode === 'file' ? (
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div className="btn-row" style={{ alignItems: 'center', gap: 8 }}>
+                  <button
+                    className="btn"
+                    onClick={() => slicePrivKeyRef.current?.click()}
+                    disabled={loading}
+                  >Private Key…</button>
+                  <span style={{ fontSize: 12 }}>
+                    {sliceKeyPrivName
+                      ? <span style={{ color: '#008e7a' }}>{'✓'} {sliceKeyPrivName}</span>
+                      : <span style={{ color: 'var(--fabric-text-muted)' }}>No file chosen</span>}
+                  </span>
+                </div>
+                <div className="btn-row" style={{ alignItems: 'center', gap: 8 }}>
+                  <button
+                    className="btn"
+                    onClick={() => slicePubKeyRef.current?.click()}
+                    disabled={loading}
+                  >Public Key…</button>
+                  <span style={{ fontSize: 12 }}>
+                    {sliceKeyPubName
+                      ? <span style={{ color: '#008e7a' }}>{'✓'} {sliceKeyPubName}</span>
+                      : <span style={{ color: 'var(--fabric-text-muted)' }}>No file chosen</span>}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div>
+                  <label style={{ fontSize: 11, display: 'block', marginBottom: 2 }}>Private key (PEM / OPENSSH)</label>
+                  <textarea
+                    value={sliceKeyPrivText}
+                    onChange={(e) => setSliceKeyPrivText(e.target.value)}
+                    placeholder={'-----BEGIN OPENSSH PRIVATE KEY-----\n…\n-----END OPENSSH PRIVATE KEY-----'}
+                    rows={5}
+                    style={{ width: '100%', fontFamily: 'monospace', fontSize: 11 }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, display: 'block', marginBottom: 2 }}>Public key</label>
+                  <textarea
+                    value={sliceKeyPubText}
+                    onChange={(e) => setSliceKeyPubText(e.target.value)}
+                    placeholder="ssh-ed25519 AAAA... comment"
+                    rows={2}
+                    style={{ width: '100%', fontFamily: 'monospace', fontSize: 11 }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="btn-row" style={{ marginTop: 10, alignItems: 'center', gap: 8 }}>
               <button
-                className="btn"
+                className="btn primary"
                 onClick={() => handleSliceKeyUpload(effectiveKeyName)}
-                disabled={loading}
+                disabled={loading || !uploadReady}
+                title={uploadReady ? `Upload to key set '${effectiveKeyName}'` : 'Provide both a private and public key first'}
               >
-                Upload Pair
+                {loading ? 'Uploading…' : 'Upload Pair'}
               </button>
+              <span style={{ flex: 1, fontSize: 11, color: 'var(--fabric-text-muted)' }}>
+                {!uploadReady
+                  ? (sliceKeyMode === 'file' ? 'Choose both a private and public key file to enable upload.' : 'Paste both keys to enable upload.')
+                  : `Ready to upload to '${effectiveKeyName}'.`}
+              </span>
               <button className="btn success" onClick={() => handleGenerateKeys(effectiveKeyName)} disabled={loading}>
                 Generate
               </button>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {generatedPubKey && (
           <div className="key-info" style={{ marginTop: 8 }}>
@@ -989,7 +1365,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
             <TestButton testKey="project" label="Test Project" />
           </div>
         </div>
-        <p>Click a project to make it active. Use the eye toggle to show or hide it in the project switcher.</p>
+        <p>Click a project to select it, then press <strong>Save</strong> to make it active. The eye toggle hides a project from the switcher.</p>
         {allRegular.length === 0 && status?.has_token && (
           <p style={{ color: 'var(--fabric-text-muted)', fontStyle: 'italic' }}>Loading projects...</p>
         )}
@@ -999,11 +1375,16 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
         <div className="project-toggle-list">
           {allRegular.map((p) => {
             const isHidden = hiddenProjects?.has(p.uuid) ?? false;
-            const isActive = p.uuid === selectedProject;
+            // "Active" means the project the backend is currently configured
+            // for (saved). "Selected" means the row the user clicked but
+            // hasn't saved yet. Pending = selected != active.
+            const isActive = p.uuid === status?.project_id;
+            const isSelected = p.uuid === selectedProject;
+            const isPending = isSelected && !isActive;
             return (
               <div
                 key={p.uuid}
-                className={`project-toggle-row${isActive ? ' project-active-row' : ''}${isHidden ? ' hidden-project' : ''}`}
+                className={`project-toggle-row${isActive ? ' project-active-row' : ''}${isPending ? ' project-pending-row' : ''}${isHidden ? ' hidden-project' : ''}`}
                 onClick={() => setSelectedProject(p.uuid)}
                 style={{ cursor: 'pointer' }}
               >
@@ -1026,6 +1407,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                 )}
                 <span className="project-toggle-name">{p.name}</span>
                 {isActive && <span className="project-toggle-active">active</span>}
+                {isPending && <span className="project-toggle-pending">selected — save to apply</span>}
               </div>
             );
           })}
@@ -1433,51 +1815,257 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
             onChange={e => setCompositeViewEnabled(e.target.checked)}
             style={{ marginRight: 4 }}
           />
-          Enable Composite Slices View
+          Enable Federated Slices View
         </label>
         <span style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>(cross-testbed experiments)</span>
       </div>
       {chameleonEnabled && (
         <div style={{ marginTop: 8 }}>
           <p>
-            Enter application credentials for each Chameleon site. Create them at each site's dashboard under Identity &rarr; Application Credentials.
+            Enter one shared Chameleon username and password, then choose per site whether to use password auth or that site's application credential. Both credential sets are saved, so switching modes does not clear the other mode's values.
           </p>
-          {Object.entries(chameleonSites).map(([siteName, siteCfg]) => (
-            <div key={siteName} style={{ marginTop: 8, padding: 8, border: '1px solid var(--fabric-border)', borderRadius: 6 }}>
-              <p style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>{siteName}</p>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
-                <input type="text" placeholder="App Credential ID" value={siteCfg.app_credential_id || ''}
-                  onChange={e => setChameleonSites(prev => ({ ...prev, [siteName]: { ...prev[siteName], app_credential_id: e.target.value } }))}
-                  style={{ fontSize: 11 }} />
-                <input type="password" placeholder="App Credential Secret" value={siteCfg.app_credential_secret || ''}
-                  onChange={e => setChameleonSites(prev => ({ ...prev, [siteName]: { ...prev[siteName], app_credential_secret: e.target.value } }))}
-                  style={{ fontSize: 11 }} />
-              </div>
-              <input type="text" placeholder="Project ID" value={siteCfg.project_id || ''}
-                onChange={e => setChameleonSites(prev => ({ ...prev, [siteName]: { ...prev[siteName], project_id: e.target.value } }))}
-                style={{ fontSize: 11, marginTop: 4, width: '100%' }} />
+          <div style={{ marginTop: 8, padding: 8, border: '1px solid var(--fabric-border)', borderRadius: 6 }}>
+            <p style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Shared Password Auth</p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+              <input
+                type="email"
+                placeholder="Chameleon username or email"
+                value={chameleonPasswordUsername}
+                onChange={e => setChameleonPasswordUsername(e.target.value)}
+                style={{ fontSize: 11 }}
+              />
+              <input
+                type="password"
+                placeholder="Chameleon password"
+                value={chameleonPassword}
+                onChange={e => setChameleonPassword(e.target.value)}
+                style={{ fontSize: 11 }}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
               <button
+                type="button"
                 className="test-btn"
-                style={{ marginTop: 4 }}
-                onClick={async () => {
-                  setChameleonTestResults(prev => ({ ...prev, [siteName]: { ok: false, error: 'Testing...', latency_ms: 0 } }));
-                  try {
-                    const r = await api.testChameleonConnection(siteName);
-                    setChameleonTestResults(prev => ({ ...prev, ...r }));
-                  } catch (e: any) {
-                    setChameleonTestResults(prev => ({ ...prev, [siteName]: { ok: false, error: e.message, latency_ms: 0 } }));
-                  }
-                }}
-              >Test Connection</button>
-              {chameleonTestResults[siteName] && (
-                <span style={{ fontSize: 11, marginLeft: 8, color: chameleonTestResults[siteName].ok ? 'green' : 'var(--text-muted)' }}>
-                  {chameleonTestResults[siteName].ok
-                    ? `\u2713 Connected (${chameleonTestResults[siteName].latency_ms}ms)`
-                    : chameleonTestResults[siteName].error}
-                </span>
+                onClick={loadChameleonPasswordProjects}
+                disabled={loadingChameleonProjects || !chameleonPasswordUsername.trim() || !chameleonPassword}
+              >
+                {loadingChameleonProjects ? 'Loading Projects...' : 'Load Projects'}
+              </button>
+              <select
+                value={selectedChameleonPasswordProject}
+                onChange={e => applyChameleonPasswordProject(e.target.value)}
+                disabled={chameleonPasswordProjects.length === 0}
+                style={{ fontSize: 11, minWidth: 220 }}
+              >
+                <option value="">Select project by name</option>
+                {chameleonPasswordProjects.map(project => (
+                  <option key={project.name} value={project.name}>
+                    {project.name} ({project.site_count} site{project.site_count === 1 ? '' : 's'})
+                  </option>
+                ))}
+              </select>
+              {chameleonProjectLookupMessage && (
+                <span style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>{chameleonProjectLookupMessage}</span>
               )}
             </div>
-          ))}
+          </div>
+          {Object.entries(chameleonSites).map(([siteName, siteCfg]) => {
+            const authType: ChameleonAuthType = siteCfg.auth_type || 'application_credential';
+            const siteDefaultKey = siteCfg.default_key_name || '';
+            const siteKeypairs = chameleonKeypairsBySite[siteName] || [];
+            const siteKeyNames = Array.from(new Set(
+              siteKeypairs
+                .map(keypair => keypair.name || '')
+                .filter(Boolean),
+            ));
+            if (siteDefaultKey && !siteKeyNames.includes(siteDefaultKey)) {
+              siteKeyNames.push(siteDefaultKey);
+            }
+            const updateSite = (updates: Partial<ChameleonSiteSettings>) => {
+              setChameleonSites(prev => ({ ...prev, [siteName]: { ...prev[siteName], ...updates } }));
+            };
+            return (
+              <div key={siteName} style={{ marginTop: 8, padding: 8, border: '1px solid var(--fabric-border)', borderRadius: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                  <p style={{ fontWeight: 600, fontSize: 12, margin: 0 }}>{siteName}</p>
+                  <div style={{ display: 'inline-flex', border: '1px solid var(--fabric-border)', borderRadius: 6, overflow: 'hidden' }}>
+                    {([
+                      ['application_credential', 'Application credential'],
+                      ['password', 'Password auth'],
+                    ] as Array<[ChameleonAuthType, string]>).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => updateSite({ auth_type: value })}
+                        style={{
+                          border: 0,
+                          borderRight: value === 'application_credential' ? '1px solid var(--fabric-border)' : 0,
+                          padding: '4px 8px',
+                          fontSize: 11,
+                          cursor: 'pointer',
+                          background: authType === value ? 'var(--fabric-primary)' : 'transparent',
+                          color: authType === value ? '#fff' : 'var(--fabric-text)',
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {authType === 'application_credential' ? (
+                  <>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+                      <input type="text" placeholder="App Credential ID" value={siteCfg.app_credential_id || ''}
+                        onChange={e => updateSite({ app_credential_id: e.target.value })}
+                        style={{ fontSize: 11 }} />
+                      <input type="password" placeholder="App Credential Secret" value={siteCfg.app_credential_secret || ''}
+                        onChange={e => updateSite({ app_credential_secret: e.target.value })}
+                        style={{ fontSize: 11 }} />
+                    </div>
+                    <input type="text" placeholder="Project ID for this site" value={siteCfg.project_id || ''}
+                      onChange={e => updateSite({ project_id: e.target.value })}
+                      style={{ fontSize: 11, marginTop: 4, width: '100%' }} />
+                  </>
+                ) : (
+                  <>
+                    <input type="text" placeholder="Project ID" value={siteCfg.project_id || ''}
+                      onChange={e => updateSite({ project_id: e.target.value })}
+                      style={{ fontSize: 11, marginTop: 4, width: '100%' }} />
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, marginTop: 4 }}>
+                      <input type="text" placeholder="OIDC Client ID" value={siteCfg.client_id || ''}
+                        onChange={e => updateSite({ client_id: e.target.value })}
+                        style={{ fontSize: 11 }} />
+                      <input type="text" placeholder="Client Secret" value={siteCfg.client_secret ?? 'none'}
+                        onChange={e => updateSite({ client_secret: e.target.value })}
+                        style={{ fontSize: 11 }} />
+                    </div>
+                  </>
+                )}
+                <div style={{ marginTop: 6 }}>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 600, marginBottom: 3 }}>
+                    Default SSH key
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 4, alignItems: 'center' }}>
+                    <select
+                      value={siteDefaultKey}
+                      onChange={e => updateSite({ default_key_name: e.target.value })}
+                      style={{ fontSize: 11, width: '100%' }}
+                      data-testid={`chameleon-default-key-${siteName}`}
+                    >
+                      <option value="">Use LoomAI managed key (loomai-key)</option>
+                      {siteKeyNames.map(keyName => (
+                        <option key={keyName} value={keyName}>
+                          {keyName}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="test-btn"
+                      onClick={() => loadChameleonKeypairs(siteName)}
+                      disabled={!!loadingChameleonKeypairs[siteName]}
+                    >
+                      {loadingChameleonKeypairs[siteName] ? 'Loading...' : 'Refresh Keys'}
+                    </button>
+                  </div>
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 600, marginBottom: 3 }}>
+                    Keypair private keys
+                  </label>
+                  <div style={{ display: 'grid', gap: 4 }}>
+                    {siteKeypairs.length === 0 ? (
+                      <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>No registered keypairs loaded.</div>
+                    ) : siteKeypairs.map(keypair => {
+                      const keyName = keypair.name || '';
+                      if (!keyName) return null;
+                      const uploadKey = `${siteName}::${keyName}`;
+                      const uploadMessage = chameleonKeyUploadMessages[uploadKey];
+                      return (
+                        <div
+                          key={keyName}
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'minmax(140px, 1fr) minmax(110px, auto) minmax(190px, auto)',
+                            alignItems: 'center',
+                            gap: 6,
+                            padding: '4px 0',
+                            borderTop: '1px solid var(--fabric-border)',
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {keyName}
+                            </div>
+                            {keypair.fingerprint && (
+                              <div style={{ fontSize: 10, color: 'var(--fabric-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {keypair.fingerprint}
+                              </div>
+                            )}
+                          </div>
+                          <span
+                            title={keypair.private_key_path || ''}
+                            style={{
+                              fontSize: 10,
+                              color: keypair.has_private_key ? 'var(--fabric-success, #39B54A)' : 'var(--fabric-text-muted)',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {keypair.has_private_key ? 'private key saved' : 'private key missing'}
+                          </span>
+                          <div style={{ display: 'grid', gap: 2 }}>
+                            <input
+                              type="file"
+                              accept=".pem,.key,.txt"
+                              aria-label={`Upload private key for ${keyName}`}
+                              data-testid={`chameleon-keypair-private-key-${siteName}-${keyName}`}
+                              disabled={!!uploadingChameleonKey[uploadKey]}
+                              onChange={e => {
+                                const file = e.target.files?.[0];
+                                if (file) void handleChameleonKeypairPrivateKeyUpload(siteName, keyName, file);
+                                e.currentTarget.value = '';
+                              }}
+                              style={{ fontSize: 10, maxWidth: '100%' }}
+                            />
+                            {uploadMessage && (
+                              <span
+                                style={{
+                                  fontSize: 10,
+                                  color: uploadMessage.type === 'success' ? 'var(--fabric-success, #39B54A)' : 'var(--fabric-danger, #b91c1c)',
+                                }}
+                              >
+                                {uploadingChameleonKey[uploadKey] ? 'Uploading...' : uploadMessage.text}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <button
+                  className="test-btn"
+                  style={{ marginTop: 4 }}
+                  onClick={async () => {
+                    setChameleonTestResults(prev => ({ ...prev, [siteName]: { ok: false, error: 'Testing...', latency_ms: 0 } }));
+                    try {
+                      const r = await api.testChameleonConnection(siteName);
+                      setChameleonTestResults(prev => ({ ...prev, ...r }));
+                    } catch (e: any) {
+                      setChameleonTestResults(prev => ({ ...prev, [siteName]: { ok: false, error: e.message, latency_ms: 0 } }));
+                    }
+                  }}
+                >Test Connection</button>
+                {chameleonTestResults[siteName] && (
+                  <span style={{ fontSize: 11, marginLeft: 8, color: chameleonTestResults[siteName].ok ? 'green' : 'var(--text-muted)' }}>
+                    {chameleonTestResults[siteName].ok
+                      ? `\u2713 Connected (${chameleonTestResults[siteName].latency_ms}ms)`
+                      : chameleonTestResults[siteName].error}
+                  </span>
+                )}
+              </div>
+            );
+          })}
           <div style={{ marginTop: 12 }}>
             <p style={{ fontWeight: 600, marginBottom: 3 }}>SSH Key (optional)</p>
             <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
@@ -1747,7 +2335,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
 
   /* ---------- Render ---------- */
   return (
-    <div className="configure-view">
+    <div className="configure-view" data-testid="configure-view">
       {/* Top bar with title, save & close */}
       <div className="configure-topbar" data-tour-id="save-close">
         <div className="configure-topbar-left">
@@ -1773,15 +2361,22 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           </div>
         </div>
         <div className="configure-topbar-actions">
+          {hasUnsavedChanges && (
+            <span className="configure-dirty-badge" title="You have unsaved changes">
+              {'●'} Unsaved
+            </span>
+          )}
           <button
             className="btn primary"
             onClick={handleSave}
-            disabled={saving || !status?.has_token || !selectedProject || !bastionLogin}
+            disabled={saving || !status?.has_token || !selectedProject || !bastionLogin || !hasUnsavedChanges}
+            title={!hasUnsavedChanges ? 'No changes to save' : 'Save settings'}
+            data-testid="configure-save"
           >
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? 'Saving...' : hasUnsavedChanges ? 'Save' : 'Saved'}
           </button>
           {onClose && (
-            <button className="btn configure-close-btn" onClick={onClose}>
+            <button className="btn configure-close-btn" onClick={requestClose}>
               Close
             </button>
           )}
@@ -1810,6 +2405,8 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                 key={s.id}
                 className={`configure-sidebar-item${activeSection === s.id ? ' active' : ''}`}
                 onClick={() => setActiveSection(s.id)}
+                data-testid="configure-section-tab"
+                data-section={s.id}
               >
                 <span className="configure-sidebar-icon">{s.icon}</span>
                 {s.label}
@@ -1821,6 +2418,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
               className={`test-btn test-btn-all${testingAll ? ' testing' : ''}`}
               onClick={runTestAll}
               disabled={testingAll}
+              data-testid="configure-test-all"
             >
               {testingAll && <span className="test-spinner" />}
               {testingAll ? 'Testing...' : 'Test All'}

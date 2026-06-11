@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import type { SliceData, SliceErrorMessage } from '../../types/fabric';
+import { getFacilityPortSlivers } from '../../utils/fabricSlivers';
 
 export interface SliverOption {
   key: string;       // e.g. "node:node1", "net:net1", "fp:port1"
@@ -14,7 +15,7 @@ interface SliverComboBoxProps {
   selectedSliverKey: string;
   onSelect: (key: string) => void;
   errorMessages?: SliceErrorMessage[];
-  tabFilter?: 'fabric' | 'chameleon' | 'experiment';
+  tabFilter?: 'fabric' | 'chameleon';
 }
 
 function buildOptions(sliceData: SliceData | null, errorMessages?: SliceErrorMessage[]): SliverOption[] {
@@ -45,7 +46,7 @@ function buildOptions(sliceData: SliceData | null, errorMessages?: SliceErrorMes
       hasFailed: failedNames.has(net.name),
     });
   }
-  for (const fp of (sliceData.facility_ports ?? [])) {
+  for (const fp of getFacilityPortSlivers(sliceData)) {
     options.push({
       key: `fp:${fp.name}`,
       name: fp.name,
@@ -86,9 +87,13 @@ export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect,
   // Filter by tab context, then by text search
   const tabFiltered = tabFilter ? allOptions.filter(opt => {
     const g = opt.group.toLowerCase();
-    if (tabFilter === 'fabric') return (g.includes('node') && !g.includes('chameleon')) || (g.includes('network') && !g.includes('chameleon'));
+    if (tabFilter === 'fabric') {
+      return (g.includes('node') && !g.includes('chameleon'))
+        || (g.includes('network') && !g.includes('chameleon'))
+        || g.includes('facility')
+        || g.includes('mirror');
+    }
     if (tabFilter === 'chameleon') return g.includes('chameleon');
-    if (tabFilter === 'experiment') return g.includes('facility') || g.includes('mirror');
     return true;
   }) : allOptions;
 
@@ -119,12 +124,22 @@ export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect,
   }, [open]);
 
   return (
-    <div className="sliver-combo" ref={dropdownRef}>
+    <div className="sliver-combo" ref={dropdownRef} data-testid="sliver-selector">
       <div
         className="sliver-combo-input"
+        role="button"
+        tabIndex={0}
+        data-testid="sliver-selector-control"
+        aria-label="Select sliver"
         onClick={() => {
           setOpen(true);
           setTimeout(() => inputRef.current?.focus(), 0);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            setOpen(true);
+            setTimeout(() => inputRef.current?.focus(), 0);
+          }
         }}
       >
         {open ? (
@@ -134,6 +149,8 @@ export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect,
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Type to filter..."
+            aria-label="Filter slivers"
+            data-testid="sliver-selector-filter"
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
                 setOpen(false);
@@ -160,7 +177,7 @@ export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect,
       </div>
 
       {open && (
-        <div className="sliver-combo-dropdown">
+        <div className="sliver-combo-dropdown" data-testid="sliver-selector-options">
           {filtered.length === 0 ? (
             <div className="sliver-combo-empty">
               {allOptions.length === 0 ? '(empty slice)' : 'No matches'}
@@ -173,6 +190,10 @@ export default function SliverComboBox({ sliceData, selectedSliverKey, onSelect,
                   <div
                     key={opt.key}
                     className={`sliver-combo-option ${opt.key === selectedSliverKey ? 'selected' : ''} ${opt.hasFailed ? 'failed' : ''}`}
+                    data-testid="sliver-selector-option"
+                    data-sliver-key={opt.key}
+                    data-sliver-name={opt.name}
+                    data-sliver-type={opt.type}
                     onClick={() => {
                       onSelect(opt.key);
                       setOpen(false);

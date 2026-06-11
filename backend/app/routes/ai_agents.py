@@ -16,6 +16,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.ai_assets import parse_markdown_asset, serialize_markdown_asset
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ai", tags=["ai-agents"])
@@ -63,26 +65,20 @@ def _parse_md_file(fpath: str) -> dict[str, str]:
     with open(fpath, "r") as f:
         content = f.read()
 
-    name = ""
-    description = ""
-    body = content
-
-    if content.startswith("name:"):
-        parts = content.split("---", 1)
-        header = parts[0]
-        body = parts[1].strip() if len(parts) > 1 else ""
-        for line in header.strip().splitlines():
-            if line.startswith("name:"):
-                name = line.split(":", 1)[1].strip()
-            elif line.startswith("description:"):
-                description = line.split(":", 1)[1].strip()
-
-    return {"name": name, "description": description, "body": body}
+    parsed = parse_markdown_asset(content)
+    return {
+        "name": str(parsed.metadata.get("name", "")),
+        "description": str(parsed.metadata.get("description", "")),
+        "body": parsed.body,
+    }
 
 
 def _serialize_md(name: str, description: str, body: str) -> str:
     """Serialize back to the frontmatter .md format."""
-    return f"name: {name}\ndescription: {description}\n---\n{body}\n"
+    return serialize_markdown_asset(
+        {"name": name, "description": description},
+        body,
+    )
 
 
 def _load_all(

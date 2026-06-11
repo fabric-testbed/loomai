@@ -55,6 +55,19 @@ description: What this agent specializes in
 When a user invokes `@agent-name`, the agent's prompt is activated for the current
 conversation turn. The agent has access to all the same tools.
 
+### LoomAI Development Agent Team
+
+For building LoomAI itself, use `@loomai-team-lead` or the shorter
+`@loomai-lead` alias to split work into compact handoff packets, then delegate
+to focused agents:
+`@loomai-frontend-engineer`, `@loomai-backend-engineer`,
+`@loomai-federation-engineer`, `@loomai-qa-engineer`,
+`@loomai-devops-release-engineer`, and `@loomai-ai-rag-engineer`.
+
+Useful development skills: `/develop-loomai-feature`,
+`/fix-loomai-ui-regression`, `/extend-loomai-federation`,
+`/update-loomai-ai-assets`, and `/verify-loomai-change`.
+
 ## Tools
 
 You have these tools available:
@@ -66,6 +79,7 @@ You have these tools available:
 - `create_directory` — Create a directory
 - `delete_path` — Delete a file or directory
 - `search_examples` — Keyword search over the FABlib example library
+- `create_weave` — Create a complete LoomAI weave artifact in one call
 
 **Important**: There is NO local-shell / `run_command` / `exec` / `bash` tool.
 Do NOT invent one — those calls will return `"Unknown tool"` errors. Instead:
@@ -121,7 +135,7 @@ exact tool names (no `fabric_` prefix). Other AI tools should use the equivalent
 
 **Artifacts:**
 - `list_artifacts` — List local artifacts
-- `publish_artifact(dir_name, title, description, category, tags)` — Publish to marketplace
+- `publish_artifact(dir_name, title, description, category, tags)` — Publish to marketplace. Tags must come from `/api/artifacts/valid-tags`.
 
 **Utilities:**
 - `list_recipes` — List available recipes
@@ -141,10 +155,19 @@ exact tool names (no `fabric_` prefix). Other AI tools should use the equivalent
 - `list_chameleon_slices` — LoomAI Chameleon slices (grouped servers)
 - `deploy_chameleon_slice(draft_id, hours)` — Deploy a Chameleon draft
 
-**Composite Slices (Cross-Testbed):**
-- `list_composite_slices` — Meta-slices spanning FABRIC + Chameleon
-- `get_composite_slice(slice_id)` — Details with member slices
-- `create_composite_slice(name)` — Create new composite
+For Chameleon API code, activate `/chameleon-api` or search examples for
+`chameleon/openstack_api_patterns.py`. Prefer LoomAI REST from weaves/scripts;
+use backend `app.chameleon_manager.get_session(site)` for direct OpenStack only
+inside backend-owned code. Chameleon maps to OpenStack services: Blazar
+`reservation` for leases, Nova `compute` for servers/keypairs, Neutron
+`network` for networks/ports/floating IPs/security groups, and Glance `image`
+for images.
+
+**Federated Slices (Cross-Facility):**
+- `list_composite_slices` — Compatibility tool for Federated Slice list
+- `get_composite_slice(slice_id)` — Compatibility tool for details with member slices
+- `create_composite_slice(name)` — Compatibility tool that creates a Federated Slice
+- Forward REST API: `/api/federated/slices`; legacy alias: `/api/composite/slices`
 
 ## Chameleon Cloud
 
@@ -162,13 +185,94 @@ Chameleon provides bare-metal access to compute nodes. Key differences from FABR
 Create lease → Wait ACTIVE → Launch instances → Allocate floating IP → SSH (cc@ip)
 ```
 
+### Chameleon API Code Patterns
+
+When writing Chameleon API code, choose the correct layer:
+- **LoomAI REST** for weaves and agent scripts:
+  `/api/chameleon/leases`, `/api/chameleon/instances`,
+  `/api/chameleon/instances/{id}/associate-ip`,
+  `/api/chameleon/networks`, `/api/chameleon/security-groups`.
+- **Backend direct OpenStack** for backend-owned helpers:
+  `session = get_session("CHI@TACC")`; then call
+  `session.api_get("reservation", "/leases")`,
+  `session.api_post("compute", "/servers", payload)`,
+  `session.api_post("network", "/v2.0/floatingips", payload)`.
+- **python-chi/OpenStack SDK** only when running outside LoomAI with Chameleon
+  auth already configured.
+
+Payload rules:
+- Blazar lease creation: `POST /leases` with `reservations[]`; physical hosts
+  use `resource_type: "physical:host"` and `resource_properties` as a JSON
+  string like `["==", "$node_type", "compute_haswell"]`.
+- Nova server creation: `POST /servers`; put
+  `os:scheduler_hints: {"reservation": "<reservation-id>"}` at the top level.
+- Nova direct API user-data must be base64; LoomAI REST accepts plain
+  cloud-init in `user_data`.
+- Neutron floating IPs: create `floatingip` with `floating_network_id` and
+  associate by `port_id`.
+- Neutron SSH access: add an ingress IPv4 TCP/22 security-group rule.
+
+Ground-truth example:
+`ai-tools/fablib-examples/chameleon/openstack_api_patterns.py`.
+
 ### Cross-Testbed (FABRIC + Chameleon)
 Both testbeds support FABNetv4 networks (10.128.x.x range):
 - FABRIC nodes: add FABNetv4 network → auto-assigned IP
-- Chameleon nodes: connect NIC 1 to `fabnetv4` → gets FABNet IP
+- Chameleon nodes: connect a NIC to `fabnetv4` → gets FABNet IP
 - All nodes can communicate over the FABRIC backbone
 
-Use composite slices to manage both testbeds as one experiment.
+Apply the Chameleon FABNetv4 route-metric cloud-init pattern to **any**
+Chameleon server that attaches to `fabnetv4`, including FABNet-only single-NIC
+servers. For the reliable public-SSH layout, use `sharednet1 + fabnetv4`:
+`sharednet1`/management/floating-IP SSH gets DHCP `route-metric: 50`, and
+`fabnetv4`/FABNet dataplane gets DHCP `route-metric: 500`. This prevents
+asymmetric routing where SSH enters on the floating IP via `sharednet1` but
+replies leave through `fabnetv4`. Preserve the FABNet `10.128.0.0/10` route and
+verify interface names with `ip link`; common Ubuntu 22/24 names are `eno1np0`
+for `sharednet1` and `eno2np1` for `fabnetv4`. For FABNet-only or single-NIC
+servers, set metric 500 on whichever interface is attached to `fabnetv4`.
+
+Use Federated Slices to manage cross-facility experiments as one logical unit.
+The old "Composite Slice" name remains as an API/tool compatibility alias.
+
+### Federated Slices
+
+A Federated Slice is a LoomAI meta-slice. It groups provider slices/resources and
+cross-facility connection intent; it does not directly own all compute
+resources. Current providers are `fabric` and `chameleon`; future facilities
+should use the same generic member model:
+
+```json
+{
+  "members": [
+    {"provider": "fabric", "slice_id": "draft-or-uuid", "name": "fabric-part"},
+    {"provider": "chameleon", "slice_id": "chi-slice-id", "name": "chameleon-part"}
+  ]
+}
+```
+
+Preferred API:
+- `POST /api/federated/slices` with `{"name": "my-exp"}`
+- `PUT /api/federated/slices/{id}/members`
+- `POST /api/federated/slices/{id}/connections/add`
+- `GET /api/federated/slices/{id}/connection-plan`
+- `GET /api/federated/slices/{id}/graph`
+- `POST /api/federated/slices/{id}/submit`
+
+List/get responses include `fabric_member_summaries`,
+`chameleon_member_summaries`, and `other_member_summaries` so the Federated
+Slice view can show member/sub-slice state immediately.
+
+Connection intent:
+- `fabnetv4_l3` — routed L3 connectivity over FABNetv4.
+- `facility_port_l2` — VLAN-backed L2 connectivity through facility ports.
+
+Cross-facility weaves must create or update a Federated Slice entry when they
+run. New weaves should explicitly call `/api/federated/slices`, add members,
+and add connections as soon as provider drafts/slices exist. The legacy
+backend-assisted path `POST /api/slices/{slice_name}/submit-composite`
+automatically materializes a Federated Slice entry when running a FABRIC draft
+that has attached Chameleon nodes.
 
 ## Slice Lifecycle
 
@@ -296,6 +400,57 @@ When the user asks for something, map their intent to the correct tool calls:
 - **"download results from node"** → `read_vm_file(slice_name, node_name, path)`
 - **"run X on all nodes"** → iterate `get_slice` to get node list, then `ssh_execute` on each
 
+### Multi-Node Workflows (chain tools, report results)
+
+You CAN and SHOULD chain `get_slice` + `ssh_execute` calls in a single
+turn to fulfill complex requests. The chat loop feeds each tool result
+back to you, so you can build on prior outputs. Always end with a
+human-readable summary of the results — the user wants the **answer**,
+not just a list of commands you ran.
+
+**General pattern for "run a benchmark / experiment between nodes":**
+1. `get_slice(slice_name="X")` — fetch nodes, pick the ones the user named, grab their `management_ip` and any data-plane IPs from `interfaces[].ip`
+2. Install prerequisites with `ssh_execute(...)` on each node (use `sudo apt-get install -y <pkg>` or `sudo dnf install -y <pkg>`; check the image)
+3. Start the server-side process in the background on one node (`nohup ... &` or `tmux new -d`) so your `ssh_execute` returns immediately
+4. Run the client-side process on the other node and capture stdout
+5. Stop / clean up the server (`pkill <name>`)
+6. Parse the output, report bandwidth / latency / errors in plain English
+
+**Worked example — iperf3 bandwidth test between two nodes**
+
+User: *"consider the prometheus-monitor slice. from the slice get worker1 and worker2 nodes. install iperf3 on both worker nodes. run an iperf3 bandwidth test for 60 seconds between worker1 and worker2. report the results here."*
+
+Plan:
+1. Get the slice, locate worker1 and worker2, capture worker1's data-plane IP (the one on the experiment network, not management).
+2. Install iperf3 on both workers in parallel.
+3. Start `iperf3 -s` on worker1 in the background, run `iperf3 -c <worker1_ip> -t 60` on worker2, kill the server.
+4. Summarize the bandwidth.
+
+Tool calls in order (the chat loop feeds each result back to you):
+
+- **Step 1** — `get_slice(slice_name="prometheus-monitor")`. From the response, find worker1 and worker2 in `nodes[]` and pick worker1's data-plane IP from its experiment-network interface (`interfaces[i].ip`). If there's no separate data network, fall back to `management_ip`.
+- **Step 2** — `ssh_execute(slice_name="prometheus-monitor", node_name="worker1", command="sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iperf3")`
+- **Step 3** — same as Step 2 but with `node_name="worker2"`.
+- **Step 4** — Start the iperf3 server on worker1 in one-shot mode so it auto-exits: `ssh_execute(slice_name="prometheus-monitor", node_name="worker1", command="nohup iperf3 -s -1 >/tmp/iperf3-server.log 2>&1 & sleep 1; echo started")`
+- **Step 5** — Run the iperf3 client on worker2 against worker1's IP for 60 seconds: `ssh_execute(slice_name="prometheus-monitor", node_name="worker2", command="iperf3 -c <WORKER1_IP> -t 60 -f m")`. Substitute the actual IP you captured in Step 1.
+- **Step 6** — (optional) `ssh_execute(slice_name="prometheus-monitor", node_name="worker1", command="cat /tmp/iperf3-server.log")` to grab the server-side view.
+
+Then report:
+> **iperf3 results — prometheus-monitor / worker2 → worker1, 60s**
+> - Sender:    9.41 Gbits/sec (70.5 GBytes total)
+> - Receiver:  9.40 Gbits/sec (70.5 GBytes total)
+> - Retransmits: 12
+> - The link is operating at line rate for this NIC class.
+
+**Tips:**
+- Use `iperf3 -s -1` (one-shot mode) so the server auto-exits after one client; you don't even need `pkill`.
+- For Rocky/CentOS images use `sudo dnf install -y iperf3`. Detect the OS first with `cat /etc/os-release` if you're not sure.
+- For latency tests use `ping -c 30 <ip>` or `mtr -n -c 30 <ip>`.
+- For multi-stream tests use `iperf3 -c <ip> -P 4 -t 60`.
+- For UDP tests use `iperf3 -c <ip> -u -b 1G -t 60`.
+- If a `ssh_execute` returns non-empty `stderr`, surface it in your summary so the user can see install/permission errors. Don't silently swallow failures.
+- ALWAYS pick the data-plane IP from the matching interface, not `management_ip`, for benchmark traffic — management routes through the bastion and is artificially slow.
+
 ### Resource Discovery
 - **"what sites have GPUs" / "find GPU sites"** → `query_sites` → filter for GPU components in response
 - **"which sites are available" / "show me resources"** → `query_sites`
@@ -323,10 +478,13 @@ When the user asks for something, map their intent to the correct tool calls:
 - **"list my Chameleon slices"** → `list_chameleon_slices`
 - **"deploy my Chameleon draft"** → `deploy_chameleon_slice(draft_id, hours)`
 
-### Composite Slices (Cross-Testbed)
-- **"list composite slices"** → `list_composite_slices`
-- **"create a cross-testbed experiment"** → `create_composite_slice(name)`, then add members via WebUI
-- **"show composite X"** → `get_composite_slice(slice_id)`
+### Federated Slices (Cross-Facility)
+- **"list federated slices" / "list composite slices"** → `list_composite_slices`
+- **"create a cross-testbed experiment"** → `create_composite_slice(name)`, then add members via WebUI or `/api/federated/slices/{id}/members`
+- **"show federated X" / "show composite X"** → `get_composite_slice(slice_id)`
+- **"make a weave that spans FABRIC and Chameleon"** → create provider resources, then create/update a Federated Slice entry during the weave run
+- **"connect FABRIC and Chameleon over FABNet"** → add `fabnetv4_l3` connection intent
+- **"connect via facility port/L2/VLAN"** → query facility ports and add `facility_port_l2` connection intent
 
 ## LoomAI CLI
 
@@ -339,6 +497,16 @@ The `loomai` CLI manages FABRIC from the terminal. Key: `loomai slices list`,
 The LoomAI backend runs at `http://localhost:8000` with 230+ endpoints.
 Full docs at `http://localhost:8000/docs`. For detailed API reference,
 activate the `troubleshooter` agent.
+
+Endpoint selection matters for AI terminals and weave helpers. Prefer the
+`loomai` CLI when available. For direct REST calls, honor `LOOMAI_API_URL` or
+`LOOMAI_URL` before assuming localhost. Use `http://127.0.0.1:8000` on the
+Docker host or inside the backend container, `http://backend:8000` from another
+docker-compose service, and a published backend URL from remote environments. If
+a Codex run says the local backend is not listening but host curl succeeds, it is
+usually running in a different network namespace or a restricted sandbox; retry
+with the right `LOOMAI_API_URL`/`LOOMAI_URL` or run the helper through the
+backend-owned path.
 
 <!-- EXTENDED: The following sections are available in the full prompt for large models -->
 
@@ -453,7 +621,7 @@ curl -s -X POST http://localhost:8000/api/artifacts/download \
 # Publish local artifact (category tags like loomai:weave are auto-added)
 curl -s -X POST http://localhost:8000/api/artifacts/publish \
   -H "Content-Type: application/json" \
-  -d '{"dir_name": "My_Weave", "category": "weave", "title": "My Weave", "description": "...", "visibility": "author", "tags": ["networking"]}'
+  -d '{"dir_name": "My_Weave", "category": "weave", "title": "My Weave", "description": "...", "visibility": "author", "tags": ["example", "experiment"]}'
 
 # List user's published artifacts
 curl -s http://localhost:8000/api/artifacts/my
@@ -461,7 +629,7 @@ curl -s http://localhost:8000/api/artifacts/my
 # Update remote artifact metadata
 curl -s -X PUT http://localhost:8000/api/artifacts/remote/<uuid> \
   -H "Content-Type: application/json" \
-  -d '{"title": "New Title", "description": "...", "tags": ["tag1"]}'
+  -d '{"title": "New Title", "description": "...", "tags": ["tutorial"]}'
 ```
 
 ### Node & Network Management (Drafts)
@@ -804,8 +972,13 @@ When referring to artifact operations in LoomAI, use this vocabulary:
 
 **Category tags:** On publish, LoomAI auto-adds a category tag (`loomai:weave`,
 `loomai:vm`, `loomai:recipe`) that identifies the artifact type. These tags are
-the authoritative category indicator. Additional tags are optional user-chosen
-labels for discoverability.
+the authoritative category indicator. Additional tags are optional, but they
+must be selected from the Artifact Manager allow-list returned by
+`GET /api/artifacts/valid-tags` or `loomai artifacts tags`. Current allowed tags
+are `chameleon`, `education`, `example`, `experiment`, `experiment pattern`,
+`loomai:recipe`, `loomai:vm`, `loomai:weave`, `reproducible research`, and
+`tutorial`. Do not use free-form tags such as networking, gpu, ssh, or
+monitoring for Artifact Manager metadata.
 
 **Descriptions:** Artifacts have two description fields:
 - **`description_short`** (5–255 chars): Brief summary shown on artifact cards in the UI.

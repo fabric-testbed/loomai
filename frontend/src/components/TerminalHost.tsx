@@ -27,7 +27,7 @@ function refitSession(session: TerminalSession) {
   try {
     session.fitAddon.fit();
     session.term.refresh(0, session.term.rows - 1);
-    if (session.ws.readyState === WebSocket.OPEN) {
+    if (session.ws && session.ws.readyState === WebSocket.OPEN) {
       session.ws.send(
         JSON.stringify({ type: 'resize', cols: session.term.cols, rows: session.term.rows }),
       );

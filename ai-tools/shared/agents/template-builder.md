@@ -209,7 +209,11 @@ Post-provisioning scripts in `$ARTIFACTS_DIR/<DirName>/` (identified by `recipe.
 
 ### Artifact Tags & Descriptions
 On publish, LoomAI auto-adds a category tag (`loomai:weave`, `loomai:vm`, `loomai:recipe`)
-to identify the artifact type. Additional tags are optional user labels.
+to identify the artifact type. Additional tags are optional, but they must come
+from the Artifact Manager allow-list returned by `GET /api/artifacts/valid-tags`
+or `loomai artifacts tags`. Current allowed tags are `chameleon`, `education`,
+`example`, `experiment`, `experiment pattern`, `loomai:recipe`, `loomai:vm`,
+`loomai:weave`, `reproducible research`, and `tutorial`.
 
 Artifacts have two description fields:
 - **`description_short`** (5–255 chars): Brief summary for UI cards. In `weave.json`, this
@@ -326,7 +330,7 @@ curl -X POST http://localhost:8000/api/templates/runs/run-abc123/stop
 Users can publish artifacts to the FABRIC community:
 1. Create artifact locally (weave, VM template, or recipe)
 2. Click "Publish" in the Artifacts view (Local tab)
-3. Set visibility, tags, and description
+3. Set visibility, allowed tags, and description
 4. Artifact appears in the Marketplace tab for others to "Get"
 
 The Artifacts side panel in the Topology view provides quick access:

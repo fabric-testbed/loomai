@@ -81,7 +81,12 @@ When referring to artifact operations, use this vocabulary:
 - **Recipe** — A post-provisioning script
 
 Artifact types are identified by category tags auto-added on publish:
-`loomai:weave`, `loomai:vm`, `loomai:recipe`. Additional tags are optional user labels.
+`loomai:weave`, `loomai:vm`, `loomai:recipe`. Additional tags are optional, but
+must come from the Artifact Manager allow-list returned by
+`GET /api/artifacts/valid-tags` or `loomai artifacts tags`. Current allowed tags
+are `chameleon`, `education`, `example`, `experiment`, `experiment pattern`,
+`loomai:recipe`, `loomai:vm`, `loomai:weave`, `reproducible research`, and
+`tutorial`.
 
 Artifacts have two description fields:
 - **`description_short`** (5–255 chars): Brief summary for UI cards.
@@ -98,6 +103,12 @@ Key skills for slice and weave management:
 **Software:** `/install-software`, `/create-recipe`, `/create-vm-template`
 **Troubleshooting:** `/debug`, `/monitor`, `/benchmark`
 **Data & Reports:** `/query-fabric`, `/reports`, `/jupyter`
+
+**LoomAI development:** `/develop-loomai-feature`,
+`/fix-loomai-ui-regression`, `/extend-loomai-federation`,
+`/update-loomai-ai-assets`, `/verify-loomai-change`. For multi-area work, use
+`@loomai-team-lead` or `@loomai-lead` to split tasks across the LoomAI
+frontend, backend, federation, QA, DevOps, and AI/RAG specialist agents.
 
 ## Co-located AI Tools
 

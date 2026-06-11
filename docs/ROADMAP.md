@@ -11,8 +11,8 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
 - **Template system**: Weaves (orchestrated topologies), VM templates, recipes
 - **Weave workflow**: Python lifecycle scripts (`start`/`stop`/`monitor`), `weave.sh` orchestrator, background runs with log streaming, failure monitoring, graceful shutdown (SIGTERM trap)
 - **Artifact marketplace**: Browse, publish, download artifacts from FABRIC Artifact Manager
-- **AI tools**: 6 integrated tools — LoomAI (chat), Aider (web IDE), OpenCode (terminal), Crush (TUI), Claude Code (CLI), Deep Agents (LangChain)
-- **AI agents & skills**: 8 agent personas + 31 skills for in-container AI tools, user-customizable via Settings UI with CRUD API
+- **AI tools**: 8 launchable tools — LoomAI (chat), Antigravity (CLI), Codex (CLI), Aider (web IDE), OpenCode (terminal/web), Crush (TUI), Deep Agents (LangChain), Claude Code (CLI); Jupyter AI is integrated into JupyterLab
+- **AI agents & skills**: 22 shared agent prompts + 41 skills for in-container AI tools, user-customizable via Settings UI with CRUD API
 - **Site resolution**: `@group` co-location tags, host-level feasibility checks, auto-assign
 - **File management**: Dual-panel browser (container storage + VM SFTP), file editor
 - **Terminal**: Local container shell, SSH to VMs via bastion, FABlib log tail
@@ -38,12 +38,12 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
 - **Quick wins (2026-03-26)**: Terminal sliver state override (Dead/Closing slices show correct state), getMyArtifacts() 5s dedup cache, listValidTags/listUserProjects session cache, "new conversation" warning (already working), weave run view switching (already fixed)
 - **Jupyter AI integration (2026-03-26)**: Added `jupyter-ai` package to requirements.txt and tool installer. JupyterLab startup auto-configures `OPENAI_API_KEY`/`OPENAI_BASE_URL` from FABRIC AI settings. Multi-provider support (FABRIC + NRP + custom). FABRIC system prompt patched into Jupyternaut. Skills and agents copied to `~/.jupyter/fabric_context/`.
 - **AI assistant features (2026-03-26)**: Multi-conversation chat (create, switch, rename, delete conversations with localStorage persistence). LLM connection health test button with latency display + `POST /api/ai/models/test` endpoint + `POST /api/ai/models/refresh` force-refresh. Tool execution queue with numbered steps and mutating-tool highlighting. Streaming tool progress summaries (one-line result descriptions in tool card headers).
-- **Phase 1 — Polish & Stabilize (2026-03-27)**: Settings view redesigned (two-panel sectioned layout, 9 sections, responsive). Settings validation with live Test buttons (`POST /api/settings/test/{name}`, Test All). UIS query caching (10-min TTL via FabricCallManager). Help docs updated (21 new entries for FABRIC/Chameleon views, AI assistant, CLI). Tour steps updated (FABRIC/Chameleon views, 6 AI tools, multi-conversation). README updated (17 features, 7 AI tools). CONTRIBUTING.md created.
+- **Phase 1 — Polish & Stabilize (2026-03-27)**: Settings view redesigned (two-panel sectioned layout, 9 sections, responsive). Settings validation with live Test buttons (`POST /api/settings/test/{name}`, Test All). UIS query caching (10-min TTL via FabricCallManager). Help docs updated (21 new entries for FABRIC/Chameleon views, AI assistant, CLI). Tour steps updated for the AI tool set current at the time. README updated (17 features). CONTRIBUTING.md created.
 - **Phase 2 — Infrastructure Map + AI Tool Maturity (2026-03-27)**: Live load indicators on map (color-coded markers, link thickness, tooltips, legend, 2-min auto-refresh). Auto AI config propagation on settings save. Uniform FABRIC/NRP access verified + OpenCode bug fix. Crush/Deep Agents in ai-eval. 30 new seeding tests. Custom FABlib branch support (Dockerfile ARG + runtime override).
 - **Phase 4a — Chameleon Foundation Layer (2026-03-27)**: Unified `TestbedViewShell` component with `TestbedTheme` prop and CSS custom properties. Both InfrastructureView and ChameleonView refactored to use shared shell. Lease selector dropdown added to ChameleonView toolbar. SSH key management bug fixed (fallback to FABRIC key). ~130 lines of duplicate CSS removed.
 - **Phase 4c — Chameleon Scheduling (2026-03-27)**: Chameleon calendar endpoint + ChameleonCalendar component (14-day timeline, lease bars, green theme). Find-available wired into calendar finder with "Reserve at that time" button.
-- **Phase 4f — Final Chameleon Items (2026-03-27)**: L2 Stitch with VLAN negotiation (`POST /api/chameleon/negotiate-vlan`). Composite submit (`POST /api/slices/{name}/submit-composite`) with parallel FABRIC+Chameleon provisioning via asyncio.gather. Chameleon networks + floating IPs as editor topology elements. Trovi already implemented (discovered existing backend + frontend).
-- **Phase 4e — Cross-Testbed Integration (2026-03-27)**: Chameleon nodes in Composite Slice editor (FABnet v4). Server-side graph merge via `build_chameleon_slice_node_elements()`. EditorPanel gated by `chameleonEnabled` prop (Composite Slice only, not FABRIC view). ChameleonNodeForm with site/type/image/connection dropdowns. SliverComboBox Chameleon group.
+- **Phase 4f — Final Chameleon Items (2026-03-27)**: L2 Stitch with VLAN negotiation (`POST /api/chameleon/negotiate-vlan`). Federated submit, then named Composite submit (`POST /api/slices/{name}/submit-composite`), with parallel FABRIC+Chameleon provisioning via asyncio.gather. Chameleon networks + floating IPs as editor topology elements. Trovi already implemented (discovered existing backend + frontend).
+- **Phase 4e — Cross-Testbed Integration (2026-03-27)**: Chameleon nodes in Federated Slice editor, then named Composite Slice editor (FABnet v4). Server-side graph merge via `build_chameleon_slice_node_elements()`. EditorPanel gated by `chameleonEnabled` prop (Federated/Composite Slice only, not FABRIC view). ChameleonNodeForm with site/type/image/connection dropdowns. SliverComboBox Chameleon group.
 - **Phase 4d — Chameleon Topology Editor (2026-03-27)**: 11 new draft management endpoints. ChameleonEditor component with Draft → Lease → Deploy workflow, CytoscapeGraph integration, add node/network forms, deploy controls. `build_chameleon_draft_graph()` in graph_builder.py.
 - **Phase 4b — Chameleon Full Editor (2026-03-27)**: 8 new backend endpoints (instance reboot/stop/start, disassociate-ip, network CRUD, node-types/detail). Server management buttons on instance cards. Networks tab. ChameleonTableView (sort, filter, bulk delete, context menu). Map instance markers. Lease extend/delete. Browse hardware specs. Create Lease dropdown with hardware specs.
 - **Phase 8 — Production Readiness (2026-03-27)**: Future reservation & auto-execution (reservation_manager.py, background checker, schedule UI in ResourceCalendar). Staging environment (docker-compose.staging.yml). Detailed health monitoring (`GET /api/health/detailed` with subsystem checks).
@@ -65,11 +65,61 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
   - PVC: 5Gi recommended for AI tools (~900MB for JupyterLab alone)
   - Image builds: `docker buildx --platform linux/amd64` with versioned tags
 
-- **HTTPS deployment + hub-disabled AI tools (2026-05-01)**: Production HTTPS support via CHP TLS termination with manual certificates (InCommon/Sectigo). LoadBalancer exposes only port 443 when HTTPS enabled. Full cert chain support (leaf + intermediate). K8s TLS secret created manually or via Helm values. CILogon callback URL updated for HTTPS. Secure cookies enforced. AI tools (Aider, OpenCode, Crush, Claude Code, Deep Agents) greyed out in hub mode with "Local Install Only" badge — detected via `window.__LOOMAI_BASE_PATH`. LoomAI (built-in) remains fully available. Docs updated: KUBERNETES.md (cert prep, HTTPS config, renewal, troubleshooting), NOTES.txt (HTTPS-aware), values.yaml (annotated HTTPS options).
+- **HTTPS deployment + hub-disabled AI tools (2026-05-01)**: Production HTTPS support via CHP TLS termination with manual certificates (InCommon/Sectigo). LoadBalancer exposes only port 443 when HTTPS enabled. Full cert chain support (leaf + intermediate). K8s TLS secret created manually or via Helm values. CILogon callback URL updated for HTTPS. Secure cookies enforced. Installable AI tools (Antigravity, Codex, Aider, OpenCode, Crush, Deep Agents, Claude Code) greyed out in hub mode with "Local Install Only" badge — detected via `window.__LOOMAI_BASE_PATH`. LoomAI (built-in) remains fully available. Docs updated: KUBERNETES.md (cert prep, HTTPS config, renewal, troubleshooting), NOTES.txt (HTTPS-aware), values.yaml (annotated HTTPS options).
+
+- **Testing hardening increment (2026-06-08)**: Backend-contract E2E is now wired into CI and runs a real FastAPI backend in fake-provider mode. Contract coverage includes FABRIC lifecycle, facility ports, port mirrors, Chameleon draft lifecycle, floating IPs, security groups, federated members/connections, and Facility Port L2 connection plans. The Chameleon contract session now persists floating-IP/security-group mutations. Federated editor component coverage now exercises scalable subslice selection, embedded FABRIC/Chameleon editor tabs, FABNetv4 and Facility Port L2 connection controls, and connection removal. Follow-up coverage adds Chameleon editor component tests, deterministic provider fake unit tests, deeper mocked Chameleon/Federated workflows, federated submit regression checks, and forced federated topology refresh on view activation. Live E2E has a gated `.live.spec.ts` preflight skeleton skipped unless `E2E_FULL=1`, with mutation checks further gated by `E2E_LIVE_MUTATIONS=1`.
 
 ## In Progress
 
-(None)
+- **LoomAI AI assistant, agent, skill, and RAG modernization (2026-06-09)**:
+  - **Canonical AI asset model**: Define one repo-owned source format for LoomAI AI knowledge, agents, skills, examples, and eval prompts, then generate/adapt per-tool outputs for LoomAI Assistant, Claude Code, Codex, OpenCode, Aider, Crush, Deep Agents, Antigravity, and future coding tools. Initial inventory: `docs/AI_ASSET_INVENTORY.md`. Accepted format: Markdown files with standard frontmatter, documented in `docs/AI_ASSET_FORMAT.md`.
+  - **Developer vs end-user split**: Keep repo-development guidance (`AGENTS.md`, `CLAUDE.md`, `.claude/commands`) distinct from in-container end-user AI assets (`ai-tools/shared`, `backend/ai-tools/shared`), but add a shared propagation checklist so important LoomAI/FABlib/Chameleon/Federated knowledge reaches both surfaces when appropriate.
+  - **Curated RAG corpus**: Starter pass implemented for all requested categories. The index now reads canonical curated corpus maps from `ai-tools/shared/corpus/*.md`, enriches FABlib examples with domains/source paths/freshness metadata, and includes repo default weaves from `backend/default_artifacts/` before user storage is populated. Continue expanding with user-specific weaves, lab examples, FABlib snippets, Chameleon/OpenStack patterns, federated workflows, and troubleshooting runbooks as they are identified.
+  - **Implementation discovery questions**: Initial answer recorded: include all categories. For future expansion, ask which user-specific skills, example weaves, FABlib snippets, Chameleon/OpenStack patterns, federated workflows, and troubleshooting examples should be added beyond the starter corpus.
+  - **Cross-tool packaging adapters**: Completed on this branch for the supported workspace-seeded tools. Canonical shared skills and agents now flow through deterministic adapters for OpenCode, Claude Code commands, Crush, Deep Agents, Antigravity, and Codex; Aider receives a generated read-only `AI_ASSETS.md` index. User-custom skill/agent overlays are included in these adapters.
+  - **Assistant quality loop**: Completed static foundation on this branch. Canonical eval assets now cover creating weaves, writing FABlib code, extending Chameleon slices, debugging Federated topology state, and explaining slice/SSH errors. The deterministic harness validates retrieval coverage, tool-schema availability after per-model filtering, intent routing, prompt-regression terms, and context-budget tool retention without live LLM calls.
+  - **RAG operations UI/API**: Next. Surface RAG status, corpus sources, rebuild, search preview, and last-refresh diagnostics in Settings or an AI admin panel, backed by the existing `/api/ai/rag/*` endpoints.
+  - **Security and config hygiene**: Review AI tool provider config generation so secrets are not written into persistent tool config files when an env-var or runtime injection path is available, especially for Codex/custom providers.
+  - **Documentation correction**: Completed on this branch. Docs and help text now describe the current tool set, including Codex and Antigravity, and state which tools support skills, agents, MCP, direct tool calling, or only `AGENTS.md` context.
+
+- **Deterministic WebUI testing and E2E hardening (2026-06-08)**:
+  - **Test suite split**: Foundation done. Automated coverage is split into `unit`, `backend-contract`, `mocked-e2e`, and `live-e2e` layers so most regressions are found without creating or managing real FABRIC/Chameleon slices.
+  - **Backend tests without real slices**: Provider fake coverage and federated submit/graph regression tests are in place for the current Chameleon/Federated risk areas. Remaining work: expand pytest coverage with mocked FABlib, Chameleon/OpenStack, federated-slice, file, artifact, AI-model, settings, serializer, graph-builder, validation, and error-path tests.
+  - **Frontend component tests**: Federated editor coverage is expanded for subslice selection, embedded provider tabs, and cross-testbed connection controls. Chameleon editor coverage now exercises NIC assignments, lease attach/detach, existing network attach, resources audit, cleanup policy, and explicit action wording. Remaining work: FABRIC editor controls, shared settings/artifact/AI/file surfaces, loading states, empty states, and error states.
+  - **Strict mocked Playwright E2E**: Chameleon and Federated mocked workflows now cover graph state, resource/member detach/delete, cross-testbed connection state, and federated submit response refresh. Remaining work: broaden PR-gate browser workflows with deterministic API fixtures across FABRIC, provider tabs, settings, artifacts, AI, file/tunnel, and failure cases.
+  - **Backend-contract E2E**: Foundation and CI gate done. The browser talks to the real backend while backend provider clients run in fake/test mode, covering core FABRIC, Chameleon, and Federated mutation contracts without deploying real resources. Remaining work: add file/artifact/settings/AI contracts and more error-path contracts.
+  - **Gated live E2E**: Skeleton done. Live FABRIC, Chameleon, Federated, terminal/SSH, and hardware checks stay behind `E2E_FULL=1`; draft/member mutations are additionally gated by `E2E_LIVE_MUTATIONS=1`. Remaining work: add small live critical paths with resource preflight and cleanup.
+  - **Harness/tooling improvements**: Playwright projects, `e2e:mock`, `e2e:contract`, `e2e:live`, `e2e:report`, core selectors, strict API mocks, backend-contract CI artifacts, and live skeleton are in place. Remaining work: expand selectors for file/artifact/AI controls and document triage/runbook details.
+  - **Bug-fix workflow**: Work bottom-up: fix backend/unit failures first, then frontend component failures, then mocked browser workflow failures, then backend-contract issues, and only then spend time on live provisioning failures.
+
+- **WebUI workflow completion and product health (2026-06-07)**:
+  - **Workflow-first status surfaces**: Add a persistent setup/readiness panel for FABRIC, Chameleon, and Federated views that shows the active project, auth/config status, selected slice, provider health, key readiness, validation issues, and next recommended action.
+  - **Provider shell consolidation**: Route FABRIC, Chameleon, and Federated top bars through shared provider-shell components so selectors, `New`, `Submit`/`Deploy`, `Delete`, refresh, auto-refresh, and availability/preflight actions behave consistently across testbeds.
+  - **Typed modals instead of browser dialogs**: Replace remaining `prompt`, `confirm`, and `alert` flows with domain-specific modals. Destructive and membership-changing operations should preview affected resources and use explicit commands such as `Detach from slice`, `Delete from provider`, `Release floating IP`, and `Disassociate IP`.
+  - **Preflight validation before submit/deploy**: Add a pre-submit drawer that summarizes resource availability, site/host/node-type choices, images, networks, facility ports, VLANs, floating IPs, security groups, lease windows, SSH readiness, and cross-testbed connection risks.
+  - **FABRIC editor facility-port selector bugfix**: The facility port dropdown in the FABRIC editor must list all facility ports accessible to the current active FABRIC project. Fix the selector data path so project-visible facility ports are fetched, filtered, and displayed reliably, including empty/loading/error states and a clear refresh path when the active project changes.
+  - **Unified operation console**: Present submit/deploy/config/delete/template operations as timelines with timestamps, step status, retry affordances, and links back to the responsible slice/editor tab/resource. FABRIC, Chameleon, and Federated operations should use the same console model.
+  - **Federated control-plane clarity**: Make Federated slices visibly own membership and cross-testbed intent while provider slices own resource lifecycle. Show member states, provider ownership, submit progress, and refresh/cache state directly in the Federated view.
+  - **Chameleon editor scanability**: Keep Leases, Servers, Networks, IPs, and Resources tabs, but make high-cardinality areas searchable and table-driven so users can manage many servers, leases, networks, floating IPs, and security groups without long vertical scanning.
+  - **OpenStack as advanced inventory**: Position the Chameleon OpenStack tab as an advanced project-wide inventory/escape hatch. Normal slice-scoped lifecycle actions should remain available inside the Chameleon slice editor.
+  - **Codebase decomposition**: Reduce `App.tsx` and editor-component blast radius by extracting provider view containers/hooks, shared toolbar/modal/operation-log primitives, and smaller editor tab components before adding more cross-testbed workflows.
+  - **Workflow E2E coverage**: Expand Playwright coverage around create/edit/submit/refresh/terminal/delete journeys for FABRIC, Chameleon, and Federated slices, including cross-view sync and error handling.
+
+- **Slice model alignment — provider slices + federated slices (2026-06-04)**:
+  - **Specification**: FABRIC slices remain native provider slices. Chameleon slices are first-class LoomAI records that group project resources because Chameleon itself exposes a project-wide resource pool rather than native slices. Federated slices group provider slices/resources plus cross-testbed connection intent.
+  - **Chameleon ownership model**: Every tracked Chameleon resource should carry explicit membership and lifecycle metadata: `provider`, `ownership` (`managed` or `imported`), `created_by`, `managed`, `delete_with_slice`, and relationship fields such as `lease_id`/`planned_node_id`. Managed resources may be deleted with the slice; imported resources detach by default.
+  - **Resource attach workflow**: Users must be able to add additional Chameleon resources to an existing Chameleon slice. Required flows: add planned servers, add/import unaffiliated existing servers, import all matching servers from a Blazar reservation, detach without deleting, and optionally delete managed resources.
+  - **Chameleon editor GUI completion**: Keep the existing **Leases** and **Servers** editor tabs, then add focused **Networks**, **IPs**, and **Resources** tabs so users can add, attach, detach, or delete every meaningful piece of a Chameleon slice without leaving the editor.
+    - **Leases tab**: Preserve the current lease workflow, but make ownership actions explicit. Attached leases should show `Detach from slice` separately from `Delete lease`. Detaching a lease must preview dependent imported resources that will also detach, such as instances tied to that lease.
+    - **Servers tab**: Preserve the current add/edit/remove server workflow, but clearly separate planned servers (`draft.nodes`) from live/imported instances (`resources[type=instance]`). Planned servers need edit, remove-from-draft, NIC configuration, and floating-IP intent controls. Live/imported servers need open-terminal, detach-from-slice, delete-server, and floating-IP actions. "Attach Existing Server" should use a searchable table instead of only a post-search dropdown.
+    - **Networks tab**: Promote network management to a first-class editor surface. Users should be able to create new Chameleon networks, attach existing networks, see slice networks, inspect connected servers/NICs, remove networks from slice membership, and optionally delete the underlying Neutron network with confirmation. Rows should show name, site, CIDR/subnet, shared/private status, VLAN if known, and connected NIC count.
+    - **IPs tab**: Centralize floating-IP management. Show floating-IP intent for planned servers, allocated IPs attached to live instances, and unattached floating IPs in the project. Required actions: allocate, attach to server/NIC, disassociate, release, and detach from slice tracking. The UI must distinguish "desired on deploy" from "already allocated".
+    - **Resources tab**: Provide an audit/power-user inventory of raw slice membership across leases, instances, networks, floating IPs, and security groups. Each row should show type, name, site, status, ownership (`managed` or `imported`), delete behavior (`delete_with_slice` vs detach-only), and provider ID. Actions should include detach from slice, delete from Chameleon when allowed, and optional toggle of delete-with-slice for imported resources.
+    - **Action wording rule**: Avoid ambiguous "Remove" labels for Chameleon resources. Use explicit commands such as `Remove from draft`, `Detach from slice`, `Delete from Chameleon`, `Release floating IP`, and `Disassociate IP` so users understand whether LoomAI is editing membership or destroying cloud resources.
+    - **Dependency preview**: Destructive or membership-changing actions should show the affected graph before confirmation. Examples: removing a planned node clears floating-IP intent and network memberships; detaching a lease also detaches lease-bound imported instances; deleting a network can affect attached ports.
+    - **Graph integration**: Right-click topology actions should route to the same operations exposed in the editor tabs, including add server, configure NIC, attach/detach resource, manage floating IP, delete, and open terminal.
+  - **Federated member model**: Preserve current `fabric_slices` and `chameleon_slices` fields for compatibility, but migrate toward a generic `members: [{provider, slice_id}]` representation so future testbeds can be added without changing the federated slice schema.
+  - **UX rule**: FABRIC view edits FABRIC provider slices, Chameleon view edits LoomAI Chameleon provider slices, and Federated view adds/removes provider slices as members while delegating resource lifecycle to those provider slices.
 
 ## Gaps & TODOs
 
@@ -79,32 +129,71 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
 - ~~No frontend unit tests~~ — Done (Phase 7). Vitest + @testing-library/react, 20 tests across 3 files.
 - ~~Missing WebSocket/SSE/terminal tests~~ — Done (Phase 7). 12 new tests covering container/slice terminals, AI tool WS, chat SSE.
 - ~~End-to-end LLM tests~~ — Done (Phase 7). 4 round-trip tests gated behind `@pytest.mark.llm`.
-- **Composite slice + base slice test expansion** — The current composite test suite (`tests/integration/test_composite.py`) has 28 tests covering CRUD, members, graph merge, submit, migration, and Chameleon interface rendering. Expand with:
+- **Testing/tooling overhaul for full WebUI coverage**:
+  - ~~**Repository scripts and Playwright projects**~~ — Done (2026-06-08):
+    - Added frontend scripts for `e2e:mock`, `e2e:contract`, `e2e:live`, and `e2e:report`.
+    - Split Playwright projects into deterministic mocked UI, backend-contract UI, and live provisioning layers.
+    - Moved mock-backed browser tests to `.mock.spec.ts` so live E2E does not silently depend on route mocks.
+    - Added `E2E_PORT` support so local mocked suites can start a fresh Next.js server even when Docker owns port 3000.
+  - **Strict API mocking** — Foundation done (2026-06-08):
+    - Replaced partial route fallthrough in `frontend/e2e/fixtures/api-mocks.ts` with a fixture-backed router that fails tests on unhandled `/api/**` endpoints by default.
+    - Added fixture builders for FABRIC slices, Chameleon drafts/resources, federated slices, artifacts, AI model state, settings, files, tunnels, Jupyter, and failure responses.
+    - Added scenario overrides for Chameleon disabled, expired token, backend unavailable, no slices, provisioning errors, and stale member references.
+    - Added realistic FABRIC mock mutation state for node components, generated interfaces, L2 network attachment, topology graph refresh, submitted-slice delete state, slice-key config, and boot-config streams.
+    - Remaining: add workflow-specific stream fixtures as mocked AI/chat and long-running operation specs are introduced.
+  - ~~**Stable selectors**~~ — Core workflow surfaces done (2026-06-08):
+    - Added stable `data-testid` and data attributes for provider shells/tabs, slice toolbar controls, editor tabs, add-resource menus, FABRIC slice/resource rows, Chameleon editor tabs/resource rows, federated member/candidate rows, topology controls/context actions, and slice modal primary/destructive buttons.
+    - Prefer role/label/test-id selectors in Playwright over implementation CSS classes.
+    - Remaining: add the same level of selector coverage to file controls, artifact publish/edit controls, and AI chat controls when those mocked workflows are added.
+  - **Backend no-real-slice tests**:
+    - Mock FABlib/session managers for FABRIC slice CRUD, submit state transitions, topology mutations, graph serialization, availability, boot config, files, terminal command dispatch, and delete/archive flows.
+    - Mock Chameleon/OpenStack clients for draft CRUD, node/server edits, lease planning, full deploy orchestration, networks, floating IPs, security groups, project inventory, import/attach/detach/delete semantics, and error translation.
+    - Mock federated provider clients for membership CRUD, generic member schema migration, graph merge, cross-connection CRUD, provider state propagation, submit orchestration, degraded-member handling, and refresh/cache behavior.
+  - **Frontend component tests**:
+    - FABRIC editor: add/remove/update VM, components, networks, facility ports, port mirrors, boot config, validation, availability result display, and disabled/dirty states.
+    - Chameleon editor: add/remove/update planned servers, NIC assignments, attach existing network, create network, lease membership, floating-IP intent vs allocated IPs, security groups, resources audit tab, and explicit action wording.
+    - Federated editor: create/select members, attach/detach provider slices, embedded FABRIC and Chameleon editor tabs, provider state badges, empty topology, missing-member warnings, and cross-testbed connection plan display.
+    - Shared surfaces: Settings, Marketplace/artifacts, AI chat controls, file transfer, tunnels, Jupyter launch, dark mode, guided-help entry points, loading/empty/error states.
+  - **Mocked WebUI E2E workflows**:
+    - ~~FABRIC first workflow~~ — Done (2026-06-08): create draft slice, add VM + NIC component, attach L2 network to the generated interface, submit through mocked provisioning, and delete/mark terminal state without live FABRIC resources.
+    - FABRIC: create slice, add resources, inspect topology/map/resources/calendar, validate availability, submit success/error UI, refresh, terminal action surface, storage/tunnel flows, delete.
+    - Chameleon: create draft, add servers, configure NICs, attach/create networks, manage leases/IPs/security groups/resources, inspect project inventory, deploy success/error UI, storage/terminal surfaces, delete/detach.
+    - Federated: create federated slice, attach FABRIC and Chameleon members, use provider editor tabs, plan/display cross-testbed connections, verify unified topology and state propagation, open member views, detach members, delete federated slice without deleting provider slices.
+    - Product-wide: landing/navigation, settings/configuration, expired/no-token states, marketplace load/edit/publish, AI chat streaming/tool-progress UI, help/tour entry points, backend error handling without white screens.
+  - ~~**Backend-contract E2E foundation**~~ — Done (2026-06-08):
+    - Runs the browser against the real FastAPI backend in fake-provider mode, using seeded provider fixtures and temporary storage.
+    - Verifies API request/response contracts for core FABRIC, Chameleon, and Federated workflows, including mutations and state refresh.
+    - Remaining: expand the same layer across file/artifact/settings/AI workflows and additional error paths.
+  - **Live E2E policy**:
+    - Keep real provisioning small and explicit: one FABRIC critical path, one Chameleon critical path, one Federated critical path, plus rotating hardware smoke tests.
+    - Require `E2E_FULL=1`, live credentials, resource preflight checks, serial workers, long timeouts, `e2e-*` names, and cleanup in `afterEach`/`afterAll`.
+    - Run full live suites manually or nightly, not as the default PR gate.
+- **Federated slice + base slice test expansion** — The current composite/federated test suite (`tests/integration/test_composite.py`) has 28 tests covering CRUD, members, graph merge, submit, migration, and Chameleon interface rendering. Expand with:
   - **Backend API tests**:
-    - Composite member validation with real FABRIC draft slices (create draft → add to composite → verify graph includes it)
+    - Federated member validation with real FABRIC draft slices (create draft → add to federated slice → verify graph includes it)
     - Cross-connection CRUD (add, list, remove cross-connections, verify graph edges)
     - Replace-fabric-member endpoint (simulate draft → submitted UUID change)
-    - Composite submit with mock FABRIC + Chameleon members
+    - Federated submit with mock FABRIC + Chameleon members
     - Per-node interfaces endpoint (update interfaces, verify graph renders correctly)
     - FABNetv4 route configuration (set custom routes via L3 config, verify `auto_configure_networks` reads them)
     - Draft slice fetch by draft ID (the bug we just fixed — ensure `GET /slices/draft-xxx` returns data)
   - **Frontend unit tests** (Vitest):
-    - CompositeEditorPanel: render with mock props, test tab switching, member toggle calls API
-    - CompositeEditorPanel FABRIC tab: select member → EditorPanel renders with sliceData
-    - CompositeEditorPanel Chameleon tab: select member → ChameleonEditor renders in formsOnly mode
+    - Federated editor panel: render with mock props, test tab switching, member toggle calls API
+    - Federated editor FABRIC tab: select member → EditorPanel renders with sliceData
+    - Federated editor Chameleon tab: select member → ChameleonEditor renders in formsOnly mode
     - ChameleonEditor Servers tab: dual-NIC dropdowns render, network selection calls `updateChameleonNodeInterfaces`
     - ChameleonEditor Leases tab: lease checklist renders, toggle calls `addChameleonSliceResource`/`removeChameleonSliceResource`
   - **Playwright E2E tests**:
-    - Composite flow: create composite → add FABRIC member → add Chameleon member → verify topology shows both → submit
+    - Federated flow: create federated slice → add FABRIC member → add Chameleon member → verify topology shows both → submit
     - Chameleon flow: create slice → add node → select network for NIC → verify topology shows NIC + network
-    - Cross-view sync: edit FABRIC slice in composite editor → switch to FABRIC view → verify changes visible
+    - Cross-view sync: edit FABRIC slice in federated editor → switch to FABRIC view → verify changes visible
 
-- **Known bugs — composite slice submit + refresh issues (user-reported 2026-03-31)** — During a composite slice E2E test (create composite → add FABRIC + Chameleon slice → submit), the following issues were observed:
-  - **FABRIC slice visibility during Configuring**: After composite submit, the FABRIC slice disappears from the composite topology during the "Configuring" state. User had to manually thrash between FABRIC view and composite view, refreshing multiple times, before the slice became visible again. The root cause is that: (1) the draft is popped from memory on submit, (2) the submitted slice may not be in the call manager cache yet, (3) the composite graph endpoint's live-fetch fallback (`await get_slice(name, max_age=30)`) may fail or be slow during initial provisioning. **Needs investigation**: why does the live-fetch fallback not work consistently? Is there a race condition between the FABRIC submit and the composite graph refresh?
-  - **Chameleon slice: lease created but VM never started**: The composite submit calls `deploy_draft()` which creates Blazar leases but does NOT launch Nova instances. The `deploy_draft` endpoint is a "lease-only" operation — instance creation happens in the frontend's `handleDeployChameleonLease` flow (App.tsx lines 1600-1650) which waits for leases to become ACTIVE, gets reservation IDs, and THEN calls `createChameleonInstance` per node. The composite backend submit only calls `deploy_draft`, so instances are never created. **Fix needed**: either (a) make `deploy_draft` also launch instances (auto-deploy mode), or (b) have the composite submit use the full frontend deploy flow, or (c) add a backend endpoint that does the full deploy (lease + wait + instances) in one call.
-  - **Auto-refresh not working reliably**: The composite topology should auto-update when member slices change state, but the user had to manually refresh. The composite auto-refresh polls every 30s comparing member state signatures — but this only works when the composite view is active (the polling effect checks `currentView === 'slices'`). If the user is on the FABRIC view, the composite doesn't poll. When they switch back, the tab-switch effect should trigger a refresh, but it may be hitting the same cache/draft issues.
+- **Known bugs — federated slice submit + refresh issues (user-reported 2026-03-31)** — During a federated slice E2E test (create federated slice → add FABRIC + Chameleon slice → submit), the following issues were observed:
+  - ~~**FABRIC slice visibility during Configuring**~~ — Mitigated. Federated submit caches the submitted FABRIC result immediately and the federated graph endpoint checks draft state, call-manager cache, and fresh live fetches so Configuring members remain visible while FABlib/orchestrator state catches up. Keep regression coverage around draft-ID replacement and cached graph rendering.
+  - ~~**Chameleon slice: lease created but VM never started**~~ — Fixed. Federated submit now calls Chameleon `deploy_draft()` with `full_deploy: true`, so the backend creates/uses leases, waits for ACTIVE, and launches Nova instances for planned nodes. The full-deploy wait path now checks already-ACTIVE leases before sleeping.
+  - **Auto-refresh not working reliably**: The federated topology should auto-update when member slices change state, but the user had to manually refresh. The federated auto-refresh polls every 30s comparing member state signatures — but this only works when the Federated view is active (the polling effect checks `currentView === 'slices'`). If the user is on the FABRIC view, the Federated view doesn't poll. When they switch back, the tab-switch effect should trigger a refresh, but it may be hitting the same cache/draft issues.
 
-- **Deep E2E test suite for composite + base slice workflows** — The WebUI needs comprehensive end-to-end tests that simulate real user clicks through the full workflow. Current Playwright tests are minimal (6 tests). A deep E2E suite should cover:
+- **Deep E2E test suite for federated + base slice workflows** — The WebUI needs comprehensive end-to-end tests that simulate real user clicks through the full workflow. Current Playwright tests are minimal (6 tests). A deep E2E suite should cover:
   - **FABRIC view E2E**:
     - Create new slice → add node → add component → add network → verify topology shows all elements
     - Submit slice → verify state transitions (Configuring → StableOK) → verify polling updates
@@ -117,36 +206,36 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
     - Submit → verify lease creation → wait for ACTIVE → verify instances launched
     - Verify SSH terminal on ACTIVE instance
     - Delete slice → verify cleanup
-  - **Composite view E2E**:
-    - Create composite slice → create new FABRIC slice from composite editor → create new Chameleon slice from composite editor
-    - Add both as members → verify composite topology shows both with bounding boxes
-    - Edit FABRIC member inline in composite editor → verify topology updates
+  - **Federated view E2E**:
+    - Create federated slice → create new FABRIC slice from federated editor → create new Chameleon slice from federated editor
+    - Add both as members → verify federated topology shows both with bounding boxes
+    - Edit FABRIC member inline in federated editor → verify topology updates
     - Edit Chameleon member inline → verify topology updates
-    - Submit composite → verify BOTH FABRIC and Chameleon slices deploy (leases + instances)
-    - Wait for both to become active → verify composite topology shows live state
-    - Open SSH terminal from composite topology context menu → verify connection
+    - Submit federated slice → verify BOTH FABRIC and Chameleon slices deploy (leases + instances)
+    - Wait for both to become active → verify federated topology shows live state
+    - Open SSH terminal from federated topology context menu → verify connection
     - Switch to FABRIC view → verify submitted slice visible and editable
     - Switch to Chameleon view → verify slice visible with deployed instances
-    - Delete composite → verify member slices not deleted
+    - Delete federated slice → verify member slices not deleted
   - **Cross-view sync E2E**:
-    - Create FABRIC slice in FABRIC view → switch to composite → add it → verify appears
-    - Edit FABRIC slice in FABRIC view (add node) → switch to composite → verify topology updated
-    - Submit from composite → switch to FABRIC view → verify state change visible
-    - Auto-refresh: enable auto on composite → submit from FABRIC view → wait → verify composite updates without manual refresh
+    - Create FABRIC slice in FABRIC view → switch to Federated view → add it → verify appears
+    - Edit FABRIC slice in FABRIC view (add node) → switch to Federated view → verify topology updated
+    - Submit from Federated view → switch to FABRIC view → verify state change visible
+    - Auto-refresh: enable auto on Federated view → submit from FABRIC view → wait → verify federated topology updates without manual refresh
   - **Error handling E2E**:
     - Submit with invalid configuration → verify error shown (not white screen)
     - Network assignment to non-existent network → verify error handling
-    - Delete a member slice from testbed view while composite references it → verify graceful handling
+    - Delete a member slice from testbed view while federated slice references it → verify graceful handling
 
 ### AI Chat Features
 - (all items completed)
 
 ### AI Tool Configuration
 - ~~**Automatic AI tool config propagation**~~ — Done (2026-03-27)
-- ~~**Uniform FABRIC/NRP model access across all 6 tools**~~ — Done (2026-03-27)
+- ~~**Uniform FABRIC/NRP model access across supported FABRIC/NRP-backed tools**~~ — Done (2026-03-27)
 - ~~**Include Crush and Deep Agents in `/ai-eval`**~~ — Done (2026-03-27)
 - ~~**Clarify FABlib execution methods per tool**~~ — Done (preambles already per-tool; added OpenCode MCP note)
-- ~~**Propagate new features to all 6 tool prompts**~~ — Done (process documented in `docs/FEATURE_PROPAGATION.md`)
+- ~~**Propagate new features to all supported tool prompts**~~ — Done (process documented in `docs/FEATURE_PROPAGATION.md`)
 - ~~**User-customizable AI agents & skills**~~ — Done (2026-04-02). CRUD API (`/api/ai/agents`, `/api/ai/skills`) with built-in + user-custom merge. Settings UI "Agents & Skills" section with inline editor, source badges, create/edit/delete/reset. Changes auto-propagate to all AI tools and invalidate chat cache.
 - ~~**Crush/Deep Agents workspace seeding**~~ — Done (2026-03-27, 30 verification tests)
 - ~~**Runtime validation**~~ — Done (2026-03-27, seeding tests cover file creation + config correctness)
@@ -156,13 +245,13 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
 - ~~**FABRIC view — Map & Details enhancements**~~ — Done. Map shows selected slice nodes only when a slice is selected. Details promoted to full side panel with searchable resource dropdown (Sites + Links optgroups). Map clicks sync to Details panel.
 - ~~**FABRIC view — Rename "Table" to "Slices" and move to first tab**~~ — Done. "Slices" is the default/leftmost tab.
 - ~~**FABRIC view — Action buttons and auto-refresh**~~ — Done. New/Submit/Delete buttons + auto-refresh toggle in FABRIC bar. Stable topology refresh with `preserveLayout` — diffs elements by ID, updates data in-place, skips re-layout.
-- ~~**FABRIC view — Editor panel tab renaming**~~ — Done. FABRIC view shows "Slice"/"Slivers" tabs; Composite Slice view shows "Experiment"/"FABRIC"/"Chameleon" via `viewContext` prop.
-- ~~**Composite Slice view — cross-testbed editor**~~ — Done. Cross-testbed topology (FABnet v4 + L2 Stitch), parallel provisioning, editor tab restructure (Experiment/FABRIC/Chameleon), unified graph.
+- ~~**FABRIC view — Editor panel tab renaming**~~ — Done. FABRIC view shows "Slice"/"Slivers" tabs; Federated Slice view currently uses the Composite Slice implementation and shows "Experiment"/"FABRIC"/"Chameleon" via `viewContext` prop.
+- ~~**Federated Slice view — cross-testbed editor**~~ — Done under the current Composite Slice implementation. Cross-testbed topology (FABnet v4 + L2 Stitch), parallel provisioning, editor tab restructure (Experiment/FABRIC/Chameleon), unified graph.
 - ~~**Settings view redesign — sectioned navigation**~~ — Done (2026-03-27)
 - ~~**Settings validation — live "Test" buttons**~~ — Done (2026-03-27)
 - ~~**Infrastructure map — live load indicators**~~ — Done (2026-03-27)
 
-- ~~**Settings — per-view enable/disable toggles**~~ — Done (2026-03-30). `views.composite_enabled` in settings.json (default `false`). `GET /api/views/status` endpoint. TitleBar filters with `requiresComposite`. ConfigureView: "Enable Composite Slices View" checkbox in Chameleon section. Chameleon already gated by `chameleon.enabled`. FABRIC always visible. Only FABRIC shown on first launch.
+- ~~**Settings — per-view enable/disable toggles**~~ — Done (2026-03-30). `views.composite_enabled` in settings.json (default `false`) should migrate or alias to federated naming. `GET /api/views/status` endpoint. TitleBar filters with `requiresComposite`. ConfigureView should present "Enable Federated Slices View" in the Chameleon section. Chameleon already gated by `chameleon.enabled`. FABRIC always visible. Only FABRIC shown on first launch.
 
 - ~~**FABRIC view — Run/rerun post-boot config**~~ — Done. Right-click VM → "Run Boot Config" context menu (CytoscapeGraph), right-click slice → "Run Boot Config (All)", "Run Boot Config" button in EditorPanel, per-node `run-boot-config-node` action. Progress streams to Console. Full pipeline: `post_boot_config` → `auto_configure_networks` → execute user boot commands.
 
@@ -195,10 +284,12 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
   - ~~**Topology: refresh button and auto-refresh**~~ — Done. ChameleonEditor `autoRefresh` prop wired to Chameleon bar toggle. Refreshes graph every 30s.
   - ~~**Live topology updates on node add**~~ — Done. `handleAddNode` calls `refreshGraph(draft.id)` immediately after API call.
   - ~~**Chameleon network model (revised)**~~ — Done (2026-04-02). Multi-NIC per-interface network selection implemented. Data model: `interfaces: [{nic: 0, network: {id, name}}, ...]` in chameleon.ts. ChameleonEditor renders one network dropdown per NIC. Backend `update_draft_node_interfaces` endpoint stores per-NIC assignments. Deploy passes all network UUIDs to Nova create. Default: NIC 0 on sharednet1, NIC 1 unconnected.
-  - ~~**Table view like FABRIC**~~ — Done. ChameleonSlicesView with expandable parent/child rows (drafts + leases as parents, nodes/networks/instances as children). Columns: Name, Site, Status, Nodes, Networks. Multi-select bulk delete, inline SSH buttons.
+  - ~~**Table view like FABRIC**~~ — Done. ChameleonSlicesView with expandable Chameleon slice parent rows; planned nodes, networks, reservations, and instances appear as child rows under their owning slice. Standalone leases are managed in OpenStack/resource workflows, not shown as slices. Columns: Name, Site, Status, Nodes, Networks. Multi-select bulk delete, inline SSH buttons.
   - ~~**OpenStack tab**~~ — Done. ChameleonOpenStackView with 7 sub-tabs (Instances, Networks, Key Pairs, Leases, Images, Floating IPs, Security Groups). Search/filter per tab, independently scrollable.
   - ~~**OpenStack tab — full CRUD actions**~~ — Done. All 7 tabs have full CRUD: Instances (delete, reboot, stop/start, +FIP), Networks (create, delete), Leases (create, extend, import, delete), Key Pairs (create, import, delete), Floating IPs (allocate, associate, disassociate, release), Security Groups (create, delete, add/remove rules). Confirmation dialogs for destructive ops.
   - ~~**OpenStack tab — multi-select bulk operations**~~ — Done. Row checkboxes, select-all header checkbox, "N selected" indicator, bulk delete/release per tab with confirmation.
+  - ~~**Default Chameleon SSH Slice weave**~~ — Done (2026-06-04). Added `backend/default_artifacts/Chameleon_SSH_Slice/`, a runnable weave that creates a LoomAI Chameleon slice record, provisions one bare-metal Chameleon node through OpenStack APIs, allocates/associates a floating IP, registers lease/instance/FIP resources with the Chameleon slice view, updates draft topology fields (`nodes[].interfaces`, `floating_ips`) so graph/slice views show the live node and floating IP, monitors SSH reachability, and tears down resources on Stop. Runtime logs/state and credentials are intentionally excluded.
+  - ~~**Chameleon password authentication fallback**~~ — Done (2026-06-05). Settings now store one shared Chameleon username/password and let each Chameleon site choose application credentials or OIDC password auth independently with its own project identifier. Both credential sets persist while switching modes. Application credentials remain preferred because they are easier to revoke and scope by project/site; password auth is supported for full-account access across Chameleon projects and as a fallback when application credentials are unavailable.
   - **Chameleon Slices (first-class LoomAI abstraction)** — A "slice" is a LoomAI concept (not a native Chameleon concept) that groups a set of Chameleon servers into a logical unit the user operates on together. This is the primary organizational concept for the Chameleon view, analogous to FABRIC slices.
     - **Core concept** — A slice is a named collection of Chameleon servers (instances), their networks, and associated reservations. A slice may span multiple Chameleon sites (multi-site) and may be backed by multiple Blazar reservations. Slices are persisted to `{STORAGE_DIR}/.loomai/chameleon_slices.json`.
     - **Rename "Table" tab → "Slices"** — The current "Table" tab becomes the "Slices" tab. Each slice is an expandable row in the table. Expanding a slice row reveals its member servers with status, site, image, IPs. Columns: Name, Sites, Status, Servers, Reservations.
@@ -279,6 +370,18 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
 ### Chameleon Cloud — Next Steps
 Core Chameleon integration is done (9 phases: backend, CLI, frontend types, settings UI, map, ChameleonView, AI tools, SSH, cross-testbed topology). Remaining work:
 
+- **Chameleon stabilization fixes from code review (2026-06-04)**:
+  - ~~**Fix floating IP intent handling in deploy**~~ — Done (2026-06-04): normalized mixed legacy string and `{node_id, nic}` entries before deploy/bastion checks.
+  - ~~**Ensure security group before bastion creation**~~ — Done (2026-06-04): shared `loomai-ssh` security group ensure path is used before bastion creation and auto-network setup.
+  - ~~**Honor node `count` during instance launch**~~ — Done (2026-06-04): deploy launches one Nova server per planned replica and tracks the planned node ID/name for each resource.
+  - ~~**Harden Chameleon file transfer paths**~~ — Done (2026-06-04): sanitized upload filenames/relative paths, rejected absolute and `..` upload paths, normalized remote paths, and constrained uploaded files to the requested destination directory.
+  - ~~**Persist live instance status during network setup**~~ — Done (2026-06-04): `auto-network-setup` now stores observed `ACTIVE`/`ERROR`/build statuses before recomputing slice state.
+  - ~~**Make import-from-reservation reliable**~~ — Done (2026-06-04): imports now match lease reservations, metadata/tags, planned node/replica names, and explicit manual instance IDs/names.
+  - ~~**Fix detailed node type API contract**~~ — Done (2026-06-04): frontend uses `/node-types/detail`, and backend also supports `?detail=true` compatibility.
+  - ~~**Add concurrency safety for persisted slices**~~ — Done (2026-06-04): persisted slice snapshots and common mutations are guarded with a process-local reentrant lock.
+  - ~~**Fix keypair settings update bug**~~ — Done (2026-06-04): `create_keypair()` stores the path returned by `_save_chameleon_key()` before updating settings.
+  - ~~**Repair validation tests**~~ — Done (2026-06-04): added Vitest globals to TypeScript config and targeted regression tests for file path hardening, import fallback, and node-type detail compatibility.
+
 - ~~**Multi-site Chameleon drafts**~~ — Done (Phase M, 2026-03-29). Per-node site field required, draft-level site removed, deploy creates one lease per site concurrently, graph clusters by site, multi-site topology view.
 
 - ~~**Chameleon SSH terminal verification & fixes**~~ — Done (Phase T, 2026-03-29). E2E tested at CHI@UC. Per-site SSH keys (`chameleon_key_{site}`). Floating IP via Neutron. SSH button in OpenStack Instances, Slices tab, and topology context menu. SSH shows for any ACTIVE instance with an IP. "+ FIP" button for manual floating IP assignment. `ensure_keypair` endpoint syncs keypair + private key. Auto-routable network selection (prefers sharednet1). Double-click deployed node → SSH terminal. Username `cc` for all Chameleon images. Two-hop SSH via bastion supported in terminal handler.
@@ -320,7 +423,7 @@ Core Chameleon integration is done (9 phases: backend, CLI, frontend types, sett
 
 - ~~**Next-available-time finder**~~ — Done (Phase 4c, 2026-03-27). Wired existing `findChameleonAvailability()` into calendar finder with "Reserve at that time" button.
 
-- ~~**Slice editor: Chameleon nodes**~~ — Done (Phase 4e+4f). FABnet v4 + L2 Stitch with VLAN negotiation. Composite submit with parallel provisioning (FABRIC + Chameleon in parallel via asyncio.gather).
+- ~~**Slice editor: Chameleon nodes**~~ — Done (Phase 4e+4f). FABnet v4 + L2 Stitch with VLAN negotiation. Federated submit, currently implemented as composite submit, provisions FABRIC + Chameleon in parallel via asyncio.gather.
 
 - ~~**All Chameleon resource types in editor**~~ — Done (Phase 4f). Chameleon networks, floating IPs as topology elements in the Chameleon tab.
 
@@ -330,7 +433,7 @@ Core Chameleon integration is done (9 phases: backend, CLI, frontend types, sett
 - ~~**Trovi as a second artifact marketplace**~~ — Done (already implemented). Backend: `trovi.py` (175 lines). Frontend: "Chameleon Marketplace" tab in LibrariesView with search, browse, get. Source badges (green "Trovi"). API client functions: `listTroviArtifacts`, `downloadTroviArtifact`, `getTroviTags`.
 
 ### Documentation
-- ~~**README update**~~ — Done: Features section updated with all 7 AI tools, CLI, caching, adaptive polling, performance, guided tours, monitoring, smart LLM management, dark/light mode
+- ~~**README update**~~ — Done: Features section updated with AI tools, CLI, caching, adaptive polling, performance, guided tours, monitoring, smart LLM management, dark/light mode
 - ~~**CONTRIBUTING guide**~~ — Done: Created `CONTRIBUTING.md` with setup, project structure, code style, testing, PR guidelines, agent tools
 
 ---
@@ -340,58 +443,66 @@ Core Chameleon integration is done (9 phases: backend, CLI, frontend types, sett
 ### Test Coverage Improvement
 - ~~**Increase backend coverage from 33% to 60%+**~~ — Done. Coverage: 35% → 58% (1,148 tests, up from 439). Added 709 new tests across 20+ test files. Key modules covered: Chameleon (85%), reservations (96%), monitoring (60%), run manager (76%), settings (full), graph builder (edge cases), slices (advanced), files, templates, experiments, tunnels, tool installer.
 
-### Composite Cross-Testbed Slices (FABRIC + Chameleon)
+### Federated Cross-Testbed Slices (FABRIC + Chameleon)
 
-**Core concept**: A composite slice is a **meta-slice** — a named collection of references to existing slices from other views (FABRIC slices, Chameleon slices, future NRP slices, etc.). The composite view does NOT have its own topology editor for adding nodes. Users create and manage individual slices in their respective testbed views (FABRIC view, Chameleon view), then compose them together in the Composite view for a unified cross-testbed experience.
+**Core concept**: A federated slice is a cross-testbed workspace that can group existing provider slices, add FABRIC and Chameleon resources through provider-backed workflows, and define cross-testbed connection intent. Provider slices still own the actual resource lifecycle; the federated slice owns membership, orchestration, visualization, and cross-testbed connectivity.
 
-- **Composite Slice View — unified multi-testbed UI** — The Composite Slice view aggregates slices from other views into a single cross-testbed view. It shows merged topology, map, and status but does not duplicate editing functionality.
+- **Federated Slice View — unified multi-testbed UI** — The Federated Slice view aggregates slices from other views into a single cross-testbed view. It shows merged topology, map, and status but does not duplicate editing functionality.
   - **View-specific top bar** — Same pattern as FABRIC/Chameleon bars. Layout:
-    - **Left: label** — "Composite Slices" text label with LoomAI icon.
-    - **Center: tabs** — Six content tabs: **Slices** (table of composite slices, expandable to show member slices per testbed), **Topology** (unified Cytoscape.js graph merging all member slice topologies), **Storage** (shared/per-node storage across all member slices), **Map** (Leaflet map showing all member slice resources across all testbed sites), **Apps** (web apps running on any member slice node), **Calendar** (resource scheduling across testbeds).
-    - **Right: action widgets** — Composite slice selector dropdown, **New** button (create new composite slice — opens a picker to select member slices from FABRIC/Chameleon), **Submit** button (deploy all un-deployed member slices in parallel), **Delete** button (remove composite slice — does NOT delete member slices, just the grouping), **Refresh** buttons, **Auto on/off** toggle.
+    - **Left: label** — "Federated Slices" text label with LoomAI icon.
+    - **Center: tabs** — Six content tabs: **Slices** (table of federated slices, expandable to show member slices per testbed), **Topology** (unified Cytoscape.js graph merging all member slice topologies), **Storage** (shared/per-node storage across all member slices), **Map** (Leaflet map showing all member slice resources across all testbed sites), **Apps** (web apps running on any member slice node), **Calendar** (resource scheduling across testbeds).
+    - **Right: action widgets** — Federated slice selector dropdown, **New** button (create new federated slice — opens a picker to select member slices from FABRIC/Chameleon), **Submit** button (deploy all un-deployed member slices in parallel), **Delete** button (remove federated slice — does NOT delete member slices, just the grouping), **Refresh** buttons, **Auto on/off** toggle.
   - **Consistent with FABRIC view** — Same visual patterns, tab behavior, action widget placement.
-  - **Bulk delete in Slices tab** — The composite Slices tab should support selecting multiple composite slices and deleting them in bulk:
-    - **Row checkboxes**: Each composite slice row has a checkbox. A "Select All" checkbox in the header selects/deselects all visible rows.
+  - **Bulk delete in Slices tab** — The federated Slices tab should support selecting multiple federated slices and deleting them in bulk:
+    - **Row checkboxes**: Each federated slice row has a checkbox. A "Select All" checkbox in the header selects/deselects all visible rows.
     - **Bulk action bar**: When 1+ rows are selected, show a floating action bar with "Delete N selected" button.
     - **Delete options**: Same as single delete — "Remove grouping only" (default, member slices untouched) or "Delete all member slices too" (with confirmation listing all affected FABRIC + Chameleon slices).
-    - **Confirmation dialog**: Lists all selected composite slices and their member counts before proceeding.
-    - **Progress**: Show per-composite progress during bulk delete (success/failure for each).
-  - **Provider-agnostic** — Not hardcoded to FABRIC + Chameleon. Adding a new provider means its slices become selectable as composite members.
-  - ~~**LoomAI branding for composite bar**~~ — Done. Replaced indigo (`#312e81` → `#6366F1`) with LoomAI brand colors (`#1c2e4a` → `#27aae1`). Updated COMPOSITE_THEME, .composite-bar CSS, CompositeEditorPanel, Slices tab badges, CytoscapeGraph composite-shared-network style.
+    - **Confirmation dialog**: Lists all selected federated slices and their member counts before proceeding.
+    - **Progress**: Show per-federated-slice progress during bulk delete (success/failure for each).
+  - **Provider-agnostic** — Not hardcoded to FABRIC + Chameleon. Adding a new provider means its slices become selectable as federated members.
+  - ~~**LoomAI branding for federated bar**~~ — Done under current composite naming. Replaced indigo (`#312e81` → `#6366F1`) with LoomAI brand colors (`#1c2e4a` → `#27aae1`). Updated COMPOSITE_THEME, .composite-bar CSS, CompositeEditorPanel, Slices tab badges, CytoscapeGraph composite-shared-network style.
 
-- **Composite slice as meta-slice** — A composite slice is defined entirely by its references to member slices from other views. It has no resources of its own.
-  - **Data model**: `{ id, name, created, fabric_slices: [slice_id, ...], chameleon_slices: [slice_id, ...], cross_connections: [...] }`
-  - **Creating a composite slice**: User clicks "New" → names the composite → picks one or more FABRIC slices and/or Chameleon slices from dropdown/checklist pickers (showing name, state, site, node count). The picker shows all available slices from each testbed view.
-  - **Cross-testbed connections**: The composite view can define cross-testbed connections between member slices (FABnet v4, L2 Stitch). These are overlay connections that link nodes from different testbed slices.
-  - **Storage**: `{STORAGE_DIR}/.loomai/composite_slices.json` — references only, not resource data.
+- **Federated resource membership and cross-testbed connections** — In progress with the core FABNetv4 path implemented under federated naming while preserving composite compatibility.
+  - ~~**Resource membership**~~: Done. Federated slices store generic `members: [{provider, slice_id, ...}]` while keeping legacy `fabric_slices` and `chameleon_slices` in sync.
+  - **Provider ownership**: The federated slice owns grouping, connection intent, orchestration, and status aggregation. FABRIC and Chameleon provider slices own actual nodes, bare-metal servers, NICs, networks, leases, reservations, and deletion semantics.
+  - ~~**FABNetv4 L3 connections**~~: Done for submit-time preparation. Federated `fabnetv4_l3` intent prepares FABRIC member nodes with FABNetv4, prepares Chameleon member nodes with `sharednet1 + fabnetv4` when unconfigured, preserves explicit single-NIC FABNet-only nodes, and applies route-metric cloud-init/userdata to every Chameleon server that uses FABNet.
+  - **Facility-port L2 connections**: Intent model and submit-time connection plan are implemented for `facility_port_l2` with VLAN/facility-port metadata validation. Full provider provisioning remains: negotiate/select VLAN, add FABRIC facility-port/L2 topology, create/attach Chameleon VLAN-backed network, then validate link/IP configuration.
+  - ~~**API shape**~~: Done. Federated member CRUD, connection CRUD, graph, submit, and connection-plan endpoints exist, with composite aliases retained for compatibility.
+  - **UI shape**: Members and Connections controls exist in the federated editor. Remaining UI work is to surface connection-plan/status details and provider-specific actionable errors more explicitly.
+
+- **Federated slice membership model** — A federated slice is defined by references to member slices and provider-backed resource/connection intent. The federated slice does not directly own provider resources, but it can drive provider workflows to create or attach resources through FABRIC and Chameleon.
+  - **Data model**: `{ id, name, created, members: [{provider, slice_id, resource_ids, site, endpoint_type, state}], cross_connections: [...] }` with migration from existing `fabric_slices` and `chameleon_slices` fields.
+  - **Creating a federated slice**: User clicks "New" → names the federated slice → picks one or more FABRIC slices and/or Chameleon slices from dropdown/checklist pickers (showing name, state, site, node count). The picker shows all available slices from each testbed view.
+  - **Cross-testbed connections**: The federated view can define cross-testbed connections between member slices/resources (FABnet v4, L2 Stitch). These are overlay connections that link nodes from different testbed slices.
+  - **Storage**: `{STORAGE_DIR}/.loomai/federated_slices.json`, with migration or alias support for existing `{STORAGE_DIR}/.loomai/composite_slices.json`.
   - **Lifecycle**:
-    1. **New** — name the composite, select member slices
+    1. **New** — name the federated slice, select member slices
     2. **Edit** — manage membership, edit member slices inline, define cross-connections
-    3. **Submit** — The Submit button in the composite view submits ALL member slices that are in the composite. For each member: FABRIC slices are submitted via FABlib, Chameleon slices are deployed via the Chameleon deploy flow. All submissions run in parallel via `asyncio.gather`. Already-deployed/active members are skipped. The user clicks one button and all testbed resources across all member slices are provisioned.
+    3. **Submit** — The Submit button in the federated view submits ALL member slices that are in the federated slice. For each member: FABRIC slices are submitted via FABlib, Chameleon slices are deployed via the Chameleon deploy flow. All submissions run in parallel via `asyncio.gather`. Already-deployed/active members are skipped. The user clicks one button and all testbed resources across all member slices are provisioned.
     4. **Operational** — unified topology, SSH to any node, monitoring across all members
-    5. **Delete composite** — removes the composite grouping only. Member slices remain in their testbed views untouched. Optional: "Delete All" to also delete all member slices from their testbeds (with confirmation).
+    5. **Delete federated slice** — removes the federated grouping only. Member slices remain in their testbed views untouched. Optional: "Delete All" to also delete all member slices from their testbeds (with confirmation).
 
-- ~~**Composite editor panel — three tabs for editing**~~ — Done. CompositeEditorPanel with Composite/FABRIC/Chameleon tabs. Tab 1 (Composite): member slice pickers with checkboxes for FABRIC + Chameleon slices, status summary. Tab 2 (FABRIC): embeds EditorPanel with selected FABRIC member's sliceData for inline editing. Tab 3 (Chameleon): embeds ChameleonEditor in `formsOnly` mode for inline Chameleon member editing. Bidirectional sync — edits in composite reflect in native views and vice versa.
+- ~~**Federated editor panel — three tabs for editing**~~ — Done under the current `CompositeEditorPanel` implementation. Composite/FABRIC/Chameleon tabs should be relabeled Federated/FABRIC/Chameleon as terminology migrates. Tab 1 (Federated): member slice pickers with checkboxes for FABRIC + Chameleon slices, status summary. Tab 2 (FABRIC): embeds EditorPanel with selected FABRIC member's sliceData for inline editing. Tab 3 (Chameleon): embeds ChameleonEditor in `formsOnly` mode for inline Chameleon member editing. Bidirectional sync — edits in the federated editor reflect in native views and vice versa.
 
 - **Per-provider slice isolation** — Each view has fully independent slice state:
   - **FABRIC view**: `fabricSlices`, `selectedFabricSliceId`, `fabricSliceData`
   - **Chameleon view**: `chameleonSlices`, `selectedChameleonSliceId`, `chameleonSliceData` — already separate
-  - **Composite view**: `compositeSlices`, `selectedCompositeSliceId` — references to member slices, merged graph built on demand
-  - The composite view does NOT own any slice data. It reads member slice data from FABRIC and Chameleon state and merges it for display.
+  - **Federated view**: `federatedSlices`, `selectedFederatedSliceId` planned, with compatibility for current `compositeSlices` and `selectedCompositeSliceId` state — references to member slices, merged graph built on demand
+  - The federated view does NOT own any slice data. It reads member slice data from FABRIC and Chameleon state and merges it for display.
 
-- **Merged topology and graph — full feature parity with base views** — The composite topology must show all the same graph elements and support all the same interactions as the FABRIC and Chameleon views. Currently missing: components, networks, slice grouping boxes. The composite topology is NOT a simplified summary — it is the union of all member slice topologies rendered with full fidelity.
-  - **Graph merge**: Backend endpoint `GET /api/composite/slices/{id}/graph` fetches each member slice's graph and merges them into one Cytoscape.js graph. All element types are preserved: nodes, components (NICs, GPUs, storage), network services, interfaces, edges.
+- **Merged topology and graph — full feature parity with base views** — The federated topology must show all the same graph elements and support all the same interactions as the FABRIC and Chameleon views. Currently missing: components, networks, slice grouping boxes. The federated topology is NOT a simplified summary — it is the union of all member slice topologies rendered with full fidelity.
+  - **Graph merge**: Backend endpoint `GET /api/federated/slices/{id}/graph` fetches each member slice's graph and merges them into one Cytoscape.js graph, with compatibility for the current `/api/composite/slices/{id}/graph` route during migration. All element types are preserved: nodes, components (NICs, GPUs, storage), network services, interfaces, edges.
   - **Slice grouping boxes**: Each member slice is rendered as a compound/parent node (bounding box) in the graph. FABRIC member slices get a blue bounding box labeled with the slice name. Chameleon member slices get a green bounding box. All nodes from a member slice are children of their slice's bounding box. This visually groups nodes by their base slice.
-  - **Components visible**: FABRIC node components (NICs, GPUs, SmartNICs, storage) must appear in the composite topology exactly as they do in the FABRIC view — as child nodes of their parent VM with the same icons and labels.
-  - **Network links visible**: All network services (L2Bridge, L2STS, L2PTP, FABNetv4, FABNetv6) and their edges to node interfaces must appear in the composite topology. Networks render as diamond-shaped nodes with edges to connected interfaces, matching the FABRIC view stylesheet.
-  - **Shared FABNetv4 network**: When both FABRIC and Chameleon nodes are connected to FABNetv4, there is ONE FABNetv4 network node in the composite topology. Both FABRIC node interfaces and Chameleon node interfaces connect to this single shared network node. This visually shows the cross-testbed L3 connectivity — FABRIC VMs and Chameleon servers all connected to the same internet. The graph merge must deduplicate FABNetv4 (match by network type, not by ID) and attach edges from both testbeds to the single node.
+  - **Components visible**: FABRIC node components (NICs, GPUs, SmartNICs, storage) must appear in the federated topology exactly as they do in the FABRIC view — as child nodes of their parent VM with the same icons and labels.
+  - **Network links visible**: All network services (L2Bridge, L2STS, L2PTP, FABNetv4, FABNetv6) and their edges to node interfaces must appear in the federated topology. Networks render as diamond-shaped nodes with edges to connected interfaces, matching the FABRIC view stylesheet.
+  - **Shared FABNetv4 network**: When both FABRIC and Chameleon nodes are connected to FABNetv4, there is ONE FABNetv4 network node in the federated topology. Both FABRIC node interfaces and Chameleon node interfaces connect to this single shared network node. This visually shows the cross-testbed L3 connectivity — FABRIC VMs and Chameleon servers all connected to the same internet. The graph merge must deduplicate FABNetv4 (match by network type, not by ID) and attach edges from both testbeds to the single node.
   - **Chameleon networks visible**: Chameleon networks (sharednet1, experiment nets, fabnetv4) appear as network nodes with edges to connected Chameleon server interfaces. Same green styling as in the Chameleon view.
   - **Testbed badges**: Nodes retain `[FAB]` (blue) or `[CHI]` (green) badges. Networks shared across testbeds (FABNetv4) get a special `[SHARED]` (indigo) badge.
   - **Map merge**: Leaflet map shows all member slice nodes at their respective testbed sites. Nodes from different member slices at the same site are visually grouped.
-  - **Status aggregation**: Composite slice status derived from member statuses (all StableOK/Active → "Active", any transitioning → "Provisioning", any error → "Degraded").
-  - **Auto-refresh**: Composite topology updates automatically when any member slice state changes in FABRIC or Chameleon views. No manual refresh needed.
+  - **Status aggregation**: Federated slice status derived from member statuses (all StableOK/Active → "Active", any transitioning → "Provisioning", any error → "Degraded").
+  - **Auto-refresh**: Federated topology updates automatically when any member slice state changes in FABRIC or Chameleon views. No manual refresh needed.
 
-- **Inherited context menu and interactions — full parity** — Every node, component, and network in the composite topology inherits ALL the capabilities it has in its base view. The composite view does not strip functionality — it composes it.
+- **Inherited context menu and interactions — full parity** — Every node, component, and network in the federated topology inherits ALL the capabilities it has in its base view. The federated view does not strip functionality — it composes it.
   - **Right-click context menu**: Right-clicking any element shows the same context menu actions as in its base view:
     - **FABRIC nodes**: SSH terminal, Run Boot Config, Run Boot Config (All), Recipes (matched by image), Open in Web Apps, Save as VM Template
     - **Chameleon nodes**: SSH terminal, Run Boot Config, Recipes, Open in Web Apps, Assign Floating IP, Save as VM Template
@@ -399,36 +510,36 @@ Core Chameleon integration is done (9 phases: backend, CLI, frontend types, sett
     - **Components**: Component details, interface configuration
   - **Double-click**: Double-clicking a deployed node opens an SSH terminal (same behavior as base views).
   - **Click-to-select**: Clicking a node selects it and shows its details in the DetailPanel. The DetailPanel shows full node info including testbed badge, IPs, state, components.
-  - **Drag and layout**: Nodes are draggable. Layout algorithms apply across the full composite graph. `preserveLayout` works for stable updates during auto-refresh.
+  - **Drag and layout**: Nodes are draggable. Layout algorithms apply across the full federated graph. `preserveLayout` works for stable updates during auto-refresh.
 
-- **Cross-testbed connectivity — shared FABNetv4 visualization** — Defined at the composite level. The composite topology must visually show that FABRIC and Chameleon nodes on FABNetv4 are connected to the same global network.
-  - **Single global FABNetv4 Internet node**: One "FABRIC Internet (FABNetv4)" cloud node in the composite graph. This is the shared L3 network that both testbeds connect to.
+- **Cross-testbed connectivity — shared FABNetv4 visualization** — Defined at the federated slice level. The federated topology must visually show that FABRIC and Chameleon nodes on FABNetv4 are connected to the same global network.
+  - **Single global FABNetv4 Internet node**: One "FABRIC Internet (FABNetv4)" cloud node in the federated graph. This is the shared L3 network that both testbeds connect to.
   - **FABRIC side**: FABRIC nodes with FABNetv4 interfaces connect to their FABRIC FABNetv4 network node, which connects to the global internet node (existing pattern from `build_graph()`).
   - **Chameleon side**: Chameleon nodes with fabnetv4 interfaces connect to their local site-scoped fabnetv4 network node (e.g., "fabnetv4 @ CHI@TACC"), which connects to the same global internet node. This shows the path: Chameleon node → local fabnetv4 → global FABRIC Internet.
   - **Visible cross-testbed link**: The result is that FABRIC VMs and Chameleon servers are visually connected through the shared global FABNetv4 Internet node — making the cross-testbed L3 connectivity obvious at a glance.
-  - **Graph merge deduplication**: `build_composite_graph()` already deduplicates FABNetv4 internet nodes from multiple FABRIC members. It must also recognize Chameleon fabnetv4 network nodes and connect them to the shared internet node.
+  - **Graph merge deduplication**: The current `build_composite_graph()` implementation already deduplicates FABNetv4 internet nodes from multiple FABRIC members. The federated graph builder must also recognize Chameleon fabnetv4 network nodes and connect them to the shared internet node.
   - **L2 Stitch**: Dedicated L2 links via Chameleon facility ports with VLAN negotiation between specific FABRIC and Chameleon nodes. Rendered as dashed cross-testbed edges.
 
-- **Unified operations across member slices** — The composite view provides a unified interface for operating on nodes from all member slices. Every operation available in a base view is available in the composite view for that node type.
+- **Unified operations across member slices** — The federated view provides a unified interface for operating on nodes from all member slices. Every operation available in a base view is available in the federated view for that node type.
   - **SSH terminals**: SSH to any node (FABRIC VM via bastion, Chameleon server via floating IP or auto-bastion). Terminal tabs labeled with node name + testbed badge.
   - **Boot config**: Run boot config on any node. Backend routes to FABlib SSH (FABRIC) or Paramiko SSH (Chameleon) based on node type.
   - **Recipes**: Execute recipes on any node. Backend detects testbed and uses appropriate SSH path. Recipe matching uses the node's image regardless of testbed.
   - **Context menu**: Full context menu for all node types — same actions as in the base view (see "Inherited context menu" above).
   - **Monitoring**: Merged metrics from all member slice nodes (node_exporter on both FABRIC VMs and Chameleon servers).
 
-- **Experiment templates** — Save/load composite slice definitions as experiment templates (already implemented in Phase 9). Templates capture member slice references + cross-connections + variables.
+- **Experiment templates** — Save/load federated slice definitions as experiment templates (already implemented in Phase 9 under current composite naming). Templates capture member slice references + cross-connections + variables.
 
 ### NRP/Nautilus Testbed Integration
 - **NRP as a third testbed** — Integrate the National Research Platform (Nautilus/NRP) alongside FABRIC and Chameleon. NRP provides Kubernetes-based compute with GPU access. Key requirements:
   - NRP view with Kubernetes namespace/pod management
   - Pod topology editor (similar to Chameleon's Draft → Deploy)
   - GPU resource browsing per NRP cluster
-  - Cross-testbed: NRP pods in the Composite Slice editor alongside FABRIC VMs and Chameleon bare-metal
+  - Cross-testbed: NRP pods in the Federated Slice editor alongside FABRIC VMs and Chameleon bare-metal
   - NRP branding (purple/blue theme)
   - Backend: Kubernetes API client via `kubectl` or Python `kubernetes` library
 
 ### Experiment Templates Marketplace
-- ~~**Cross-testbed experiment templates**~~ — Done (Phase 9). `experiment.json` format capturing FABRIC + Chameleon resources. Save/load experiment endpoints with variable substitution. "Save as Experiment" button in Composite Slice toolbar. Variable popup for parameterized loading. "Experiment" category in artifact system (purple badge). 28 new tests.
+- ~~**Cross-testbed experiment templates**~~ — Done (Phase 9). `experiment.json` format capturing FABRIC + Chameleon resources. Save/load experiment endpoints with variable substitution. "Save as Experiment" button in the Federated Slice toolbar, currently implemented under Composite Slice naming. Variable popup for parameterized loading. "Experiment" category in artifact system (purple badge). 28 new tests.
 
 ### Real-Time Collaboration
 - **Multi-user editing** — Allow multiple users to view and edit the same slice simultaneously. Key requirements:

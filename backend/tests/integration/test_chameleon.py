@@ -6,8 +6,11 @@ for OpenStack API calls. We mock both to avoid real Keystone/Blazar/Nova calls.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -326,6 +329,14 @@ class TestChameleonSites:
         assert haswell["cpu_count"] == 48
         assert haswell["ram_gb"] == 128
 
+    def test_site_node_types_detail_query_compat(self, client):
+        resp = client.get("/api/chameleon/sites/CHI@TACC/node-types?detail=true")
+        assert resp.status_code == 200
+        data = resp.json()
+        haswell = next(t for t in data["node_types"] if t["node_type"] == "compute_haswell")
+        assert haswell["cpu_count"] == 48
+        assert haswell["ram_gb"] == 128
+
     def test_site_images(self, client):
         resp = client.get("/api/chameleon/sites/CHI@TACC/images")
         assert resp.status_code == 200
@@ -472,6 +483,25 @@ class TestChameleonInstances:
         })
         assert resp.status_code == 200
 
+    def test_create_instance_encodes_user_data_for_nova(self, client, _chameleon_patches):
+        user_data = "#cloud-config\nruncmd:\n  - [ echo, ok ]\n"
+        resp = client.post("/api/chameleon/instances", json={
+            "site": "CHI@TACC",
+            "name": "userdata-instance",
+            "image_id": "img-1",
+            "reservation_id": "res-1",
+            "network_id": "net-1",
+            "user_data": user_data,
+        })
+        assert resp.status_code == 200
+        compute_posts = [
+            call for call in _chameleon_patches.api_post.call_args_list
+            if call.args[0] == "compute" and call.args[1] == "/servers"
+        ]
+        server_body = compute_posts[-1].args[2]
+        encoded = server_body["server"]["user_data"]
+        assert base64.b64decode(encoded).decode() == user_data
+
     def test_delete_instance(self, client):
         resp = client.delete("/api/chameleon/instances/srv-1?site=CHI@TACC")
         assert resp.status_code == 200
@@ -569,6 +599,33 @@ class TestChameleonNetworks:
         assert data["id"] == "new-net-1"
         assert len(data["subnet_details"]) == 1
 
+    def test_create_vlan_network_includes_provider_fields(self, storage_dir):
+        from app.routes.chameleon import create_network
+
+        class Request:
+            async def json(self):
+                return {
+                    "site": "CHI@TACC",
+                    "name": "fp-l2-tacc-3301",
+                    "vlan": 3301,
+                    "physical_network": "physnet1",
+                }
+
+        async def _run_sync(fn, *args):
+            return fn(*args)
+
+        session = _make_mock_session()
+        with patch("app.routes.chameleon._require_enabled", return_value=None), \
+             patch("app.routes.chameleon.get_session", return_value=session), \
+             patch("app.routes.chameleon.run_in_chi_pool", side_effect=_run_sync):
+            data = asyncio.run(create_network(Request()))
+
+        assert data["vlan"] == 3301
+        body = session.api_post.call_args_list[-1].args[2]["network"]
+        assert body["provider:network_type"] == "vlan"
+        assert body["provider:segmentation_id"] == 3301
+        assert body["provider:physical_network"] == "physnet1"
+
     def test_delete_network(self, client):
         resp = client.delete("/api/chameleon/networks/net-1?site=CHI@TACC")
         assert resp.status_code == 200
@@ -576,11 +633,69 @@ class TestChameleonNetworks:
         assert data["status"] == "deleted"
 
 
+
+def test_upload_chameleon_keypair_private_key(client, storage_dir, _chameleon_patches, monkeypatch):
+    session = _chameleon_patches
+    session.api_get = MagicMock(return_value={
+        "keypairs": [{"keypair": {"name": "site-key", "fingerprint": "aa:bb"}}],
+    })
+
+    from app.routes import chameleon as chm
+
+    def _write_fixture_key(path, private_key):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(private_key)
+        path.chmod(0o600)
+        return str(path)
+
+    monkeypatch.setattr(chm, "_write_chameleon_private_key", _write_fixture_key)
+    key_text = b"test-private-key-placeholder\n"
+    resp = client.post(
+        "/api/chameleon/keypairs/site-key/private-key?site=CHI@TACC",
+        files={"private_key": ("site-key.pem", key_text, "text/plain")},
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "saved"
+    assert data["name"] == "site-key"
+    key_path = storage_dir / "fabric_config" / "chameleon_key_CHI@TACC_site-key"
+    assert key_path.read_text() == key_text.decode("utf-8")
+    assert oct(key_path.stat().st_mode & 0o777) == "0o600"
+
+    list_resp = client.get("/api/chameleon/keypairs?site=CHI@TACC")
+    assert list_resp.status_code == 200
+    keypair = list_resp.json()[0]
+    assert keypair["has_private_key"] is True
+    assert keypair["private_key_path"] == str(key_path)
+
 # ---------------------------------------------------------------------------
 # VLAN Negotiation
 # ---------------------------------------------------------------------------
 
 class TestVLANNegotiation:
+    def test_list_chameleon_facility_ports_maps_site_and_vlan(self, storage_dir):
+        from app.routes.chameleon import list_chameleon_facility_ports
+
+        async def _run_sync(fn, *args):
+            return fn(*args)
+
+        with patch("app.routes.chameleon._require_enabled", return_value=None), \
+             patch("app.routes.resources._fetch_facility_ports_locked", return_value=[
+                 {
+                     "name": "Chameleon-TACC",
+                     "site": "TACC",
+                     "interfaces": [{"name": "port1", "vlan_range": ["3301-3303"]}],
+                 }
+             ]), patch("app.routes.chameleon.run_in_chi_pool", side_effect=_run_sync):
+            data = asyncio.run(list_chameleon_facility_ports(site="CHI@TACC"))
+
+        assert data["chameleon_site"] == "CHI@TACC"
+        assert data["fabric_site"] == "TACC"
+        assert data["suggested_vlan"] == 3301
+        assert data["facility_ports"][0]["name"] == "Chameleon-TACC"
+
     def test_negotiate_vlan_auto_site(self, client):
         with patch("app.routes.resources._fetch_facility_ports_locked", return_value=[
             {
@@ -616,6 +731,60 @@ class TestVLANNegotiation:
         })
         assert resp.status_code == 400
 
+    def test_prepare_draft_for_facility_port_l2_creates_vlan_network_and_attaches_node(self, storage_dir):
+        from app.routes.chameleon import _chameleon_slices, prepare_draft_for_facility_port_l2
+
+        draft_id = "chi-fp-l2"
+        _chameleon_slices[draft_id] = {
+            "id": draft_id,
+            "name": "chi-fp",
+            "site": "CHI@TACC",
+            "nodes": [
+                {
+                    "id": "node-1",
+                    "name": "router",
+                    "site": "CHI@TACC",
+                    "interfaces": [{"nic": 0, "network": {"id": "shared", "name": "sharednet1"}}, {"nic": 1, "network": None}],
+                },
+                {
+                    "id": "node-2",
+                    "name": "observer",
+                    "site": "CHI@TACC",
+                    "interfaces": [{"nic": 0, "network": {"id": "shared", "name": "sharednet1"}}],
+                },
+            ],
+            "networks": [],
+        }
+        session = MagicMock()
+        session.api_get.return_value = {"networks": []}
+        session.api_post.return_value = {"network": {"id": "net-fp", "name": "fp-l2-chi-tacc-3301", "status": "ACTIVE"}}
+
+        try:
+            with patch("app.routes.resources._fetch_facility_ports_locked", return_value=[
+                {
+                    "name": "Chameleon-TACC",
+                    "site": "TACC",
+                    "interfaces": [{"name": "port1", "vlan_range": ["3301-3303"]}],
+                }
+            ]), patch("app.routes.chameleon.get_session", return_value=session):
+                result = prepare_draft_for_facility_port_l2(
+                    draft_id,
+                    vlan=3301,
+                    facility_port="Chameleon-TACC",
+                    node_name="router",
+                )
+
+            assert result["vlan"] == 3301
+            assert result["facility_port"] == "Chameleon-TACC"
+            router = _chameleon_slices[draft_id]["nodes"][0]
+            observer = _chameleon_slices[draft_id]["nodes"][1]
+            assert router["interfaces"][1]["network"] == {"id": "net-fp", "name": "fp-l2-chi-tacc-3301"}
+            assert all(iface["network"].get("name") != "fp-l2-chi-tacc-3301" for iface in observer["interfaces"])
+            assert _chameleon_slices[draft_id]["networks"][0]["type"] == "facility_port_l2"
+            assert _chameleon_slices[draft_id]["networks"][0]["vlan"] == 3301
+        finally:
+            _chameleon_slices.pop(draft_id, None)
+
 
 # ---------------------------------------------------------------------------
 # Drafts
@@ -648,6 +817,58 @@ class TestChameleonDrafts:
         assert resp.status_code == 200
         assert resp.json()["name"] == "test"
 
+    def test_get_draft_adopts_spawning_instance_for_planned_node(self, storage_dir):
+        from app.routes.chameleon import _chameleon_slices, get_draft
+
+        _chameleon_slices["chi-slice-spawning"] = {
+            "id": "chi-slice-spawning",
+            "name": "spawning",
+            "state": "Active",
+            "site": "CHI@TACC",
+            "sites": ["CHI@TACC"],
+            "nodes": [{
+                "id": "node-1",
+                "name": "spawning-server",
+                "node_type": "compute_haswell",
+                "image": "CC-Ubuntu22.04",
+                "count": 1,
+                "site": "CHI@TACC",
+            }],
+            "networks": [],
+            "floating_ips": [],
+            "resources": [{
+                "resource_id": "lease-1",
+                "provider": "chameleon",
+                "type": "lease",
+                "id": "lease-1",
+                "lease_id": "lease-1",
+                "name": "lease",
+                "site": "CHI@TACC",
+                "status": "ACTIVE",
+                "reservations": [{"id": "reservation-1"}],
+            }],
+        }
+
+        with patch("app.routes.chameleon._fetch_live_instances", new=AsyncMock(return_value=[{
+            "id": "srv-spawning",
+            "name": "spawning-server",
+            "site": "CHI@TACC",
+            "status": "SPAWNING",
+            "metadata": {"lease_id": "lease-1"},
+            "reservation_id": "reservation-1",
+            "ip_addresses": [],
+            "floating_ip": None,
+        }])):
+            draft = asyncio.run(get_draft("chi-slice-spawning"))
+
+        instance = next(resource for resource in draft["resources"] if resource["type"] == "instance")
+        assert instance["id"] == "srv-spawning"
+        assert instance["status"] == "SPAWNING"
+        assert instance["planned_node_id"] == "node-1"
+        assert draft["state"] == "Deploying"
+        assert draft["nodes"][0]["status"] == "SPAWNING"
+        assert draft["nodes"][0]["instance_id"] == "srv-spawning"
+
     def test_get_draft_not_found(self, client):
         resp = client.get("/api/chameleon/drafts/nonexistent")
         assert resp.status_code == 404
@@ -679,6 +900,7 @@ class TestChameleonDrafts:
             "image": "CC-Ubuntu22.04",
             "count": 2,
             "site": "CHI@TACC",
+            "key_name": "project-key",
         })
         assert resp.status_code == 200
         draft = resp.json()
@@ -686,6 +908,12 @@ class TestChameleonDrafts:
         node_id = draft["nodes"][0]["id"]
         assert draft["nodes"][0]["node_type"] == "compute_skylake"
         assert draft["nodes"][0]["count"] == 2
+        assert draft["nodes"][0]["key_name"] == "project-key"
+
+        # Clear the per-node key override back to the site default
+        resp = client.put(f"/api/chameleon/drafts/{draft_id}/nodes/{node_id}", json={"key_name": ""})
+        assert resp.status_code == 200
+        assert resp.json()["nodes"][0]["key_name"] == ""
 
         # Remove node
         resp = client.delete(f"/api/chameleon/drafts/{draft_id}/nodes/{node_id}")
@@ -738,7 +966,7 @@ class TestChameleonDrafts:
             "node_ids": [node_id],
         })
         assert resp.status_code == 200
-        assert node_id in resp.json()["floating_ips"]
+        assert resp.json()["floating_ips"] == [{"node_id": node_id, "nic": 0}]
 
     def test_floating_ips_nonexistent_draft(self, client):
         resp = client.put("/api/chameleon/drafts/bad-id/floating-ips", json={"node_ids": []})
@@ -824,6 +1052,75 @@ class TestDeployDraft:
             "duration_hours": 4,
         })
         assert resp.status_code == 200
+
+    def test_full_deploy_launches_instance_without_sleep_when_lease_is_active(self, storage_dir, _chameleon_patches):
+        session = _chameleon_patches
+        draft_id = "draft-full-orchestration"
+        node_id = "node-server1"
+
+        from app.routes.chameleon import _chameleon_slices, deploy_draft
+        _chameleon_slices[draft_id] = {
+            "id": draft_id,
+            "name": "full-orchestration",
+            "provider": "chameleon",
+            "state": "Draft",
+            "created": "2026-06-08T12:00:00Z",
+            "updated": "2026-06-08T12:00:00Z",
+            "site": "CHI@TACC",
+            "sites": ["CHI@TACC"],
+            "nodes": [{
+                "id": node_id,
+                "name": "server1",
+                "node_type": "compute_haswell",
+                "image": "CC-Ubuntu22.04",
+                "site": "CHI@TACC",
+                "count": 1,
+            }],
+            "networks": [],
+            "floating_ips": [],
+            "resources": [],
+        }
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as sleep_mock, \
+             patch("app.routes.chameleon._ensure_keypair_at_site", return_value={"name": "loomai-key"}), \
+             patch("app.routes.chameleon.ensure_routable_network", return_value={
+                 "network_id": "fallback-net-1",
+                 "network_name": "sharednet1",
+                 "type": "provider",
+             }):
+            data = asyncio.run(deploy_draft(draft_id, {
+                "lease_name": "full-orchestration-lease",
+                "duration_hours": 4,
+                "full_deploy": True,
+            }))
+
+        sleep_mock.assert_not_awaited()
+        assert data["leases"][0]["status"] == "ACTIVE"
+        assert data["leases"][0]["reservations"][0]["id"] == "res-1"
+
+        stored = _chameleon_slices[draft_id]
+        lease = next(r for r in stored["resources"] if r["type"] == "lease")
+        instance = next(r for r in stored["resources"] if r["type"] == "instance")
+        assert lease["id"] == "new-lease-1"
+        assert lease["status"] == "ACTIVE"
+        assert instance["id"] == "new-srv-1"
+        assert instance["name"] == "server1"
+        assert instance["planned_node_id"] == node_id
+        assert instance["planned_node_name"] == "server1"
+        assert instance["lease_id"] == "new-lease-1"
+        assert instance["status"] == "BUILD"
+
+        compute_posts = [
+            call for call in session.api_post.call_args_list
+            if call.args[:2] == ("compute", "/servers")
+        ]
+        assert len(compute_posts) == 1
+        body = compute_posts[0].args[2]
+        assert body["os:scheduler_hints"]["reservation"] == "res-1"
+        assert body["server"]["name"] == "server1"
+        assert body["server"]["imageRef"] == "img-1"
+        assert body["server"]["key_name"] == "loomai-key"
+        assert body["server"]["networks"] == [{"uuid": "fallback-net-1"}]
 
 
 # ---------------------------------------------------------------------------
@@ -923,6 +1220,309 @@ class TestFindAvailability:
         data = resp.json()
         assert "error" in data
         assert "Only" in data["error"]
+
+
+# ---------------------------------------------------------------------------
+# Import reservation
+# ---------------------------------------------------------------------------
+
+class TestChameleonImportReservation:
+    def test_import_reservation_matches_planned_node_name(self, client):
+        from app.routes.chameleon import _chameleon_slices
+
+        _chameleon_slices["chi-slice-test"] = {
+            "id": "chi-slice-test",
+            "name": "test",
+            "state": "Draft",
+            "nodes": [{
+                "id": "node-1",
+                "name": "test-instance",
+                "node_type": "compute_haswell",
+                "image": "CC-Ubuntu22.04",
+                "count": 1,
+                "site": "CHI@TACC",
+            }],
+            "networks": [],
+            "floating_ips": [],
+            "resources": [],
+        }
+
+        resp = client.post(
+            "/api/chameleon/slices/chi-slice-test/import-reservation",
+            json={"site": "CHI@TACC", "lease_id": "lease-1"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["imported"] == 1
+        resource = next(
+            r for r in _chameleon_slices["chi-slice-test"]["resources"]
+            if r["type"] == "instance"
+        )
+        assert resource["id"] == "srv-1"
+        assert resource["planned_node_id"] == "node-1"
+
+    def test_import_reservation_supports_manual_instance_ids(self, client):
+        from app.routes.chameleon import _chameleon_slices
+
+        _chameleon_slices["chi-slice-manual"] = {
+            "id": "chi-slice-manual",
+            "name": "manual",
+            "state": "Draft",
+            "nodes": [],
+            "networks": [],
+            "floating_ips": [],
+            "resources": [],
+        }
+
+        resp = client.post(
+            "/api/chameleon/slices/chi-slice-manual/import-reservation",
+            json={"site": "CHI@TACC", "lease_id": "lease-1", "instance_ids": ["srv-1"]},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["imported"] == 1
+        resource = next(
+            r for r in _chameleon_slices["chi-slice-manual"]["resources"]
+            if r["type"] == "instance"
+        )
+        assert resource["name"] == "test-instance"
+
+
+class TestChameleonResourceMembership:
+    def test_add_resource_updates_status_in_place(self, storage_dir):
+        from app.routes.chameleon import _chameleon_slices, add_chameleon_slice_resource
+
+        _chameleon_slices["chi-slice-status"] = {
+            "id": "chi-slice-status",
+            "name": "status",
+            "state": "Deploying",
+            "site": "CHI@TACC",
+            "nodes": [],
+            "networks": [],
+            "floating_ips": [],
+            "resources": [{
+                "resource_id": "res-existing",
+                "provider": "chameleon",
+                "type": "lease",
+                "id": "lease-1",
+                "provider_id": "lease-1",
+                "name": "lease",
+                "site": "CHI@TACC",
+                "status": "DEPLOYING",
+            }],
+        }
+
+        class Request:
+            async def json(self):
+                return {"type": "lease", "id": "lease-1", "name": "lease", "site": "CHI@TACC", "status": "ACTIVE"}
+
+        updated = asyncio.run(add_chameleon_slice_resource("chi-slice-status", Request()))
+        resources = updated["resources"]
+        assert len(resources) == 1
+        assert resources[0]["resource_id"] == "res-existing"
+        assert resources[0]["status"] == "ACTIVE"
+
+    def test_add_active_instance_merges_into_planned_node_and_graph(self, storage_dir):
+        from app.routes.chameleon import _chameleon_slices, add_chameleon_slice_resource, get_draft_graph
+
+        _chameleon_slices["chi-slice-merge"] = {
+            "id": "chi-slice-merge",
+            "name": "merge",
+            "state": "Deploying",
+            "site": "CHI@TACC",
+            "nodes": [{
+                "id": "node-1",
+                "name": "chameleon-ssh-node1",
+                "node_type": "compute_haswell",
+                "image": "CC-Ubuntu22.04",
+                "count": 1,
+                "site": "CHI@TACC",
+            }],
+            "networks": [],
+            "floating_ips": [],
+            "resources": [],
+        }
+
+        class Request:
+            async def json(self):
+                return {
+                    "type": "instance",
+                    "id": "srv-1",
+                    "name": "srv-runtime-name",
+                    "site": "CHI@TACC",
+                    "status": "ACTIVE",
+                    "floating_ip": "129.114.1.10",
+                    "ip_addresses": ["10.0.0.5"],
+                    "planned_node_name": "chameleon-ssh-node1",
+                    "ssh_user": "cc",
+                }
+
+        updated = asyncio.run(add_chameleon_slice_resource("chi-slice-merge", Request()))
+        merged = updated["nodes"][0]
+        assert merged["status"] == "ACTIVE"
+        assert merged["instance_id"] == "srv-1"
+        assert merged["floating_ip"] == "129.114.1.10"
+        assert merged["management_ip"] == "129.114.1.10"
+        assert merged["ssh_command"] == "ssh cc@129.114.1.10"
+
+        with patch("app.routes.chameleon._fetch_live_instances", new=AsyncMock(return_value=[])):
+            graph = asyncio.run(get_draft_graph("chi-slice-merge"))
+        instance_nodes = [
+            node for node in graph["nodes"]
+            if node["data"].get("element_type") == "chameleon_instance"
+        ]
+        assert len(instance_nodes) == 1
+        assert instance_nodes[0]["data"]["status"] == "ACTIVE"
+        assert instance_nodes[0]["data"]["instance_id"] == "srv-1"
+
+    def test_add_resource_defaults_to_managed(self, storage_dir):
+        from app.routes.chameleon import _chameleon_slices, add_chameleon_slice_resource
+
+        _chameleon_slices["chi-slice-resource"] = {
+            "id": "chi-slice-resource",
+            "name": "resource",
+            "state": "Draft",
+            "site": "CHI@TACC",
+            "nodes": [],
+            "networks": [],
+            "floating_ips": [],
+            "resources": [],
+        }
+
+        class Request:
+            async def json(self):
+                return {"type": "instance", "id": "srv-managed", "name": "managed", "site": "CHI@TACC"}
+
+        updated = asyncio.run(add_chameleon_slice_resource("chi-slice-resource", Request()))
+        resource = updated["resources"][0]
+        assert resource["provider"] == "chameleon"
+        assert resource["provider_id"] == "srv-managed"
+        assert resource["ownership"] == "managed"
+        assert resource["delete_with_slice"] is True
+
+    def test_add_imported_resource_prevents_cross_slice_duplicate(self, storage_dir):
+        from fastapi import HTTPException
+
+        from app.routes.chameleon import _chameleon_slices, add_chameleon_slice_resource
+
+        base = {
+            "state": "Draft",
+            "site": "CHI@TACC",
+            "nodes": [],
+            "networks": [],
+            "floating_ips": [],
+            "resources": [],
+        }
+        _chameleon_slices["chi-slice-a"] = {"id": "chi-slice-a", "name": "a", **base}
+        _chameleon_slices["chi-slice-b"] = {"id": "chi-slice-b", "name": "b", **base, "resources": []}
+
+        class Request:
+            async def json(self):
+                return {"type": "instance", "id": "srv-shared", "name": "server", "ownership": "imported"}
+
+        asyncio.run(add_chameleon_slice_resource("chi-slice-a", Request()))
+
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(add_chameleon_slice_resource("chi-slice-b", Request()))
+        assert exc.value.status_code == 409
+
+    def test_import_reservation_marks_resources_imported(self, storage_dir):
+        from app.routes.chameleon import _chameleon_slices, import_reservation
+
+        _chameleon_slices["chi-slice-imported"] = {
+            "id": "chi-slice-imported",
+            "name": "imported",
+            "state": "Draft",
+            "nodes": [],
+            "networks": [],
+            "floating_ips": [],
+            "resources": [],
+        }
+
+        class Request:
+            async def json(self):
+                return {"site": "CHI@TACC", "lease_id": "lease-1", "instance_ids": ["srv-1"]}
+
+        async def run_inline(fn, *args):
+            return fn(*args)
+
+        with patch("app.routes.chameleon.run_in_chi_pool", side_effect=run_inline):
+            result = asyncio.run(import_reservation("chi-slice-imported", Request()))
+        assert result["imported"] == 1
+        resources = _chameleon_slices["chi-slice-imported"]["resources"]
+        assert {r["type"] for r in resources} == {"lease", "instance"}
+        assert all(r["ownership"] == "imported" for r in resources)
+        assert all(r["delete_with_slice"] is False for r in resources)
+        lease = next(r for r in resources if r["type"] == "lease")
+        assert lease["reservations"][0]["id"] == "res-1"
+
+    def test_removing_lease_resource_detaches_lease_group(self, storage_dir):
+        from app.routes.chameleon import _chameleon_slices, remove_chameleon_slice_resource
+
+        _chameleon_slices["chi-slice-group"] = {
+            "id": "chi-slice-group",
+            "name": "group",
+            "state": "Active",
+            "nodes": [{
+                "id": "node-1",
+                "name": "server-1",
+                "node_type": "compute_haswell",
+                "image": "CC-Ubuntu22.04",
+                "count": 1,
+                "site": "CHI@TACC",
+                "status": "ACTIVE",
+                "instance_id": "srv-1",
+                "runtime_resource_id": "res-instance",
+                "lease_id": "lease-1",
+                "management_ip": "129.114.1.1",
+            }],
+            "networks": [],
+            "floating_ips": [],
+            "resources": [
+                {
+                    "resource_id": "res-lease",
+                    "provider": "chameleon",
+                    "type": "lease",
+                    "id": "lease-1",
+                    "provider_id": "lease-1",
+                    "name": "test-lease",
+                    "site": "CHI@TACC",
+                },
+                {
+                    "resource_id": "res-instance",
+                    "provider": "chameleon",
+                    "type": "instance",
+                    "id": "srv-1",
+                    "provider_id": "srv-1",
+                    "name": "server-1",
+                    "site": "CHI@TACC",
+                    "lease_id": "lease-1",
+                    "planned_node_id": "node-1",
+                },
+                {
+                    "resource_id": "res-other",
+                    "provider": "chameleon",
+                    "type": "instance",
+                    "id": "srv-2",
+                    "provider_id": "srv-2",
+                    "name": "server-2",
+                    "site": "CHI@TACC",
+                    "lease_id": "lease-2",
+                },
+            ],
+        }
+
+        class Request:
+            async def json(self):
+                return {"resource_id": "res-lease"}
+
+        updated = asyncio.run(remove_chameleon_slice_resource("chi-slice-group", Request()))
+        assert [r["resource_id"] for r in updated["resources"]] == ["res-other"]
+        node = updated["nodes"][0]
+        assert "instance_id" not in node
+        assert "runtime_resource_id" not in node
+        assert "management_ip" not in node
+        assert "lease_id" not in node
 
 
 # ---------------------------------------------------------------------------

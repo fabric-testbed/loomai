@@ -40,20 +40,24 @@ export default function AddSliverMenu({ onSelect, chameleonEnabled, visibleTypes
   }, [open]);
 
   return (
-    <div className="add-sliver-wrapper" ref={menuRef}>
+    <div className="add-sliver-wrapper" ref={menuRef} data-testid="add-sliver-menu">
       <button
         className="add-sliver-btn"
         onClick={() => setOpen(!open)}
         title="Add a new sliver"
+        aria-label="Add sliver"
+        data-testid="add-sliver-button"
       >
         +
       </button>
       {open && (
-        <div className="add-sliver-menu">
+        <div className="add-sliver-menu" data-testid="add-sliver-options">
           {options.map((opt) => (
             <button
               key={opt.type}
               className="add-sliver-item"
+              data-testid="add-sliver-option"
+              data-sliver-type={opt.type}
               onClick={() => {
                 onSelect(opt.type);
                 setOpen(false);

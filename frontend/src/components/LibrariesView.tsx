@@ -77,6 +77,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   const [troviLoaded, setTroviLoaded] = useState(false);
   const [troviSearch, setTroviSearch] = useState('');
   const [troviDownloading, setTroviDownloading] = useState<string | null>(null);
+  const [troviStatus, setTroviStatus] = useState<{ kind: 'success' | 'info' | 'error'; message: string } | null>(null);
 
   // Inline edit state for authored marketplace artifacts
   const [mpEditing, setMpEditing] = useState<string | null>(null); // uuid
@@ -774,6 +775,59 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     }
   };
 
+  // Trovi marketplace: download an artifact, refresh the local list,
+  // and (if it's a notebook) auto-launch it in JupyterLab so the user
+  // sees the extracted files immediately. Errors are surfaced via the
+  // troviStatus banner instead of being swallowed.
+  const handleGetTrovi = async (uuid: string, title: string) => {
+    setTroviDownloading(uuid);
+    setTroviStatus(null);
+    try {
+      const result = await api.downloadTroviArtifact(uuid);
+      // Always refresh My Artifacts so the new entry shows up regardless
+      // of content_status (metadata-only entries should still be visible).
+      await fetchMyArtifacts();
+      const status = result.content_status;
+      if (status === 'extracted' || status === 'git-cloned') {
+        if (result.has_ipynb && result.dir_name) {
+          // Auto-launch in JupyterLab with a fresh working copy
+          try {
+            const launch = await api.launchNotebook(result.dir_name, { force_refresh: true });
+            if (launch.status === 'running' && launch.jupyter_path) {
+              onLaunchNotebook?.(launch.jupyter_path);
+              setTroviStatus({ kind: 'success', message: `Opened "${result.title || title}" in JupyterLab.` });
+            } else {
+              setTroviStatus({ kind: 'success', message: `Downloaded "${result.title || title}" — open it from My Artifacts.` });
+              setTab('my-artifacts');
+            }
+          } catch (launchErr: any) {
+            setTroviStatus({ kind: 'error', message: `Downloaded "${result.title || title}" but JupyterLab launch failed: ${launchErr.message}` });
+            setTab('my-artifacts');
+          }
+        } else {
+          setTroviStatus({ kind: 'success', message: `Downloaded "${result.title || title}" — see My Artifacts.` });
+          setTab('my-artifacts');
+        }
+      } else if (status === 'metadata-only') {
+        setTroviStatus({
+          kind: 'info',
+          message: `"${result.title || title}" has no downloadable content (metadata only). Visit the Trovi page for instructions.`,
+        });
+        setTab('my-artifacts');
+      } else {
+        // download-failed / extraction-failed / no-access-method / git-clone-failed / error
+        setTroviStatus({
+          kind: 'error',
+          message: `Failed to get "${result.title || title}": ${result.error_message || status}`,
+        });
+      }
+    } catch (e: any) {
+      setTroviStatus({ kind: 'error', message: `Failed to get "${title}": ${e.message}` });
+    } finally {
+      setTroviDownloading(null);
+    }
+  };
+
   const handleEditInJupyter = async (dirName: string) => {
     setLaunchingNotebook(dirName);
     try {
@@ -1376,7 +1430,13 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   const renderMyArtifactCard = (art: LocalArtifact) => {
     const isLoadInput = showLoadInput === art.dir_name;
     return (
-      <div key={`${art.category}-${art.dir_name}`} className="tv-card">
+      <div
+        key={`${art.category}-${art.dir_name}`}
+        className="tv-card"
+        data-testid="library-artifact-card"
+        data-dir-name={art.dir_name}
+        data-category={art.category}
+      >
         <div className="tv-card-header">
           <span className="tv-card-name">{art.name}</span>
           <span className={`tv-badge tv-badge-cat tv-badge-cat-${art.category}`}>
@@ -1444,7 +1504,12 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     const isAuthored = allAuthoredArtifacts.some(a => a.uuid === art.uuid);
     const isDownloaded = downloadedUuids.has(art.uuid);
     return (
-      <div key={art.uuid} className={`tv-card tv-mp-card ${isExpanded ? 'tv-card-editing' : ''}`}>
+      <div
+        key={art.uuid}
+        className={`tv-card tv-mp-card ${isExpanded ? 'tv-card-editing' : ''}`}
+        data-testid="library-marketplace-card"
+        data-artifact-uuid={art.uuid}
+      >
         <div className="tv-card-header">
           <span className="tv-card-name">{art.title}</span>
           <span className={`tv-badge tv-badge-cat tv-badge-cat-${art.category}`}>{categoryLabel(art.category)}</span>
@@ -2217,7 +2282,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="tv-root">
+    <div className="tv-root" data-testid="libraries-view">
       <div className="tv-header">
         <h1 className="tv-title">Artifacts</h1>
         <button className="tv-create-btn" onClick={() => setShowCreateDialog(true)}>
@@ -2231,7 +2296,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       {/* Create New Artifact Dialog */}
       {showCreateDialog && (
         <div className="tv-modal-overlay" onClick={() => setShowCreateDialog(false)}>
-          <div className="tv-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="tv-modal" onClick={(e) => e.stopPropagation()} data-testid="library-create-dialog">
             <h4>Create New Artifact</h4>
             <input
               type="text"
@@ -2526,7 +2591,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       {/* ================================================================= */}
       {pubOpen && (
         <div className="tv-pub-overlay" onClick={() => setPubOpen(false)}>
-          <div className="tv-pub-dialog" onClick={e => e.stopPropagation()}>
+          <div className="tv-pub-dialog" onClick={e => e.stopPropagation()} data-testid="library-publish-dialog">
             <div className="tv-pub-header">
               {pubAction === 'update' ? 'Publish New Version' : pubAction === 'fork' ? 'Fork as New Artifact' : 'Publish to FABRIC Artifact Manager'}
               <button className="tv-btn" onClick={() => setPubOpen(false)} style={{ marginLeft: 'auto' }}>Close</button>
@@ -2833,6 +2898,47 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       {/* ================================================================= */}
       {tab === 'chameleon' && (
         <div className="tv-content" style={{ padding: 16 }}>
+          {troviStatus && (
+            <div
+              style={{
+                padding: '8px 12px',
+                marginBottom: 12,
+                borderRadius: 4,
+                fontSize: 12,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                background:
+                  troviStatus.kind === 'success'
+                    ? 'rgba(0, 142, 122, 0.1)'
+                    : troviStatus.kind === 'error'
+                      ? 'rgba(226, 82, 65, 0.1)'
+                      : 'rgba(87, 152, 188, 0.1)',
+                border: `1px solid ${
+                  troviStatus.kind === 'success'
+                    ? '#008e7a'
+                    : troviStatus.kind === 'error'
+                      ? '#e25241'
+                      : '#5798bc'
+                }`,
+                color:
+                  troviStatus.kind === 'success'
+                    ? '#008e7a'
+                    : troviStatus.kind === 'error'
+                      ? '#e25241'
+                      : '#1f6a8c',
+              }}
+            >
+              <span style={{ flex: 1 }}>{troviStatus.message}</span>
+              <button
+                onClick={() => setTroviStatus(null)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', fontSize: 14, padding: 0 }}
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
             <input
               className="tv-search"
@@ -2875,13 +2981,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                         className="tv-btn tv-btn-primary"
                         style={{ fontSize: 11, padding: '3px 10px' }}
                         disabled={troviDownloading === a.uuid}
-                        onClick={async () => {
-                          setTroviDownloading(a.uuid);
-                          try {
-                            await api.downloadTroviArtifact(a.uuid);
-                          } catch { /* ignore */ }
-                          setTroviDownloading(null);
-                        }}
+                        onClick={() => handleGetTrovi(a.uuid, a.title)}
                       >
                         {troviDownloading === a.uuid ? 'Getting...' : 'Get'}
                       </button>

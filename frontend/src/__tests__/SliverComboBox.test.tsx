@@ -41,11 +41,51 @@ const mockSliceData: SliceData = {
   facility_ports: [
     { name: 'fp1', site: 'STAR', vlan: '100', bandwidth: '10', interfaces: [] },
   ],
-  port_mirrors: [],
+  port_mirrors: [
+    {
+      name: 'mirror1',
+      mirror_interface_name: 'node1-nic1-p1',
+      receive_interface_name: 'node1-nic2-p1',
+      mirror_direction: 'both',
+    },
+  ],
   chameleon_nodes: [
     { name: 'chi1', site: 'CHI@TACC', node_type: 'compute_skylake' },
   ],
-  graph: { nodes: [], edges: [] },
+  graph: {
+    nodes: [
+      {
+        data: {
+          id: 'fp:test-id:Chameleon-TACC',
+          label: 'Chameleon-TACC\n(facility port)\nVLAN 3316',
+          element_type: 'facility-port',
+          name: 'Chameleon-TACC',
+          site: 'Chameleon-TACC',
+          vlan: '3316',
+          bandwidth: '0',
+        },
+        classes: 'facility-port',
+      },
+    ],
+    edges: [
+      {
+        data: {
+          id: 'edge:test-id:iface-1',
+          source: 'fp:test-id:Chameleon-TACC',
+          target: 'net:test-id:net1',
+          element_type: 'interface',
+          interface_name: 'iface-1',
+          node_name: 'Chameleon-TACC',
+          network_name: 'net1',
+          vlan: '3316',
+          mac: '',
+          ip_addr: '',
+          bandwidth: '0',
+        },
+        classes: 'edge-l2',
+      },
+    ],
+  },
 };
 
 describe('SliverComboBox', () => {
@@ -57,10 +97,12 @@ describe('SliverComboBox', () => {
     expect(screen.getByText('Nodes (VMs)')).toBeInTheDocument();
     expect(screen.getByText('Networks')).toBeInTheDocument();
     expect(screen.getByText('Facility Ports')).toBeInTheDocument();
+    expect(screen.getByText('Chameleon-TACC')).toBeInTheDocument();
+    expect(screen.getByText('Port Mirrors')).toBeInTheDocument();
     expect(screen.getByText('Chameleon Nodes')).toBeInTheDocument();
   });
 
-  it('filters to fabric tab (nodes and non-chameleon networks)', () => {
+  it('filters to fabric tab (nodes, networks, and FABRIC services)', () => {
     render(
       <SliverComboBox
         sliceData={mockSliceData}
@@ -72,8 +114,10 @@ describe('SliverComboBox', () => {
     fireEvent.click(screen.getByText('Select sliver...'));
     expect(screen.getByText('Nodes (VMs)')).toBeInTheDocument();
     expect(screen.getByText('Networks')).toBeInTheDocument();
+    expect(screen.getByText('Facility Ports')).toBeInTheDocument();
+    expect(screen.getByText('Chameleon-TACC')).toBeInTheDocument();
+    expect(screen.getByText('Port Mirrors')).toBeInTheDocument();
     expect(screen.queryByText('Chameleon Nodes')).not.toBeInTheDocument();
-    expect(screen.queryByText('Facility Ports')).not.toBeInTheDocument();
   });
 
   it('filters to chameleon only', () => {
@@ -89,21 +133,6 @@ describe('SliverComboBox', () => {
     expect(screen.getByText('Chameleon Nodes')).toBeInTheDocument();
     expect(screen.queryByText('Nodes (VMs)')).not.toBeInTheDocument();
     expect(screen.queryByText('Networks')).not.toBeInTheDocument();
-  });
-
-  it('filters to experiment tab', () => {
-    render(
-      <SliverComboBox
-        sliceData={mockSliceData}
-        selectedSliverKey=""
-        onSelect={() => {}}
-        tabFilter="experiment"
-      />,
-    );
-    fireEvent.click(screen.getByText('Select sliver...'));
-    expect(screen.getByText('Facility Ports')).toBeInTheDocument();
-    expect(screen.queryByText('Nodes (VMs)')).not.toBeInTheDocument();
-    expect(screen.queryByText('Chameleon Nodes')).not.toBeInTheDocument();
   });
 
   it('calls onSelect when option clicked', () => {

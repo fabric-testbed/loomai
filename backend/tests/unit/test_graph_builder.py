@@ -307,6 +307,7 @@ class TestBuildGraphFacilityPort:
         assert fp["data"]["name"] == "fp1"
         assert fp["data"]["site"] == "RENC"
         assert fp["data"]["vlan"] == "100"
+        assert "parent" not in fp["data"]
 
     def test_facility_port_edge_to_network(self):
         result = build_graph(facility_port_slice())
@@ -315,6 +316,86 @@ class TestBuildGraphFacilityPort:
         edge = edges[0]
         assert edge["data"]["source"].startswith("fp:")
         assert edge["data"]["target"].startswith("net:")
+        assert "edge-facility-port-l2" in edge["classes"]
+
+    def test_network_interface_with_non_vm_node_creates_external_endpoint(self):
+        data = single_node_slice(slice_id="slice-1")
+        data["nodes"][0]["components"] = [
+            {"name": "node1-nic1", "model": "NIC_Basic", "interfaces": [
+                {"name": "node1-nic1-p1", "node_name": "node1"}
+            ]}
+        ]
+        data["networks"] = [{
+            "name": "stitch-net",
+            "type": "L2Bridge",
+            "layer": "L2",
+            "interfaces": [
+                {
+                    "name": "iface-1",
+                    "node_name": "Chameleon-TACC",
+                    "network_name": "stitch-net",
+                    "vlan": "3402",
+                    "bandwidth": 0,
+                },
+                {
+                    "name": "node1-nic1-p1",
+                    "node_name": "node1",
+                    "network_name": "stitch-net",
+                    "bandwidth": 100,
+                },
+            ],
+        }]
+
+        result = build_graph(data)
+        ids = {n["data"]["id"] for n in result["nodes"]}
+        external = [
+            n for n in result["nodes"]
+            if n["data"].get("id") == "fp:slice-1:Chameleon-TACC"
+        ]
+        assert len(external) == 1
+        assert external[0]["data"]["element_type"] == "facility-port"
+        assert external[0]["data"]["deletable"] == "false"
+        assert "(facility port)" in external[0]["data"]["label"]
+        assert "External endpoint" not in external[0]["data"]["label"]
+        assert "parent" not in external[0]["data"]
+        assert all(e["data"]["source"] in ids and e["data"]["target"] in ids for e in result["edges"])
+        external_edges = [
+            e for e in result["edges"]
+            if e["data"].get("source") == "fp:slice-1:Chameleon-TACC"
+        ]
+        assert external_edges
+        assert "edge-facility-port-l2" in external_edges[0]["classes"]
+
+    def test_network_interface_for_serialized_facility_port_is_deletable(self):
+        data = single_node_slice(slice_id="slice-1")
+        data["facility_ports"] = [{
+            "name": "Chameleon-TACC",
+            "site": "TACC",
+            "vlan": "3402",
+            "bandwidth": "100",
+            "interfaces": [],
+        }]
+        data["networks"] = [{
+            "name": "stitch-net",
+            "type": "L2Bridge",
+            "layer": "L2",
+            "interfaces": [{
+                "name": "iface-1",
+                "node_name": "Chameleon-TACC",
+                "network_name": "stitch-net",
+                "vlan": "3402",
+                "bandwidth": 100,
+            }],
+        }]
+
+        result = build_graph(data)
+        external = [
+            n for n in result["nodes"]
+            if n["data"].get("id") == "fp:slice-1:Chameleon-TACC"
+        ]
+        assert external
+        assert external[0]["data"]["deletable"] == "true"
+        assert external[0]["data"]["site"] == "TACC"
 
 
 # ---------------------------------------------------------------------------
@@ -565,7 +646,67 @@ class TestBuildChameleonDraftGraph:
                       if n["data"]["element_type"] == "chameleon_instance"]
         assert len(inst_nodes) == 1
         assert inst_nodes[0]["data"]["status"] == "DRAFT"
+        assert inst_nodes[0]["data"]["draft_id"] == "d2"
+        assert inst_nodes[0]["data"]["node_id"] == "n1"
         assert inst_nodes[0]["data"]["bg_color"] == CHAMELEON_DRAFT_STATE["bg"]
+
+    def test_runtime_resources_without_planned_nodes(self):
+        """Deployed provider resources render even when planned nodes are absent."""
+        draft = {
+            "id": "chi-slice-runtime",
+            "name": "runtime-chi",
+            "site": "CHI@TACC",
+            "nodes": [],
+            "networks": [],
+            "floating_ips": [],
+            "resources": [
+                {
+                    "type": "network",
+                    "id": "net-1",
+                    "name": "chameleon-fabric-fabnet-gb8u-stitch",
+                    "site": "CHI@TACC",
+                    "status": "ACTIVE",
+                },
+                {
+                    "type": "instance",
+                    "id": "inst-1",
+                    "name": "runtime-chi",
+                    "planned_node_name": "chameleon-server",
+                    "site": "CHI@TACC",
+                    "status": "ACTIVE",
+                    "floating_ip": "129.114.108.242",
+                    "ip_addresses": ["10.52.2.103", "192.168.100.194"],
+                    "ssh_ready": True,
+                    "node_type": "compute_cascadelake_r",
+                    "image": "CC-Ubuntu22.04",
+                },
+            ],
+        }
+        result = build_chameleon_draft_graph(draft)
+
+        inst_nodes = [
+            n for n in result["nodes"]
+            if n["data"]["element_type"] == "chameleon_instance"
+        ]
+        assert len(inst_nodes) == 1
+        inst = inst_nodes[0]
+        assert inst["data"]["name"] == "chameleon-server"
+        assert inst["data"]["instance_name"] == "runtime-chi"
+        assert inst["data"]["instance_id"] == "inst-1"
+        assert inst["data"]["floating_ip"] == "129.114.108.242"
+        assert inst["data"]["ssh_ready"] is True
+
+        network_names = {
+            n["data"]["name"]
+            for n in result["nodes"]
+            if n["data"].get("element_type") == "network"
+        }
+        assert {"sharednet1", "chameleon-fabric-fabnet-gb8u-stitch"} <= network_names
+        iface_edges = [
+            e for e in result["edges"]
+            if e["data"].get("element_type") == "interface"
+        ]
+        assert len(iface_edges) == 2
 
     def test_draft_with_networks(self):
         """Draft with per-node interface network assignments produces NIC + edges."""
@@ -587,10 +728,31 @@ class TestBuildChameleonDraftGraph:
                      if n["data"]["element_type"] == "network"]
         assert len(net_nodes) == 1
         assert "network" in net_nodes[0]["data"]["label"].lower()
+        assert net_nodes[0]["data"]["network_id"] == "net1"
+        assert net_nodes[0]["data"]["deletable"] == "false"
         # Should have 2 NIC→network edges (one per node interface)
         nic_edges = [e for e in result["edges"]
                      if e["data"]["element_type"] == "interface"]
         assert len(nic_edges) == 2
+
+    def test_legacy_draft_networks_are_marked_deletable(self):
+        """Legacy draft network rows carry the API id needed by topology delete."""
+        draft = {
+            "id": "d3b", "name": "legacy-net-draft", "site": "CHI@TACC",
+            "nodes": [],
+            "networks": [
+                {"id": "net-legacy-1", "name": "private-net", "connected_nodes": []},
+            ],
+            "floating_ips": [],
+        }
+        result = build_chameleon_draft_graph(draft)
+        net_node = [
+            n for n in result["nodes"]
+            if n["data"].get("element_type") == "network"
+        ][0]
+        assert net_node["data"]["draft_id"] == "d3b"
+        assert net_node["data"]["network_id"] == "net-legacy-1"
+        assert net_node["data"]["deletable"] == "true"
 
     def test_draft_with_floating_ips(self):
         """Floating IPs are tracked in node data for post-deploy assignment."""

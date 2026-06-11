@@ -1,9 +1,11 @@
 /** @type {import('next').NextConfig} */
 const isExport = process.env.NEXT_BUILD_MODE === 'export';
+const distDir = isExport ? 'dist' : process.env.NEXT_DIST_DIR;
 
 const nextConfig = {
+  ...(distDir ? { distDir } : {}),
   ...(isExport
-    ? { output: 'export', distDir: 'dist' }
+    ? { output: 'export' }
     : {
         // In dev mode, proxy /api/* to the FastAPI backend
         async rewrites() {

@@ -11,7 +11,8 @@
 import { test, expect } from '@playwright/test';
 import {
   navigateToView, clickBarTab, isAuthenticated,
-  waitForSliceState, deleteSliceViaApi, cleanupAllE2ESlices,
+  waitForSliceState, deleteSliceViaApi, cleanupAllE2ESlices, e2eResourceName,
+  selectSliceFromBar,
 } from '../helpers/gui-helpers';
 
 const API = 'http://localhost:8000/api';
@@ -79,7 +80,7 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
   });
 
   test('multi-site FABNetv4 topology renders in graph', async ({ page, request }) => {
-    const name = `e2e-hw-l3-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-l3');
     await createHardwareTopology(request, name, [
       { name: 'node1', site: 'TACC', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
       { name: 'node2', site: 'STAR', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
@@ -91,13 +92,13 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 10000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await clickBarTab(page, 'fabric-bar', 'Topology');
     await expect(page.locator('.cytoscape-container')).toBeVisible({ timeout: 5000 });
   });
 
   test('L2STS topology renders in graph', async ({ page, request }) => {
-    const name = `e2e-hw-l2sts-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-l2sts');
     await createHardwareTopology(request, name, [
       { name: 'node1', site: 'TACC', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
       { name: 'node2', site: 'STAR', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
@@ -109,13 +110,13 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 10000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await clickBarTab(page, 'fabric-bar', 'Topology');
     await expect(page.locator('.cytoscape-container')).toBeVisible({ timeout: 5000 });
   });
 
   test('L2PTP topology renders in graph', async ({ page, request }) => {
-    const name = `e2e-hw-l2ptp-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-l2ptp');
     await createHardwareTopology(request, name, [
       { name: 'node1', site: 'TACC', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
       { name: 'node2', site: 'STAR', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
@@ -127,13 +128,13 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 10000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await clickBarTab(page, 'fabric-bar', 'Topology');
     await expect(page.locator('.cytoscape-container')).toBeVisible({ timeout: 5000 });
   });
 
   test('GPU node topology renders with badge', async ({ page, request }) => {
-    const name = `e2e-hw-gpu-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-gpu');
     await createHardwareTopology(request, name, [
       { name: 'gpu-node', site: 'UCSD', cores: 8, ram: 32, disk: 100,
         components: [{ model: 'GPU_RTX6000', name: 'gpu1' }] },
@@ -145,13 +146,13 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 10000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await clickBarTab(page, 'fabric-bar', 'Topology');
     await expect(page.locator('.cytoscape-container')).toBeVisible({ timeout: 5000 });
   });
 
   test('NVMe node topology renders', async ({ page, request }) => {
-    const name = `e2e-hw-nvme-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-nvme');
     await createHardwareTopology(request, name, [
       { name: 'nvme-node', site: 'TACC', cores: 4, ram: 16,
         components: [{ model: 'NVME_P4510', name: 'nvme1' }] },
@@ -163,13 +164,13 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 10000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await clickBarTab(page, 'fabric-bar', 'Topology');
     await expect(page.locator('.cytoscape-container')).toBeVisible({ timeout: 5000 });
   });
 
   test('FPGA node topology renders', async ({ page, request }) => {
-    const name = `e2e-hw-fpga-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-fpga');
     await createHardwareTopology(request, name, [
       { name: 'fpga-node', site: 'UCSD', cores: 4, ram: 16,
         components: [{ model: 'FPGA_Xilinx_U280', name: 'fpga1' }] },
@@ -181,13 +182,13 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 10000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await clickBarTab(page, 'fabric-bar', 'Topology');
     await expect(page.locator('.cytoscape-container')).toBeVisible({ timeout: 5000 });
   });
 
   test('ConnectX-5 + gateway topology renders', async ({ page, request }) => {
-    const name = `e2e-hw-cx5-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-cx5');
     await createHardwareTopology(request, name, [
       { name: 'smartnic-node', site: 'TACC', components: [{ model: 'NIC_ConnectX_5', name: 'nic1' }] },
       { name: 'gw-node', site: 'STAR', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
@@ -199,13 +200,13 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 10000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await clickBarTab(page, 'fabric-bar', 'Topology');
     await expect(page.locator('.cytoscape-container')).toBeVisible({ timeout: 5000 });
   });
 
   test('ConnectX-6 + gateway topology renders', async ({ page, request }) => {
-    const name = `e2e-hw-cx6-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-cx6');
     await createHardwareTopology(request, name, [
       { name: 'smartnic-node', site: 'TACC', components: [{ model: 'NIC_ConnectX_6', name: 'nic1' }] },
       { name: 'gw-node', site: 'STAR', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
@@ -217,13 +218,13 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 10000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await clickBarTab(page, 'fabric-bar', 'Topology');
     await expect(page.locator('.cytoscape-container')).toBeVisible({ timeout: 5000 });
   });
 
   test('ConnectX-7 + gateway topology renders', async ({ page, request }) => {
-    const name = `e2e-hw-cx7-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-cx7');
     await createHardwareTopology(request, name, [
       { name: 'smartnic-node', site: 'STAR', components: [{ model: 'NIC_ConnectX_7', name: 'nic1' }] },
       { name: 'gw-node', site: 'TACC', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
@@ -235,7 +236,7 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
     }).toPass({ timeout: 10000 });
-    await select.selectOption({ label: name });
+    expect(await selectSliceFromBar(page, 'fabric-bar', name)).toBeTruthy();
     await clickBarTab(page, 'fabric-bar', 'Topology');
     await expect(page.locator('.cytoscape-container')).toBeVisible({ timeout: 5000 });
   });
@@ -258,7 +259,7 @@ test.describe('FABRIC Hardware Provisioning — Real Deploy', () => {
   });
 
   test('multi-site FABNetv4 — submit and reach StableOK', async ({ page, request }) => {
-    const name = `e2e-hw-l3p-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-l3p');
     await createHardwareTopology(request, name, [
       { name: 'node1', site: 'TACC', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
       { name: 'node2', site: 'STAR', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
@@ -271,7 +272,7 @@ test.describe('FABRIC Hardware Provisioning — Real Deploy', () => {
   });
 
   test('L2STS cross-site — submit and reach StableOK', async ({ page, request }) => {
-    const name = `e2e-hw-l2sp-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-l2sp');
     await createHardwareTopology(request, name, [
       { name: 'node1', site: 'TACC', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
       { name: 'node2', site: 'STAR', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
@@ -284,7 +285,7 @@ test.describe('FABRIC Hardware Provisioning — Real Deploy', () => {
   });
 
   test('L2PTP cross-site — submit and reach StableOK', async ({ page, request }) => {
-    const name = `e2e-hw-l2pp-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-l2pp');
     await createHardwareTopology(request, name, [
       { name: 'node1', site: 'TACC', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
       { name: 'node2', site: 'STAR', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
@@ -297,7 +298,7 @@ test.describe('FABRIC Hardware Provisioning — Real Deploy', () => {
   });
 
   test('GPU node — submit and reach StableOK', async ({ page, request }) => {
-    const name = `e2e-hw-gpup-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-gpup');
     await createHardwareTopology(request, name, [
       { name: 'gpu-node', site: 'UCSD', cores: 8, ram: 32, disk: 100,
         components: [{ model: 'GPU_RTX6000', name: 'gpu1' }] },
@@ -320,7 +321,7 @@ test.describe('FABRIC Hardware Provisioning — Real Deploy', () => {
   });
 
   test('NVMe node — submit and reach StableOK', async ({ page, request }) => {
-    const name = `e2e-hw-nvp-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-nvp');
     await createHardwareTopology(request, name, [
       { name: 'nvme-node', site: 'TACC', cores: 4, ram: 16,
         components: [{ model: 'NVME_P4510', name: 'nvme1' }] },
@@ -333,7 +334,7 @@ test.describe('FABRIC Hardware Provisioning — Real Deploy', () => {
   });
 
   test('FPGA Xilinx node — submit and reach StableOK', async ({ page, request }) => {
-    const name = `e2e-hw-fpp-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-fpp');
     await createHardwareTopology(request, name, [
       { name: 'fpga-node', site: 'UCSD', cores: 4, ram: 16,
         components: [{ model: 'FPGA_Xilinx_U280', name: 'fpga1' }] },
@@ -346,7 +347,7 @@ test.describe('FABRIC Hardware Provisioning — Real Deploy', () => {
   });
 
   test('ConnectX-5 + gateway — submit and reach StableOK', async ({ page, request }) => {
-    const name = `e2e-hw-c5p-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-c5p');
     await createHardwareTopology(request, name, [
       { name: 'smartnic-node', site: 'TACC', components: [{ model: 'NIC_ConnectX_5', name: 'nic1' }] },
       { name: 'gw-node', site: 'STAR', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
@@ -359,7 +360,7 @@ test.describe('FABRIC Hardware Provisioning — Real Deploy', () => {
   });
 
   test('ConnectX-6 + gateway — submit and reach StableOK', async ({ page, request }) => {
-    const name = `e2e-hw-c6p-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-c6p');
     await createHardwareTopology(request, name, [
       { name: 'smartnic-node', site: 'TACC', components: [{ model: 'NIC_ConnectX_6', name: 'nic1' }] },
       { name: 'gw-node', site: 'STAR', components: [{ model: 'NIC_Basic', name: 'nic1' }] },
@@ -372,7 +373,7 @@ test.describe('FABRIC Hardware Provisioning — Real Deploy', () => {
   });
 
   test('ConnectX-7 + gateway — submit and reach StableOK', async ({ page, request }) => {
-    const name = `e2e-hw-c7p-${Date.now().toString(36)}`;
+    const name = e2eResourceName('hw-c7p');
     await createHardwareTopology(request, name, [
       { name: 'smartnic-node', site: 'STAR', components: [{ model: 'NIC_ConnectX_7', name: 'nic1' }] },
       { name: 'gw-node', site: 'TACC', components: [{ model: 'NIC_Basic', name: 'nic1' }] },

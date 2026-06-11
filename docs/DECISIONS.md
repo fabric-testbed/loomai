@@ -40,7 +40,7 @@ Key architectural decisions for the fabric-webgui project.
 
 **Status**: Accepted
 
-**Context**: Multiple AI tools (LoomAI, Aider, OpenCode, Crush, Claude Code, Deep Agents) need LLM access. FABRIC provides a free AI server; NRP/Nautilus is a fallback.
+**Context**: Multiple AI surfaces (LoomAI, Aider, OpenCode, Crush, Deep Agents, Jupyter AI, and optional Codex provider paths) need OpenAI-compatible LLM access. FABRIC provides a free AI server; NRP/Nautilus is a fallback. Claude Code and Antigravity use their own account-based auth paths.
 
 **Decision**: Use the OpenAI-compatible chat completions API format (LiteLLM proxy on FABRIC side). Backend uses `httpx.AsyncClient` (not the `openai` Python library) for direct HTTP calls. A local model proxy (`scripts/model_proxy.py`) rewrites unknown model names to a configured default.
 
@@ -252,7 +252,7 @@ Key architectural decisions for the fabric-webgui project.
 
 **Status**: Accepted
 
-**Context**: In hub (K8s) mode, each user gets a container with limited PVC storage (typically 5Gi). Installable AI tools (Aider ~900MB, Claude Code ~1GB, OpenCode ~200MB, Crush ~150MB, Deep Agents ~500MB) would consume most of this budget, leaving little room for user data.
+**Context**: In hub (K8s) mode, each user gets a container with limited PVC storage (typically 5Gi). Installable AI tools (Antigravity, Codex, Aider ~900MB, Claude Code ~1GB, OpenCode ~200MB, Crush ~150MB, Deep Agents ~500MB) would consume most of this budget, leaving little room for user data.
 
 **Decision**: In hub mode, installable AI tools are greyed out in the UI with a "Local Install Only" badge and disabled launch buttons. LoomAI (the built-in chat assistant, 0MB install) remains fully available. Hub mode is detected via `window.__LOOMAI_BASE_PATH` (set by the hub spawner in K8s, absent in standalone Docker).
 

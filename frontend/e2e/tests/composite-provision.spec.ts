@@ -7,19 +7,28 @@
  * Gate: E2E_FULL=1 + authenticated session + Chameleon configured
  * Run:  E2E_FULL=1 npx playwright test composite-provision
  */
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import {
   navigateToView, createSliceViaBar, clickBarTab,
   clickEditorTab, isAuthenticated, isChameleonConfigured,
   waitForCompositeActive, waitForSliceState,
   requireFabricResources, requireChameleonResources,
   waitForChameleonSliceActive, cleanupAllE2ESlices,
+  chooseChameleonImage, chooseChameleonNodeType, e2eResourceName,
 } from '../helpers/gui-helpers';
 
 const API = 'http://localhost:8000/api';
 
-// 15 min timeout for provisioning tests
-test.setTimeout(900_000);
+// Composite provisioning can spend several minutes in the submit call before
+// the active-state poll begins, especially when a Chameleon member is included.
+test.setTimeout(1_500_000);
+
+async function refreshCompositeSlices(page: Page) {
+  const refreshButton = page.getByTestId('federated-bar-refresh-slices');
+  if (await refreshButton.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await refreshButton.click();
+  }
+}
 
 test.describe('Composite Provisioning — Real Deploy E2E', () => {
   test.afterAll(async ({ request }) => { await cleanupAllE2ESlices(request); });
@@ -34,8 +43,8 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
 
   test('create and submit composite with FABRIC member via GUI', async ({ page }) => {
     await requireFabricResources(test);
-    const compName = `e2e-comp-gui-${Date.now().toString(36)}`;
-    const fabName = `e2e-fab-gui-${Date.now().toString(36)}`;
+    const compName = e2eResourceName('comp-gui');
+    const fabName = e2eResourceName('fab-gui');
 
     // Create FABRIC slice via API (faster)
     const fabResp = await page.request.post(`${API}/slices?name=${encodeURIComponent(fabName)}`);
@@ -101,9 +110,10 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
     await requireFabricResources(test);
     const chiRes = await requireChameleonResources(test);
 
-    const compName = `e2e-comp-both-${Date.now().toString(36)}`;
-    const fabName = `e2e-fab-both-${Date.now().toString(36)}`;
-    const chiName = `e2e-chi-both-${Date.now().toString(36)}`;
+    const compName = e2eResourceName('comp-both');
+    const fabName = e2eResourceName('fab-both');
+    const chiName = e2eResourceName('chi-both');
+    const chiNodeName = e2eResourceName('chi-node');
 
     // --- Create FABRIC slice ---
     const fabResp = await page.request.post(`${API}/slices?name=${encodeURIComponent(fabName)}`);
@@ -123,7 +133,10 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
     const ntResp = await page.request.get(`${API}/chameleon/sites/${siteName}/node-types`);
     const ntData = await ntResp.json();
     const nodeTypes = ntData.node_types || ntData;
-    const nodeType = (nodeTypes[0]?.name || nodeTypes[0]) ?? 'compute_skylake';
+    const nodeType = chooseChameleonNodeType(nodeTypes);
+    const imagesResp = await page.request.get(`${API}/chameleon/sites/${siteName}/images`);
+    const images = imagesResp.ok() ? await imagesResp.json() : [];
+    const image = chooseChameleonImage(images);
 
     const chiResp = await page.request.post(`${API}/chameleon/slices`, {
       data: { name: chiName, site: siteName },
@@ -133,7 +146,7 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
     const chiId = chiData.id;
 
     await page.request.post(`${API}/chameleon/drafts/${chiId}/nodes`, {
-      data: { name: 'chi-node1', node_type: nodeType, image: 'CC-Ubuntu22.04', site: siteName },
+      data: { name: chiNodeName, node_type: nodeType, image, site: siteName },
     });
 
     // --- Create composite and add members ---
@@ -182,8 +195,8 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
 
   test('composite state badges update in Slices tab', async ({ page }) => {
     await requireFabricResources(test);
-    const compName = `e2e-comp-badge-${Date.now().toString(36)}`;
-    const fabName = `e2e-fab-badge-${Date.now().toString(36)}`;
+    const compName = e2eResourceName('comp-badge');
+    const fabName = e2eResourceName('fab-badge');
 
     // Create FABRIC slice + composite via API
     await page.request.post(`${API}/slices?name=${encodeURIComponent(fabName)}`);
@@ -205,12 +218,11 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
     const ok = await navigateToView(page, 'composite');
     if (!ok) { test.skip(); return; }
     await clickBarTab(page, 'composite-bar', 'Slices');
-    await page.waitForTimeout(2000);
+    await refreshCompositeSlices(page);
 
     // Should see "Draft" badge initially
-    const draftBadge = page.getByText(/Draft/).first();
-    const hasDraft = await draftBadge.isVisible({ timeout: 10000 }).catch(() => false);
-    expect(hasDraft).toBeTruthy();
+    const compRow = page.locator('tbody tr', { hasText: compName }).first();
+    await expect(compRow).toContainText(/Draft/, { timeout: 15000 });
 
     // Submit via API
     await page.request.post(`${API}/composite/slices/${compId}/submit`, {
@@ -226,13 +238,10 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
     await page.waitForTimeout(3000);
     await navigateToView(page, 'composite');
     await clickBarTab(page, 'composite-bar', 'Slices');
-    await page.waitForTimeout(3000);
+    await refreshCompositeSlices(page);
 
     // Should now show "Active" badge
-    await expect(async () => {
-      const allText = await page.locator('table').first().textContent();
-      expect(allText).toContain('Active');
-    }).toPass({ timeout: 15000 });
+    await expect(page.locator('tbody tr', { hasText: compName }).first()).toContainText(/Active/, { timeout: 15000 });
   });
 
   test('FABRIC member stays in composite topology throughout all state transitions', async ({ page }) => {
@@ -251,8 +260,8 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
      * every check point.  Failure: the node disappears from the graph at
      * any point during provisioning.
      */
-    const compName = `e2e-comp-topo-${Date.now().toString(36)}`;
-    const fabName = `e2e-fab-topo-${Date.now().toString(36)}`;
+    const compName = e2eResourceName('comp-topo');
+    const fabName = e2eResourceName('fab-topo');
     const NODE_NAME = 'topo-node1';
 
     // --- Setup via API ---
@@ -449,8 +458,9 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
     const chiOk = await isChameleonConfigured();
     if (!chiOk) { test.skip(true, 'Chameleon not configured'); return; }
 
-    const compName = `e2e-chi-state-${Date.now().toString(36)}`;
-    const chiName = `e2e-chi-cons-${Date.now().toString(36)}`;
+    const compName = e2eResourceName('chi-state');
+    const chiName = e2eResourceName('chi-cons');
+    const chiNodeName = e2eResourceName('chi-node');
 
     // Create Chameleon slice
     const sitesResp = await page.request.get(`${API}/chameleon/sites`);
@@ -463,7 +473,10 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
     const ntResp = await page.request.get(`${API}/chameleon/sites/${siteName}/node-types`);
     const ntData = await ntResp.json();
     const nodeTypes = ntData.node_types || ntData;
-    const nodeType = (nodeTypes[0]?.name || nodeTypes[0]) ?? 'compute_skylake';
+    const nodeType = chooseChameleonNodeType(nodeTypes);
+    const imagesResp = await page.request.get(`${API}/chameleon/sites/${siteName}/images`);
+    const images = imagesResp.ok() ? await imagesResp.json() : [];
+    const image = chooseChameleonImage(images);
 
     const chiResp = await page.request.post(`${API}/chameleon/slices`, {
       data: { name: chiName, site: siteName },
@@ -473,7 +486,7 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
     const chiId = chiData.id;
 
     await page.request.post(`${API}/chameleon/drafts/${chiId}/nodes`, {
-      data: { name: 'node1', node_type: nodeType, image: 'CC-Ubuntu22.04', site: siteName },
+      data: { name: chiNodeName, node_type: nodeType, image, site: siteName },
     });
 
     // Create composite + add Chameleon member

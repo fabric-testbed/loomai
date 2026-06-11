@@ -32,6 +32,40 @@ _CACHE_TTL = 300  # 5 minutes
 _cache: dict[str, Any] = {"artifacts": [], "fetched_at": 0}
 
 
+def _contract_mode() -> bool:
+    return os.environ.get("LOOMAI_CONTRACT_MODE", "").strip() == "1"
+
+
+def _contract_remote_artifacts() -> list[dict[str, Any]]:
+    return [
+        {
+            "uuid": "contract-remote-artifact",
+            "title": "Contract Remote Artifact",
+            "description_short": "Deterministic contract artifact",
+            "description_long": "Deterministic contract artifact",
+            "visibility": "public",
+            "tags": ["mock", "weave"],
+            "category": "weave",
+            "authors": [{"name": "Contract User", "affiliation": "FABRIC"}],
+            "versions": [
+                {
+                    "uuid": "contract-remote-artifact-version-1",
+                    "version": "1.0.0",
+                    "urn": "urn:contract:remote-artifact:1",
+                    "active": True,
+                    "created": "2026-06-08T00:00:00Z",
+                    "version_downloads": 1,
+                }
+            ],
+            "artifact_views": 1,
+            "artifact_downloads_active": 1,
+            "number_of_versions": 1,
+            "created": "2026-06-08T00:00:00Z",
+            "modified": "2026-06-08T00:00:00Z",
+        }
+    ]
+
+
 def _clear_artifact_cache() -> None:
     _cache["artifacts"] = []
     _cache["fetched_at"] = 0
@@ -75,10 +109,12 @@ def _detect_category(entry_dir: str) -> str:
     """Detect artifact category from files present in the directory.
 
     - experiment.json with ``loomai-experiment-v1`` format → experiment
-    - weave.json → weave
+    - weave.json with explicit ``category`` field → that category
+    - *.ipynb files → notebook (checked before weave.json so Trovi
+      notebooks aren't miscategorized as weaves)
+    - weave.json (no explicit category) → weave
     - vm-template.json → vm-template
     - recipe.json → recipe
-    - *.ipynb files → notebook
     - otherwise → other
     """
     # Check for cross-testbed experiment (experiment.json with v1 format)
@@ -96,18 +132,38 @@ def _detect_category(entry_dir: str) -> str:
     has_vm = os.path.isfile(os.path.join(entry_dir, "vm-template.json"))
     has_recipe = os.path.isfile(os.path.join(entry_dir, "recipe.json"))
 
+    # Check weave.json for explicit category field (e.g., Trovi notebooks)
+    if has_weave_json:
+        try:
+            with open(os.path.join(entry_dir, "weave.json")) as f:
+                weave_data = json.load(f)
+            explicit_category = weave_data.get("category")
+            if explicit_category in ("notebook", "weave", "vm-template", "recipe", "experiment"):
+                return explicit_category
+            # Trovi artifacts are always notebooks (Chameleon shared experiments)
+            if weave_data.get("source") == "trovi" or weave_data.get("source_marketplace") == "trovi":
+                return "notebook"
+        except Exception:
+            pass
+
+    # Check for notebook (.ipynb files) before defaulting to weave
+    has_ipynb = False
+    try:
+        for root, _, files in os.walk(entry_dir):
+            if any(f.endswith('.ipynb') for f in files):
+                has_ipynb = True
+                break
+    except OSError:
+        pass
+    if has_ipynb:
+        return "notebook"
+
     if has_weave_json:
         return "weave"
     if has_vm:
         return "vm-template"
     if has_recipe:
         return "recipe"
-    # Check for notebook (.ipynb files)
-    try:
-        if any(f.endswith('.ipynb') for f in os.listdir(entry_dir)):
-            return "notebook"
-    except OSError:
-        pass
     return "other"
 
 
@@ -261,6 +317,9 @@ async def _fetch_all_artifacts() -> list[dict[str, Any]]:
 
     Results are cached in memory for _CACHE_TTL seconds.
     """
+    if _contract_mode():
+        return _contract_remote_artifacts()
+
     now = time.time()
     if _cache["artifacts"] and (now - _cache["fetched_at"]) < _CACHE_TTL:
         return _cache["artifacts"]
@@ -295,6 +354,12 @@ async def _fetch_all_artifacts() -> list[dict[str, Any]]:
 
 async def _fetch_artifact(uuid: str) -> dict[str, Any]:
     """Fetch a single artifact by UUID."""
+    if _contract_mode():
+        for artifact in _contract_remote_artifacts():
+            if artifact["uuid"] == uuid:
+                return artifact
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
     headers = _get_auth_headers()
     r = await fabric_client.get(f"{ARTIFACT_API}/artifacts/{uuid}", params={"format": "json"}, headers=headers)
     r.raise_for_status()
@@ -1177,6 +1242,9 @@ async def publish_artifact(req: PublishRequest):
 @router.get("/valid-tags")
 async def list_valid_tags():
     """Return the set of tags accepted by the Artifact Manager for publishing."""
+    if _contract_mode():
+        return {"tags": [{"tag": "mock", "restricted": False}, {"tag": "weave", "restricted": False}]}
+
     headers = _get_auth_headers()
     try:
         r = await fabric_client.get(

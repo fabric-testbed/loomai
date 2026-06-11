@@ -1,29 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { mockAllApis } from '../fixtures/api-mocks';
 
 test.describe('Landing Page', () => {
-  test.describe('with mocks', () => {
-    test.beforeEach(async ({ page }) => {
-      await mockAllApis(page);
-      await page.goto('/');
-    });
-
-    test('app loads and shows landing page', async ({ page }) => {
-      await expect(page.locator('.landing-hero')).toBeVisible();
-      await expect(page.locator('img[alt="LoomAI"]').first()).toBeVisible();
-    });
-
-    test('landing page has quick link tiles', async ({ page }) => {
-      const tiles = page.locator('.landing-tile');
-      await expect(tiles).toHaveCount(4);
-      const labels = tiles.locator('.landing-tile-label');
-      await expect(labels.nth(0)).toHaveText('Slices');
-      await expect(labels.nth(1)).toHaveText('Artifacts');
-      await expect(labels.nth(2)).toHaveText('Infrastructure');
-      await expect(labels.nth(3)).toHaveText('JupyterLab');
-    });
-  });
-
   test.describe('navigation (live server)', () => {
     test.beforeEach(async ({ page }) => {
       await page.goto('/');

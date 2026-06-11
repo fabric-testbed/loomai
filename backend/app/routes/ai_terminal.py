@@ -14,10 +14,24 @@ import subprocess
 import termios
 import time
 import urllib.request
+from typing import Iterable
 
-from fastapi import APIRouter, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 
+from app import terminal_sessions as _term_sessions
+from app import terminal_auth as _term_auth
+
+from app.ai_tool_adapters import (
+    load_tool_assets,
+    render_asset_index,
+    render_body_only,
+    render_canonical_markdown,
+    sync_markdown_files,
+    sync_skill_directories,
+    write_text,
+)
 from app.settings_manager import get_fabric_api_key as _get_ai_api_key, get_nrp_api_key as _get_nrp_api_key
 from app.tracking_headers import add_tracking_headers, get_tracking_headers
 from app.tool_installer import (
@@ -29,6 +43,33 @@ from app.tool_installer import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+def _contract_mode() -> bool:
+    return os.environ.get("LOOMAI_CONTRACT_MODE", "").strip() == "1"
+
+
+def _contract_model_data() -> dict:
+    return {
+        "fabric": [
+            {
+                "id": "fabric/contract-model",
+                "name": "fabric/contract-model",
+                "healthy": True,
+                "model_type": "chat",
+                "context_length": 131072,
+                "tier": "large",
+                "supports_tools": True,
+            }
+        ],
+        "nrp": [],
+        "custom": {},
+        "default": "fabric/contract-model",
+        "has_key": {"fabric": True, "nrp": False},
+        "errors": {"fabric": "", "nrp": ""},
+        "models": ["fabric/contract-model"],
+        "nrp_models": [],
+    }
+
 
 def _ai_server_url() -> str:
     from app.settings_manager import get_ai_server_url
@@ -380,7 +421,6 @@ _APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _AI_TOOLS_DIR = os.path.join(_APP_ROOT, "ai-tools")
 _SHARED_DIR = os.path.join(_AI_TOOLS_DIR, "shared")
 _FABRIC_AI_MD_PATH = os.path.join(_SHARED_DIR, "FABRIC_AI.md")
-_OPENCODE_DEFAULTS_DIR = _SHARED_DIR  # Skills and agents live in shared/
 _AIDER_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "aider")
 _CLAUDE_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "claude-code")
 _CRUSH_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "crush")
@@ -388,6 +428,41 @@ _DEEPAGENTS_DEFAULTS_DIR = os.path.join(_AI_TOOLS_DIR, "deepagents")
 
 # Skills to skip (conflict with OpenCode internals)
 _SKIP_SKILLS = {"compact", "help"}
+
+
+def _custom_asset_dir(kind: str) -> str | None:
+    """Return user-custom asset dir for 'skills' or 'agents' if available."""
+    try:
+        from app.settings_manager import get_storage_dir
+        path = os.path.join(get_storage_dir(), ".loomai", kind)
+    except Exception:
+        return None
+    return path if os.path.isdir(path) else None
+
+
+def _load_tool_skills(*, excluded_ids: Iterable[str] = ()) -> list:
+    return load_tool_assets(
+        os.path.join(_SHARED_DIR, "skills"),
+        custom_dir=_custom_asset_dir("skills"),
+        asset_type="skill",
+        excluded_ids=excluded_ids,
+    )
+
+
+def _load_tool_agents(*, excluded_ids: Iterable[str] = ()) -> list:
+    return load_tool_assets(
+        os.path.join(_SHARED_DIR, "agents"),
+        custom_dir=_custom_asset_dir("agents"),
+        asset_type="agent",
+        excluded_ids=excluded_ids,
+    )
+
+
+def _write_asset_index(cwd: str) -> None:
+    """Write compact read-only skill/agent inventory for context-only tools."""
+    skills = _load_tool_skills(excluded_ids=_SKIP_SKILLS)
+    agents = _load_tool_agents()
+    write_text(os.path.join(cwd, "AI_ASSETS.md"), render_asset_index(skills, agents))
 
 # Per-tool preambles explaining how each tool should execute FABRIC operations.
 # Prepended to AGENTS.md so the AI knows its available methods.
@@ -533,24 +608,47 @@ loomai scp my-exp ./data.tar.gz /tmp/ --all       # Upload to all nodes
 loomai sites find --cores 16 --ram 64             # Find matching sites
 ```
 
+For direct REST calls and weave helpers, honor `LOOMAI_API_URL` or `LOOMAI_URL`.
+Use `http://127.0.0.1:8000` on the Docker host or inside the backend container,
+and `http://backend:8000` from another docker-compose service. If localhost
+works on the host but fails in Codex, treat it as a network namespace or sandbox
+issue and rerun through the backend-owned path or set the correct URL.
+
 ---
 
 """,
 }
 
 
+_GENERATED_AGENTS_MARKER = "<!-- LoomAI-managed AGENTS.md; edit ai-tools/shared/FABRIC_AI.md instead. -->"
+
+
+def _is_managed_agents_md(path: str) -> bool:
+    try:
+        with open(path) as f:
+            head = f.read(4096)
+    except OSError:
+        return False
+    return (
+        _GENERATED_AGENTS_MARKER in head
+        or head.startswith("# How to Execute FABRIC Operations")
+        or head.startswith("# FABRIC AI Assistant")
+        or head.startswith("# FABRIC AI Coding Assistant")
+    )
+
+
 def _write_agents_md(cwd: str, tool_name: str) -> None:
     """Write AGENTS.md with a tool-specific preamble + shared FABRIC_AI.md content."""
     agents_md = os.path.join(cwd, "AGENTS.md")
-    if os.path.isfile(agents_md):
-        return  # Don't overwrite existing
+    if os.path.isfile(agents_md) and not _is_managed_agents_md(agents_md):
+        return  # Don't overwrite custom user instructions.
     if not os.path.isfile(_FABRIC_AI_MD_PATH):
         return
     preamble = _TOOL_PREAMBLES.get(tool_name, "")
     with open(_FABRIC_AI_MD_PATH) as f:
         content = f.read()
     with open(agents_md, "w") as f:
-        f.write(preamble + content)
+        f.write(f"{_GENERATED_AGENTS_MARKER}\n\n{preamble}{content}")
     logger.info("Wrote AGENTS.md for %s (with preamble)", tool_name)
 
 
@@ -576,65 +674,33 @@ def _setup_opencode_workspace(cwd: str) -> dict:
     _write_agents_md(cwd, "opencode")
 
     # --- Skills → .opencode/skills/<name>/SKILL.md ---
-    skills_src = os.path.join(_OPENCODE_DEFAULTS_DIR, "skills")
-    skill_count = 0
-    if os.path.isdir(skills_src):
-        for fname in os.listdir(skills_src):
-            if not fname.endswith(".md"):
-                continue
-            skill_name = fname[:-3]
-            if skill_name in _SKIP_SKILLS:
-                continue
-            skill_dir = os.path.join(oc_dir, "skills", skill_name)
-            os.makedirs(skill_dir, exist_ok=True)
-
-            with open(os.path.join(skills_src, fname)) as f:
-                content = f.read()
-            # Convert frontmatter to OpenCode YAML frontmatter
-            if not content.startswith("---"):
-                content = "---\n" + content
-
-            with open(os.path.join(skill_dir, "SKILL.md"), "w") as f:
-                f.write(content)
-            skill_count += 1
+    skills = _load_tool_skills(excluded_ids=_SKIP_SKILLS)
+    skill_count = sync_skill_directories(
+        skills,
+        os.path.join(oc_dir, "skills"),
+        renderer=render_canonical_markdown,
+    )
     logger.info("Created %d OpenCode skills", skill_count)
 
     # --- Agent prompts → .opencode/agent-prompts/<name>.md ---
     prompts_dir = os.path.join(oc_dir, "agent-prompts")
     os.makedirs(prompts_dir, exist_ok=True)
     agent_cfg: dict = {}
-    agents_src = os.path.join(_OPENCODE_DEFAULTS_DIR, "agents")
-    if os.path.isdir(agents_src):
-        for fname in os.listdir(agents_src):
-            if not fname.endswith(".md"):
-                continue
-            name = fname[:-3]
-            with open(os.path.join(agents_src, fname)) as f:
-                raw = f.read()
+    agents = _load_tool_agents()
+    expected_prompts = set()
+    for agent in agents:
+        name = agent.asset_id
+        expected_prompts.add(f"{name}.md")
+        write_text(os.path.join(prompts_dir, f"{name}.md"), render_body_only(agent))
 
-            # Parse frontmatter
-            desc = ""
-            body_lines: list[str] = []
-            past_sep = False
-            for line in raw.split("\n"):
-                if not past_sep:
-                    if line.strip() == "---":
-                        past_sep = True
-                    elif line.startswith("description:"):
-                        desc = line.split(":", 1)[1].strip()
-                else:
-                    body_lines.append(line)
-            body = "\n".join(body_lines).strip()
-
-            prompt_file = os.path.join(prompts_dir, f"{name}.md")
-            with open(prompt_file, "w") as f:
-                f.write(body)
-
-            agent_cfg[name] = {
-                "description": desc,
-                "prompt": "{file:.opencode/agent-prompts/" + name + ".md}",
-                "mode": "subagent",
-            }
+        agent_cfg[name] = {
+            "description": str(agent.metadata.get("description", "")),
+            "prompt": "{file:.opencode/agent-prompts/" + name + ".md}",
+            "mode": "subagent",
+        }
+    for fname in os.listdir(prompts_dir):
+        if fname.endswith(".md") and fname not in expected_prompts:
+            os.remove(os.path.join(prompts_dir, fname))
     logger.info("Created %d OpenCode agents", len(agent_cfg))
 
     # --- MCP server wrapper scripts ---
@@ -713,6 +779,7 @@ def _setup_aider_workspace(cwd: str) -> None:
     """
     # Shared FABRIC context with Aider-specific preamble
     _write_agents_md(cwd, "aider")
+    _write_asset_index(cwd)
 
     # Aider config
     src_conf = os.path.join(_AIDER_DEFAULTS_DIR, ".aider.conf.yml")
@@ -747,31 +814,13 @@ def _setup_claude_workspace(cwd: str) -> None:
         logger.info("Wrote CLAUDE.md for Claude Code CLI")
 
     # Shared skills → .claude/commands/<name>.md (Claude Code slash commands)
-    skills_src = os.path.join(_SHARED_DIR, "skills")
-    if os.path.isdir(skills_src):
-        cmds_dir = os.path.join(cwd, ".claude", "commands")
-        os.makedirs(cmds_dir, exist_ok=True)
-        skill_count = 0
-        for fname in os.listdir(skills_src):
-            if not fname.endswith(".md"):
-                continue
-            # Strip YAML frontmatter — Claude Code commands use the file directly
-            with open(os.path.join(skills_src, fname)) as f:
-                content = f.read()
-            # Remove frontmatter (name:/description:/---) for Claude Code format
-            lines = content.split("\n")
-            body_start = 0
-            if lines and lines[0].startswith("name:"):
-                for i, line in enumerate(lines):
-                    if line.strip() == "---":
-                        body_start = i + 1
-                        break
-            body = "\n".join(lines[body_start:]).strip()
-            if body:
-                with open(os.path.join(cmds_dir, fname), "w") as f:
-                    f.write(body + "\n")
-                skill_count += 1
-        logger.info("Created %d Claude Code commands from shared skills", skill_count)
+    cmds_dir = os.path.join(cwd, ".claude", "commands")
+    skill_count = sync_markdown_files(
+        _load_tool_skills(),
+        cmds_dir,
+        renderer=render_body_only,
+    )
+    logger.info("Created %d Claude Code commands from shared skills", skill_count)
 
 
 def _setup_crush_workspace(cwd: str, api_key: str, model_override: str = "") -> None:
@@ -790,7 +839,8 @@ def _setup_crush_workspace(cwd: str, api_key: str, model_override: str = "") -> 
         _pick_model(models, _PREFERRED_MODELS, "qwen3-coder-30b") if models else "qwen3-coder-30b"
     )
 
-    fabric_models = [{"id": m, "name": m} for m in (models if models else [default_model])]
+    fabric_model_ids = _model_ids(models) if models else [default_model]
+    fabric_models = [{"id": model_id, "name": model_id} for model_id in fabric_model_ids]
 
     providers: dict = {
         "fabric": {
@@ -806,12 +856,13 @@ def _setup_crush_workspace(cwd: str, api_key: str, model_override: str = "") -> 
     if nrp_key:
         nrp_models = _fetch_nrp_models(nrp_key)
         if nrp_models:
+            nrp_model_ids = _model_ids(nrp_models)
             providers["nrp"] = {
                 "id": "nrp",
                 "base_url": f"{_nrp_server_url()}/v1",
                 "type": "openai",
                 "api_key": nrp_key,
-                "models": [{"id": m, "name": m} for m in nrp_models],
+                "models": [{"id": model_id, "name": model_id} for model_id in nrp_model_ids],
             }
 
     crush_config: dict = {
@@ -838,23 +889,18 @@ def _setup_crush_workspace(cwd: str, api_key: str, model_override: str = "") -> 
         json.dump(crush_config, f, indent=2)
     logger.info("Wrote .crush.json for Crush with %d providers", len(providers))
 
-    # Copy shared skills and agents so Crush has FABRIC context
-    skills_src = os.path.join(_SHARED_DIR, "skills")
-    if os.path.isdir(skills_src):
-        skills_dst = os.path.join(cwd, ".crush", "skills")
-        os.makedirs(skills_dst, exist_ok=True)
-        for fname in os.listdir(skills_src):
-            if fname.endswith(".md"):
-                shutil.copy2(os.path.join(skills_src, fname), os.path.join(skills_dst, fname))
-        logger.info("Copied shared skills to .crush/skills/")
-    agents_src = os.path.join(_SHARED_DIR, "agents")
-    if os.path.isdir(agents_src):
-        agents_dst = os.path.join(cwd, ".crush", "agents")
-        os.makedirs(agents_dst, exist_ok=True)
-        for fname in os.listdir(agents_src):
-            if fname.endswith(".md"):
-                shutil.copy2(os.path.join(agents_src, fname), os.path.join(agents_dst, fname))
-        logger.info("Copied shared agents to .crush/agents/")
+    # Adapt shared + user-custom skills and agents so Crush has FABRIC context.
+    skill_count = sync_markdown_files(
+        _load_tool_skills(),
+        os.path.join(cwd, ".crush", "skills"),
+        renderer=render_canonical_markdown,
+    )
+    agent_count = sync_markdown_files(
+        _load_tool_agents(),
+        os.path.join(cwd, ".crush", "agents"),
+        renderer=render_canonical_markdown,
+    )
+    logger.info("Synced %d skills and %d agents to .crush/", skill_count, agent_count)
 
 
 def _setup_deepagents_workspace(cwd: str, api_key: str = "", model_override: str = "") -> None:
@@ -876,17 +922,18 @@ def _setup_deepagents_workspace(cwd: str, api_key: str = "", model_override: str
         shutil.copy2(src_agents, os.path.join(da_dir, "AGENTS.md"))
         logger.info("Wrote .deepagents/AGENTS.md for Deep Agents")
 
-    # Copy shared skills and agents into .deepagents/
-    shared_skills = os.path.join(_SHARED_DIR, "skills")
-    shared_agents = os.path.join(_SHARED_DIR, "agents")
-    da_skills = os.path.join(da_dir, "skills")
-    da_agents = os.path.join(da_dir, "agents")
-    if os.path.isdir(shared_skills) and not os.path.isdir(da_skills):
-        shutil.copytree(shared_skills, da_skills)
-        logger.info("Copied %d skills to .deepagents/skills/", len(os.listdir(da_skills)))
-    if os.path.isdir(shared_agents) and not os.path.isdir(da_agents):
-        shutil.copytree(shared_agents, da_agents)
-        logger.info("Copied %d agents to .deepagents/agents/", len(os.listdir(da_agents)))
+    # Adapt shared + user-custom skills and agents into .deepagents/.
+    skill_count = sync_markdown_files(
+        _load_tool_skills(),
+        os.path.join(da_dir, "skills"),
+        renderer=render_canonical_markdown,
+    )
+    agent_count = sync_markdown_files(
+        _load_tool_agents(),
+        os.path.join(da_dir, "agents"),
+        renderer=render_canonical_markdown,
+    )
+    logger.info("Synced %d skills and %d agents to .deepagents/", skill_count, agent_count)
 
     # Build provider config with available models (like Crush)
     models = _fetch_models(api_key) if api_key else []
@@ -900,7 +947,7 @@ def _setup_deepagents_workspace(cwd: str, api_key: str = "", model_override: str
             "base_url": f"{_ai_server_url()}/v1",
             "type": "openai",
             "api_key": api_key,
-            "models": models if models else [default_model],
+            "models": _model_ids(models) if models else [default_model],
         }
     }
 
@@ -913,7 +960,7 @@ def _setup_deepagents_workspace(cwd: str, api_key: str = "", model_override: str
                 "base_url": f"{_nrp_server_url()}/v1",
                 "type": "openai",
                 "api_key": nrp_key,
-                "models": nrp_models,
+                "models": _model_ids(nrp_models),
             }
 
     config = {
@@ -935,6 +982,17 @@ def _setup_antigravity_workspace(cwd: str) -> None:
     Copies AGENTS.md (shared FABRIC context) so the tool has domain knowledge.
     """
     _write_agents_md(cwd, "antigravity")
+    _write_asset_index(cwd)
+    sync_markdown_files(
+        _load_tool_skills(),
+        os.path.join(cwd, ".antigravity", "skills"),
+        renderer=render_canonical_markdown,
+    )
+    sync_markdown_files(
+        _load_tool_agents(),
+        os.path.join(cwd, ".antigravity", "agents"),
+        renderer=render_canonical_markdown,
+    )
     logger.info("Set up Antigravity workspace at %s", cwd)
 
 
@@ -998,6 +1056,17 @@ def _setup_codex_workspace(cwd: str) -> None:
     Copies AGENTS.md (shared FABRIC context) so the tool has domain knowledge.
     """
     _write_agents_md(cwd, "codex")
+    _write_asset_index(cwd)
+    sync_skill_directories(
+        _load_tool_skills(),
+        os.path.join(cwd, ".codex", "skills"),
+        renderer=render_canonical_markdown,
+    )
+    sync_markdown_files(
+        _load_tool_agents(),
+        os.path.join(cwd, ".codex", "agents"),
+        renderer=render_canonical_markdown,
+    )
 
     # Check if any custom provider is flagged for Codex
     from app.settings_manager import get_custom_providers
@@ -1518,6 +1587,9 @@ def _persist_model_list(models_data: dict) -> dict:
 
 def _fetch_all_models() -> dict:
     """Fetch models from both providers (sync, for call manager caching)."""
+    if _contract_mode():
+        return _contract_model_data()
+
     api_key = _get_ai_api_key()
     nrp_key = _get_nrp_api_key()
 
@@ -1683,6 +1755,9 @@ def _find_first_healthy_model() -> dict:
     Much faster than _fetch_all_models — stops after finding one healthy model.
     Used for immediate default model selection.
     """
+    if _contract_mode():
+        return {"default": "fabric/contract-model", "source": "fabric"}
+
     api_key = _get_ai_api_key()
     if not api_key:
         return {"default": "", "source": ""}
@@ -2049,9 +2124,153 @@ async def browse_folders(path: str = ""):
     return {"path": real_path, "parent": os.path.dirname(real_path) if real_path != real_root else None, "folders": folders}
 
 
+# ---------------------------------------------------------------------------
+# Shared AI-tool launch preparation (used by both the persistent tmux-backed
+# create route and the legacy spawn-on-connect WebSocket).
+# ---------------------------------------------------------------------------
+
+_terminal_model_proxy: subprocess.Popen | None = None
+
+
+def _ensure_model_proxy(api_key: str, default_model: str, allowed_models: list[str]) -> bool:
+    """Start the model-rewriting proxy once (singleton on the fixed port).
+
+    Persists across terminal reconnects and is reused if already running, so a
+    tmux-backed AI session keeps working after a browser reload.
+    """
+    global _terminal_model_proxy  # noqa: PLW0603
+    if _terminal_model_proxy is not None and _terminal_model_proxy.poll() is None:
+        return True
+    proc = _start_model_proxy(api_key, default_model, allowed_models, {**os.environ})
+    if proc:
+        _terminal_model_proxy = proc
+        time.sleep(0.3)  # let it bind
+        return True
+    return False
+
+
+async def build_ai_tool_launch(tool: str, model: str = "", cwd: str = "", progress_cb=None):
+    """Prepare an AI tool for launch; returns ``(argv, env_delta, cwd)``.
+
+    ``env_delta`` holds only the tool-specific variables to layer on top of the
+    inherited environment. For tmux-backed sessions it is injected via a
+    self-deleting launcher so secrets never reach the process argv. Performs
+    workspace setup, opencode config + model proxy, and lazy install (streamed
+    through ``progress_cb`` when provided). Raises ``ValueError`` (unknown
+    tool), ``PermissionError`` (missing key), or ``RuntimeError`` (install
+    failed).
+    """
+    if tool not in TOOL_CONFIGS:
+        raise ValueError(f"Unknown tool: {tool}")
+    config = TOOL_CONFIGS[tool]
+    api_key = _get_ai_api_key() if config["needs_key"] else ""
+    if config["needs_key"] and not api_key:
+        raise PermissionError("AI API key not configured")
+
+    env: dict[str, str] = {"TERM": "xterm-256color"}
+    env.update(config["env"](api_key))
+
+    from app.settings_manager import get_storage_dir as _storage
+    default_cwd = _storage() if os.path.isdir(_storage()) else os.path.expanduser("~")
+    if cwd and os.path.isdir(cwd):
+        real_cwd = os.path.realpath(cwd)
+        real_root = os.path.realpath(default_cwd)
+        cwd = real_cwd if real_cwd.startswith(real_root) else default_cwd
+    else:
+        cwd = default_cwd
+
+    nrp_key = _get_nrp_api_key()
+    if nrp_key:
+        env["NRP_API_KEY"] = nrp_key
+
+    # Tool-specific workspace setup
+    if tool == "antigravity":
+        _setup_antigravity_workspace(cwd)
+    elif tool == "codex":
+        _setup_codex_workspace(cwd)
+    elif tool == "aider":
+        _ensure_git_ready(cwd)
+        _setup_aider_workspace(cwd)
+    elif tool == "claude":
+        _setup_claude_workspace(cwd)
+    elif tool == "crush":
+        _ensure_git_ready(cwd)
+        _setup_crush_workspace(cwd, api_key, model_override=model)
+    elif tool == "deepagents":
+        _ensure_git_ready(cwd)
+        _setup_deepagents_workspace(cwd, api_key, model_override=model)
+
+    # opencode: dynamic config + model proxy
+    if tool == "opencode":
+        _ensure_git_ready(cwd)
+        try:
+            ws_config = _setup_opencode_workspace(cwd)
+            oc_config = _build_opencode_config(api_key, model_override=model, workspace_config=ws_config)
+            write_cfg = {k: v for k, v in oc_config.items() if not k.startswith("_")}
+            with open(os.path.join(cwd, "opencode.json"), "w") as f:
+                json.dump(write_cfg, f, indent=2)
+            logger.info("Wrote opencode.json with model=%s", write_cfg.get("model"))
+            if _ensure_model_proxy(api_key, oc_config["_default"], oc_config["_allowed"]):
+                env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{_model_proxy_port()}/v1"
+        except OSError:
+            pass
+
+    # Lazy install if the binary is missing
+    if not is_tool_installed(tool):
+        if progress_cb:
+            await progress_cb(f"\x1b[36m[ai] {tool} is not installed. Installing now...\x1b[0m\r\n")
+        if not await install_tool(tool, progress_callback=progress_cb):
+            raise RuntimeError("Installation failed. Check your network connection and try again.")
+        if progress_cb:
+            await progress_cb(f"\x1b[32mInstallation complete. Launching {tool}...\x1b[0m\r\n")
+
+    # Resolve binary path — prefer lazy-installed, fall back to system
+    run_cmd = list(config["cmd"])
+    installed_path = get_tool_binary_path(tool)
+    if installed_path:
+        run_cmd[0] = installed_path
+    path_val = get_tool_env().get("PATH")
+    if path_val:
+        env["PATH"] = path_val
+    return run_cmd, env, cwd
+
+
+class CreateAiTerminalBody(BaseModel):
+    tool: str
+    model: str = ""
+    cwd: str = ""
+
+
+@router.post("/api/terminals/ai")
+async def create_ai_terminal(body: CreateAiTerminalBody):
+    """Create a persistent tmux-backed AI-tool terminal; returns id + ticket."""
+    if body.tool not in TOOL_CONFIGS:
+        raise HTTPException(status_code=400, detail=f"Unknown tool: {body.tool!r}")
+    try:
+        argv, env, cwd = await build_ai_tool_launch(body.tool, model=body.model, cwd=body.cwd)
+    except PermissionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    session = _term_sessions.create(
+        type=f"ai-{body.tool}", command=argv, env=env, cwd=cwd, label=body.tool,
+    )
+    m = _term_sessions.meta(session)
+    m["ticket"] = _term_auth.mint_ticket(session.id)
+    return m
+
+
 @router.websocket("/ws/terminal/ai/{tool}")
 async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = "", cwd: str = ""):
-    """WebSocket endpoint for interactive AI tool terminal."""
+    """WebSocket endpoint for interactive AI tool terminal.
+
+    Legacy spawn-on-connect path (the UI now prefers the persistent
+    `/ws/terminal/attach/{id}` + `POST /api/terminals/ai` flow). Authenticated
+    like every other terminal socket.
+    """
+    if not _term_auth.ws_authorized(websocket):
+        await websocket.close(code=1008)
+        return
     if tool not in TOOL_CONFIGS:
         await websocket.close(code=4000, reason=f"Unknown tool: {tool}")
         return
@@ -2071,118 +2290,32 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = "", cwd: 
     loop = asyncio.get_event_loop()
     master_fd = None
     proc = None
-    proxy_proc = None
+
+    async def _ws_progress(line: str):
+        try:
+            await websocket.send_text(line)
+        except Exception:
+            pass
 
     try:
+        try:
+            run_cmd, env_delta, launch_cwd = await build_ai_tool_launch(
+                tool, model=model, cwd=cwd, progress_cb=_ws_progress,
+            )
+        except RuntimeError as e:
+            await websocket.send_text(f"\r\n\x1b[31m{e}\x1b[0m\r\n")
+            await websocket.close()
+            return
+
         master_fd, slave_fd = pty.openpty()
-
-        # Build environment
-        tool_env = {**os.environ, "TERM": "xterm-256color"}
-        tool_env.update(config["env"](api_key))
-
-        from app.settings_manager import get_storage_dir as _storage
-        default_cwd = _storage() if os.path.isdir(_storage()) else os.path.expanduser("~")
-
-        # Use requested cwd if valid and within storage root
-        if cwd and os.path.isdir(cwd):
-            real_cwd = os.path.realpath(cwd)
-            real_root = os.path.realpath(default_cwd)
-            if real_cwd.startswith(real_root):
-                cwd = real_cwd
-            else:
-                cwd = default_cwd
-        else:
-            cwd = default_cwd
-
-        # Add NRP key to environment if available (all tools can use it)
-        nrp_key = _get_nrp_api_key()
-        if nrp_key:
-            tool_env["NRP_API_KEY"] = nrp_key
-
-        # Tool-specific workspace setup
-        if tool == "antigravity":
-            _setup_antigravity_workspace(cwd)
-        elif tool == "codex":
-            _setup_codex_workspace(cwd)
-        elif tool == "aider":
-            _ensure_git_ready(cwd)
-            _setup_aider_workspace(cwd)
-        elif tool == "claude":
-            _setup_claude_workspace(cwd)
-        elif tool == "crush":
-            _ensure_git_ready(cwd)
-            _setup_crush_workspace(cwd, api_key, model_override=model)
-        elif tool == "deepagents":
-            _ensure_git_ready(cwd)
-            _setup_deepagents_workspace(cwd, api_key, model_override=model)
-
-        # Build opencode.json dynamically from available models on the AI server
-        if tool == "opencode":
-            _ensure_git_ready(cwd)
-            oc_cfg = os.path.join(cwd, "opencode.json")
-            try:
-                ws_config = _setup_opencode_workspace(cwd)
-                oc_config = _build_opencode_config(
-                    api_key, model_override=model, workspace_config=ws_config,
-                )
-                # Write config without internal keys
-                write_cfg = {k: v for k, v in oc_config.items() if not k.startswith("_")}
-                with open(oc_cfg, "w") as f:
-                    json.dump(write_cfg, f, indent=2)
-                logger.info("Wrote opencode.json with model=%s", write_cfg.get("model"))
-
-                # Start model proxy — rewrites unknown model names to our default
-                proxy_proc = _start_model_proxy(
-                    api_key,
-                    oc_config["_default"],
-                    oc_config["_allowed"],
-                    tool_env,
-                )
-                if proxy_proc:
-                    time.sleep(0.3)  # let the proxy bind
-                    tool_env["OPENAI_BASE_URL"] = f"http://127.0.0.1:{_model_proxy_port()}/v1"
-            except OSError:
-                pass
-
-        # --- Lazy install: if tool binary not found, install it first ---
-        tool_registry_id = tool  # tool IDs match between TOOL_CONFIGS and TOOL_REGISTRY
-        if not is_tool_installed(tool_registry_id):
-            await websocket.send_text(
-                f"\x1b[36m[ai] {tool} is not installed. Installing now...\x1b[0m\r\n"
-            )
-            async def ws_progress(line: str):
-                try:
-                    await websocket.send_text(line)
-                except Exception:
-                    pass
-            success = await install_tool(tool_registry_id, progress_callback=ws_progress)
-            if not success:
-                await websocket.send_text(
-                    "\x1b[31mInstallation failed. Please check your network connection and try again.\x1b[0m\r\n"
-                )
-                await websocket.close()
-                return
-            await websocket.send_text(
-                f"\x1b[32mInstallation complete. Launching {tool}...\x1b[0m\r\n"
-            )
-
-        # Resolve binary path — prefer lazy-installed, fall back to system
-        run_cmd = list(config["cmd"])
-        installed_path = get_tool_binary_path(tool)
-        if installed_path:
-            run_cmd[0] = installed_path
-
-        # Merge lazy-install env (PATH with venv/bin and npm/bin)
-        tool_env.update({k: v for k, v in get_tool_env().items() if k == "PATH"})
-
         proc = subprocess.Popen(
             run_cmd,
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
-            cwd=cwd,
+            cwd=launch_cwd,
             preexec_fn=os.setsid,
-            env=tool_env,
+            env={**os.environ, **env_delta},
         )
         os.close(slave_fd)
 
@@ -2232,15 +2365,6 @@ async def ai_terminal_ws(websocket: WebSocket, tool: str, model: str = "", cwd: 
             except Exception:
                 try:
                     proc.kill()
-                except Exception:
-                    pass
-        if proxy_proc is not None:
-            try:
-                os.killpg(os.getpgid(proxy_proc.pid), signal.SIGTERM)
-                proxy_proc.wait(timeout=2)
-            except Exception:
-                try:
-                    proxy_proc.kill()
                 except Exception:
                     pass
         # Back up Claude Code config on session close
@@ -2295,6 +2419,10 @@ def _backup_claude_config() -> None:
     from app.settings_manager import get_tool_config_dir, get_storage_dir
     home = os.path.expanduser("~")
     claude_dir = os.path.join(home, ".claude")
+    # Multi-user mounts ~/.claude as a symlink into the user's (persistent)
+    # folder, so it's already persisted per-user — don't also copy it.
+    if os.path.islink(claude_dir):
+        return
     backup_dir = get_tool_config_dir("claude-code")
 
     # Copy all files from ~/.claude/ (skip session-local subdirs)
@@ -2330,6 +2458,9 @@ def _restore_claude_config() -> bool:
     from app.settings_manager import get_tool_config_dir, get_storage_dir
     home = os.path.expanduser("~")
     claude_dir = os.path.join(home, ".claude")
+    # Multi-user mounts ~/.claude from the user's folder — already persistent.
+    if os.path.islink(claude_dir):
+        return False
     backup_dir = get_tool_config_dir("claude-code")
 
     # Only restore if backup has settings.json or .credentials.json
@@ -2366,32 +2497,91 @@ def _restore_claude_config() -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Per-user AI-tool config swap (used when switching FABRIC users)
+# ---------------------------------------------------------------------------
+
+def _copy_tree_contents(src: str, dst: str) -> None:
+    """Copy the contents of *src* into *dst* (files overwrite, dirs replaced).
+    No-op (and doesn't create *dst*) when *src* is missing or empty."""
+    if not os.path.isdir(src):
+        return
+    entries = os.listdir(src)
+    if not entries:
+        return
+    os.makedirs(dst, exist_ok=True)
+    for entry in entries:
+        s = os.path.join(src, entry)
+        d = os.path.join(dst, entry)
+        if os.path.isfile(s):
+            shutil.copy2(s, d)
+        elif os.path.isdir(s):
+            if os.path.exists(d):
+                shutil.rmtree(d)
+            shutil.copytree(s, d)
+
+
+def _backup_codex_config() -> None:
+    """Back up ~/.codex (Codex auth/config) to the active user's config dir."""
+    from app.settings_manager import get_tool_config_dir
+    _copy_tree_contents(os.path.join(os.path.expanduser("~"), ".codex"),
+                        get_tool_config_dir("codex"))
+
+
+def _restore_codex_config() -> None:
+    """Restore the active user's ~/.codex from their config dir (if any)."""
+    from app.settings_manager import get_tool_config_dir
+    _copy_tree_contents(get_tool_config_dir("codex"),
+                        os.path.join(os.path.expanduser("~"), ".codex"))
+
+
+def backup_ai_tool_configs() -> None:
+    """Persist the *current* (active) user's home AI-tool config to their
+    per-user store. Call BEFORE changing the active user."""
+    for fn in (_backup_claude_config, _backup_codex_config):
+        try:
+            fn()
+        except Exception:                       # noqa: BLE001
+            logger.warning("AI-tool config backup (%s) failed", fn.__name__, exc_info=True)
+
+
+def restore_ai_tool_configs() -> None:
+    """Replace the home AI-tool config with the *now-active* user's. Clears
+    the home dirs first so the previous user's auth/config never leaks; if the
+    new user has no saved config the tools start fresh (and re-seed on launch).
+    Call AFTER changing the active user."""
+    home = os.path.expanduser("~")
+    # Clear current state so nothing carries over from the previous user.
+    shutil.rmtree(os.path.join(home, ".claude"), ignore_errors=True)
+    shutil.rmtree(os.path.join(home, ".codex"), ignore_errors=True)
+    for f in (".claude.json",):
+        try:
+            os.remove(os.path.join(home, f))
+        except OSError:
+            pass
+    # Restore the active user's saved config (no-op if they have none).
+    try:
+        _restore_claude_config()
+    except Exception:                           # noqa: BLE001
+        logger.warning("Claude config restore failed", exc_info=True)
+    try:
+        _restore_codex_config()
+    except Exception:                           # noqa: BLE001
+        logger.warning("Codex config restore failed", exc_info=True)
+
+
 def seed_ai_tool_defaults() -> None:
     """Seed AI tool configs into their default locations at container startup.
 
     Places configuration files where each tool expects to find them by default:
     - Claude Code: ~/.claude/CLAUDE.md, ~/.claude/settings.json, <cwd>/.mcp.json
     - OpenCode:    ~/.opencode.json, <cwd>/.opencode/ (skills, agents, MCP)
-    - Aider:       ~/.aider.conf.yml, ~/.aiderignore
+    - Aider:       ~/.aider.conf.yml, ~/.aiderignore, <cwd>/AI_ASSETS.md
     - Crush:       ~/.config/crush/crush.json, .crush/skills/, .crush/agents/
     - Deep Agents: .deepagents/AGENTS.md, config.json, skills/, agents/
+    - Antigravity: .antigravity/skills/, .antigravity/agents/, AI_ASSETS.md
+    - Codex:       .codex/skills/, .codex/agents/, AI_ASSETS.md
     - All tools:   <cwd>/AGENTS.md (shared FABRIC context with tool-specific preamble)
-
-    Provider configuration status (verified Phase 12):
-    ┌──────────────┬─────────┬──────┬────────┬────────┬───────────┐
-    │ Tool         │ FABRIC  │ NRP  │ Skills │ Agents │ AGENTS.md │
-    ├──────────────┼─────────┼──────┼────────┼────────┼───────────┤
-    │ LoomAI Asst  │ ✓       │ ✓    │ N/A    │ ✓      │ ✓         │
-    │ OpenCode     │ ✓       │ ✓*   │ ✓      │ ✓      │ ✓         │
-    │ Aider        │ ✓ proxy │ ✓**  │ —†     │ —†     │ ✓         │
-    │ Claude Code  │ —‡      │ —‡   │ ✓      │ —†     │ ✓         │
-    │ Crush        │ ✓       │ ✓    │ ✓      │ ✓      │ ✓         │
-    │ Deep Agents  │ ✓       │ ✓    │ ✓      │ ✓      │ ✓         │
-    └──────────────┴─────────┴──────┴────────┴────────┴───────────┘
-    * OpenCode accesses NRP via documented curl/CLI in AGENTS.md
-    ** Aider routes through model proxy which serves both providers
-    † Tool has no skills/agents system — uses AGENTS.md via read: config
-    ‡ Claude Code uses its own Anthropic API; FABRIC via CLI/curl per preamble
     """
     from app.settings_manager import get_storage_dir as _storage
     home = os.path.expanduser("~")
@@ -2616,7 +2806,20 @@ def propagate_ai_configs() -> dict:
 
     # --- Codex: re-seed workspace context ---
     try:
-        _setup_codex_workspace(cwd)
+        codex_workspaces = [cwd]
+        users_dir = os.path.join(cwd, ".loomai", "users")
+        if os.path.isdir(users_dir):
+            for entry in os.listdir(users_dir):
+                workspace = os.path.join(users_dir, entry)
+                if os.path.isdir(workspace):
+                    codex_workspaces.append(workspace)
+        seen: set[str] = set()
+        for workspace in codex_workspaces:
+            real_workspace = os.path.realpath(workspace)
+            if real_workspace in seen:
+                continue
+            seen.add(real_workspace)
+            _setup_codex_workspace(workspace)
         results["codex"] = "ok"
     except Exception as e:
         logger.warning("Failed to propagate Codex config: %s", e)
@@ -2648,7 +2851,7 @@ async def propagate_config_endpoint():
     """Manually trigger AI config propagation to all tool workspaces.
 
     Re-generates workspace configuration files for all AI tools (OpenCode,
-    Aider, Claude Code, Crush, Deep Agents, Jupyter AI) using the current
+    Aider, Claude Code, Crush, Deep Agents, Antigravity, Codex, Jupyter AI) using the current
     settings.  Useful after changing API keys or server URLs.
     """
     results = propagate_ai_configs()

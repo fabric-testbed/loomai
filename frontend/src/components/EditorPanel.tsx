@@ -1,11 +1,12 @@
 'use client';
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { SliceData, SiteInfo, ComponentModel, SliceNode, SliceNetwork, SliceFacilityPort, SlicePortMirror, BootConfig, BootUpload, BootCommand, BootExecResult, FileEntry, SliceKeySet, VMTemplateSummary, HostInfo, IpHint, L3Config, FacilityPortInfo } from '../types/fabric';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import type { SliceData, SiteInfo, ComponentModel, SliceNode, SliceNetwork, SlicePortMirror, BootConfig, BootUpload, BootCommand, BootExecResult, FileEntry, SliceKeySet, VMTemplateSummary, HostInfo, IpHint, L3Config, FacilityPortInfo } from '../types/fabric';
 import * as api from '../api/client';
 import Tooltip from './Tooltip';
 import SliverComboBox from './editor/SliverComboBox';
 import ImageComboBox from './editor/ImageComboBox';
 import AddSliverMenu, { type AddSliverType } from './editor/AddSliverMenu';
+import { getFacilityPortSlivers, type FabricFacilityPortSliver } from '../utils/fabricSlivers';
 import '../styles/editor.css';
 
 /** Return the first available name like "prefix1", "prefix2", etc. */
@@ -177,13 +178,24 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
     setChiNetCidr('192.168.1.0/24');
   }, [chiNetName, chiNetCidr]);
 
-  // Handler for adding a Chameleon floating IP (stored locally, included in composite submit)
-  const handleAddChameleonFloatingIp = useCallback(() => {
-    if (!chiFloatingIpNode) return;
-    setChiFloatingIps(prev => [...prev, chiFloatingIpNode]);
-    setAddMode(null);
-    setChiFloatingIpNode('');
-  }, [chiFloatingIpNode]);
+  // Handler for adding a Chameleon floating IP — persists the flag on the
+  // backend so the composite submit can honor it during deployment
+  const handleAddChameleonFloatingIp = useCallback(async () => {
+    if (!chiFloatingIpNode || !sliceName) return;
+    try {
+      await api.updateChameleonSliceNode(sliceName, chiFloatingIpNode, { floating_ip: true });
+      setChiFloatingIps(prev => prev.includes(chiFloatingIpNode) ? prev : [...prev, chiFloatingIpNode]);
+      setAddMode(null);
+      setChiFloatingIpNode('');
+      // Refresh slice data so the new flag is visible
+      try {
+        const updated = await api.getSlice(sliceName);
+        onSliceUpdated(updated);
+      } catch { /* ignore */ }
+    } catch (e: any) {
+      alert(`Failed to set floating IP: ${e?.message || e}`);
+    }
+  }, [chiFloatingIpNode, sliceName, onSliceUpdated]);
 
   // When selectedElement changes from graph click, auto-select in combo box
   useEffect(() => {
@@ -202,11 +214,11 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
     } else if (type === 'facility-port') {
       setSelectedSliverKey(`fp:${name}`);
       setAddMode(null);
-      setEditorTab('experiment');
+      setEditorTab('fabric');
     } else if (type === 'port-mirror') {
       setSelectedSliverKey(`pm:${name}`);
       setAddMode(null);
-      setEditorTab('experiment');
+      setEditorTab('fabric');
     } else if (type === 'chameleon_instance') {
       setSelectedSliverKey(`chi:${name}`);
       setAddMode(null);
@@ -228,7 +240,7 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
       setSelectedSliverKey('');
     } else if (prefix === 'net' && !sliceData.networks.find((n) => n.name === name)) {
       setSelectedSliverKey('');
-    } else if (prefix === 'fp' && !(sliceData.facility_ports ?? []).find((f) => f.name === name)) {
+    } else if (prefix === 'fp' && !getFacilityPortSlivers(sliceData).find((f) => f.name === name)) {
       setSelectedSliverKey('');
     } else if (prefix === 'pm' && !(sliceData.port_mirrors ?? []).find((p) => p.name === name)) {
       setSelectedSliverKey('');
@@ -252,7 +264,8 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
   const sliverName = sliverNameParts.join(':');
   const selectedNode: SliceNode | undefined = sliverPrefix === 'node' ? sliceData?.nodes.find((n) => n.name === sliverName) : undefined;
   const selectedNetwork: SliceNetwork | undefined = sliverPrefix === 'net' ? sliceData?.networks.find((n) => n.name === sliverName) : undefined;
-  const selectedFP: SliceFacilityPort | undefined = sliverPrefix === 'fp' ? (sliceData?.facility_ports ?? []).find((f) => f.name === sliverName) : undefined;
+  const facilityPortSlivers = getFacilityPortSlivers(sliceData);
+  const selectedFP: FabricFacilityPortSliver | undefined = sliverPrefix === 'fp' ? facilityPortSlivers.find((f) => f.name === sliverName) : undefined;
   const selectedPM: SlicePortMirror | undefined = sliverPrefix === 'pm' ? (sliceData?.port_mirrors ?? []).find((p) => p.name === sliverName) : undefined;
   const selectedChi = sliverPrefix === 'chi' ? (sliceData?.chameleon_nodes ?? []).find((c) => c.name === sliverName) : undefined;
 
@@ -299,29 +312,29 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
   };
 
   return (
-    <div className="editor-panel">
-      <div className="editor-header" {...(dragHandleProps || {})}>
+    <div className="editor-panel" data-testid="editor-panel" data-view-context={viewContext || 'composite'}>
+      <div className="editor-header" {...(dragHandleProps || {})} data-testid="editor-panel-header">
         <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <span className="panel-drag-handle">{'\u283F'}</span>
           Editor
         </span>
-        <button className="collapse-btn" onClick={(e) => { e.stopPropagation(); onCollapse(); }} title="Close panel">
+        <button className="collapse-btn" onClick={(e) => { e.stopPropagation(); onCollapse(); }} title="Close panel" data-testid="editor-panel-close">
           {'\u2715'}
         </button>
       </div>
 
       {/* Top-level Experiment / FABRIC / Chameleon tab bar */}
-      <div className="editor-top-tabs">
-        <button className={editorTab === 'experiment' ? 'active' : ''} onClick={() => setEditorTab('experiment')}>{experimentLabel}</button>
-        <button className={editorTab === 'fabric' ? 'active' : ''} onClick={() => setEditorTab('fabric')}>{fabricLabel}</button>
+      <div className="editor-top-tabs" data-testid="editor-tabs">
+        <button className={editorTab === 'experiment' ? 'active' : ''} onClick={() => setEditorTab('experiment')} data-testid="editor-tab" data-editor-tab="experiment">{experimentLabel}</button>
+        <button className={editorTab === 'fabric' ? 'active' : ''} onClick={() => setEditorTab('fabric')} data-testid="editor-tab" data-editor-tab="fabric">{fabricLabel}</button>
         {chameleonEnabled && viewContext !== 'fabric' && (
-          <button className={`${editorTab === 'chameleon' ? 'active chameleon-tab-active' : ''}`} onClick={() => setEditorTab('chameleon')}>Chameleon</button>
+          <button className={`${editorTab === 'chameleon' ? 'active chameleon-tab-active' : ''}`} onClick={() => setEditorTab('chameleon')} data-testid="editor-tab" data-editor-tab="chameleon">Chameleon</button>
         )}
       </div>
 
-      {/* ── Experiment tab (slice metadata + cross-testbed services) ── */}
+      {/* ── Experiment tab (slice metadata) ── */}
       {editorTab === 'experiment' && (
-        <div className="tab-content">
+        <div className="tab-content" data-testid="editor-tab-panel" data-editor-tab-panel="experiment">
           {error && <div style={{ color: 'var(--fabric-coral)', fontSize: 12, marginBottom: 8 }}>{error}</div>}
 
           {/* Slice info — name, UUID, state, dates */}
@@ -329,7 +342,30 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
             <div className="editor-slice-info" style={{ border: 'none', background: 'transparent', padding: '0 0 8px' }}>
               <span className="slice-info-name" title={sliceData.name}>{sliceData.name}</span>
               <span className={`slice-info-state state-${sliceData.state?.toLowerCase() || 'unknown'}`}>{sliceData.state || '\u2014'}</span>
-              {sliceData.id && <span className="slice-info-field" title={sliceData.id}>UUID: {sliceData.id.slice(0, 8)}...</span>}
+              {sliceData.id && (
+                <span className="slice-info-field" title={sliceData.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  UUID: {sliceData.id.slice(0, 8)}…
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigator.clipboard.writeText(sliceData.id!).then(() => {
+                        const btn = e.currentTarget;
+                        const prev = btn.textContent;
+                        btn.textContent = '✓';
+                        setTimeout(() => { btn.textContent = prev; }, 1200);
+                      }).catch(() => {});
+                    }}
+                    title="Copy full UUID"
+                    aria-label="Copy slice UUID"
+                    style={{
+                      background: 'transparent', border: '1px solid var(--fabric-border, #ccc)',
+                      borderRadius: 3, padding: '0 4px', fontSize: 10, cursor: 'pointer',
+                      lineHeight: '14px', color: 'inherit',
+                    }}
+                  >⧉</button>
+                </span>
+              )}
               {sliceData.lease_start && <span className="slice-info-field">Start: {new Date(sliceData.lease_start).toLocaleString()}</span>}
               {sliceData.lease_end && <span className="slice-info-field">Expires: {new Date(sliceData.lease_end).toLocaleString()}</span>}
             </div>
@@ -407,70 +443,6 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
             </div>
           )}
 
-          {/* Cross-Testbed Services (facility ports, port mirrors) */}
-          {sliceData && (
-            <>
-              <div style={{ margin: '12px 0 6px', fontSize: 11, fontWeight: 600, color: 'var(--fabric-text-muted)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                Cross-Testbed Services
-              </div>
-              <div className="editor-sliver-bar">
-                <SliverComboBox
-                  sliceData={sliceData}
-                  selectedSliverKey={selectedSliverKey}
-                  onSelect={handleSliverSelect}
-                  errorMessages={sliceData?.error_messages}
-                  tabFilter="experiment"
-                />
-                {!isTerminal && <AddSliverMenu onSelect={handleAddSelect} visibleTypes={['facility-port', 'port-mirror']} />}
-              </div>
-              <div className="tab-content">
-                {addMode === 'facility-port' && (
-                  <FacilityPortForm
-                    mode="add"
-                    sites={sites}
-                    sliceName={sliceName}
-                    loading={loading}
-                    sliceData={sliceData}
-                    facilityPorts={facilityPorts}
-                    onSubmit={async (data) => {
-                      const result = await apiCall(() => api.addFacilityPort(sliceName, data));
-                      if (result) setAddMode(null);
-                    }}
-                  />
-                )}
-                {addMode === 'port-mirror' && (
-                  <PortMirrorForm
-                    sliceData={sliceData}
-                    loading={loading}
-                    onSubmit={async (data) => {
-                      const result = await apiCall(() => api.addPortMirror(sliceName, data));
-                      if (result) setAddMode(null);
-                    }}
-                  />
-                )}
-                {!addMode && selectedFP && (
-                  <FacilityPortReadOnlyView
-                    fp={selectedFP}
-                    loading={loading}
-                    onDelete={async () => {
-                      await apiCall(() => api.removeFacilityPort(sliceName, selectedFP.name));
-                      setSelectedSliverKey('');
-                    }}
-                  />
-                )}
-                {!addMode && selectedPM && (
-                  <PortMirrorReadOnlyView
-                    pm={selectedPM}
-                    loading={loading}
-                    onDelete={async () => {
-                      await apiCall(() => api.removePortMirror(sliceName, selectedPM.name));
-                      setSelectedSliverKey('');
-                    }}
-                  />
-                )}
-              </div>
-            </>
-          )}
         </div>
       )}
 
@@ -478,7 +450,7 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
       {editorTab === 'fabric' && (
         <>
           {/* Sliver selector + Add button */}
-          <div className="editor-sliver-bar" data-help-id="editor.sliver-selector">
+          <div className="editor-sliver-bar" data-help-id="editor.sliver-selector" data-testid="fabric-sliver-bar">
             <SliverComboBox
               sliceData={sliceData}
               selectedSliverKey={selectedSliverKey}
@@ -486,10 +458,10 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
               errorMessages={sliceData?.error_messages}
               tabFilter="fabric"
             />
-            {!isTerminal && <AddSliverMenu onSelect={handleAddSelect} visibleTypes={['node', 'l2network', 'l3network']} />}
+            {!isTerminal && <AddSliverMenu onSelect={handleAddSelect} visibleTypes={['node', 'l2network', 'l3network', 'facility-port', 'port-mirror']} />}
           </div>
 
-          <div className="tab-content">
+          <div className="tab-content" data-testid="editor-tab-panel" data-editor-tab-panel="fabric">
             {error && <div style={{ color: 'var(--fabric-coral)', fontSize: 12, marginBottom: 8 }}>{error}</div>}
 
             {/* Add mode forms */}
@@ -610,6 +582,7 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                   await apiCall(() => api.updateNode(sliceName, selectedNode.name, data));
                 }}
                 onDelete={async () => {
+                  if (!window.confirm(`Delete FABRIC node "${selectedNode.name}" and its attached components/interfaces from this slice?`)) return;
                   await apiCall(() => api.removeNode(sliceName, selectedNode.name));
                   setSelectedSliverKey('');
                 }}
@@ -617,7 +590,12 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                   await apiCall(() => api.addComponent(sliceName, selectedNode.name, compData));
                 }}
                 onDeleteComponent={async (compName) => {
+                  if (!window.confirm(`Delete component "${compName}" from node "${selectedNode.name}"? Attached network links using this component will be removed.`)) return;
                   await apiCall(() => api.removeComponent(sliceName, selectedNode.name, compName));
+                }}
+                onAddFabnet={async (netType) => {
+                  const result = await apiCall(() => api.addFabnetToNode(sliceName, selectedNode.name, netType));
+                  if (result) setSelectedSliverKey(`node:${selectedNode.name}`);
                 }}
                 onSaveVmTemplate={onSaveVmTemplate ? (nodeName) => onSaveVmTemplate(nodeName) : undefined}
               />
@@ -627,19 +605,57 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
             {!addMode && selectedNetwork && (
               <NetworkReadOnlyView
                 network={selectedNetwork}
+                sliceData={sliceData}
                 loading={loading}
                 isDraft={isDraft}
                 sliceName={sliceName}
                 onSliceUpdated={onSliceUpdated}
                 onDelete={async () => {
+                  const ifaceCount = selectedNetwork.interfaces.length;
+                  if (!window.confirm(`Delete network "${selectedNetwork.name}"${ifaceCount ? ` and detach ${ifaceCount} interface${ifaceCount === 1 ? '' : 's'}` : ''}?`)) return;
                   await apiCall(() => api.removeNetwork(sliceName, selectedNetwork.name));
                   setSelectedSliverKey('');
                 }}
               />
             )}
 
+            {/* Edit mode: selected facility port */}
+            {!addMode && selectedFP && (
+              <FacilityPortReadOnlyView
+                fp={selectedFP}
+                sliceName={sliceName}
+                sliceData={sliceData}
+                loading={loading}
+                onUpdate={async (data) => {
+                  await apiCall(() => api.updateFacilityPort(sliceName, selectedFP.name, data));
+                }}
+                onDelete={async () => {
+                  if (!window.confirm(`Delete facility port "${selectedFP.name}" from this slice? Connected network links will be removed.`)) return;
+                  await apiCall(() => api.removeFacilityPort(sliceName, selectedFP.name));
+                  setSelectedSliverKey('');
+                }}
+              />
+            )}
+
+            {/* Edit mode: selected port mirror */}
+            {!addMode && selectedPM && (
+              <PortMirrorReadOnlyView
+                pm={selectedPM}
+                sliceData={sliceData}
+                loading={loading}
+                onUpdate={async (data) => {
+                  await apiCall(() => api.updatePortMirror(sliceName, selectedPM.name, data));
+                }}
+                onDelete={async () => {
+                  if (!window.confirm(`Delete port mirror "${selectedPM.name}"?`)) return;
+                  await apiCall(() => api.removePortMirror(sliceName, selectedPM.name));
+                  setSelectedSliverKey('');
+                }}
+              />
+            )}
+
             {/* Nothing selected, no add mode */}
-            {!addMode && !selectedNode && !selectedNetwork && (
+            {!addMode && !selectedNode && !selectedNetwork && !selectedFP && !selectedPM && (
               <div className="editor-empty">
                 Select a FABRIC resource to edit, or click <strong>+</strong> to add one.
               </div>
@@ -651,7 +667,7 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
       {/* ── Chameleon tab (bare-metal servers, networks) ── */}
       {editorTab === 'chameleon' && chameleonEnabled && (
         <>
-          <div className="editor-sliver-bar">
+          <div className="editor-sliver-bar" data-testid="chameleon-sliver-bar">
             <SliverComboBox
               sliceData={sliceData}
               selectedSliverKey={selectedSliverKey}
@@ -661,11 +677,11 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
             />
             {!isTerminal && <AddSliverMenu onSelect={handleAddSelect} visibleTypes={['chameleon-node', 'chameleon-network', 'chameleon-floating-ip']} chameleonEnabled />}
           </div>
-          <div className="tab-content">
+          <div className="tab-content" data-testid="editor-tab-panel" data-editor-tab-panel="chameleon">
             {error && <div style={{ color: 'var(--fabric-coral)', fontSize: 12, marginBottom: 8 }}>{error}</div>}
 
             {addMode === 'chameleon-node' && (
-              <div className="editor-form">
+              <div className="editor-form" data-testid="chameleon-node-form">
                 <h4 style={{ margin: '0 0 8px' }}>Add Chameleon Node</h4>
                 {error && <div style={{ color: 'var(--fabric-coral)', fontSize: 12, marginBottom: 8 }}>{error}</div>}
                 <label className="editor-label">Site</label>
@@ -785,7 +801,14 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                       <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
                         <span>{node}</span>
                         <button style={{ background: 'none', border: 'none', color: '#b00020', cursor: 'pointer', fontSize: 11, padding: 0 }}
-                          onClick={() => setChiFloatingIps(prev => prev.filter((_, j) => j !== i))}>remove</button>
+                          onClick={async () => {
+                            if (sliceName) {
+                              try {
+                                await api.updateChameleonSliceNode(sliceName, node, { floating_ip: false });
+                              } catch { /* ignore */ }
+                            }
+                            setChiFloatingIps(prev => prev.filter((_, j) => j !== i));
+                          }}>remove</button>
                       </div>
                     ))}
                   </div>
@@ -1206,7 +1229,7 @@ function HostComboBox({ hosts, hostsLoading, value, onChange, disabled, cores, r
 // --- Node Form (add + edit) ---
 function NodeForm({
   mode, node, sites, images, componentModels, sliceName, loading,
-  sliceData, vmTemplates = [], onSubmit, onDelete, onAddComponent, onDeleteComponent, onSaveVmTemplate,
+  sliceData, vmTemplates = [], onSubmit, onDelete, onAddComponent, onDeleteComponent, onAddFabnet, onSaveVmTemplate,
 }: {
   mode: 'add' | 'edit';
   node?: SliceNode;
@@ -1221,6 +1244,7 @@ function NodeForm({
   onDelete?: () => void;
   onAddComponent?: (data: { name: string; model: string }) => void;
   onDeleteComponent?: (name: string) => void;
+  onAddFabnet?: (netType: 'IPv4' | 'IPv6') => void;
   onSaveVmTemplate?: (nodeName: string) => void;
 }) {
   // Pre-fill name for add mode
@@ -1236,6 +1260,9 @@ function NodeForm({
   const [ram, setRam] = useState(node?.ram ?? 8);
   const [disk, setDisk] = useState(node?.disk ?? 10);
   const [image, setImage] = useState(node?.image ?? 'default_ubuntu_22');
+  const [imageType, setImageType] = useState(node?.image_type || 'qcow2');
+  const [username, setUsername] = useState(node?.username || '');
+  const [instanceType, setInstanceType] = useState('');
 
   // Fetch hosts when site changes
   useEffect(() => {
@@ -1328,13 +1355,16 @@ function NodeForm({
       setRam(node.ram);
       setDisk(node.disk);
       setImage(node.image || 'default_ubuntu_22');
+      setImageType(node.image_type || 'qcow2');
+      setUsername(node.username || '');
+      setInstanceType('');
     }
   }, [mode, node]);
 
   const isLocked = sliceData?.state !== undefined && sliceData.state !== 'Draft';
   const isNodeActive = node?.reservation_state === 'Active';
 
-  const [nodeTab, setNodeTab] = useState<'edit' | 'components' | 'boot' | 'files' | 'shell'>('edit');
+  const [nodeTab, setNodeTab] = useState<'edit' | 'components' | 'boot'>('edit');
 
   // Reset tab when switching nodes or modes
   useEffect(() => {
@@ -1345,16 +1375,16 @@ function NodeForm({
   if (mode === 'add') {
     return (
       <>
-        <div className="editor-section-label">Add VM Node</div>
+        <div className="editor-section-label" data-testid="node-form-title">Add VM Node</div>
 
         <div className="form-group" data-help-id="editor.node.name">
           <label><Tooltip text="Unique name for this VM within the slice">Name</Tooltip></label>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="node1" />
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="node1" data-testid="node-name-input" />
         </div>
         <div className="form-group" data-help-id="editor.node.site">
           <label><Tooltip text="FABRIC site where the VM will be deployed">Site</Tooltip></label>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <select value={site} onChange={(e) => { setSite(e.target.value); setHost(''); }} style={{ flex: 1 }}>
+            <select value={site} onChange={(e) => { setSite(e.target.value); setHost(''); }} style={{ flex: 1 }} data-testid="node-site-select">
               <option value="auto">auto</option>
               {sites.filter(s => s.state === 'Active').map((s) => {
                 const sib = siblingUsageAtSite(sliceData, s.name, node?.name);
@@ -1386,15 +1416,15 @@ function NodeForm({
         </div>
         <div className="form-group" data-help-id="editor.node.cores">
           <label><Tooltip text="CPU cores (1-64)">Cores</Tooltip> <span className="range-value">{cores}</span></label>
-          <input type="range" min={1} max={64} value={cores} onChange={(e) => setCores(+e.target.value)} />
+          <input type="range" min={1} max={64} value={cores} onChange={(e) => setCores(+e.target.value)} data-testid="node-cores-input" />
         </div>
         <div className="form-group" data-help-id="editor.node.ram">
           <label><Tooltip text="RAM in GB (2-256)">RAM (GB)</Tooltip> <span className="range-value">{ram}</span></label>
-          <input type="range" min={2} max={256} value={ram} onChange={(e) => setRam(+e.target.value)} />
+          <input type="range" min={2} max={256} value={ram} onChange={(e) => setRam(+e.target.value)} data-testid="node-ram-input" />
         </div>
         <div className="form-group" data-help-id="editor.node.disk">
           <label><Tooltip text="Root disk in GB (10-500)">Disk (GB)</Tooltip> <span className="range-value">{disk}</span></label>
-          <input type="range" min={10} max={500} value={disk} onChange={(e) => setDisk(+e.target.value)} />
+          <input type="range" min={10} max={500} value={disk} onChange={(e) => setDisk(+e.target.value)} data-testid="node-disk-input" />
         </div>
         <div className="form-group" data-help-id="editor.node.image">
           <label><Tooltip text="OS image or VM template">Image</Tooltip></label>
@@ -1410,19 +1440,44 @@ function NodeForm({
             VM template applied: {appliedTemplateName}
           </div>
         )}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+          <div className="form-group">
+            <label><Tooltip text="FABRIC image format, usually qcow2">Image Type</Tooltip></label>
+            <select value={imageType} onChange={(e) => setImageType(e.target.value)} data-testid="node-image-type-select">
+              <option value="qcow2">qcow2</option>
+              <option value="docker">docker</option>
+              <option value="raw">raw</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label><Tooltip text="SSH username override. Leave blank for image default.">Username</Tooltip></label>
+            <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="image default" data-testid="node-username-input" />
+          </div>
+        </div>
+        <div className="form-group">
+          <label><Tooltip text="Optional FABRIC instance type/capacity hint">Instance Type</Tooltip></label>
+          <input type="text" value={instanceType} onChange={(e) => setInstanceType(e.target.value)} placeholder="optional" data-testid="node-instance-type-input" />
+        </div>
 
         {/* Components section for add mode */}
         <div className="editor-section-divider" style={{ margin: '12px 0 8px' }} />
         <div className="editor-section-label">Components</div>
 
         {pendingComponents.length > 0 && (
-          <div className="component-list" style={{ marginBottom: 8 }}>
+          <div className="component-list" style={{ marginBottom: 8 }} data-testid="node-pending-components">
             {pendingComponents.map((comp, idx) => (
-              <div key={idx} className="component-row">
+              <div
+                key={idx}
+                className="component-row"
+                data-testid="node-pending-component-row"
+                data-component-name={comp.name}
+                data-component-model={comp.model}
+              >
                 <span className="component-row-name">{comp.name}</span>
                 <span className="component-row-model">{comp.model}</span>
                 <button
                   className="component-row-delete"
+                  data-testid="node-pending-component-remove"
                   onClick={() => {
                     setPendingComponents(pendingComponents.filter((_, i) => i !== idx));
                   }}
@@ -1442,7 +1497,7 @@ function NodeForm({
               setCompModel(e.target.value);
               const allNames = [...(node?.components.map((c) => c.name) ?? []), ...pendingComponents.map((c) => c.name)];
               setCompName(nextName(compPrefix(e.target.value), allNames));
-            }} style={{ marginBottom: 4 }}>
+            }} style={{ marginBottom: 4 }} data-testid="node-component-model-select">
               {componentModels.map((c) => (
                 <option key={c.model} value={c.model}>{c.model} — {c.description}</option>
               ))}
@@ -1454,9 +1509,11 @@ function NodeForm({
                 onChange={(e) => setCompName(e.target.value)}
                 placeholder="nic1"
                 style={{ flex: 1 }}
+                data-testid="node-component-name-input"
               />
               <button
                 disabled={!compName}
+                data-testid="node-component-add"
                 onClick={() => {
                   setPendingComponents([...pendingComponents, { name: compName, model: compModel }]);
                   const allNames = [...(node?.components.map((c) => c.name) ?? []), ...pendingComponents.map((c) => c.name), compName];
@@ -1473,7 +1530,21 @@ function NodeForm({
           <button
             className="primary"
             disabled={loading || !name || !sliceName}
-            onClick={() => onSubmit({ name, site, host: host || undefined, cores, ram, disk, image, _pendingBootConfig: pendingBootConfig, _pendingComponents: pendingComponents })}
+            data-testid="node-submit"
+            onClick={() => onSubmit({
+              name,
+              site,
+              host: host || undefined,
+              cores,
+              ram,
+              disk,
+              image,
+              image_type: imageType || undefined,
+              username: username || undefined,
+              instance_type: instanceType || undefined,
+              _pendingBootConfig: pendingBootConfig,
+              _pendingComponents: pendingComponents,
+            })}
           >
             Add Node
           </button>
@@ -1493,12 +1564,6 @@ function NodeForm({
           Components{node && node.components.length > 0 ? ` (${node.components.length})` : ''}
         </button>
         <button className={nodeTab === 'boot' ? 'active' : ''} onClick={() => setNodeTab('boot')} data-help-id="editor.boot-config">Boot Config</button>
-        {isNodeActive && (
-          <>
-            <button className={nodeTab === 'files' ? 'active' : ''} onClick={() => setNodeTab('files')}>Files</button>
-            <button className={nodeTab === 'shell' ? 'active' : ''} onClick={() => setNodeTab('shell')}>Shell</button>
-          </>
-        )}
       </div>
 
       {/* Edit tab */}
@@ -1536,6 +1601,16 @@ function NodeForm({
                 <span className="readonly-label">Image</span>
                 <span className="readonly-value">{node?.image}</span>
               </div>
+              <div className="readonly-field">
+                <span className="readonly-label">Image Type</span>
+                <span className="readonly-value">{node?.image_type || 'qcow2'}</span>
+              </div>
+              {node?.username && (
+                <div className="readonly-field">
+                  <span className="readonly-label">Username</span>
+                  <span className="readonly-value">{node.username}</span>
+                </div>
+              )}
               {node?.reservation_state && (
                 <div className="readonly-field">
                   <span className="readonly-label">State</span>
@@ -1610,12 +1685,40 @@ function NodeForm({
                   VM template applied: {appliedTemplateName}
                 </div>
               )}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                <div className="form-group">
+                  <label><Tooltip text="FABRIC image format, usually qcow2">Image Type</Tooltip></label>
+                  <select value={imageType} onChange={(e) => setImageType(e.target.value)}>
+                    <option value="qcow2">qcow2</option>
+                    <option value="docker">docker</option>
+                    <option value="raw">raw</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label><Tooltip text="SSH username override. Leave blank for image default.">Username</Tooltip></label>
+                  <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="image default" />
+                </div>
+              </div>
+              <div className="form-group">
+                <label><Tooltip text="Optional FABRIC instance type/capacity hint">Instance Type</Tooltip></label>
+                <input type="text" value={instanceType} onChange={(e) => setInstanceType(e.target.value)} placeholder="optional" />
+              </div>
 
               <div className="form-actions">
                 <button
                   className="primary"
                   disabled={loading || !sliceName}
-                  onClick={() => onSubmit({ site, host: host || '', cores, ram, disk, image })}
+                  onClick={() => onSubmit({
+                    site,
+                    host: host || '',
+                    cores,
+                    ram,
+                    disk,
+                    image,
+                    image_type: imageType || undefined,
+                    username: username || undefined,
+                    instance_type: instanceType || undefined,
+                  })}
                 >
                   Update Node
                 </button>
@@ -1631,6 +1734,20 @@ function NodeForm({
                   </Tooltip>
                 )}
               </div>
+              {onAddFabnet && node && (
+                <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                  <Tooltip text="Attach FABNetv4 using FABlib's per-node helper. Best for multi-site routed connectivity.">
+                    <button disabled={loading} onClick={() => onAddFabnet('IPv4')} style={{ flex: 1 }}>
+                      Add FABNetv4
+                    </button>
+                  </Tooltip>
+                  <Tooltip text="Attach FABNetv6 using FABlib's per-node helper.">
+                    <button disabled={loading} onClick={() => onAddFabnet('IPv6')} style={{ flex: 1 }}>
+                      Add FABNetv6
+                    </button>
+                  </Tooltip>
+                </div>
+              )}
 
               {onDelete && (
                 <>
@@ -1712,16 +1829,6 @@ function NodeForm({
       {/* Boot Config tab */}
       {nodeTab === 'boot' && node && (
         <BootConfigSection sliceName={sliceName} nodeName={node.name} loading={loading} isLocked={isLocked} isNodeActive={isNodeActive} />
-      )}
-
-      {/* Files tab (active nodes only) */}
-      {nodeTab === 'files' && node && isNodeActive && (
-        <FilesTab sliceName={sliceName} nodeName={node.name} />
-      )}
-
-      {/* Shell tab (active nodes only) */}
-      {nodeTab === 'shell' && node && isNodeActive && (
-        <ShellTab sliceName={sliceName} nodeName={node.name} />
       )}
     </>
   );
@@ -2141,278 +2248,6 @@ function formatSize(bytes: number): string {
 }
 
 
-// --- Files Tab (upload to VM) ---
-function FilesTab({ sliceName, nodeName }: { sliceName: string; nodeName: string }) {
-  const [source, setSource] = useState('');
-  const [dest, setDest] = useState('');
-  const [uploading, setUploading] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
-
-  // File picker state
-  const [showPicker, setShowPicker] = useState(false);
-  const [pickerPath, setPickerPath] = useState('');
-  const [pickerFiles, setPickerFiles] = useState<FileEntry[]>([]);
-  const [pickerLoading, setPickerLoading] = useState(false);
-  const [pickerSelected, setPickerSelected] = useState('');
-
-  const openPicker = async () => {
-    setShowPicker(true);
-    setPickerPath('');
-    setPickerSelected('');
-    setPickerLoading(true);
-    try {
-      const files = await api.listFiles('');
-      setPickerFiles(files);
-    } catch {
-      setPickerFiles([]);
-    } finally {
-      setPickerLoading(false);
-    }
-  };
-
-  const navigatePicker = async (dir: string) => {
-    const newPath = pickerPath ? `${pickerPath}/${dir}` : dir;
-    setPickerLoading(true);
-    setPickerSelected('');
-    try {
-      const files = await api.listFiles(newPath);
-      setPickerFiles(files);
-      setPickerPath(newPath);
-    } catch {
-      setPickerFiles([]);
-    } finally {
-      setPickerLoading(false);
-    }
-  };
-
-  const pickerGoUp = async () => {
-    const parts = pickerPath.split('/').filter(Boolean);
-    parts.pop();
-    const newPath = parts.join('/');
-    setPickerLoading(true);
-    setPickerSelected('');
-    try {
-      const files = await api.listFiles(newPath);
-      setPickerFiles(files);
-      setPickerPath(newPath);
-    } catch {
-      setPickerFiles([]);
-    } finally {
-      setPickerLoading(false);
-    }
-  };
-
-  const handleUpload = async () => {
-    if (!source || !dest) return;
-    setUploading(true);
-    setResult(null);
-    try {
-      await api.uploadToVm(sliceName, nodeName, source, dest);
-      setResult({ ok: true, message: `Uploaded ${source} to ${dest}` });
-    } catch (e: any) {
-      setResult({ ok: false, message: e.message });
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  return (
-    <>
-      <div className="editor-section-label">Upload to VM</div>
-
-      <div className="form-group">
-        <label style={{ fontSize: 11 }}>Source (container storage)</label>
-        <div style={{ display: 'flex', gap: 4 }}>
-          <input
-            type="text"
-            value={source}
-            onChange={(e) => setSource(e.target.value)}
-            placeholder="path/to/file"
-            style={{ flex: 1, fontSize: 11, padding: '3px 6px' }}
-          />
-          <button className="boot-btn-sm" onClick={openPicker} disabled={uploading}>...</button>
-        </div>
-      </div>
-
-      <div className="form-group">
-        <label style={{ fontSize: 11 }}>Destination (VM path)</label>
-        <input
-          type="text"
-          value={dest}
-          onChange={(e) => setDest(e.target.value)}
-          placeholder="/home/ubuntu/"
-          style={{ fontSize: 11, padding: '3px 6px' }}
-        />
-      </div>
-
-      <div className="form-actions">
-        <button
-          className="primary"
-          disabled={uploading || !source || !dest}
-          onClick={handleUpload}
-        >
-          {uploading ? 'Uploading...' : 'Upload'}
-        </button>
-      </div>
-
-      {result && (
-        <div style={{
-          marginTop: 8,
-          padding: '6px 8px',
-          borderRadius: 4,
-          fontSize: 11,
-          background: result.ok ? 'rgba(0,142,122,0.1)' : 'rgba(226,82,65,0.1)',
-          color: result.ok ? 'var(--fabric-teal)' : 'var(--fabric-coral)',
-        }}>
-          {result.message}
-        </div>
-      )}
-
-      {/* File Picker Modal */}
-      {showPicker && (
-        <div className="boot-file-picker-overlay" onClick={() => setShowPicker(false)}>
-          <div className="boot-file-picker" onClick={(e) => e.stopPropagation()}>
-            <div className="boot-fp-header">
-              <span>Select File or Folder</span>
-              <button onClick={() => setShowPicker(false)}>{'\u2715'}</button>
-            </div>
-            <div className="boot-fp-breadcrumb">
-              <button onClick={() => { setPickerPath(''); setPickerSelected(''); api.listFiles('').then(setPickerFiles); }}>root</button>
-              {pickerPath.split('/').filter(Boolean).map((seg, i, arr) => (
-                <span key={i}>
-                  {' / '}
-                  <button onClick={() => {
-                    const p = arr.slice(0, i + 1).join('/');
-                    setPickerPath(p);
-                    setPickerSelected('');
-                    api.listFiles(p).then(setPickerFiles);
-                  }}>{seg}</button>
-                </span>
-              ))}
-            </div>
-            <div className="boot-fp-list">
-              {pickerPath && (
-                <div className="boot-fp-entry" onClick={pickerGoUp}>
-                  <span className="boot-fp-icon">{'\u2B06'}</span>
-                  <span className="boot-fp-name">..</span>
-                </div>
-              )}
-              {pickerLoading ? (
-                <div className="boot-empty" style={{ padding: 20 }}>Loading...</div>
-              ) : pickerFiles.length === 0 ? (
-                <div className="boot-empty" style={{ padding: 20 }}>Empty directory</div>
-              ) : (
-                pickerFiles.map((f) => (
-                  <div
-                    key={f.name}
-                    className={`boot-fp-entry ${pickerSelected === f.name ? 'selected' : ''}`}
-                    onClick={() => setPickerSelected(f.name)}
-                    onDoubleClick={() => {
-                      if (f.type === 'dir') {
-                        navigatePicker(f.name);
-                      } else {
-                        const fullPath = pickerPath ? `${pickerPath}/${f.name}` : f.name;
-                        setSource(fullPath);
-                        setShowPicker(false);
-                      }
-                    }}
-                  >
-                    <span className="boot-fp-icon">{f.type === 'dir' ? '\uD83D\uDCC1' : '\uD83D\uDCC4'}</span>
-                    <span className="boot-fp-name">{f.name}</span>
-                    {f.type === 'file' ? (
-                      <span className="boot-fp-size">{formatSize(f.size)}</span>
-                    ) : (
-                      <span className="boot-fp-size">folder</span>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
-            <div className="boot-fp-actions">
-              <button onClick={() => setShowPicker(false)}>Cancel</button>
-              <button className="primary" disabled={!pickerSelected} onClick={() => {
-                const fullPath = pickerPath ? `${pickerPath}/${pickerSelected}` : pickerSelected;
-                setSource(fullPath);
-                setShowPicker(false);
-              }}>Select</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
-
-// --- Shell Tab (execute commands on VM) ---
-function ShellTab({ sliceName, nodeName }: { sliceName: string; nodeName: string }) {
-  const [command, setCommand] = useState('');
-  const [running, setRunning] = useState(false);
-  const [output, setOutput] = useState<Array<{ cmd: string; stdout: string; stderr: string }>>([]);
-
-  const handleRun = async () => {
-    if (!command.trim()) return;
-    setRunning(true);
-    try {
-      const result = await api.executeOnVm(sliceName, nodeName, command);
-      setOutput((prev) => [...prev, { cmd: command, stdout: result.stdout, stderr: result.stderr }]);
-      setCommand('');
-    } catch (e: any) {
-      setOutput((prev) => [...prev, { cmd: command, stdout: '', stderr: e.message }]);
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  return (
-    <>
-      <div className="editor-section-label">Shell</div>
-
-      <div className="form-group">
-        <textarea
-          className="shell-input"
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          placeholder="Enter command..."
-          rows={3}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-              e.preventDefault();
-              handleRun();
-            }
-          }}
-        />
-      </div>
-
-      <div className="form-actions">
-        <button
-          className="primary"
-          disabled={running || !command.trim()}
-          onClick={handleRun}
-        >
-          {running ? 'Running...' : 'Run'}
-        </button>
-        {output.length > 0 && (
-          <button onClick={() => setOutput([])} style={{ marginLeft: 4 }}>Clear</button>
-        )}
-      </div>
-
-      {output.length > 0 && (
-        <div className="shell-output-area">
-          {output.map((entry, i) => (
-            <div key={i} className="shell-entry">
-              <div className="shell-cmd-line">$ {entry.cmd}</div>
-              {entry.stdout && <pre className="shell-stdout">{entry.stdout}</pre>}
-              {entry.stderr && <pre className="shell-stderr">{entry.stderr}</pre>}
-            </div>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
-
 // --- Network Form (add only) ---
 function NetworkForm({
   mode, defaultLayer, sliceData, sliceName, loading, onSubmit,
@@ -2469,14 +2304,21 @@ function NetworkForm({
       }
     }
   }
+  for (const fp of sliceData?.facility_ports ?? []) {
+    for (const iface of fp.interfaces) {
+      if (!iface.network_name) {
+        allIfaces.push(iface.name);
+      }
+    }
+  }
 
   return (
     <>
-      <div className="editor-section-label">Add {layer} Network</div>
+      <div className="editor-section-label" data-testid="network-form-title">Add {layer} Network</div>
 
       <div className="form-group" data-help-id="editor.net.name">
         <label><Tooltip text="Unique name for this network">Name</Tooltip></label>
-        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="net1" />
+        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="net1" data-testid="network-name-input" />
       </div>
       <div className="form-group" data-help-id="editor.net.layer">
         <label><Tooltip text="L2 = Ethernet switching. L3 = IP routed.">Layer</Tooltip></label>
@@ -2496,7 +2338,7 @@ function NetworkForm({
             setSubnet('');
             setIpMode('none');
           }
-        }}>
+        }} data-testid="network-type-select">
           {types.map((t) => <option key={t} value={t}>{typeLabels[t] || t}</option>)}
         </select>
       </div>
@@ -2510,6 +2352,7 @@ function NetworkForm({
         <select
           multiple
           value={selectedIfaces}
+          data-testid="network-interfaces-select"
           onChange={(e) => setSelectedIfaces(Array.from(e.target.selectedOptions, (o) => o.value))}
         >
           {allIfaces.map((i) => <option key={i} value={i}>{i}</option>)}
@@ -2531,11 +2374,11 @@ function NetworkForm({
         <>
           <div className="form-group">
             <label><Tooltip text="VLAN tag for L2 interfaces. Leave blank for auto-assignment.">VLAN (optional)</Tooltip></label>
-            <input type="text" value={vlan} onChange={(e) => setVlan(e.target.value)} placeholder="Auto" />
+            <input type="text" value={vlan} onChange={(e) => setVlan(e.target.value)} placeholder="Auto" data-testid="network-vlan-input" />
           </div>
           <div className="form-group" data-help-id="editor.net.subnet">
             <label><Tooltip text={netType === 'L2PTP' ? 'Subnet for the point-to-point link' : 'Optional CIDR subnet'}>Subnet{netType !== 'L2PTP' ? ' (optional)' : ''}</Tooltip></label>
-            <input type="text" value={subnet} onChange={(e) => setSubnet(e.target.value)} placeholder="192.168.1.0/24" />
+            <input type="text" value={subnet} onChange={(e) => setSubnet(e.target.value)} placeholder="192.168.1.0/24" data-testid="network-subnet-input" />
           </div>
           {subnet && (
             <>
@@ -2547,7 +2390,7 @@ function NetworkForm({
               )}
               <div className="form-group" data-help-id="editor.net.ip-mode">
                 <label><Tooltip text="How IPs are assigned">IP Assignment</Tooltip></label>
-                <select value={ipMode} onChange={(e) => setIpMode(e.target.value as 'none' | 'auto' | 'config')}>
+                <select value={ipMode} onChange={(e) => setIpMode(e.target.value as 'none' | 'auto' | 'config')} data-testid="network-ip-mode-select">
                   <option value="none">None (configure after boot)</option>
                   <option value="auto">Auto (FABlib assigns)</option>
                   <option value="config">User-Defined (specify per interface)</option>
@@ -2579,6 +2422,7 @@ function NetworkForm({
         <button
           className="primary"
           disabled={!name || loading}
+          data-testid="network-submit"
           onClick={() => onSubmit({
             name,
             type: netType,
@@ -2620,6 +2464,39 @@ function expandAllVlanRanges(ranges: string[]): number[] {
   return all;
 }
 
+function asStringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((v) => String(v)).filter(Boolean);
+  if (typeof value === 'string' && value) return [value];
+  return [];
+}
+
+function getFacilityPortInterfaces(fp: FacilityPortInfo): FacilityPortInfo['interfaces'] {
+  return Array.isArray(fp.interfaces) ? fp.interfaces : [];
+}
+
+function getFacilityPortVlanRanges(fp: FacilityPortInfo): string[] {
+  return getFacilityPortInterfaces(fp).flatMap((iface) => asStringList(iface.vlan_range));
+}
+
+function getFacilityPortAllocatedVlans(fp: FacilityPortInfo): string[] {
+  return getFacilityPortInterfaces(fp).flatMap((iface) => asStringList(iface.allocated_vlans));
+}
+
+function getFacilityPortInterfaceSummary(fp: FacilityPortInfo): string {
+  const labels = getFacilityPortInterfaces(fp)
+    .map((iface) => [iface.name, iface.local_name, iface.device_name].filter(Boolean).join(' / '))
+    .filter(Boolean);
+  return labels[0] || 'No interface metadata';
+}
+
+function getFacilityPortSearchText(fp: FacilityPortInfo): string {
+  const parts = [fp.name, fp.site, ...getFacilityPortVlanRanges(fp), ...getFacilityPortAllocatedVlans(fp)];
+  for (const iface of getFacilityPortInterfaces(fp)) {
+    parts.push(iface.name, iface.local_name, iface.device_name, iface.region);
+  }
+  return parts.filter(Boolean).join(' ').toLowerCase();
+}
+
 // --- Facility Port Form (add only) ---
 function FacilityPortForm({
   mode, sites, sliceName, loading, sliceData, facilityPorts, onSubmit,
@@ -2636,6 +2513,7 @@ function FacilityPortForm({
     ? nextName('fp', (sliceData.facility_ports ?? []).map((f) => f.name))
     : '';
   const [name, setName] = useState(defaultFpName);
+  const [nameEdited, setNameEdited] = useState(false);
   const [selectedFpName, setSelectedFpName] = useState('');
   const [fpSearch, setFpSearch] = useState('');
   const [fpDropdownOpen, setFpDropdownOpen] = useState(false);
@@ -2643,8 +2521,38 @@ function FacilityPortForm({
   const [vlanSearch, setVlanSearch] = useState('');
   const [vlanDropdownOpen, setVlanDropdownOpen] = useState(false);
   const [bandwidth, setBandwidth] = useState(10);
+  const [availableFacilityPorts, setAvailableFacilityPorts] = useState<FacilityPortInfo[]>(() => facilityPorts || []);
+  const [facilityPortsLoading, setFacilityPortsLoading] = useState(false);
+  const [facilityPortsError, setFacilityPortsError] = useState('');
   const fpDropdownRef = useRef<HTMLDivElement>(null);
   const vlanDropdownRef = useRef<HTMLDivElement>(null);
+  const facilityPortsRequestedRef = useRef(false);
+
+  const loadFacilityPorts = useCallback(async (forceFresh = false) => {
+    setFacilityPortsLoading(true);
+    setFacilityPortsError('');
+    try {
+      const ports = await api.listFacilityPorts(forceFresh ? 0 : undefined);
+      setAvailableFacilityPorts(Array.isArray(ports) ? ports : []);
+    } catch (e: any) {
+      setFacilityPortsError(e?.message || 'Failed to load facility ports');
+      setAvailableFacilityPorts([]);
+    } finally {
+      setFacilityPortsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (facilityPorts && facilityPorts.length > 0) {
+      setAvailableFacilityPorts(facilityPorts);
+    }
+  }, [facilityPorts]);
+
+  useEffect(() => {
+    if ((facilityPorts || []).length > 0 || facilityPortsRequestedRef.current) return;
+    facilityPortsRequestedRef.current = true;
+    loadFacilityPorts();
+  }, [facilityPorts, loadFacilityPorts]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -2660,34 +2568,29 @@ function FacilityPortForm({
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // Group facility ports by site for the dropdown
-  const fpBySite = (facilityPorts || []).reduce<Record<string, FacilityPortInfo[]>>((acc, fp) => {
-    (acc[fp.site] = acc[fp.site] || []).push(fp);
+  // Filter and group facility ports by site for the dropdown.
+  const fpSearchLower = fpSearch.trim().toLowerCase();
+  const filteredFacilityPorts = useMemo(() => {
+    return [...availableFacilityPorts]
+      .filter((fp) => !fpSearchLower || getFacilityPortSearchText(fp).includes(fpSearchLower))
+      .sort((a, b) => (a.site || '').localeCompare(b.site || '') || (a.name || '').localeCompare(b.name || ''));
+  }, [availableFacilityPorts, fpSearchLower]);
+  const fpBySite = filteredFacilityPorts.reduce<Record<string, FacilityPortInfo[]>>((acc, fp) => {
+    const site = fp.site || 'Unknown site';
+    (acc[site] = acc[site] || []).push(fp);
     return acc;
   }, {});
   const sortedSites = Object.keys(fpBySite).sort();
 
-  // Filter facility ports by search
-  const fpSearchLower = fpSearch.toLowerCase();
-  const filteredSites = fpSearchLower
-    ? sortedSites.filter(site =>
-        site.toLowerCase().includes(fpSearchLower) ||
-        fpBySite[site].some(fp => fp.name.toLowerCase().includes(fpSearchLower))
-      )
-    : sortedSites;
-
   // Selected facility port details
-  const selectedFp = (facilityPorts || []).find(fp => fp.name === selectedFpName);
+  const selectedFp = availableFacilityPorts.find(fp => fp.name === selectedFpName);
   const selectedSite = selectedFp?.site || '';
 
   // Expand VLAN ranges for the selected facility port
-  const availableVlans = selectedFp?.interfaces?.[0]
-    ? expandAllVlanRanges(selectedFp.interfaces[0].vlan_range)
-    : [];
+  const selectedVlanRanges = selectedFp ? getFacilityPortVlanRanges(selectedFp) : [];
+  const availableVlans = Array.from(new Set(expandAllVlanRanges(selectedVlanRanges))).sort((a, b) => a - b);
   const allocatedVlans = new Set(
-    selectedFp?.interfaces?.[0]?.allocated_vlans
-      ? expandAllVlanRanges(selectedFp.interfaces[0].allocated_vlans)
-      : []
+    selectedFp ? expandAllVlanRanges(getFacilityPortAllocatedVlans(selectedFp)) : []
   );
 
   // Filter VLANs by search
@@ -2697,55 +2600,104 @@ function FacilityPortForm({
 
   return (
     <>
-      <div className="editor-section-label">Add Facility Port</div>
+      <div className="editor-section-label" data-testid="facility-port-form-title">Add Facility Port</div>
 
       <div className="form-group" data-help-id="editor.facility-port">
         <label><Tooltip text="Unique name for this facility port">Name</Tooltip></label>
-        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="fp1" />
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => {
+            setName(e.target.value);
+            setNameEdited(true);
+          }}
+          placeholder="fp1"
+          data-testid="facility-port-name-input"
+        />
       </div>
 
       {/* Searchable Facility Port Dropdown */}
       <div className="form-group">
         <label><Tooltip text="Select a FABRIC facility port">Facility Port</Tooltip></label>
+        <div className="fp-dropdown-toolbar">
+          <span data-testid="facility-port-list-count">
+            {facilityPortsLoading && availableFacilityPorts.length === 0
+              ? 'Loading facility ports...'
+              : `${filteredFacilityPorts.length} of ${availableFacilityPorts.length} facility ports`}
+          </span>
+          <button
+            type="button"
+            className="fp-refresh-button"
+            disabled={facilityPortsLoading}
+            onClick={() => {
+              facilityPortsRequestedRef.current = true;
+              loadFacilityPorts(true);
+            }}
+          >
+            {facilityPortsLoading ? 'Loading' : 'Refresh'}
+          </button>
+        </div>
+        {facilityPortsError && (
+          <div className="fp-dropdown-error" data-testid="facility-port-list-error">{facilityPortsError}</div>
+        )}
         <div className="fp-searchable-dropdown" ref={fpDropdownRef}>
           <input
             type="text"
             className="fp-dropdown-input"
-            placeholder="Search facility ports..."
+            placeholder="Search by name, site, VLAN, device, or interface..."
             value={fpDropdownOpen ? fpSearch : (selectedFpName ? `${selectedFpName} (${selectedSite})` : '')}
+            data-testid="facility-port-search-input"
             onChange={(e) => { setFpSearch(e.target.value); setFpDropdownOpen(true); }}
             onFocus={() => { setFpDropdownOpen(true); setFpSearch(''); }}
           />
+          <span className="fp-dropdown-arrow">{fpDropdownOpen ? '\u25B2' : '\u25BC'}</span>
           {fpDropdownOpen && (
-            <div className="fp-dropdown-list">
-              {filteredSites.length === 0 && (
+            <div className="fp-dropdown-list" data-testid="facility-port-options">
+              {facilityPortsLoading && availableFacilityPorts.length === 0 && (
+                <div className="fp-dropdown-empty">Loading facility ports...</div>
+              )}
+              {!facilityPortsLoading && availableFacilityPorts.length === 0 && (
+                <div className="fp-dropdown-empty">No facility ports loaded. Use Refresh to load project facility ports.</div>
+              )}
+              {!facilityPortsLoading && availableFacilityPorts.length > 0 && sortedSites.length === 0 && (
                 <div className="fp-dropdown-empty">No matching facility ports</div>
               )}
-              {filteredSites.map(site => {
-                const portsForSite = fpBySite[site].filter(fp =>
-                  !fpSearchLower || fp.name.toLowerCase().includes(fpSearchLower) || site.toLowerCase().includes(fpSearchLower)
-                );
-                if (portsForSite.length === 0) return null;
+              {sortedSites.map(site => {
                 return (
                   <div key={site}>
                     <div className="fp-dropdown-site-header">{site}</div>
-                    {portsForSite.map(fp => (
-                      <div
-                        key={fp.name}
-                        className={`fp-dropdown-item ${fp.name === selectedFpName ? 'selected' : ''}`}
-                        onClick={() => {
-                          setSelectedFpName(fp.name);
-                          setFpDropdownOpen(false);
-                          setFpSearch('');
-                          setVlan('');
-                        }}
-                      >
-                        <span className="fp-dropdown-item-name">{fp.name}</span>
-                        <span className="fp-dropdown-item-vlan">
-                          {fp.interfaces[0]?.vlan_range.join(', ') || ''}
-                        </span>
-                      </div>
-                    ))}
+                    {fpBySite[site].map(fp => {
+                      const vlanRanges = getFacilityPortVlanRanges(fp);
+                      const interfaceSummary = getFacilityPortInterfaceSummary(fp);
+                      return (
+                        <div
+                          key={fp.name}
+                          className={`fp-dropdown-item ${fp.name === selectedFpName ? 'selected' : ''}`}
+                          data-testid="facility-port-option"
+                          data-facility-port-name={fp.name}
+                          data-site={site}
+                          title={`${fp.name} ${site} ${interfaceSummary} ${vlanRanges.join(', ')}`}
+                          onClick={() => {
+                            setSelectedFpName(fp.name);
+                            if (!nameEdited || !name || name === defaultFpName) {
+                              setName(fp.name);
+                              setNameEdited(false);
+                            }
+                            setFpDropdownOpen(false);
+                            setFpSearch('');
+                            setVlan('');
+                          }}
+                        >
+                          <span className="fp-dropdown-item-main">
+                            <span className="fp-dropdown-item-name">{fp.name}</span>
+                            <span className="fp-dropdown-item-detail">{interfaceSummary}</span>
+                          </span>
+                          <span className="fp-dropdown-item-vlan" title={vlanRanges.join(', ')}>
+                            {vlanRanges.join(', ') || 'No VLANs'}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })}
@@ -2772,11 +2724,13 @@ function FacilityPortForm({
               className="fp-dropdown-input"
               placeholder="Search VLANs..."
               value={vlanDropdownOpen ? vlanSearch : vlan}
+              data-testid="facility-port-vlan-input"
               onChange={(e) => { setVlanSearch(e.target.value); setVlanDropdownOpen(true); }}
               onFocus={() => { setVlanDropdownOpen(true); setVlanSearch(''); }}
             />
+            <span className="fp-dropdown-arrow">{vlanDropdownOpen ? '\u25B2' : '\u25BC'}</span>
             {vlanDropdownOpen && (
-              <div className="fp-dropdown-list fp-vlan-list">
+              <div className="fp-dropdown-list fp-vlan-list" data-testid="facility-port-vlan-options">
                 {filteredVlans.length === 0 && (
                   <div className="fp-dropdown-empty">No matching VLANs</div>
                 )}
@@ -2786,6 +2740,8 @@ function FacilityPortForm({
                     <div
                       key={v}
                       className={`fp-dropdown-item fp-vlan-item ${isAllocated ? 'allocated' : ''} ${String(v) === vlan ? 'selected' : ''}`}
+                      data-testid="facility-port-vlan-option"
+                      data-vlan={v}
                       onClick={() => {
                         if (!isAllocated) {
                           setVlan(String(v));
@@ -2802,9 +2758,9 @@ function FacilityPortForm({
               </div>
             )}
           </div>
-          {selectedFp.interfaces[0] && (
+          {selectedVlanRanges.length > 0 && (
             <div className="fp-vlan-range-hint">
-              Range: {selectedFp.interfaces[0].vlan_range.join(', ')}
+              Range: {selectedVlanRanges.join(', ')}
             </div>
           )}
         </div>
@@ -2812,13 +2768,14 @@ function FacilityPortForm({
 
       <div className="form-group">
         <label><Tooltip text="Bandwidth in Gbps">Bandwidth (Gbps)</Tooltip> <span className="range-value">{bandwidth}</span></label>
-        <input type="range" min={1} max={100} value={bandwidth} onChange={(e) => setBandwidth(+e.target.value)} />
+        <input type="range" min={1} max={100} value={bandwidth} onChange={(e) => setBandwidth(+e.target.value)} data-testid="facility-port-bandwidth-input" />
       </div>
 
       <div className="form-actions">
         <button
           className="primary"
           disabled={!name || !selectedSite || !sliceName || loading}
+          data-testid="facility-port-submit"
           onClick={() => onSubmit({ name, site: selectedSite, vlan: vlan || undefined, bandwidth })}
         >
           Add Facility Port
@@ -2860,15 +2817,15 @@ function PortMirrorForm({
 
   return (
     <>
-      <div className="editor-section-label">Add Port Mirror</div>
+      <div className="editor-section-label" data-testid="port-mirror-form-title">Add Port Mirror</div>
 
       <div className="form-group">
         <label><Tooltip text="Unique name for this port mirror service">Name</Tooltip></label>
-        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="mirror1" />
+        <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="mirror1" data-testid="port-mirror-name-input" />
       </div>
       <div className="form-group">
         <label><Tooltip text="Interface whose traffic will be mirrored">Mirror Interface (source)</Tooltip></label>
-        <select value={mirrorIface} onChange={(e) => setMirrorIface(e.target.value)}>
+        <select value={mirrorIface} onChange={(e) => setMirrorIface(e.target.value)} data-testid="port-mirror-source-select">
           <option value="">-- Select --</option>
           {allIfaces.map((i) => (
             <option key={i.name} value={i.name}>{i.name} ({i.nodeName})</option>
@@ -2877,7 +2834,7 @@ function PortMirrorForm({
       </div>
       <div className="form-group">
         <label><Tooltip text="Interface that receives the mirrored traffic for capture">Receive Interface (capture)</Tooltip></label>
-        <select value={receiveIface} onChange={(e) => setReceiveIface(e.target.value)}>
+        <select value={receiveIface} onChange={(e) => setReceiveIface(e.target.value)} data-testid="port-mirror-receive-select">
           <option value="">-- Select --</option>
           {allIfaces.filter((i) => i.name !== mirrorIface).map((i) => (
             <option key={i.name} value={i.name}>{i.name} ({i.nodeName})</option>
@@ -2886,7 +2843,7 @@ function PortMirrorForm({
       </div>
       <div className="form-group">
         <label><Tooltip text="Which traffic direction to mirror">Direction</Tooltip></label>
-        <select value={direction} onChange={(e) => setDirection(e.target.value)}>
+        <select value={direction} onChange={(e) => setDirection(e.target.value)} data-testid="port-mirror-direction-select">
           <option value="both">Both (ingress + egress)</option>
           <option value="ingress">Ingress only</option>
           <option value="egress">Egress only</option>
@@ -2903,6 +2860,7 @@ function PortMirrorForm({
         <button
           className="primary"
           disabled={!name || !mirrorIface || !receiveIface || loading}
+          data-testid="port-mirror-submit"
           onClick={() => onSubmit({ name, mirror_interface_name: mirrorIface, receive_interface_name: receiveIface, mirror_direction: direction })}
         >
           Add Port Mirror
@@ -2914,28 +2872,65 @@ function PortMirrorForm({
 
 // --- Port Mirror Read-Only View ---
 function PortMirrorReadOnlyView({
-  pm, loading, onDelete,
+  pm, sliceData, loading, onUpdate, onDelete,
 }: {
   pm: SlicePortMirror;
+  sliceData: SliceData | null;
   loading: boolean;
+  onUpdate: (data: { mirror_interface_name: string; receive_interface_name: string; mirror_direction?: string }) => void;
   onDelete: () => void;
 }) {
+  const [mirrorIface, setMirrorIface] = useState(pm.mirror_interface_name || '');
+  const [receiveIface, setReceiveIface] = useState(pm.receive_interface_name || '');
+  const [direction, setDirection] = useState(pm.mirror_direction || 'both');
+  useEffect(() => {
+    setMirrorIface(pm.mirror_interface_name || '');
+    setReceiveIface(pm.receive_interface_name || '');
+    setDirection(pm.mirror_direction || 'both');
+  }, [pm.name, pm.mirror_interface_name, pm.receive_interface_name, pm.mirror_direction]);
+  const allIfaces: { name: string; nodeName: string }[] = [];
+  for (const node of sliceData?.nodes ?? []) {
+    for (const iface of node.interfaces ?? []) {
+      allIfaces.push({ name: iface.name, nodeName: node.name });
+    }
+  }
   return (
     <>
       <div className="editor-section-label">Port Mirror: {pm.name}</div>
       <div className="form-group">
         <label>Mirror Interface</label>
-        <span className="form-value">{pm.mirror_interface_name || '—'}</span>
+        <select value={mirrorIface} onChange={(e) => setMirrorIface(e.target.value)} disabled={loading}>
+          <option value="">-- Select --</option>
+          {allIfaces.map((i) => (
+            <option key={i.name} value={i.name}>{i.name} ({i.nodeName})</option>
+          ))}
+        </select>
       </div>
       <div className="form-group">
         <label>Receive Interface</label>
-        <span className="form-value">{pm.receive_interface_name || '—'}</span>
+        <select value={receiveIface} onChange={(e) => setReceiveIface(e.target.value)} disabled={loading}>
+          <option value="">-- Select --</option>
+          {allIfaces.filter((i) => i.name !== mirrorIface).map((i) => (
+            <option key={i.name} value={i.name}>{i.name} ({i.nodeName})</option>
+          ))}
+        </select>
       </div>
       <div className="form-group">
         <label>Direction</label>
-        <span className="form-value">{pm.mirror_direction || 'both'}</span>
+        <select value={direction} onChange={(e) => setDirection(e.target.value)} disabled={loading}>
+          <option value="both">Both (ingress + egress)</option>
+          <option value="ingress">Ingress only</option>
+          <option value="egress">Egress only</option>
+        </select>
       </div>
       <div className="form-actions">
+        <button
+          className="primary"
+          disabled={loading || !mirrorIface || !receiveIface}
+          onClick={() => onUpdate({ mirror_interface_name: mirrorIface, receive_interface_name: receiveIface, mirror_direction: direction })}
+        >
+          Update Port Mirror
+        </button>
         <button className="danger" disabled={loading} onClick={onDelete}>
           Delete Port Mirror
         </button>
@@ -3291,9 +3286,10 @@ function L3ConfigEditor({
 
 // --- Network read-only view (existing networks) ---
 function NetworkReadOnlyView({
-  network, loading, isDraft, sliceName, onSliceUpdated, onDelete,
+  network, sliceData, loading, isDraft, sliceName, onSliceUpdated, onDelete,
 }: {
   network: SliceNetwork;
+  sliceData: SliceData | null;
   loading: boolean;
   isDraft: boolean;
   sliceName: string;
@@ -3319,7 +3315,10 @@ function NetworkReadOnlyView({
     return ips;
   });
   const [saving, setSaving] = useState(false);
+  const [membershipSaving, setMembershipSaving] = useState(false);
   const [error, setError] = useState('');
+  const [selectedIfaces, setSelectedIfaces] = useState<string[]>(() => network.interfaces.map(i => i.name));
+  const [networkVlan, setNetworkVlan] = useState('');
 
   // Reset local state when selected network changes
   useEffect(() => {
@@ -3337,10 +3336,43 @@ function NetworkReadOnlyView({
       if (iface.ip_addr) ips[iface.name] = iface.ip_addr;
     }
     setInterfaceIps(ips);
+    setSelectedIfaces(network.interfaces.map(i => i.name));
+    const firstVlan = network.interfaces.find(i => i.vlan)?.vlan || '';
+    setNetworkVlan(firstVlan);
     setError('');
   }, [network.name, network.subnet, network.gateway, network.interfaces]);
 
   const hasChanges = ipMode !== derivedMode || subnet !== (network.subnet || '') || gateway !== (network.gateway || '');
+  const currentVlan = network.interfaces.find(i => i.vlan)?.vlan || '';
+  const currentIfaceNames = network.interfaces.map(i => i.name).sort().join('|');
+  const selectedIfaceNames = [...selectedIfaces].sort().join('|');
+  const hasMembershipChanges = currentIfaceNames !== selectedIfaceNames;
+  const hasVlanChanges = networkVlan !== currentVlan;
+
+  const allNetworkableIfaces = (() => {
+    const rows: Array<{ name: string; label: string; attachedTo: string; kind: 'node' | 'facility-port' }> = [];
+    for (const node of sliceData?.nodes ?? []) {
+      for (const iface of node.interfaces ?? []) {
+        rows.push({
+          name: iface.name,
+          label: `${iface.name} (${node.name})`,
+          attachedTo: iface.network_name || '',
+          kind: 'node',
+        });
+      }
+    }
+    for (const fp of sliceData?.facility_ports ?? []) {
+      for (const iface of fp.interfaces ?? []) {
+        rows.push({
+          name: iface.name,
+          label: `${iface.name} (${fp.name} facility port)`,
+          attachedTo: iface.network_name || '',
+          kind: 'facility-port',
+        });
+      }
+    }
+    return rows.filter(row => !row.attachedTo || row.attachedTo === network.name || selectedIfaces.includes(row.name));
+  })();
 
   const handleSave = async () => {
     setSaving(true);
@@ -3360,6 +3392,22 @@ function NetworkReadOnlyView({
     }
   };
 
+  const handleSaveMembership = async () => {
+    setMembershipSaving(true);
+    setError('');
+    try {
+      const result = await api.updateNetwork(sliceName, network.name, {
+        interfaces: selectedIfaces,
+        ...(networkVlan ? { vlan: networkVlan } : {}),
+      });
+      onSliceUpdated(result);
+    } catch (e: any) {
+      setError(e.message || 'Failed to update network membership');
+    } finally {
+      setMembershipSaving(false);
+    }
+  };
+
   const isL2 = network.layer === 'L2';
   const canEdit = isDraft && isL2;
 
@@ -3375,6 +3423,52 @@ function NetworkReadOnlyView({
         <span className="readonly-label">Layer</span>
         <span className="readonly-value">{network.layer}</span>
       </div>
+
+      {isDraft && (
+        <>
+          <div className="editor-section-divider" />
+          <div className="editor-section-label">Interfaces</div>
+          {allNetworkableIfaces.length === 0 ? (
+            <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginBottom: 8 }}>
+              No available interfaces. Add NIC components or facility ports first.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+              {allNetworkableIfaces.map((iface) => {
+                const checked = selectedIfaces.includes(iface.name);
+                return (
+                  <label key={iface.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={loading || membershipSaving}
+                      onChange={() => {
+                        setSelectedIfaces(prev => checked ? prev.filter(n => n !== iface.name) : [...prev, iface.name]);
+                      }}
+                    />
+                    <span style={{ flex: 1 }}>{iface.label}</span>
+                    <span style={{ color: 'var(--fabric-text-muted)' }}>{iface.kind === 'facility-port' ? 'facility' : 'node'}</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+          {isL2 && (
+            <div className="form-group">
+              <label><Tooltip text="Optional VLAN tag to apply to this L2 network's interfaces">VLAN</Tooltip></label>
+              <input type="text" value={networkVlan} onChange={(e) => setNetworkVlan(e.target.value)} placeholder="Auto" />
+            </div>
+          )}
+          <button
+            className="primary-btn"
+            disabled={loading || membershipSaving || (!hasMembershipChanges && !hasVlanChanges)}
+            onClick={handleSaveMembership}
+            style={{ marginBottom: 8 }}
+          >
+            {membershipSaving ? 'Saving...' : 'Apply Interface Membership'}
+          </button>
+        </>
+      )}
 
       {isL2 && canEdit ? (
         <>
@@ -3457,7 +3551,7 @@ function NetworkReadOnlyView({
         />
       )}
 
-      {network.interfaces.length > 0 && network.layer === 'L2' && (
+      {network.interfaces.length > 0 && network.layer === 'L2' && !isDraft && (
         <>
           <div className="editor-section-divider" />
           <div className="editor-section-label">Interfaces</div>
@@ -3485,31 +3579,62 @@ function NetworkReadOnlyView({
 
 // --- Facility Port read-only view ---
 function FacilityPortReadOnlyView({
-  fp, loading, onDelete,
+  fp, sliceName, sliceData, loading, onUpdate, onDelete,
 }: {
-  fp: SliceFacilityPort;
+  fp: FabricFacilityPortSliver;
+  sliceName: string;
+  sliceData: SliceData | null;
   loading: boolean;
+  onUpdate: (data: { site?: string; vlan?: string; bandwidth?: number }) => void;
   onDelete: () => void;
 }) {
+  const derived = !!fp.derived_from_graph;
+  const [site, setSite] = useState(fp.site || '');
+  const [vlan, setVlan] = useState(fp.vlan || '');
+  const [bandwidth, setBandwidth] = useState(Number(fp.bandwidth) || 10);
+  useEffect(() => {
+    setSite(fp.site || '');
+    setVlan(fp.vlan || '');
+    setBandwidth(Number(fp.bandwidth) || 10);
+  }, [fp.name, fp.site, fp.vlan, fp.bandwidth]);
+  const connectedNetworks = (sliceData?.networks ?? []).filter(net =>
+    net.interfaces.some(iface => fp.interfaces.some(fpIface => fpIface.name === iface.name))
+  );
   return (
     <>
       <div className="editor-section-label">Facility Port: {fp.name}</div>
 
-      <div className="readonly-field">
-        <span className="readonly-label">Site</span>
-        <span className="readonly-value">{fp.site}</span>
+      <div className="form-group">
+        <label><Tooltip text="FABRIC site for this facility port">Site</Tooltip></label>
+        <input type="text" value={site} onChange={(e) => setSite(e.target.value)} disabled={loading || !sliceName || derived} />
       </div>
-      {fp.vlan && (
-        <div className="readonly-field">
-          <span className="readonly-label">VLAN</span>
-          <span className="readonly-value">{fp.vlan}</span>
+      <div className="form-group">
+        <label><Tooltip text="VLAN tag for the facility port">VLAN</Tooltip></label>
+        <input type="text" value={vlan} onChange={(e) => setVlan(e.target.value)} placeholder="Auto" disabled={loading || derived} />
+      </div>
+      <div className="form-group">
+        <label><Tooltip text="Bandwidth in Gbps">Bandwidth (Gbps)</Tooltip> <span className="range-value">{bandwidth}</span></label>
+        <input type="range" min={1} max={100} value={bandwidth} onChange={(e) => setBandwidth(+e.target.value)} disabled={loading || derived} />
+      </div>
+      {derived && (
+        <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginBottom: 8 }}>
+          This external endpoint is reported by FABRIC as a network interface and rendered as a facility port in the topology. It is shown here with the other slivers, but it cannot be updated or deleted through the facility-port API.
         </div>
       )}
-      {fp.bandwidth && (
-        <div className="readonly-field">
-          <span className="readonly-label">Bandwidth</span>
-          <span className="readonly-value">{fp.bandwidth}</span>
+      {!derived && connectedNetworks.length > 0 && (
+        <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginBottom: 8 }}>
+          Replacing this facility port will preserve attachment to {connectedNetworks.map(n => n.name).join(', ')}.
         </div>
+      )}
+      {!derived && (
+        <button
+          className="primary-btn"
+          disabled={loading || !site}
+          onClick={() => onUpdate({ site, vlan: vlan || undefined, bandwidth })}
+          style={{ marginBottom: 8 }}
+        >
+          Update Facility Port
+        </button>
       )}
 
       {fp.interfaces.length > 0 && (
@@ -3525,10 +3650,14 @@ function FacilityPortReadOnlyView({
         </>
       )}
 
-      <div className="editor-section-divider" />
-      <button className="danger-btn" disabled={loading} onClick={onDelete}>
-        Delete Facility Port
-      </button>
+      {!derived && (
+        <>
+          <div className="editor-section-divider" />
+          <button className="danger-btn" disabled={loading} onClick={onDelete}>
+            Delete Facility Port
+          </button>
+        </>
+      )}
     </>
   );
 }

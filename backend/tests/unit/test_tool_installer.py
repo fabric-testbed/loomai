@@ -217,13 +217,13 @@ class TestCleanStaleLocks:
         ti.clean_stale_locks()
         assert not os.path.isfile(lock_path)
 
-    def test_keeps_active_lock(self, clean_dirs):
+    def test_removes_active_lock_on_startup(self, clean_dirs):
         os.makedirs(ti._LOCK_DIR, exist_ok=True)
         lock_path = os.path.join(ti._LOCK_DIR, "active.lock")
         with open(lock_path, "w") as f:
-            f.write(str(os.getpid()))  # Our own PID — still alive
+            f.write(str(os.getpid()))  # Startup cleanup removes all locks, even live PIDs
         ti.clean_stale_locks()
-        assert os.path.isfile(lock_path)
+        assert not os.path.isfile(lock_path)
 
     def test_handles_corrupt_lock_file(self, clean_dirs):
         os.makedirs(ti._LOCK_DIR, exist_ok=True)

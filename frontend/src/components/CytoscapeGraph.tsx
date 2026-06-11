@@ -23,8 +23,6 @@ function buildStylesheet(dark: boolean): any[] {
   const l2NodeBg = dark ? '#1a3050' : '#ddeaf2';
   const l3Color = dark ? '#2bb5a0' : '#008e7a';
   const l3NodeBg = dark ? '#1a3a30' : '#e0f2f1';
-  const fpColor = dark ? '#ffa562' : '#ff8542';
-  const fpNodeBg = dark ? '#3a2008' : '#fff3e0';
   const internetColor = dark ? '#a78bfa' : '#7c3aed';
   const internetBg = dark ? '#1e1040' : '#ede9fe';
   const selectOverlay = dark ? '#ffa562' : '#ff8542';
@@ -163,10 +161,11 @@ function buildStylesheet(dark: boolean): any[] {
       'display': 'none',
     }},
     { selector: '.facility-port', style: {
-      'shape': 'diamond', 'width': 80, 'height': 70, 'background-color': fpNodeBg,
-      'border-width': 2, 'border-color': fpColor, 'label': 'data(label)',
+      'shape': 'diamond', 'width': 90, 'height': 80, 'background-color': internetBg,
+      'border-width': 3, 'border-color': internetColor, 'border-style': 'dashed',
+      'label': 'data(label)',
       'text-valign': 'center', 'text-halign': 'center', 'font-size': '9px',
-      'text-wrap': 'wrap', 'text-max-width': '70px', 'color': fpColor,
+      'text-wrap': 'wrap', 'text-max-width': '80px', 'color': internetColor,
       'font-family': 'Montserrat, sans-serif',
     }},
     // Port mirror service nodes — hexagon shape, coral/orange
@@ -239,6 +238,13 @@ function buildStylesheet(dark: boolean): any[] {
       'text-background-padding': '2px',
       'color': '#ff8542',
     }},
+    { selector: '.edge-facility-port-l2', style: {
+      'line-color': internetColor,
+      'target-arrow-color': internetColor,
+      'line-style': 'dashed',
+      'width': 2,
+      'color': internetColor,
+    }},
     // --- Composite member bounding boxes ---
     { selector: '.composite-member', style: {
       'shape': 'round-rectangle',
@@ -267,6 +273,12 @@ function buildStylesheet(dark: boolean): any[] {
       'border-width': 3,
       'color': '#27aae1',
     }},
+    { selector: '.facility-port.composite-shared-network', style: {
+      'background-color': internetBg,
+      'border-color': internetColor,
+      'border-width': 3,
+      'color': internetColor,
+    }},
   ];
 }
 
@@ -289,26 +301,64 @@ function positionComponentsAtVmEdge(cy: Core) {
   });
 
   for (const [vmId, comps] of Object.entries(byVm)) {
-    const vm = cy.getElementById(vmId);
-    if (vm.empty()) continue;
-
-    const vmPos = vm.position();
-    const vmH = 70;  // fixed VM height from stylesheet
-
-    // Spread components horizontally along the bottom edge
-    const spacing = 50;
-    const totalWidth = (comps.length - 1) * spacing;
-    const startX = vmPos.x - totalWidth / 2;
-
-    comps.forEach((comp: any, i: number) => {
-      comp.unlock();
-      comp.position({
-        x: startX + i * spacing,
-        y: vmPos.y + vmH / 2,  // bottom edge of VM
-      });
-      comp.lock();
-    });
+    positionComponentsForVm(cy, vmId, comps);
   }
+}
+
+function positionComponentsForVm(cy: Core, vmId: string, compsArg?: any[]) {
+  const vm = cy.getElementById(vmId);
+  if (vm.empty()) return;
+
+  const comps = compsArg ?? cy.nodes('.component').filter(
+    (n: any) => n.data('parent_vm') === vmId && !n.hasClass('component-hidden')
+  ).toArray();
+  if (!comps.length) return;
+
+  const vmPos = vm.position();
+  const vmBox = vm.boundingBox({ includeLabels: false, includeOverlays: false });
+  const vmWidth = Math.max(70, vmBox.w || Number(vm.width()) || 120);
+  const vmHeight = Math.max(50, vmBox.h || Number(vm.height()) || 70);
+  const gap = 8;
+
+  const widths = comps.map((comp: any) => {
+    const box = comp.boundingBox({ includeLabels: true, includeOverlays: false });
+    return Math.max(28, box.w || Number(comp.width()) || 34);
+  });
+  const totalWidth = widths.reduce((sum: number, width: number) => sum + width, 0) + gap * (comps.length - 1);
+  const bottomY = vmPos.y + vmHeight / 2;
+
+  if (totalWidth <= vmWidth + 12) {
+    let x = vmPos.x - totalWidth / 2;
+    comps.forEach((comp: any, i: number) => {
+      const width = widths[i];
+      comp.unlock();
+      comp.position({ x: x + width / 2, y: bottomY });
+      comp.lock();
+      x += width + gap;
+    });
+    return;
+  }
+
+  const rowCount = Math.ceil(totalWidth / (vmWidth + 12));
+  const rows: any[][] = Array.from({ length: Math.min(rowCount, comps.length) }, () => []);
+  const rowWidths: number[] = rows.map(() => 0);
+  comps.forEach((comp: any, i: number) => {
+    const rowIndex = rowWidths.indexOf(Math.min(...rowWidths));
+    rows[rowIndex].push({ comp, width: widths[i] });
+    rowWidths[rowIndex] += widths[i] + (rows[rowIndex].length > 1 ? gap : 0);
+  });
+
+  rows.forEach((row, rowIndex) => {
+    const rowWidth = row.reduce((sum, item) => sum + item.width, 0) + gap * Math.max(0, row.length - 1);
+    let x = vmPos.x - rowWidth / 2;
+    const y = bottomY + rowIndex * 24;
+    row.forEach(({ comp, width }) => {
+      comp.unlock();
+      comp.position({ x: x + width / 2, y });
+      comp.lock();
+      x += width + gap;
+    });
+  });
 }
 
 /** Layout presets matching fabvis layouts.py */
@@ -335,6 +385,36 @@ export interface ContextMenuAction {
   instanceName?: string;
 }
 
+export function isTopologyElementDeletable(el: Record<string, any>): boolean {
+  const elementType = String(el.element_type || '');
+  const testbed = String(el.testbed || '').toLowerCase();
+  const deletableFlag = String(el.deletable ?? '').toLowerCase();
+  const name = String(el.name || '').toLowerCase();
+  const netType = String(el.net_type || el.type || '').toLowerCase();
+  const compactName = name.replace(/[^a-z0-9]/g, '');
+
+  if (testbed === 'shared') return false;
+  if (elementType === 'fabnet-internet' || elementType === 'chameleon_draft' || elementType === 'chameleon_cluster') return false;
+
+  if (elementType === 'facility-port') return true;
+  if (deletableFlag === 'false') return false;
+  if (elementType === 'node' || elementType === 'port-mirror') return true;
+  if (elementType === 'network') {
+    if (compactName.startsWith('fabnetv4') || compactName.startsWith('fabnetv6') || netType.includes('fabnet')) return false;
+    if (testbed === 'chameleon') {
+      return deletableFlag === 'true' || Boolean(el.resource_id);
+    }
+    return true;
+  }
+  if (testbed === 'chameleon' && elementType === 'chameleon_resource') {
+    return Boolean(el.resource_id);
+  }
+  if (elementType === 'chameleon_instance') {
+    return String(el.status || '').toUpperCase() === 'DRAFT' && Boolean(el.node_id || el.planned_node_id);
+  }
+  return false;
+}
+
 interface CytoscapeGraphProps {
   graph: CyGraph | null;
   layout: string;
@@ -344,7 +424,7 @@ interface CytoscapeGraphProps {
   bootNodeStatus?: Record<string, 'pending' | 'running' | 'done' | 'error'>;
   /** Optional Chameleon graph elements to merge (from /api/chameleon/graph) */
   chameleonGraph?: { nodes: any[]; edges: any[] } | null;
-  /** When true, update element data in-place without re-running layout */
+  /** When true, update element data in-place; topology additions/removals still re-layout. */
   preserveLayout?: boolean;
   onLayoutChange: (layout: string) => void;
   onNodeClick: (data: Record<string, string>) => void;
@@ -358,6 +438,124 @@ interface MenuState {
   y: number;
   selected: Record<string, string>[];
   sliceName?: string;  // set when right-clicking a slice compound node
+}
+
+type GraphElementInput = {
+  data?: Record<string, any>;
+  classes?: string;
+};
+
+type NormalizedGraphElement = {
+  data: Record<string, any>;
+  classes?: string;
+};
+
+export interface SanitizedGraphElements {
+  nodes: NormalizedGraphElement[];
+  edges: NormalizedGraphElement[];
+  droppedEdges: Array<{ id: string; source: string; target: string; reason: string }>;
+  droppedNodes: Array<{ id: string; reason: string }>;
+}
+
+export interface GraphElementIdSnapshot {
+  nodeIds: string[];
+  edgeIds: string[];
+}
+
+function elementId(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return String(value);
+}
+
+export function graphElementIdSnapshot(
+  nodes: GraphElementInput[],
+  edges: GraphElementInput[],
+): GraphElementIdSnapshot {
+  return {
+    nodeIds: nodes.map((node) => elementId(node.data?.id)).filter(Boolean).sort(),
+    edgeIds: edges.map((edge) => elementId(edge.data?.id)).filter(Boolean).sort(),
+  };
+}
+
+export function graphElementIdsChanged(previous: GraphElementIdSnapshot | null, next: GraphElementIdSnapshot): boolean {
+  if (!previous) return true;
+  if (previous.nodeIds.length !== next.nodeIds.length || previous.edgeIds.length !== next.edgeIds.length) return true;
+  return previous.nodeIds.some((id, index) => id !== next.nodeIds[index])
+    || previous.edgeIds.some((id, index) => id !== next.edgeIds[index]);
+}
+
+export function sanitizeGraphElements(
+  nodes: GraphElementInput[],
+  edges: GraphElementInput[],
+): SanitizedGraphElements {
+  const normalizedNodes: NormalizedGraphElement[] = [];
+  const droppedNodes: SanitizedGraphElements['droppedNodes'] = [];
+  const nodeIds = new Set<string>();
+
+  for (const node of nodes) {
+    const data = { ...(node.data ?? {}) };
+    const id = elementId(data.id);
+    if (!id) {
+      droppedNodes.push({ id: '', reason: 'missing node id' });
+      continue;
+    }
+    if (nodeIds.has(id)) {
+      droppedNodes.push({ id, reason: 'duplicate node id' });
+      continue;
+    }
+    data.id = id;
+    nodeIds.add(id);
+    normalizedNodes.push({ data, classes: node.classes });
+  }
+
+  for (const node of normalizedNodes) {
+    const parent = elementId(node.data.parent);
+    if (parent && !nodeIds.has(parent)) {
+      delete node.data.parent;
+    } else if (parent) {
+      node.data.parent = parent;
+    }
+  }
+
+  const normalizedEdges: NormalizedGraphElement[] = [];
+  const droppedEdges: SanitizedGraphElements['droppedEdges'] = [];
+  const edgeIds = new Set<string>();
+
+  edges.forEach((edge, index) => {
+    const data = { ...(edge.data ?? {}) };
+    const source = elementId(data.source);
+    const target = elementId(data.target);
+    const id = elementId(data.id) || `edge:${source}->${target}:${index}`;
+
+    if (!source || !target) {
+      droppedEdges.push({ id, source, target, reason: 'missing endpoint' });
+      return;
+    }
+    if (!nodeIds.has(source) || !nodeIds.has(target)) {
+      droppedEdges.push({ id, source, target, reason: 'endpoint node not found' });
+      return;
+    }
+    if (edgeIds.has(id)) {
+      droppedEdges.push({ id, source, target, reason: 'duplicate edge id' });
+      return;
+    }
+
+    data.id = id;
+    data.source = source;
+    data.target = target;
+    edgeIds.add(id);
+    normalizedEdges.push({ data, classes: edge.classes });
+  });
+
+  return { nodes: normalizedNodes, edges: normalizedEdges, droppedEdges, droppedNodes };
+}
+
+function warnAboutDroppedGraphElements(sanitized: SanitizedGraphElements) {
+  if (sanitized.droppedNodes.length === 0 && sanitized.droppedEdges.length === 0) return;
+  console.warn('Dropped invalid topology elements before rendering', {
+    nodes: sanitized.droppedNodes,
+    edges: sanitized.droppedEdges,
+  });
 }
 
 export default React.memo(function CytoscapeGraph({
@@ -378,6 +576,7 @@ export default React.memo(function CytoscapeGraph({
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const prevGraphRef = useRef<CyGraph | null>(null);
+  const prevElementIdsRef = useRef<GraphElementIdSnapshot | null>(null);
   const prevLayoutRef = useRef<string>(layout);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [showComponents, setShowComponents] = useState(true);
@@ -435,22 +634,9 @@ export default React.memo(function CytoscapeGraph({
     cy.on('drag', '.vm, .chameleon-instance', (e: any) => {
       const vm = e.target;
       const vmId = vm.id();
-      const vmPos = vm.position();
       const comps = cy.nodes('.component').filter((n: any) => n.data('parent_vm') === vmId && !n.hasClass('component-hidden'));
       if (comps.empty()) return;
-
-      const spacing = 50;
-      const total = (comps.length - 1) * spacing;
-      const startX = vmPos.x - total / 2;
-
-      comps.forEach((comp: any, i: number) => {
-        comp.unlock();
-        comp.position({
-          x: startX + i * spacing,
-          y: vmPos.y + 35,
-        });
-        comp.lock();
-      });
+      positionComponentsForVm(cy, vmId, comps.toArray());
     });
 
     return () => {
@@ -600,7 +786,12 @@ export default React.memo(function CytoscapeGraph({
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    if (!graph && !chameleonGraph) { cy.elements().remove(); prevGraphRef.current = null; return; }
+    if (!graph && !chameleonGraph) {
+      cy.elements().remove();
+      prevGraphRef.current = null;
+      prevElementIdsRef.current = null;
+      return;
+    }
 
     // Build the full element set (FABRIC + optional Chameleon)
     const allNodes = [
@@ -611,6 +802,12 @@ export default React.memo(function CytoscapeGraph({
       ...(graph?.edges ?? []),
       ...(chameleonGraph?.edges ?? []),
     ];
+    const sanitized = sanitizeGraphElements(allNodes, allEdges);
+    warnAboutDroppedGraphElements(sanitized);
+    const allRenderableNodes = sanitized.nodes;
+    const allRenderableEdges = sanitized.edges;
+    const nextElementIds = graphElementIdSnapshot(allRenderableNodes, allRenderableEdges);
+    const topologyChanged = graphElementIdsChanged(prevElementIdsRef.current, nextElementIds);
 
     // Determine whether we can do a stable in-place update:
     // preserveLayout is requested AND the graph already has elements AND layout algorithm hasn't changed
@@ -622,12 +819,12 @@ export default React.memo(function CytoscapeGraph({
       // --- Stable update: diff data in-place without re-running layout ---
       cy.startBatch();
 
-      const newNodeIds = new Set(allNodes.map(n => n.data.id));
-      const newEdgeIds = new Set(allEdges.map(e => e.data.id));
+      const newNodeIds = new Set(allRenderableNodes.map(n => n.data.id));
+      const newEdgeIds = new Set(allRenderableEdges.map(e => e.data.id));
 
       // Update existing nodes or add new ones
       const addedElements: cytoscape.ElementDefinition[] = [];
-      for (const n of allNodes) {
+      for (const n of allRenderableNodes) {
         const existing = cy.getElementById(n.data.id);
         if (existing.length > 0) {
           // Update data attributes (state colors, labels, etc.) without moving
@@ -640,7 +837,7 @@ export default React.memo(function CytoscapeGraph({
       }
 
       // Update existing edges or add new ones
-      for (const e of allEdges) {
+      for (const e of allRenderableEdges) {
         const existing = cy.getElementById(e.data.id);
         if (existing.length > 0) {
           existing.data(e.data);
@@ -670,8 +867,19 @@ export default React.memo(function CytoscapeGraph({
       applySliceBoxVisibility(cy, showSliceBoxRef.current);
       applyFabnetInternetVisibility(cy, showFabnetInternetRef.current);
 
-      // Position components at VM edges (they may have changed)
-      if (showComponentsRef.current) {
+      // State-only updates keep positions; topology edits need layout so new
+      // nodes such as facility ports are placed on the visible canvas.
+      if (topologyChanged) {
+        const layoutElements = cy.elements().not('.component');
+        const lay = layoutElements.layout(LAYOUTS[layout] || LAYOUTS.dagre);
+        lay.on('layoutstop', () => {
+          if (showComponentsRef.current) {
+            positionComponentsAtVmEdge(cy);
+          }
+          setTimeout(() => cy.fit(undefined, 30), 100);
+        });
+        lay.run();
+      } else if (showComponentsRef.current) {
         positionComponentsAtVmEdge(cy);
       }
     } else {
@@ -679,8 +887,8 @@ export default React.memo(function CytoscapeGraph({
       cy.elements().remove();
 
       const elements: cytoscape.ElementDefinition[] = [
-        ...allNodes.map((n) => ({ group: 'nodes' as const, data: n.data, classes: n.classes })),
-        ...allEdges.map((e) => ({ group: 'edges' as const, data: e.data, classes: e.classes })),
+        ...allRenderableNodes.map((n) => ({ group: 'nodes' as const, data: n.data, classes: n.classes })),
+        ...allRenderableEdges.map((e) => ({ group: 'edges' as const, data: e.data, classes: e.classes })),
       ];
 
       cy.add(elements);
@@ -705,6 +913,7 @@ export default React.memo(function CytoscapeGraph({
     }
 
     prevGraphRef.current = graph;
+    prevElementIdsRef.current = nextElementIds;
   }, [graph, chameleonGraph, layout, preserveLayout]);
 
   // Apply boot config status classes to VM nodes
@@ -781,15 +990,52 @@ export default React.memo(function CytoscapeGraph({
   }, [pngDialog, pngFilename, pngSavePath]);
 
   // Context menu helpers
-  const vmsWithIp = menu?.selected.filter(
-    (el) => el.element_type === 'node' && el.management_ip
-  ) ?? [];
+  const hasUsableAddress = (value: unknown) => {
+    const text = String(value ?? '').trim();
+    return !!text && !['none', 'null', 'undefined', '-', '—'].includes(text.toLowerCase());
+  };
+  const liveFabricNodeByName = new Map((sliceData?.nodes || []).map(node => [node.name, node]));
+  const withLiveFabricRuntime = (el: Record<string, string>): Record<string, string> => {
+    if (el.element_type !== 'node') return el;
+    const live = liveFabricNodeByName.get(el.name || el.label || '');
+    if (!live) return el;
+    return {
+      ...el,
+      site: el.site || live.site || '',
+      image: el.image || live.image || '',
+      username: el.username || live.username || '',
+      reservation_state: el.reservation_state || live.reservation_state || '',
+      management_ip: hasUsableAddress(el.management_ip) ? el.management_ip : (live.management_ip || ''),
+    };
+  };
+  const selectedWithRuntime = menu?.selected.map(withLiveFabricRuntime) ?? [];
+  const currentSliceVmsWithIp = (sliceData?.nodes || [])
+    .filter((node) => hasUsableAddress(node.management_ip))
+    .map((node): Record<string, string> => ({
+      id: node.name,
+      element_type: 'node',
+      name: node.name,
+      label: node.name,
+      site: node.site,
+      management_ip: node.management_ip,
+      username: node.username,
+      reservation_state: node.reservation_state,
+      image: node.image,
+    }));
+  const vmsWithIp = selectedWithRuntime.filter(
+    (el) => el.element_type === 'node' && hasUsableAddress(el.management_ip)
+  );
+  const sliceVmsWithIp = menu?.sliceName ? currentSliceVmsWithIp : [];
+  const contextualSliceVmsWithIp = !menu?.sliceName && selectedWithRuntime.length > 0
+    ? currentSliceVmsWithIp
+    : [];
+  const terminalTargetsForMenu = vmsWithIp.length > 0 ? vmsWithIp : contextualSliceVmsWithIp;
   const deletable = menu?.selected.filter(
-    (el) => el.element_type === 'node' || el.element_type === 'network' || el.element_type === 'facility-port' || el.element_type === 'port-mirror'
+    isTopologyElementDeletable
   ) ?? [];
 
-  const singleVm = menu?.selected.length === 1 && menu.selected[0].element_type === 'node'
-    ? menu.selected[0] : null;
+  const singleVm = selectedWithRuntime.length === 1 && selectedWithRuntime[0].element_type === 'node'
+    ? selectedWithRuntime[0] : null;
   const vmComponents = singleVm
     ? (sliceData?.nodes.find((n) => n.name === singleVm.name)?.components ?? [])
     : [];
@@ -801,8 +1047,9 @@ export default React.memo(function CytoscapeGraph({
   const singleChi = chameleonInstances.length === 1 ? chameleonInstances[0] : null;
 
   const handleTerminal = () => {
-    if (vmsWithIp.length > 0) {
-      onContextAction({ type: 'terminal', elements: vmsWithIp });
+    const terminalTargets = menu?.sliceName ? sliceVmsWithIp : terminalTargetsForMenu;
+    if (terminalTargets.length > 0) {
+      onContextAction({ type: 'terminal', elements: terminalTargets });
     }
     setMenu(null);
   };
@@ -820,11 +1067,11 @@ export default React.memo(function CytoscapeGraph({
   };
 
   return (
-    <div className="graph-panel">
-      <div className="cytoscape-container" ref={containerRef} data-help-id="topology.graph" />
-      <div className="graph-controls">
+    <div className="graph-panel" data-testid="topology-panel">
+      <div className="cytoscape-container" ref={containerRef} data-help-id="topology.graph" data-testid="topology-graph" />
+      <div className="graph-controls" data-testid="topology-controls">
         <label>Layout:</label>
-        <select value={layout} onChange={(e) => onLayoutChange(e.target.value)} data-help-id="topology.layout">
+        <select value={layout} onChange={(e) => onLayoutChange(e.target.value)} data-help-id="topology.layout" data-testid="topology-layout-select">
           <option value="dagre" title="Hierarchical layout — best for tree topologies">dagre</option>
           <option value="cola" title="Force-directed layout — good for general topologies">cola</option>
           <option value="breadthfirst" title="Tree layout from root — good for hierarchical networks">breadthfirst</option>
@@ -832,14 +1079,15 @@ export default React.memo(function CytoscapeGraph({
           <option value="concentric" title="Radial circles — good for star topologies">concentric</option>
           <option value="cose" title="Physics simulation — good for organic layouts">cose</option>
         </select>
-        <button onClick={handleFit} title="Fit graph to viewport" data-help-id="topology.fit">Fit</button>
-        <button onClick={handleExport} title="Save graph as PNG image" data-help-id="topology.export">Save PNG</button>
+        <button onClick={handleFit} title="Fit graph to viewport" data-help-id="topology.fit" data-testid="topology-fit">Fit</button>
+        <button onClick={handleExport} title="Save graph as PNG image" data-help-id="topology.export" data-testid="topology-export">Save PNG</button>
         <span className="graph-controls-sep" />
         <label className="graph-toggle">
           <input
             type="checkbox"
             checked={showSliceBox}
             onChange={(e) => setShowSliceBox(e.target.checked)}
+            data-testid="topology-toggle-slice-box"
           />
           Slice Box
         </label>
@@ -848,6 +1096,7 @@ export default React.memo(function CytoscapeGraph({
             type="checkbox"
             checked={showComponents}
             onChange={(e) => setShowComponents(e.target.checked)}
+            data-testid="topology-toggle-components"
           />
           Components
         </label>
@@ -856,6 +1105,7 @@ export default React.memo(function CytoscapeGraph({
             type="checkbox"
             checked={showFabnetInternet}
             onChange={(e) => setShowFabnetInternet(e.target.checked)}
+            data-testid="topology-toggle-fabnet-internet"
           />
           FABNet Internet
         </label>
@@ -865,17 +1115,23 @@ export default React.memo(function CytoscapeGraph({
         <div
           className="graph-context-menu"
           style={{ left: menu.x, top: menu.y }}
+          data-testid="topology-context-menu"
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="graph-context-menu-label">{menu.sliceName}</div>
-          <button className="graph-context-menu-item" onClick={() => {
+          {sliceVmsWithIp.length > 0 && (
+            <button className="graph-context-menu-item" data-testid="topology-context-open-terminal" onClick={handleTerminal}>
+              ▸ Open Terminal{sliceVmsWithIp.length > 1 ? ` (${sliceVmsWithIp.length})` : ''}
+            </button>
+          )}
+          <button className="graph-context-menu-item" data-testid="topology-context-open-build-log" onClick={() => {
             onContextActionRef.current({ type: 'open-boot-log', elements: [], sliceNames: [menu.sliceName!] });
             setMenu(null);
           }}>
             {'\u2630'} Open Build Log
           </button>
-          <button className="graph-context-menu-item" onClick={() => {
+          <button className="graph-context-menu-item" data-testid="topology-context-run-post-boot" onClick={() => {
             onContextActionRef.current({ type: 'run-boot-config', sliceNames: [menu.sliceName!], elements: [] });
             setMenu(null);
           }}>
@@ -887,6 +1143,7 @@ export default React.memo(function CytoscapeGraph({
         <div
           className="graph-context-menu"
           style={{ left: menu.x, top: menu.y }}
+          data-testid="topology-context-menu"
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >
@@ -895,13 +1152,13 @@ export default React.memo(function CytoscapeGraph({
               {menu.selected.length} selected
             </div>
           )}
-          {vmsWithIp.length > 0 && (
-            <button className="graph-context-menu-item" onClick={handleTerminal}>
-              ▸ Open Terminal{vmsWithIp.length > 1 ? ` (${vmsWithIp.length})` : ''}
+          {terminalTargetsForMenu.length > 0 && (
+            <button className="graph-context-menu-item" data-testid="topology-context-open-terminal" onClick={handleTerminal}>
+              ▸ Open Terminal{terminalTargetsForMenu.length > 1 ? ` (${terminalTargetsForMenu.length})` : ''}
             </button>
           )}
           {vmsWithIp.length === 1 && (
-            <button className="graph-context-menu-item" onClick={() => {
+            <button className="graph-context-menu-item" data-testid="topology-context-run-boot-config" onClick={() => {
               onContextActionRef.current({ type: 'run-boot-config-node', elements: vmsWithIp, nodeName: vmsWithIp[0].name });
               setMenu(null);
             }}>
@@ -909,7 +1166,7 @@ export default React.memo(function CytoscapeGraph({
             </button>
           )}
           {singleVm && singleVm.management_ip && (
-            <button className="graph-context-menu-item" onClick={() => {
+            <button className="graph-context-menu-item" data-testid="topology-context-open-web-app" onClick={() => {
               onContextAction({ type: 'open-client', elements: [singleVm], port: 80 });
               setMenu(null);
             }}>
@@ -926,6 +1183,8 @@ export default React.memo(function CytoscapeGraph({
                 <button
                   key={comp.name}
                   className="graph-context-menu-item component-delete"
+                  data-testid="topology-context-delete-component"
+                  data-component-name={comp.name}
                   onClick={() => handleDeleteComponent(singleVm.name, comp.name)}
                 >
                   <span className="component-info">{comp.name} <span className="component-model">{comp.model}</span></span>
@@ -941,6 +1200,7 @@ export default React.memo(function CytoscapeGraph({
               )}
               <button
                 className="graph-context-menu-item"
+                data-testid="topology-context-save-vm-template"
                 onClick={() => {
                   onContextAction({ type: 'save-vm-template', elements: [singleVm], nodeName: singleVm.name });
                   setMenu(null);
@@ -986,22 +1246,22 @@ export default React.memo(function CytoscapeGraph({
             <div className="graph-context-menu-sep" />
           )}
           {deletable.length > 0 && (
-            <button className="graph-context-menu-item danger" onClick={handleDelete}>
+            <button className="graph-context-menu-item danger" data-testid="topology-context-delete" onClick={handleDelete}>
               ✕ Delete{deletable.length > 1 ? ` (${deletable.length})` : ''}
             </button>
           )}
           {/* Chameleon instance context menu items */}
           {singleChi && (singleChi.status === 'ACTIVE' && (singleChi.floating_ip || singleChi.ip)) && (
-            <button className={`graph-context-menu-item${!singleChi.ssh_ready ? ' graph-context-menu-dim' : ''}`} onClick={() => {
+            <button className={`graph-context-menu-item${!singleChi.ssh_ready ? ' graph-context-menu-dim' : ''}`} data-testid="topology-context-chameleon-terminal" onClick={() => {
               onContextAction({ type: 'chi-ssh', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
               setMenu(null);
             }}>
-              {singleChi.ssh_ready ? '▸ SSH Terminal' : '▸ SSH Terminal (Connecting...)'}
+              {singleChi.ssh_ready ? '▸ Open Terminal' : '▸ Open Terminal (Connecting...)'}
             </button>
           )}
           {/* Open in Web Apps — floating IP instances */}
           {singleChi && singleChi.status === 'ACTIVE' && singleChi.floating_ip && (
-            <button className="graph-context-menu-item" onClick={() => {
+            <button className="graph-context-menu-item" data-testid="topology-context-chameleon-open-web" onClick={() => {
               onContextAction({ type: 'chi-open-web', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
               setMenu(null);
             }}>
@@ -1010,7 +1270,7 @@ export default React.memo(function CytoscapeGraph({
           )}
           {/* Run Boot Config */}
           {singleChi && singleChi.status === 'ACTIVE' && (singleChi.floating_ip || singleChi.ip) && (
-            <button className="graph-context-menu-item" onClick={() => {
+            <button className="graph-context-menu-item" data-testid="topology-context-chameleon-run-boot-config" onClick={() => {
               onContextAction({ type: 'chi-run-boot-config', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
               setMenu(null);
             }}>
@@ -1019,7 +1279,7 @@ export default React.memo(function CytoscapeGraph({
           )}
           {/* Assign Floating IP — for instances without one */}
           {singleChi && singleChi.status === 'ACTIVE' && !singleChi.floating_ip && (
-            <button className="graph-context-menu-item" onClick={() => {
+            <button className="graph-context-menu-item" data-testid="topology-context-chameleon-assign-fip" onClick={() => {
               onContextAction({ type: 'chi-assign-fip', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
               setMenu(null);
             }}>
@@ -1057,7 +1317,7 @@ export default React.memo(function CytoscapeGraph({
             );
           })()}
           {singleChi && (
-            <button className="graph-context-menu-item" onClick={() => {
+            <button className="graph-context-menu-item" data-testid="topology-context-chameleon-save-template" onClick={() => {
               onContextAction({ type: 'chi-save-template', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
               setMenu(null);
             }}>
@@ -1066,7 +1326,7 @@ export default React.memo(function CytoscapeGraph({
           )}
           <div className="graph-context-menu-sep" />
           {singleChi && (singleChi.status === 'ACTIVE' || singleChi.status === 'SHUTOFF') && (
-            <button className="graph-context-menu-item" onClick={() => {
+            <button className="graph-context-menu-item" data-testid="topology-context-chameleon-reboot" onClick={() => {
               onContextAction({ type: 'chi-reboot', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
               setMenu(null);
             }}>
@@ -1074,7 +1334,7 @@ export default React.memo(function CytoscapeGraph({
             </button>
           )}
           {singleChi && singleChi.status === 'ACTIVE' && (
-            <button className="graph-context-menu-item" onClick={() => {
+            <button className="graph-context-menu-item" data-testid="topology-context-chameleon-stop" onClick={() => {
               onContextAction({ type: 'chi-stop', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
               setMenu(null);
             }}>
@@ -1082,7 +1342,7 @@ export default React.memo(function CytoscapeGraph({
             </button>
           )}
           {singleChi && singleChi.status === 'SHUTOFF' && (
-            <button className="graph-context-menu-item" onClick={() => {
+            <button className="graph-context-menu-item" data-testid="topology-context-chameleon-start" onClick={() => {
               onContextAction({ type: 'chi-start', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
               setMenu(null);
             }}>
@@ -1092,8 +1352,8 @@ export default React.memo(function CytoscapeGraph({
           {singleChi && (
             <>
               <div className="graph-context-menu-sep" />
-              <button className="graph-context-menu-item danger" onClick={() => {
-                onContextAction({ type: 'chi-delete', elements: [], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
+              <button className="graph-context-menu-item danger" data-testid="topology-context-chameleon-delete" onClick={() => {
+                onContextAction({ type: 'chi-delete', elements: [singleChi], instanceId: singleChi.instance_id, instanceSite: singleChi.site, instanceName: singleChi.name || singleChi.label });
                 setMenu(null);
               }}>
                 ✕ Delete Instance
