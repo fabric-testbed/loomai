@@ -1686,7 +1686,7 @@ def _tool_summary(name: str, args: dict, result: str) -> str:
     return "Done"
 
 
-async def execute_tool(name: str, arguments: dict) -> str:
+async def execute_tool(name: str, arguments: dict, request: Request | None = None) -> str:
     """Execute a tool and return the result as a JSON string."""
     try:
         if name == "list_slices":
@@ -2090,6 +2090,7 @@ async def execute_tool(name: str, arguments: dict) -> str:
                 arguments["weave_dir_name"],
                 arguments["script"],
                 StartRunRequest(slice_name=arguments.get("slice_name", "")),
+                request=request,
             )
             return json.dumps(result, default=str)
 
@@ -2449,7 +2450,7 @@ async def chat_stream(request: Request):
             logger.info("Destructive intent %s — will ask for confirmation", intent_tool)
         else:
             try:
-                result = await execute_tool(intent_tool, intent_args)
+                result = await execute_tool(intent_tool, intent_args, request=request)
                 prefetched_data = result
                 prefetched_tools.append((intent_tool, result[:profile["tool_result_max"]]))
                 logger.info("Pre-fetched %s (%s confidence)", intent_tool, intent_confidence)
@@ -2470,7 +2471,7 @@ async def chat_stream(request: Request):
         if template["steps"]:
             step_tool, step_args = template["steps"][0]
             try:
-                result = await execute_tool(step_tool, step_args)
+                result = await execute_tool(step_tool, step_args, request=request)
                 prefetched_data = result
                 prefetched_tools.append((step_tool, result[:profile["tool_result_max"]]))
             except Exception:
@@ -2479,7 +2480,7 @@ async def chat_stream(request: Request):
     # Always pre-fetch slice summary (lightweight, ~200 tokens)
     if not any(t == "list_slices" for t, _ in prefetched_tools):
         try:
-            slice_summary = await execute_tool("list_slices", {})
+            slice_summary = await execute_tool("list_slices", {}, request=request)
             prefetched_tools.append(("list_slices", slice_summary[:300]))
         except Exception:
             pass
@@ -2520,7 +2521,7 @@ async def chat_stream(request: Request):
     )
     if _is_weave_request and not any(t == "search_examples" for t, _ in prefetched_tools):
         try:
-            examples = await execute_tool("search_examples", {"query": user_message[:100]})
+            examples = await execute_tool("search_examples", {"query": user_message[:100]}, request=request)
             prefetched_tools.append(("search_examples", examples[:6000]))
         except Exception:
             pass
@@ -3026,7 +3027,7 @@ async def chat_stream(request: Request):
                                 _outer_timeout = 300
                             try:
                                 tool_result = await asyncio.wait_for(
-                                    execute_tool(tc_name, tc_args), timeout=_outer_timeout
+                                    execute_tool(tc_name, tc_args, request=request), timeout=_outer_timeout
                                 )
                             except asyncio.TimeoutError:
                                 tool_result = json.dumps({

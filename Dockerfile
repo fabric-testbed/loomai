@@ -77,8 +77,70 @@ server {
         proxy_read_timeout 120s;
     }
 
-    location /jupyter/ {
+    # Internal auth gate for the embedded-tool proxies below (nginx auth_request).
+    # Proxies to the backend, which returns 200 when the loomai_session cookie is
+    # valid (or 200 unconditionally when auth is disabled, via AuthMiddleware) and
+    # 401 otherwise. Without this, JupyterLab/Aider/OpenCode/tunnels are reachable
+    # unauthenticated when the standalone container is exposed remotely.
+    location = /_auth_check {
+        internal;
+        proxy_pass http://127.0.0.1:8000/api/auth/check;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Host $host;
+        proxy_set_header Cookie $http_cookie;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 5s;
+    }
+
+    location ^~ /jupyter/ {
+        auth_request /_auth_check;
         proxy_pass http://127.0.0.1:8889;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 604800s;
+        proxy_send_timeout 604800s;
+        proxy_buffering off;
+    }
+
+    location ^~ /aider/ {
+        auth_request /_auth_check;
+        proxy_pass http://127.0.0.1:9197;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 604800s;
+        proxy_send_timeout 604800s;
+        proxy_buffering off;
+    }
+
+    location ^~ /opencode/ {
+        auth_request /_auth_check;
+        proxy_pass http://127.0.0.1:9198;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 604800s;
+        proxy_send_timeout 604800s;
+        proxy_buffering off;
+    }
+
+    location ~ ^/tunnel/(91[0-9][0-9])/(.*) {
+        auth_request /_auth_check;
+        proxy_pass http://127.0.0.1:$1/$2$is_args$args;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
@@ -155,6 +217,12 @@ RUN mkdir -p /home/fabric/work/fabric_config && chown -R fabric:fabric /home/fab
 ENV FABRIC_CONFIG_DIR=/home/fabric/work/fabric_config
 ENV FABRIC_STORAGE_DIR=/home/fabric/work
 ENV HOME=/home/fabric
+# Marker: this combined image runs nginx in the same container as JupyterLab,
+# so the entrypoint binds JupyterLab to loopback (only the in-container nginx,
+# which enforces the loomai_session gate, can reach it). The split source build
+# (backend/Dockerfile) leaves this unset so its separate nginx container can
+# still reach JupyterLab over the Docker network.
+ENV LOOMAI_COMBINED_IMAGE=1
 
 # Copy entrypoint script
 COPY entrypoint.sh /app/entrypoint.sh

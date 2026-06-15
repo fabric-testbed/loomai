@@ -2,6 +2,9 @@ name: deploy-chameleon
 description: Deploy a Chameleon experiment — lease, instances, networking, and SSH access
 ---
 Guide the user through deploying a complete Chameleon experiment with SSH access.
+For Python REST snippets, use the authenticated session pattern from
+`chameleon-api.md`: honor `LOOMAI_API_URL`/`LOOMAI_URL` and attach
+`LOOMAI_SESSION_COOKIE` as the `loomai_session` cookie when present.
 
 ## Full Deploy Workflow
 
@@ -33,7 +36,7 @@ Or: `create_chameleon_lease("CHI@TACC", "my-experiment", "compute_haswell", 2, 8
 
 LoomAI REST equivalent for weaves:
 ```python
-requests.post(f"{BASE}/chameleon/leases", json={
+session.post(f"{BASE}/chameleon/leases", json={
     "site": "CHI@TACC",
     "name": "my-experiment",
     "node_type": "compute_haswell",
@@ -77,7 +80,7 @@ Or: `create_chameleon_instance("CHI@TACC", lease_id, reservation_id, "CC-Ubuntu2
 
 LoomAI REST equivalent:
 ```python
-requests.post(f"{BASE}/chameleon/instances", json={
+session.post(f"{BASE}/chameleon/instances", json={
     "site": "CHI@TACC",
     "name": "node1",
     "reservation_id": reservation_id,
@@ -122,14 +125,14 @@ loomai chameleon security-groups list --site CHI@TACC
 LoomAI REST shortcuts:
 ```python
 # Allocate and associate a floating IP to an instance in one backend call.
-requests.post(
+session.post(
     f"{BASE}/chameleon/instances/{instance_id}/associate-ip",
     json={"site": "CHI@TACC"},
     timeout=60,
 )
 
 # Add an SSH ingress rule to an existing security group.
-requests.post(f"{BASE}/chameleon/security-groups/{sg_id}/rules", json={
+session.post(f"{BASE}/chameleon/security-groups/{sg_id}/rules", json={
     "site": "CHI@TACC",
     "direction": "ingress",
     "ethertype": "IPv4",

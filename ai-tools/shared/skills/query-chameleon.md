@@ -67,13 +67,17 @@ LoomAI REST so the script inherits the user's configured Chameleon auth:
 import os
 import requests
 
-BASE = os.environ.get("LOOMAI_API_URL") or "http://127.0.0.1:8000/api"
+BASE = os.environ.get("LOOMAI_API_URL") or os.environ.get("LOOMAI_URL") or "http://127.0.0.1:8000/api"
+BASE = BASE.rstrip("/") if BASE.rstrip("/").endswith("/api") else BASE.rstrip("/") + "/api"
+session = requests.Session()
+if os.environ.get("LOOMAI_SESSION_COOKIE"):
+    session.cookies.set("loomai_session", os.environ["LOOMAI_SESSION_COOKIE"])
 site = "CHI@TACC"
 
-leases = requests.get(f"{BASE}/chameleon/leases", params={"site": site}, timeout=30).json()
-instances = requests.get(f"{BASE}/chameleon/instances", params={"site": site}, timeout=30).json()
-networks = requests.get(f"{BASE}/chameleon/networks", params={"site": site}, timeout=30).json()
-images = requests.get(f"{BASE}/chameleon/images/{site}", timeout=30).json()
+leases = session.get(f"{BASE}/chameleon/leases", params={"site": site}, timeout=30).json()
+instances = session.get(f"{BASE}/chameleon/instances", params={"site": site}, timeout=30).json()
+networks = session.get(f"{BASE}/chameleon/networks", params={"site": site}, timeout=30).json()
+images = session.get(f"{BASE}/chameleon/images/{site}", timeout=30).json()
 ```
 
 For backend-owned code only, use the authenticated OpenStack session:

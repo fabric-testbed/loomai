@@ -9,6 +9,10 @@ when set, otherwise it defaults to `http://localhost:8000/api`. If this weave is
 run outside the backend container, set the URL for that network namespace:
 `http://127.0.0.1:8000` on the Docker host, `http://backend:8000` from another
 docker-compose service, or the published backend URL in a remote environment.
+When LoomAI auth is enabled and the helper is launched by a background run, it
+uses `LOOMAI_SESSION_COOKIE` from the child process environment for protected
+backend calls. Do not write that cookie to `weave.json`, `.runs/*/meta.json`,
+logs, API responses, or script arguments.
 
 Defaults:
 

@@ -1,4 +1,10 @@
-import { graphElementIdSnapshot, graphElementIdsChanged, isTopologyElementDeletable, sanitizeGraphElements } from '../components/CytoscapeGraph';
+import {
+  addFederatedSliceBoxContainers,
+  graphElementIdSnapshot,
+  graphElementIdsChanged,
+  isTopologyElementDeletable,
+  sanitizeGraphElements,
+} from '../components/CytoscapeGraph';
 
 describe('sanitizeGraphElements', () => {
   it('drops edges whose endpoints are not present in the node set', () => {
@@ -33,6 +39,95 @@ describe('sanitizeGraphElements', () => {
 
     expect(graph.nodes).toHaveLength(1);
     expect(graph.nodes[0].data).not.toHaveProperty('parent');
+  });
+});
+
+describe('addFederatedSliceBoxContainers', () => {
+  it('adds synthetic slice boxes from federated member metadata', () => {
+    const nodes = addFederatedSliceBoxContainers([
+      {
+        data: {
+          id: 'fab:fab-1:node:fab-1:router',
+          element_type: 'node',
+          name: 'router',
+          slice_id: 'fab-1',
+          slice_name: 'fabric-member',
+          testbed: 'FABRIC',
+        },
+        classes: 'vm',
+      },
+      {
+        data: {
+          id: 'fab:fab-1:net:fab-1:l2',
+          element_type: 'network',
+          name: 'l2',
+          slice_id: 'fab-1',
+          slice_name: 'fabric-member',
+          testbed: 'FABRIC',
+        },
+        classes: 'network-l2',
+      },
+      {
+        data: {
+          id: 'chi:chi-1:chi-draft-node:chi-1:server',
+          element_type: 'chameleon_instance',
+          name: 'server',
+          slice_id: 'chi-1',
+          slice_name: 'chameleon-member',
+          testbed: 'Chameleon',
+        },
+        classes: 'chameleon-instance',
+      },
+    ]);
+
+    expect(nodes.map((node) => node.data?.id)).toEqual([
+      'slice-box:fabric:fab-1',
+      'slice-box:chameleon:chi-1',
+      'fab:fab-1:node:fab-1:router',
+      'fab:fab-1:net:fab-1:l2',
+      'chi:chi-1:chi-draft-node:chi-1:server',
+    ]);
+    expect(nodes[0].classes).toContain('slice');
+    expect(nodes[0].classes).toContain('composite-member-fabric');
+    expect(nodes[2].data?.parent).toBe('slice-box:fabric:fab-1');
+    expect(nodes[3].data?.parent).toBe('slice-box:fabric:fab-1');
+    expect(nodes[4].data?.parent).toBe('slice-box:chameleon:chi-1');
+  });
+
+  it('does not wrap component badges or graphs that already have slice containers', () => {
+    const withNativeContainer = addFederatedSliceBoxContainers([
+      { data: { id: 'slice:fab-1', element_type: 'slice' }, classes: 'slice' },
+      { data: { id: 'node:fab-1:router', element_type: 'node', parent: 'slice:fab-1' }, classes: 'vm' },
+    ]);
+    expect(withNativeContainer).toHaveLength(2);
+    expect(withNativeContainer[1].data?.parent).toBe('slice:fab-1');
+
+    const withComponent = addFederatedSliceBoxContainers([
+      {
+        data: {
+          id: 'fab:fab-1:node:fab-1:router',
+          element_type: 'node',
+          slice_id: 'fab-1',
+          slice_name: 'fabric-member',
+          testbed: 'FABRIC',
+        },
+        classes: 'vm',
+      },
+      {
+        data: {
+          id: 'fab:fab-1:comp:fab-1:router:nic1',
+          element_type: 'component',
+          parent_vm: 'fab:fab-1:node:fab-1:router',
+          slice_id: 'fab-1',
+          slice_name: 'fabric-member',
+          testbed: 'FABRIC',
+        },
+        classes: 'component component-nic',
+      },
+    ]);
+    expect(withComponent[0].data?.id).toBe('slice-box:fabric:fab-1');
+    expect(withComponent[1].data?.parent).toBe('slice-box:fabric:fab-1');
+    expect(withComponent[2].data).not.toHaveProperty('parent');
   });
 });
 

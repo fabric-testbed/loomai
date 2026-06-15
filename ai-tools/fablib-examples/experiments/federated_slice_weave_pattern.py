@@ -30,16 +30,31 @@ import urllib.request
 from typing import Any
 
 
-BASE_URL = os.environ.get("LOOMAI_API_URL", "http://localhost:8000/api")
+def _with_api_suffix(url: str) -> str:
+    url = url.rstrip("/")
+    return url if url.endswith("/api") else f"{url}/api"
+
+
+def loomai_api_url() -> str:
+    configured = os.environ.get("LOOMAI_API_URL") or os.environ.get("LOOMAI_URL") or "http://localhost:8000/api"
+    return _with_api_suffix(configured)
+
+
+def loomai_auth_headers() -> dict[str, str]:
+    session_cookie = os.environ.get("LOOMAI_SESSION_COOKIE", "")
+    if not session_cookie or "\n" in session_cookie or "\r" in session_cookie:
+        return {}
+    return {"Cookie": f"loomai_session={session_cookie}"}
 
 
 def _request(method: str, path: str, body: dict[str, Any] | list[Any] | None = None) -> Any:
     """Call the LoomAI backend with stdlib urllib so no extra dependency is needed."""
     data = None
     headers = {"Content-Type": "application/json"}
+    headers.update(loomai_auth_headers())
     if body is not None:
         data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(f"{BASE_URL}{path}", data=data, headers=headers, method=method)
+    req = urllib.request.Request(f"{loomai_api_url()}{path}", data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             payload = resp.read().decode("utf-8")

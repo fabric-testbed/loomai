@@ -2136,17 +2136,19 @@ def relocate_users_to_loomai() -> None:
         logger.warning("Re-symlink during user-storage relocation failed", exc_info=True)
 
     # Drop the old root mounts that are no longer used: my_slices is per-user
-    # (accessed by its absolute path), and notebooks is now a shared flat dir.
+    # (accessed by its absolute path), and notebooks is created only if there
+    # is existing notebook content to preserve.
     for name in ("my_slices", "notebooks"):
         link = os.path.join(storage, name)
         if os.path.islink(link):
             try:
                 target = os.path.realpath(link)
                 os.unlink(link)
-                if name == "notebooks":
-                    os.makedirs(link, exist_ok=True)   # shared flat dir
-                    if os.path.isdir(target):           # preserve existing notebooks
-                        for entry in os.listdir(target):
+                if name == "notebooks" and os.path.isdir(target):
+                    entries = os.listdir(target)
+                    if entries:
+                        os.makedirs(link, exist_ok=True)
+                        for entry in entries:
                             dst = os.path.join(link, entry)
                             if not os.path.exists(dst):
                                 _shutil.move(os.path.join(target, entry), dst)

@@ -555,7 +555,9 @@ async def launch_notebook(name: str, force_refresh: bool = False):
         raise HTTPException(status_code=404, detail=f"Notebook artifact '{name}' not found")
 
     # Create (or refresh) working copy
-    work_dir = os.path.join(_notebooks_workdir(), safe)
+    notebooks_root = _notebooks_workdir()
+    os.makedirs(notebooks_root, exist_ok=True)
+    work_dir = os.path.join(notebooks_root, safe)
     if force_refresh and os.path.isdir(work_dir):
         shutil.rmtree(work_dir, ignore_errors=True)
         logger.info("Removed stale notebook workspace %s (force_refresh)", work_dir)
@@ -608,7 +610,9 @@ async def reset_notebook(name: str):
     Deletes the working copy and replaces it with the original.
     """
     safe = _sanitize_name(name)
-    work_dir = os.path.join(_notebooks_workdir(), safe)
+    notebooks_root = _notebooks_workdir()
+    os.makedirs(notebooks_root, exist_ok=True)
+    work_dir = os.path.join(notebooks_root, safe)
     artifact_dir = os.path.join(_artifacts_dir(), safe)
 
     # Find the source for reset: prefer .artifact-originals (by UUID, then name), fall back to artifacts dir

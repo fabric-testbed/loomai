@@ -24,8 +24,26 @@ import urllib.request
 
 # Directory where this script lives (contains tools/, build/, etc.)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_LOOMAI_URL = "http://localhost:8000"
 
 from fabrictestbed_extensions.fablib.fablib import FablibManager
+
+
+def _with_api_suffix(url):
+    url = url.rstrip("/")
+    return url if url.endswith("/api") else f"{url}/api"
+
+
+def loomai_api_base():
+    configured = os.environ.get("LOOMAI_API_URL") or os.environ.get("LOOMAI_URL") or DEFAULT_LOOMAI_URL
+    return _with_api_suffix(configured)
+
+
+def loomai_auth_headers():
+    session_cookie = os.environ.get("LOOMAI_SESSION_COOKIE", "")
+    if not session_cookie or "\n" in session_cookie or "\r" in session_cookie:
+        return {}
+    return {"Cookie": f"loomai_session={session_cookie}"}
 
 
 # =====================================================================
@@ -233,7 +251,10 @@ def verify_and_create_tunnel(slice_name):
     print("### PROGRESS: [4c/5] Creating Grafana web tunnel...")
     try:
         # Check if tunnel already exists
-        req = urllib.request.Request("http://localhost:8000/api/tunnels")
+        req = urllib.request.Request(
+            f"{loomai_api_base()}/tunnels",
+            headers=loomai_auth_headers(),
+        )
         with urllib.request.urlopen(req, timeout=10) as resp:
             tunnels = json.loads(resp.read())
 
@@ -255,9 +276,9 @@ def verify_and_create_tunnel(slice_name):
                 "label": "Grafana Dashboard",
             }).encode()
             req = urllib.request.Request(
-                "http://localhost:8000/api/tunnels",
+                f"{loomai_api_base()}/tunnels",
                 data=tunnel_data,
-                headers={"Content-Type": "application/json"},
+                headers={**loomai_auth_headers(), "Content-Type": "application/json"},
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=30) as resp:

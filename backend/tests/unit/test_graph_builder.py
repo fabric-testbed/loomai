@@ -397,6 +397,61 @@ class TestBuildGraphFacilityPort:
         assert external[0]["data"]["deletable"] == "true"
         assert external[0]["data"]["site"] == "TACC"
 
+    def test_disconnected_facility_vlan_helper_network_is_hidden(self):
+        data = single_node_slice(slice_id="slice-1")
+        data["nodes"][0]["components"] = [
+            {"name": "node1-nic1", "model": "NIC_Basic", "interfaces": [
+                {"name": "node1-nic1-p1", "node_name": "node1"}
+            ]}
+        ]
+        data["facility_ports"] = [{
+            "name": "Chameleon-TACC",
+            "site": "TACC",
+            "vlan": "3402",
+            "bandwidth": "100",
+            "interfaces": [],
+        }]
+        data["networks"] = [{
+            "name": "Chameleon-TACC-ns",
+            "type": "VLAN",
+            "layer": "L2",
+            "interfaces": [],
+        }, {
+            "name": "fp-l2-chameleon-tacc-3402",
+            "type": "L2Bridge",
+            "layer": "L2",
+            "interfaces": [
+                {"name": "node1-nic1-p1", "node_name": "node1", "network_name": "fp-l2-chameleon-tacc-3402"},
+                {"name": "Chameleon-TACC-p1", "node_name": "Chameleon-TACC", "network_name": "fp-l2-chameleon-tacc-3402", "vlan": "3402"},
+            ],
+        }]
+
+        result = build_graph(data)
+        network_names = {
+            n["data"].get("name")
+            for n in result["nodes"]
+            if n["data"].get("element_type") == "network"
+        }
+        assert "Chameleon-TACC-ns" not in network_names
+        assert "fp-l2-chameleon-tacc-3402" in network_names
+
+    def test_empty_regular_vlan_network_remains_visible_without_facility_context(self):
+        data = single_node_slice(slice_id="slice-1")
+        data["networks"] = [{
+            "name": "VLAN",
+            "type": "VLAN",
+            "layer": "L2",
+            "interfaces": [],
+        }]
+
+        result = build_graph(data)
+        network_names = {
+            n["data"].get("name")
+            for n in result["nodes"]
+            if n["data"].get("element_type") == "network"
+        }
+        assert "VLAN" in network_names
+
 
 # ---------------------------------------------------------------------------
 # build_graph: site groups

@@ -43,9 +43,23 @@ DEFAULT_SHARED_NETWORK = "sharednet1"
 DEFAULT_FABNET_NETWORK = "fabnetv4"
 
 
+def _with_api_suffix(url: str) -> str:
+    url = url.rstrip("/")
+    return url if url.endswith("/api") else f"{url}/api"
+
+
 def loomai_api_url() -> str:
     """Return the LoomAI backend URL agents should use for REST calls."""
-    return os.environ.get("LOOMAI_API_URL") or os.environ.get("LOOMAI_URL") or "http://127.0.0.1:8000/api"
+    configured = os.environ.get("LOOMAI_API_URL") or os.environ.get("LOOMAI_URL") or "http://127.0.0.1:8000/api"
+    return _with_api_suffix(configured)
+
+
+def loomai_auth_cookies() -> dict[str, str] | None:
+    """Return LoomAI session cookies for authenticated in-container helpers."""
+    session_cookie = os.environ.get("LOOMAI_SESSION_COOKIE", "")
+    if not session_cookie or "\n" in session_cookie or "\r" in session_cookie:
+        return None
+    return {"loomai_session": session_cookie}
 
 
 def utc_end_time(hours: int) -> str:
@@ -135,6 +149,7 @@ def loomai_create_lease(
             "node_count": count,
             "duration_hours": hours,
         },
+        cookies=loomai_auth_cookies(),
         timeout=60,
     )
     response.raise_for_status()
@@ -147,7 +162,12 @@ def loomai_wait_for_lease_active(site: str, lease_id: str, timeout_seconds: int 
         raise RuntimeError("requests is required to call LoomAI REST examples")
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        response = requests.get(f"{loomai_api_url()}/chameleon/leases", params={"site": site}, timeout=30)
+        response = requests.get(
+            f"{loomai_api_url()}/chameleon/leases",
+            params={"site": site},
+            cookies=loomai_auth_cookies(),
+            timeout=30,
+        )
         response.raise_for_status()
         for lease in response.json():
             if lease.get("id") == lease_id:
@@ -188,7 +208,12 @@ def loomai_create_instance(
     if user_data:
         body["user_data"] = user_data
 
-    response = requests.post(f"{loomai_api_url()}/chameleon/instances", json=body, timeout=60)
+    response = requests.post(
+        f"{loomai_api_url()}/chameleon/instances",
+        json=body,
+        cookies=loomai_auth_cookies(),
+        timeout=60,
+    )
     response.raise_for_status()
     return response.json()
 
@@ -204,6 +229,7 @@ def loomai_allocate_and_associate_floating_ip(site: str, instance_id: str) -> di
     response = requests.post(
         f"{loomai_api_url()}/chameleon/instances/{instance_id}/associate-ip",
         json={"site": site},
+        cookies=loomai_auth_cookies(),
         timeout=60,
     )
     response.raise_for_status()

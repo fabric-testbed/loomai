@@ -200,6 +200,16 @@ class TestStartupStorage:
             _startup_storage()
         assert (storage / "notebooks" / "test.ipynb").exists()
 
+    def test_removes_empty_notebooks_dir(self, tmp_path):
+        """Should not leave an unused notebooks/ workspace on startup."""
+        storage = tmp_path / "fabric_work"
+        storage.mkdir()
+        (storage / "notebooks").mkdir()
+        with patch.dict(os.environ, {"FABRIC_STORAGE_DIR": str(storage)}):
+            from app.main import _startup_storage
+            _startup_storage()
+        assert not (storage / "notebooks").exists()
+
     def test_migrates_per_user_drafts(self, tmp_path):
         """Should migrate per-user .drafts/ to my_slices/."""
         storage = tmp_path / "fabric_work"

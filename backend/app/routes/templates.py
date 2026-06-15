@@ -964,8 +964,23 @@ class StartRunRequest(BaseModel):
     args: dict[str, str] = {}
 
 
+def _run_extra_env_from_request(request: Request | None) -> dict[str, str]:
+    """Return non-persisted environment values for a child weave process."""
+    if request is None:
+        return {}
+    from app.auth import _COOKIE_NAME, is_auth_enabled
+
+    if not is_auth_enabled():
+        return {}
+
+    session_cookie = request.cookies.get(_COOKIE_NAME)
+    if not session_cookie:
+        return {}
+    return {"LOOMAI_SESSION_COOKIE": session_cookie}
+
+
 @router.post("/{name}/start-run/{script}")
-def start_background_run(name: str, script: str, req: StartRunRequest):
+def start_background_run(name: str, script: str, req: StartRunRequest, request: Request = None):
     """Start a weave script as a background run, detached from the HTTP connection.
 
     Returns a run_id that can be used to poll status and output.
@@ -1004,7 +1019,8 @@ def start_background_run(name: str, script: str, req: StartRunRequest):
             pass
 
     # Build script args — merge legacy slice_name with new args dict
-    script_args = dict(req.args)
+    from app.run_manager import sanitize_run_args
+    script_args = sanitize_run_args(req.args)
     if req.slice_name and "SLICE_NAME" not in script_args:
         script_args["SLICE_NAME"] = req.slice_name
 
@@ -1022,6 +1038,7 @@ def start_background_run(name: str, script: str, req: StartRunRequest):
         cwd=tmpl_dir,
         script_args=script_args,
         log_path=weave_log_path,
+        extra_env=_run_extra_env_from_request(request),
     )
 
     # Store active run info in weave.json so the weave knows its running process
@@ -1045,5 +1062,4 @@ def start_background_run(name: str, script: str, req: StartRunRequest):
         logger.warning("Failed to write run info to weave.json: %s", e)
 
     return {"run_id": run_id, "status": "running"}
-
 

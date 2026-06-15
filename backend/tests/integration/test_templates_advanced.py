@@ -220,6 +220,64 @@ class TestBackgroundRuns:
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
+    def test_start_run_forwards_session_cookie_only_to_child_env(
+        self,
+        client,
+        storage_dir,
+        monkeypatch,
+    ):
+        from app import auth as auth_mod
+
+        monkeypatch.setenv("LOOMAI_AUTH_ENABLED", "1")
+        monkeypatch.delenv("LOOMAI_NO_AUTH", raising=False)
+        monkeypatch.delenv("LOOMAI_BASE_PATH", raising=False)
+        auth_mod._session_secret = None
+        auth_mod._login_fails.clear()
+        auth_mod.write_password_hash("hunter2")
+
+        _make_template(storage_dir, "auth_tmpl", weave_sh=True)
+
+        captured = {}
+
+        def fake_start_run(**kwargs):
+            captured.update(kwargs)
+            return "run-auth123"
+
+        run_meta = {
+            "run_id": "run-auth123",
+            "pid": 123,
+            "pgid": 123,
+            "started_at": "2026-06-12T00:00:00Z",
+        }
+
+        try:
+            assert client.post("/api/auth/login", json={"password": "hunter2"}).status_code == 200
+            session_cookie = client.cookies.get("loomai_session")
+            assert session_cookie
+
+            with patch("app.run_manager.start_run", side_effect=fake_start_run), \
+                 patch("app.run_manager.get_run", return_value=run_meta):
+                resp = client.post(
+                    "/api/templates/auth_tmpl/start-run/weave.sh",
+                    json={
+                        "slice_name": "auth-slice",
+                        "args": {"LOOMAI_SESSION_COOKIE": "arg-cookie-should-not-persist"},
+                    },
+                )
+
+            assert resp.status_code == 200
+            assert resp.json() == {"run_id": "run-auth123", "status": "running"}
+            assert captured["extra_env"] == {"LOOMAI_SESSION_COOKIE": session_cookie}
+            assert "LOOMAI_SESSION_COOKIE" not in captured["script_args"]
+
+            weave_json_text = (storage_dir / "my_artifacts" / "auth_tmpl" / "weave.json").read_text()
+            assert "loomai_session" not in weave_json_text
+            assert session_cookie not in weave_json_text
+            assert "arg-cookie-should-not-persist" not in weave_json_text
+        finally:
+            auth_mod._session_secret = None
+            auth_mod._login_fails.clear()
+
     def test_get_nonexistent_run_returns_404(self, client):
         resp = client.get("/api/templates/runs/nonexistent-id")
         assert resp.status_code == 404

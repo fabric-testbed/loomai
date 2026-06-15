@@ -506,7 +506,10 @@ docker-compose service, and a published backend URL from remote environments. If
 a Codex run says the local backend is not listening but host curl succeeds, it is
 usually running in a different network namespace or a restricted sandbox; retry
 with the right `LOOMAI_API_URL`/`LOOMAI_URL` or run the helper through the
-backend-owned path.
+backend-owned path. Weave subprocesses that call protected LoomAI APIs should
+also send `LOOMAI_SESSION_COOKIE` as the `loomai_session` cookie when that
+environment variable is present. Keep it in memory only: do not write it to
+`weave.json`, `.runs/*/meta.json`, logs, API responses, or command-line args.
 
 <!-- EXTENDED: The following sections are available in the full prompt for large models -->
 

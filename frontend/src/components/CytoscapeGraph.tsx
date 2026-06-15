@@ -457,6 +457,100 @@ export interface SanitizedGraphElements {
   droppedNodes: Array<{ id: string; reason: string }>;
 }
 
+function hasClassName(classes: string | undefined, className: string): boolean {
+  return String(classes || '').split(/\s+/).includes(className);
+}
+
+function federatedSliceBoxProvider(data: Record<string, any>): 'fabric' | 'chameleon' | 'member' {
+  const testbed = String(data.testbed || '').toLowerCase();
+  const id = String(data.id || '');
+  if (testbed.includes('chameleon') || id.startsWith('chi:')) return 'chameleon';
+  if (testbed.includes('fabric') || id.startsWith('fab:')) return 'fabric';
+  return 'member';
+}
+
+function federatedSliceBoxTestbed(data: Record<string, any>, provider: string): string {
+  const testbed = String(data.testbed || '').trim();
+  if (testbed) return testbed;
+  if (provider === 'chameleon') return 'Chameleon';
+  if (provider === 'fabric') return 'FABRIC';
+  return '';
+}
+
+function federatedSliceBoxClasses(provider: string): string {
+  if (provider === 'fabric') return 'slice composite-member composite-member-fabric';
+  if (provider === 'chameleon') return 'slice composite-member composite-member-chameleon';
+  return 'slice composite-member';
+}
+
+function shouldParentInFederatedSliceBox(data: Record<string, any>): boolean {
+  const elementType = String(data.element_type || '');
+  const testbed = String(data.testbed || '').toLowerCase();
+  if (!data.slice_id) return false;
+  if (testbed === 'shared') return false;
+  if (elementType === 'component') return false;
+  if (elementType === 'fabnet-internet') return false;
+  if (elementType === 'slice' || elementType === 'chameleon_draft' || elementType === 'chameleon_cluster') return false;
+  return true;
+}
+
+export function addFederatedSliceBoxContainers(nodes: GraphElementInput[]): GraphElementInput[] {
+  const hasContainerNodes = nodes.some((node) => {
+    const data = node.data || {};
+    return data.element_type === 'slice'
+      || data.element_type === 'chameleon_draft'
+      || data.element_type === 'chameleon_cluster'
+      || hasClassName(node.classes, 'slice')
+      || hasClassName(node.classes, 'composite-member');
+  });
+  if (hasContainerNodes) return nodes;
+
+  const existingIds = new Set(nodes.map((node) => elementId(node.data?.id)).filter(Boolean));
+  const sliceBoxes = new Map<string, NormalizedGraphElement>();
+
+  const rewrittenNodes = nodes.map((node) => {
+    const data = { ...(node.data || {}) };
+    if (!shouldParentInFederatedSliceBox(data)) {
+      return { ...node, data };
+    }
+
+    const provider = federatedSliceBoxProvider(data);
+    const sliceId = elementId(data.slice_id);
+    const sliceName = String(data.slice_name || data.name || sliceId);
+    const testbed = federatedSliceBoxTestbed(data, provider);
+    const boxKey = `${provider}:${sliceId}`;
+    let box = sliceBoxes.get(boxKey);
+    if (!box) {
+      const boxId = `slice-box:${provider}:${sliceId}`;
+      if (existingIds.has(boxId)) {
+        return { ...node, data };
+      }
+      existingIds.add(boxId);
+      box = {
+        data: {
+          id: boxId,
+          label: testbed ? `${sliceName}\n${testbed}` : sliceName,
+          element_type: 'slice',
+          name: sliceName,
+          slice_name: sliceName,
+          slice_id: sliceId,
+          testbed,
+          synthetic: 'true',
+        },
+        classes: federatedSliceBoxClasses(provider),
+      };
+      sliceBoxes.set(boxKey, box);
+    }
+
+    if (!data.parent) {
+      data.parent = box.data.id;
+    }
+    return { ...node, data };
+  });
+
+  return [...sliceBoxes.values(), ...rewrittenNodes];
+}
+
 export interface GraphElementIdSnapshot {
   nodeIds: string[];
   edgeIds: string[];
@@ -802,7 +896,8 @@ export default React.memo(function CytoscapeGraph({
       ...(graph?.edges ?? []),
       ...(chameleonGraph?.edges ?? []),
     ];
-    const sanitized = sanitizeGraphElements(allNodes, allEdges);
+    const graphNodesWithSliceBoxes = addFederatedSliceBoxContainers(allNodes);
+    const sanitized = sanitizeGraphElements(graphNodesWithSliceBoxes, allEdges);
     warnAboutDroppedGraphElements(sanitized);
     const allRenderableNodes = sanitized.nodes;
     const allRenderableEdges = sanitized.edges;
@@ -1466,8 +1561,13 @@ function applySliceBoxVisibility(cy: Core, show: boolean) {
       // Restore parent on children
       cy.nodes().forEach((n: any) => {
         const origParent = n.data('_orig_parent');
-        if (origParent && n.data('parent') !== origParent) {
-          n.move({ parent: origParent });
+        const dataParent = n.data('parent');
+        const targetParent = origParent || dataParent;
+        if (targetParent && cy.getElementById(targetParent).hasClass('slice')) {
+          const currentParent = n.parent?.().id?.();
+          if (currentParent !== targetParent) {
+            n.move({ parent: targetParent });
+          }
         }
       });
     } else {

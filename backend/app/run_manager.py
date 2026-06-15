@@ -75,6 +75,21 @@ _active_runs: dict[str, ActiveRun] = {}
 _stopped_runs: set[str] = set()  # runs explicitly stopped by user (not errors)
 _lock = threading.Lock()
 
+SENSITIVE_RUN_ENV_KEYS = frozenset({
+    "LOOMAI_SESSION_COOKIE",
+})
+
+
+def sanitize_run_args(script_args: dict[str, str] | None) -> dict[str, str]:
+    """Return script args safe to persist in run metadata."""
+    if not script_args:
+        return {}
+    return {
+        key: value
+        for key, value in script_args.items()
+        if key.upper() not in SENSITIVE_RUN_ENV_KEYS
+    }
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -89,6 +104,7 @@ def start_run(
     script_args: dict[str, str] | None = None,
     slice_name: str = "",
     log_path: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> str:
     """Start a background run. Returns the run_id.
 
@@ -96,13 +112,14 @@ def start_run(
         script_args: Dict of env vars to pass to the script (e.g. SLICE_NAME, NUM_RUNS).
         slice_name: Legacy param — used if script_args doesn't contain SLICE_NAME.
         log_path: If provided, write output to this path instead of .runs/{run_id}/output.log.
+        extra_env: Additional child-process environment values that are not persisted.
     """
     run_id = f"run-{uuid.uuid4().hex[:12]}"
     rdir = _run_dir(run_id)
     os.makedirs(rdir, exist_ok=True)
 
     # Merge legacy slice_name with new args dict
-    args = dict(script_args or {})
+    args = sanitize_run_args(script_args)
     if slice_name and "SLICE_NAME" not in args:
         args["SLICE_NAME"] = slice_name
     # Sanitize SLICE_NAME so meta matches what weave.sh actually uses
@@ -131,7 +148,7 @@ def start_run(
     # next frontend poll picks up changes even in STEADY mode (max_age=300).
     get_call_manager().invalidate("slices:list")
 
-    env = {**os.environ, **args}
+    env = {**os.environ, **args, **(extra_env or {})}
     cmd = ["bash", script_path]
     # Pass SLICE_NAME as positional arg for backward compat with scripts using $1
     if args.get("SLICE_NAME"):

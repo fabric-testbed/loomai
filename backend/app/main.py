@@ -238,6 +238,15 @@ def _startup_storage():
             except Exception:
                 pass
 
+    # Older startup/settings paths eagerly created an empty shared notebooks
+    # workspace. Keep real notebook workspaces, but remove the unused empty dir.
+    notebooks_dir = os.path.join(storage, "notebooks")
+    try:
+        if os.path.isdir(notebooks_dir) and not os.path.islink(notebooks_dir) and not os.listdir(notebooks_dir):
+            os.rmdir(notebooks_dir)
+    except OSError:
+        pass
+
 
 def _seed_default_artifacts():
     """Copy default artifacts (e.g. Hello_FABRIC) into my_artifacts/ if missing."""
@@ -490,7 +499,7 @@ async def lifespan(app: FastAPI):
 _enable_docs = os.environ.get("LOOMAI_ENABLE_DOCS", "").strip() == "1"
 _docs_kwargs = {} if _enable_docs else {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
-app = FastAPI(title="LoomAI API", version="0.7.0", lifespan=lifespan, **_docs_kwargs)
+app = FastAPI(title="LoomAI API", version="0.7.1", lifespan=lifespan, **_docs_kwargs)
 
 from app.error_handler import install_error_handlers
 install_error_handlers(app)

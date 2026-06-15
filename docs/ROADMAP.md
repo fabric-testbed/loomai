@@ -123,6 +123,52 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
 
 ## Gaps & TODOs
 
+### Security & Hardening (audit 2026-06-11)
+
+Full report with code excerpts, attack paths, and fixes: [`SECURITY_AUDIT_2026-06-11.md`](../SECURITY_AUDIT_2026-06-11.md) (repo root). Threat model: the app is designed as a single-user localhost container, but operators routinely expose it remotely — localhost-only is mostly fine, **remote exposure is unsafe as shipped**. Re-audit of the 2026-06-10 review found that **two prior fixes regressed in the published artifact**. Fix order: C1→C3 first (unauthenticated/remote credential + RCE), then the Highs, then deployment hardening.
+
+**Critical**
+- ~~**C1 — Unauthenticated JupyterLab = container RCE in the shipped image.**~~ — **Implemented (2026-06-11, standalone only; K8s untouched), pending image rebuild + end-to-end verify.** The combined image's baked nginx config (`Dockerfile`) now has the `auth_request /_auth_check` gate on `/jupyter/` plus new gated `/aider/`, `/opencode/`, `/tunnel/` blocks, validated with `nginx -t`. JupyterLab now binds `127.0.0.1` in the combined standalone image (via `LOOMAI_COMBINED_IMAGE=1` marker + `JUPYTER_IP` in `entrypoint.sh`); the K8s branch explicitly keeps `0.0.0.0` so production on GCP is byte-for-byte unchanged, and the split source build keeps `0.0.0.0` so its separate nginx container can still reach Jupyter. Remaining (not yet done): drop `--ServerApp.allow_origin='*'` and re-enable XSRF (defense-in-depth; deferred to avoid touching the shared Jupyter launch used by K8s). Original issue: the prior `auth_request` fix (`602ad18`) only landed in `frontend/nginx.conf`, which the published image never used.
+- **C2 — File API exposes all `fabric_config/` credentials.** Regression from `43f18b9`: `files.py:_browse_dir()` browses `/home/fabric` (one level above the storage root), so every browse endpoint can read/write/delete `fabric_config/id_token.json`, bastion+slice SSH keys, `~/.ssh`, `~/.claude/.credentials.json`. **Fix:** revert browse base to `_storage_dir()` or deny-list `fabric_config` (+ `~/.ssh`, AI-tool creds) in `_safe_path`. Add regression tests.
+- **C3 — `.loomai` deny bypassed in multi-user mode.** `files.py:103-108` computes the deny prefix from the per-user `_storage_dir()` (= `.../users/{uuid}`), not the root, so root `.loomai` is reachable: read `session_secret` (forge `loomai_session` cookie), overwrite `password_hash`, read other users' tokens. **Fix:** compute the `.loomai` deny from `get_root_storage_dir()`. Fix C2+C3 as one `files.py` change.
+
+**High**
+- **H1 — `PUT /api/settings` returns unmasked secrets** (`config.py:1907`): GET masks via `_mask_secrets`, PUT returns `load_settings()` raw (Chameleon/FABRIC/NRP/provider keys). **Fix:** `return _mask_secrets(...)`.
+- **H2 — Prompt-injection → ungated destructive AI tools = RCE.** `DESTRUCTIVE_TOOLS` (`chat_intent.py:320`) covers only `delete_slice`/`submit_slice`; `ssh_execute`, `write_file`, `start_background_run`, `delete_chameleon_*` run without confirmation, while RAG indexes untrusted marketplace/weave text into the system prompt. **Fix:** expand the destructive set + require per-action confirmation for model-originated calls; fence RAG text as reference-only; stop indexing weave script bodies.
+- **H3 — Zip-slip via tar symlink members** in artifact/Trovi extraction (`artifacts.py:546-552,1577-1583`, `trovi.py:107-159`): guard checks `member.name` but not `linkname`; `extractall` has no `filter=`. **Fix:** `extractall(..., filter="data")` or reject `issym()/islnk()` + validate `linkname` containment.
+- **H4 — SSRF via LLM `fetch_webpage` + `test-custom-provider`** (`ai_chat.py:2260-2277`, `config.py:2501-2538`): no private/link-local/metadata range block. **Fix:** resolve host and reject private ranges (and redirects) before fetching.
+- **H5 — Login lockout bypass via `X-Forwarded-For` spoofing** (`auth.py:194-198`): trusts the first XFF hop with no trusted-proxy config. **Fix:** trust XFF only from the known proxy (last hop / nginx `real_ip`); add a global login rate limit.
+- **H6 — JupyterLab `:8889` + backend `:8000` published to host; dev/staging bind `0.0.0.0`** (`docker-compose*.yml`). **Partially done (2026-06-11):** the `8889` and `8000` host port publishes were removed from `docker-compose.yml` and `docker-compose.public.yml` (the combined-image standalone path); UI, API, and Jupyter are now reached only through nginx on `3000`. Still open: `docker-compose.dev.yml`/`docker-compose.staging.yml` `0.0.0.0` binds (left as-is — dev-only; see M7).
+- **H7 — No clickjacking/CSP/security headers** on a terminal-bearing UI (`frontend/nginx.conf`, inline `Dockerfile` config). **Fix:** add `X-Frame-Options: DENY` / CSP `frame-ancestors 'none'` / `nosniff` / `Referrer-Policy`.
+
+**Medium**
+- **M1 — Chameleon `client_secret` not masked** (`config.py:1818-1835`): leaks via GET, breaks the PUT round-trip. **Fix:** add to `_walk_secret_fields` + `_restore_masked_secrets`.
+- **M2 — OAuth callback: token-in-query + fail-open CSRF** (`config.py:742-747,512-521`): full `id_token` as a GET query param (logged); state check passes when no cookie is present. **Fix:** POST callback (body), strict state when backend-initiated, stop logging token material.
+- **M3 — ssh_config injection via `bastion_username`** (`settings_manager.py:666-692`): interpolated verbatim; a newline injects `ProxyCommand` → local command execution. **Fix:** validate `^[A-Za-z0-9._-]+$`, strip CR/LF.
+- **M4 — Path traversal in user deletion** (`config.py:2238-2245` → `user_registry.py:194-199`): `remove_user` `rmtree`s without `_UUID_RE` validation. **Fix:** validate `uuid` before building the path.
+- **M5 — Session cookie not `Secure`** (`auth.py:242-249`); 7-day HMAC token has no nonce/revocation. **Fix:** `secure=True` behind TLS; add a jti; shorter sliding TTL.
+- **M6 — CI shell injection via release name** (`.github/workflows/publish-to-public.yml:94-100`): `${{ github.event.release.name }}` in a `run:` shell holding `PUBLIC_REPO_PAT`. **Fix:** pass via `env:`.
+- **M7 — dev compose grants `SYS_ADMIN` + unconfined seccomp/apparmor with auth off on `0.0.0.0`** (`docker-compose.dev.yml`). **Fix:** loopback binds, scope caps, document loudly.
+
+**Verified intact (no action):** all 6 WebSockets auth-gated before `accept()`; login-lockout logic; OAuth state cookie (fail-open caveat = M2); binary-safe session-secret read; `_safe_path` core hardening (defeated only by the caller base in C2/C3); GET `/api/settings` masking (PUT = H1); no shell-string command injection in Chameleon/composite SSH paths; CORS is a concrete allowlist; `contract_test.py` double-gated behind `LOOMAI_CONTRACT_MODE`; no reachable XSS sink.
+
+### Code Quality & Correctness (review 2026-06-11)
+
+From the same audit (details in [`SECURITY_AUDIT_2026-06-11.md`](../SECURITY_AUDIT_2026-06-11.md), "Code-quality" section). Fix the two silent system-wide breakages (#2, #4) first.
+
+- **[High] Fire-and-forget deploy tasks GC'd mid-run** (`slices.py:1495,1519`): `asyncio.create_task(...)` results unstored; the 15-min post-boot poller can be silently collected. **Fix:** module-level task set + `add_done_callback(discard)` (as `main.py:455`).
+- **[High] Naive `scheduled_time` crashes the reservation checker** (`reservation_manager.py:94-100`): naive-vs-aware datetime compare *outside* the try/except → one bad reservation halts **all** auto-submits. **Fix:** tz-normalize on parse (reuse `schedule.py:_parse_iso`).
+- **[High] Blocking OpenStack/FABlib in `async def` composite submit** (`composite.py:1495-1524`): blocking Neutron/FABlib prep on the loop, parallel via `gather` → backend freezes during federated submit. **Fix:** `await run_in_chi_pool(...)`.
+- **[High] `settings.json` read-modify-write has no lock → lost updates** (`settings_manager.py` + callers): background model-discovery threads race user config writes; `_get_settings()` shares the mutable dict. **Fix:** module-level `RLock` around load-mutate-save.
+- **[High] `asyncio.Queue.put_nowait()` from a worker thread** (`files.py:1255-1259`): boot-config SSE emits from a `run_in_executor` thread into a non-thread-safe `asyncio.Queue` → can hang/drop progress. **Fix:** `loop.call_soon_threadsafe(queue.put_nowait, msg)`.
+- **[Med] Two-hop Chameleon SSH terminal leaks the bastion `SSHClient`** (`terminal.py:591-604,654-662`): only `target_client` is closed. **Fix:** track + close the bastion in `finally`.
+- **[Med] Terminal child processes never reaped → zombies** (`terminal_sessions.py:198-217`): killpg without `proc.wait()`; no SIGCHLD reaping. **Fix:** `proc.wait()` in `kill()` and reader `finally`.
+- **[Med] SWR background refresh task unreferenced + can wedge cache** (`fabric_call_manager.py:267`): if collected, `inflight_event` stays set and that key serves stale forever. **Fix:** store the task; reset `inflight_event` in `finally`.
+- **[Med] `reconcile_projects` mutates the global project id, racing the FABlib pool** (`slices.py:722-745` vs `_ensure_project` `:40-47`): a parallel `submit`/`list` can hit the wrong project. **Fix:** serialize project-scoped FABlib ops under a lock.
+- **[Med] Frontend polling closure reads stale `slices`** (`App.tsx:1542,1693`): captured `slices` excluded from `useCallback` deps; ACTIVE/STEADY heuristics misfire. **Fix:** read `slicesRef.current` (exists at `:706`).
+- **[Med] Weave-run/boot-config subprocesses not killed on client disconnect** (`templates.py:914-955`, `files.py:1373-1399`): abandoned SSE generator leaves the subprocess running, `stdout` unclosed. **Fix:** `try/finally` close + `terminate()`; route detached runs through `run_manager`.
+- **[Low] `_open_chameleon_ssh` leaks client on connect failure** (`chameleon_files.py:152-166`); **`_write_meta` non-atomic** (`run_manager.py:339-342`); **`_persist()` blocking file I/O on the event loop** (`composite.py:528`).
+
 ### Testing
 - ~~No CI/CD test pipeline~~ — Done (Phase 7). `.github/workflows/test.yml` with backend pytest + frontend build/test.
 - ~~No test coverage reporting~~ — Done (Phase 7). `pytest-cov` with XML + terminal reports, 33% overall.
@@ -540,6 +586,15 @@ Core Chameleon integration is done (9 phases: backend, CLI, frontend types, sett
 
 ### Experiment Templates Marketplace
 - ~~**Cross-testbed experiment templates**~~ — Done (Phase 9). `experiment.json` format capturing FABRIC + Chameleon resources. Save/load experiment endpoints with variable substitution. "Save as Experiment" button in the Federated Slice toolbar, currently implemented under Composite Slice naming. Variable popup for parameterized loading. "Experiment" category in artifact system (purple badge). 28 new tests.
+
+### Reproducible Topology Layouts for Weaves
+- **Weave-authored graph layouts** — Let a weave artifact include an optional, versioned topology layout manifest so complex experiment graphs render repeatably across LoomAI sessions, exported figures, publications, websites, notebooks, and marketplace previews. This is intended for experiments where the layout itself communicates scientific structure, for example layered protocol stacks, multi-site workflows, control/data-plane separation, federated testbed paths, or publication-ready before/after diagrams.
+  - **Artifact format**: Add a `layout` section to `weave.json` or a companion file such as `topology.layout.json`. The manifest should be declarative and stable under resource ID changes by supporting semantic anchors: node names, role tags, network names, facility-port names, testbed/provider, site, group, and optional explicit Cytoscape element IDs.
+  - **Layout semantics**: Support fixed positions, groups, lanes, annotations, locked nodes, hidden/collapsed transport details, preferred edge routing hints, labels/callouts, viewport bounds, and named layout variants such as `overview`, `publication`, `debug`, and `deployment`.
+  - **Editor workflow**: Add `Save layout to weave`, `Load layout from weave`, `Reset to auto layout`, and `Export figure` actions in the topology view. Users should be able to arrange a graph once, save the layout into the weave, and have it reappear the same way after reloading, submitting, refreshing, or sharing the artifact.
+  - **Rendering behavior**: Apply saved positions after graph merge/refresh without breaking live state updates. Missing resources should be ignored gracefully; new resources should fall back to deterministic auto-placement near related anchors. Layout manifests must work for FABRIC-only, Chameleon-only, and Federated slices.
+  - **Share/export**: Provide publication-quality export paths: PNG/SVG with transparent or themed backgrounds, optional legend/testbed badges, scale/viewport controls, and metadata documenting the weave version and layout variant used.
+  - **Compatibility and validation**: Keep layouts optional and backward-compatible. Validate manifests with clear warnings for stale anchors, duplicate positions, unknown element types, and unsupported layout schema versions. Add tests for deterministic reload, graph refresh preservation, missing-resource fallback, and export output.
 
 ### Real-Time Collaboration
 - **Multi-user editing** — Allow multiple users to view and edit the same slice simultaneously. Key requirements:

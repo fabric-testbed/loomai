@@ -67,6 +67,13 @@ def loomai_api_base() -> str:
     return loomai_base_url().rstrip("/") + "/api"
 
 
+def loomai_auth_headers() -> dict[str, str]:
+    session_cookie = os.environ.get("LOOMAI_SESSION_COOKIE", "")
+    if not session_cookie or "\n" in session_cookie or "\r" in session_cookie:
+        return {}
+    return {"Cookie": f"loomai_session={session_cookie}"}
+
+
 def loomai_connection_hint() -> str:
     return (
         "Set LOOMAI_API_URL or LOOMAI_URL if this script is not running in the "
@@ -86,6 +93,7 @@ def loomai_request(
     url = loomai_api_base() + path
     data = None
     headers = {"Accept": "application/json"}
+    headers.update(loomai_auth_headers())
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"

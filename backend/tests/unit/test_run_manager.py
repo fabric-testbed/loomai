@@ -127,7 +127,8 @@ class TestStartRun:
         mock_proc = MagicMock()
         mock_proc.pid = 99999
         mock_proc.returncode = None
-        mock_proc.wait = MagicMock()
+        _running = threading.Event()
+        mock_proc.wait = MagicMock(side_effect=lambda *a, **k: _running.wait())
 
         with patch("app.run_manager.subprocess.Popen", return_value=mock_proc), \
              patch("app.run_manager.os.getpgid", return_value=99999), \
@@ -149,6 +150,83 @@ class TestStartRun:
         assert meta["slice_name"] == "custom-name"
         assert meta["args"]["NUM_RUNS"] == "3"
 
+    def test_start_merges_extra_env_without_persisting(self, _isolate_run_manager):
+        tmp_path = _isolate_run_manager
+        import app.run_manager as rm
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 22222
+        mock_proc.returncode = None
+        _running = threading.Event()
+        mock_proc.wait = MagicMock(side_effect=lambda *a, **k: _running.wait())
+
+        with patch("app.run_manager.subprocess.Popen", return_value=mock_proc) as mock_popen, \
+             patch("app.run_manager.os.getpgid", return_value=22222), \
+             patch("app.run_manager.get_call_manager") as mock_cm:
+            mock_cm.return_value.invalidate = MagicMock()
+
+            run_id = rm.start_run(
+                weave_dir_name="w",
+                weave_name="W",
+                script="weave.sh",
+                script_path="/w/weave.sh",
+                cwd="/w",
+                script_args={"SLICE_NAME": "auth-slice"},
+                extra_env={"LOOMAI_SESSION_COOKIE": "secret-cookie-value"},
+            )
+
+        popen_env = mock_popen.call_args.kwargs["env"]
+        assert popen_env["LOOMAI_SESSION_COOKIE"] == "secret-cookie-value"
+
+        meta_path = os.path.join(tmp_path, ".runs", run_id, "meta.json")
+        with open(meta_path) as f:
+            meta_text = f.read()
+        meta = json.loads(meta_text)
+        assert "LOOMAI_SESSION_COOKIE" not in meta["args"]
+        assert "loomai_session" not in meta_text
+        assert "secret-cookie-value" not in meta_text
+        with open(meta["log_path"]) as f:
+            log_text = f.read()
+        assert "loomai_session" not in log_text
+        assert "secret-cookie-value" not in log_text
+
+    def test_start_filters_sensitive_script_args_from_metadata(self, _isolate_run_manager):
+        tmp_path = _isolate_run_manager
+        import app.run_manager as rm
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 33333
+        mock_proc.returncode = None
+        _running = threading.Event()
+        mock_proc.wait = MagicMock(side_effect=lambda *a, **k: _running.wait())
+
+        with patch("app.run_manager.subprocess.Popen", return_value=mock_proc) as mock_popen, \
+             patch("app.run_manager.os.getpgid", return_value=33333), \
+             patch("app.run_manager.get_call_manager") as mock_cm:
+            mock_cm.return_value.invalidate = MagicMock()
+
+            run_id = rm.start_run(
+                weave_dir_name="w",
+                weave_name="W",
+                script="weave.sh",
+                script_path="/w/weave.sh",
+                cwd="/w",
+                script_args={
+                    "SLICE_NAME": "auth-slice",
+                    "LOOMAI_SESSION_COOKIE": "bad-cookie-value",
+                },
+            )
+
+        popen_env = mock_popen.call_args.kwargs["env"]
+        assert popen_env.get("LOOMAI_SESSION_COOKIE") != "bad-cookie-value"
+
+        meta_path = os.path.join(tmp_path, ".runs", run_id, "meta.json")
+        with open(meta_path) as f:
+            meta_text = f.read()
+        meta = json.loads(meta_text)
+        assert "LOOMAI_SESSION_COOKIE" not in meta["args"]
+        assert "bad-cookie-value" not in meta_text
+
     def test_start_sanitizes_slice_name(self, _isolate_run_manager):
         tmp_path = _isolate_run_manager
         import app.run_manager as rm
@@ -156,7 +234,8 @@ class TestStartRun:
         mock_proc = MagicMock()
         mock_proc.pid = 11111
         mock_proc.returncode = None
-        mock_proc.wait = MagicMock()
+        _running = threading.Event()
+        mock_proc.wait = MagicMock(side_effect=lambda *a, **k: _running.wait())
 
         with patch("app.run_manager.subprocess.Popen", return_value=mock_proc), \
              patch("app.run_manager.os.getpgid", return_value=11111), \

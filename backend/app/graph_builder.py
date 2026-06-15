@@ -104,6 +104,38 @@ def _component_summary(components: list) -> str:
     return "  ".join(parts)
 
 
+def _normalized_graph_token(value: Any) -> str:
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+
+def _is_facility_vlan_helper_network(
+    net: dict,
+    *,
+    facility_endpoint_names: set[str],
+    referenced_facility_networks: set[str],
+) -> bool:
+    """Return true for disconnected FABRIC facility-port VLAN helper services."""
+    net_name = str(net.get("name", ""))
+    if str(net.get("type", "")) != "VLAN":
+        return False
+    if net.get("interfaces"):
+        return False
+    if not facility_endpoint_names:
+        return False
+    if net_name in referenced_facility_networks:
+        return False
+
+    normalized_name = _normalized_graph_token(net_name)
+    if normalized_name in {"", "vlan"}:
+        return True
+    if net_name.endswith("-ns"):
+        return True
+    return any(
+        token and token in normalized_name
+        for token in (_normalized_graph_token(name) for name in facility_endpoint_names)
+    )
+
+
 def build_graph(slice_data: dict) -> dict[str, Any]:
     """Build a Cytoscape.js-compatible graph JSON from slice data.
 
@@ -124,6 +156,18 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
         for fp in slice_data.get("facility_ports", [])
         if fp.get("name")
     }
+    facility_endpoint_names = set(facility_ports_by_name)
+    referenced_facility_networks: set[str] = set()
+    for fp in slice_data.get("facility_ports", []):
+        for iface in fp.get("interfaces", []):
+            network_name = iface.get("network_name")
+            if network_name:
+                referenced_facility_networks.add(str(network_name))
+    for net in slice_data.get("networks", []):
+        for iface in net.get("interfaces", []):
+            iface_node = iface.get("node_name", "")
+            if iface_node and iface_node not in node_names:
+                facility_endpoint_names.add(str(iface_node))
     external_iface_node_ids: set[str] = set()
 
     # Slice container node
@@ -239,6 +283,12 @@ def build_graph(slice_data: dict) -> dict[str, Any]:
     for net in slice_data.get("networks", []):
         net_name = net["name"]
         net_type = net.get("type", "L2Bridge")
+        if _is_facility_vlan_helper_network(
+            net,
+            facility_endpoint_names=facility_endpoint_names,
+            referenced_facility_networks=referenced_facility_networks,
+        ):
+            continue
         layer = net.get("layer", "L2")
         net_id = f"net:{slice_id}:{net_name}"
 
@@ -811,12 +861,23 @@ def build_chameleon_slice_graph(
     # Per-node network assignments (new model)
     for node in draft.get("nodes", []):
         net = node.get("network")
-        if net and net.get("id") and net["id"] not in seen_net_ids:
-            seen_net_ids.add(net["id"])
+        if isinstance(net, dict):
+            net_id = net.get("id") or net.get("network_id") or net.get("name", "")
+        elif isinstance(net, str):
+            net_id = net
+        else:
+            net_id = ""
+        if net_id and net_id not in seen_net_ids:
+            seen_net_ids.add(net_id)
 
     # Legacy networks array (backward compat)
     for net in draft.get("networks", []):
-        net_id = net.get("id", "")
+        if isinstance(net, dict):
+            net_id = net.get("id") or net.get("name", "")
+        elif isinstance(net, str):
+            net_id = net
+        else:
+            net_id = ""
         if net_id not in seen_net_ids:
             seen_net_ids.add(net_id)
 
@@ -968,6 +1029,15 @@ def build_chameleon_slice_graph(
                     break
         net_key = _network_scope_key(net_site, net_id, net_name)
         if net_key in emitted_nets:
+            existing_net_id = emitted_nets[net_key]
+            for existing_node in nodes:
+                data = existing_node.get("data", {})
+                if data.get("id") == existing_net_id:
+                    data.setdefault("type", net.get("type", ""))
+                    data.setdefault("vlan", str(net.get("vlan", "")))
+                    data.setdefault("facility_port", net.get("facility_port", ""))
+                    data.setdefault("fabric_site", net.get("fabric_site", ""))
+                    break
             continue
         cy_net_id = _network_cy_id(net_site, net_id, net_name)
         emitted_nets[net_key] = cy_net_id
@@ -980,6 +1050,10 @@ def build_chameleon_slice_graph(
                 "testbed": "Chameleon",
                 "draft_id": draft_id,
                 "network_id": net_id,
+                "type": net.get("type", ""),
+                "vlan": str(net.get("vlan", "")),
+                "facility_port": net.get("facility_port", ""),
+                "fabric_site": net.get("fabric_site", ""),
                 "deletable": "true",
                 "name": net_name,
                 "site": net_site,
@@ -1491,6 +1565,68 @@ def _prefix_graph_ids(graph: dict[str, Any], prefix: str, member_parent: str | N
     return {"nodes": out_nodes, "edges": out_edges}
 
 
+_COMPOSITE_MEMBER_CONTAINER_TYPES = {"slice", "chameleon_draft", "chameleon_cluster"}
+
+
+def _flatten_composite_member_graph(graph: dict[str, Any]) -> dict[str, Any]:
+    """Remove standalone member grouping containers from a composite graph.
+
+    Standalone FABRIC and Chameleon topology views use compound slice/site
+    containers as visual folders. Federated/composite topology views already
+    have testbed and connection context, so those folders add visual clutter.
+    """
+    container_ids = {
+        node.get("data", {}).get("id")
+        for node in graph.get("nodes", [])
+        if node.get("data", {}).get("element_type") in _COMPOSITE_MEMBER_CONTAINER_TYPES
+    }
+    container_ids.discard(None)
+    if not container_ids:
+        return graph
+
+    flattened_nodes: list[dict] = []
+    for node in graph.get("nodes", []):
+        data = dict(node.get("data", {}))
+        if data.get("id") in container_ids:
+            continue
+        if data.get("parent") in container_ids:
+            data.pop("parent", None)
+        flattened_nodes.append({"data": data, "classes": node.get("classes", "")})
+
+    flattened_edges = [
+        edge
+        for edge in graph.get("edges", [])
+        if edge.get("data", {}).get("source") not in container_ids
+        and edge.get("data", {}).get("target") not in container_ids
+    ]
+    return {"nodes": flattened_nodes, "edges": flattened_edges}
+
+
+def _composite_member_endpoint_fallback_id(graph: dict[str, Any]) -> str:
+    """Return a real member resource to anchor slice-level fallback edges."""
+    priority = {
+        "node": 0,
+        "chameleon_instance": 0,
+        "network": 1,
+        "facility-port": 2,
+        "component": 3,
+        "port-mirror": 4,
+    }
+    best: tuple[int, str] | None = None
+    for node in graph.get("nodes", []):
+        data = node.get("data", {})
+        node_id = str(data.get("id", ""))
+        element_type = data.get("element_type", "")
+        if not node_id or element_type in _COMPOSITE_MEMBER_CONTAINER_TYPES:
+            continue
+        if element_type == "fabnet-internet":
+            continue
+        score = priority.get(element_type, 100)
+        if best is None or score < best[0]:
+            best = (score, node_id)
+    return best[1] if best else ""
+
+
 def build_composite_graph(
     fabric_members: list[tuple[dict, str]],
     chameleon_members: list[tuple[dict, str]],
@@ -1509,13 +1645,15 @@ def build_composite_graph(
     all_nodes: list[dict] = []
     all_edges: list[dict] = []
     fabnet_internet_ids: list[str] = []  # prefixed IDs of fabnet-internet nodes to deduplicate
-    member_container_fallbacks: dict[tuple[str, str], str] = {}
+    member_endpoint_fallbacks: dict[tuple[str, str], str] = {}
+    member_slice_names: dict[tuple[str, str], str] = {}
 
     # --- FABRIC members ---
     for slice_data, member_id in fabric_members:
         member_graph = build_graph(slice_data)
         prefix = f"fab:{member_id}"
         member_slice_name = slice_data.get("name", member_id)
+        member_slice_names[("fab", member_id)] = member_slice_name
 
         # FABRIC member graphs already include the same slice container used by
         # the standalone FABRIC topology view. Do not wrap them in an extra
@@ -1530,13 +1668,10 @@ def build_composite_graph(
             n["data"]["slice_name"] = member_slice_name
             n["data"]["slice_id"] = member_id
             n["data"]["testbed"] = "FABRIC"
+        prefixed = _flatten_composite_member_graph(prefixed)
+        member_endpoint_fallbacks[("fab", member_id)] = _composite_member_endpoint_fallback_id(prefixed)
         all_nodes.extend(prefixed["nodes"])
         all_edges.extend(prefixed["edges"])
-        member_container_fallbacks[("fab", member_id)] = next((
-            node["data"]["id"]
-            for node in prefixed["nodes"]
-            if node.get("data", {}).get("element_type") == "slice"
-        ), "")
 
         # Track fabnet-internet nodes for dedup
         for node in prefixed["nodes"]:
@@ -1547,22 +1682,20 @@ def build_composite_graph(
     for chi_slice, member_id in chameleon_members:
         member_graph = build_chameleon_slice_graph(chi_slice)
         prefix = f"chi:{member_id}"
+        member_slice_names[("chi", member_id)] = chi_slice.get("name", member_id)
 
         # Chameleon member graphs already have the same site-cluster containers
         # used by the standalone Chameleon topology view. Do not wrap them in an
         # extra composite-member box; otherwise federated Chameleon sub-slices
         # look different from normal Chameleon slices.
         prefixed = _prefix_graph_ids(member_graph, prefix, None)
-        member_container_fallbacks[("chi", member_id)] = next((
-            node["data"]["id"]
-            for node in prefixed["nodes"]
-            if node.get("data", {}).get("element_type") in {"chameleon_draft", "chameleon_cluster"}
-        ), "")
         for n in prefixed["nodes"]:
-            n["data"]["slice_name"] = chi_slice.get("name", member_id)
+            n["data"]["slice_name"] = member_slice_names[("chi", member_id)]
             n["data"]["slice_id"] = member_id
             if n["data"].get("element_type") != "fabnet-internet":
                 n["data"]["testbed"] = "Chameleon"
+        prefixed = _flatten_composite_member_graph(prefixed)
+        member_endpoint_fallbacks[("chi", member_id)] = _composite_member_endpoint_fallback_id(prefixed)
         all_nodes.extend(prefixed["nodes"])
         all_edges.extend(prefixed["edges"])
 
@@ -1625,11 +1758,16 @@ def build_composite_graph(
                 return data.get("id", "")
         return ""
 
+    hidden_transport_node_ids: set[str] = set()
+
     def _node_by_id(node_id: str) -> dict | None:
         for node in all_nodes:
             if node.get("data", {}).get("id") == node_id:
                 return node
         return None
+
+    def _member_testbed(provider_prefix: str) -> str:
+        return "FABRIC" if provider_prefix == "fab" else "Chameleon"
 
     def _find_facility_port_name_for_network(network_id: str) -> str:
         if not network_id:
@@ -1647,6 +1785,171 @@ def build_composite_graph(
             if other_data.get("element_type") == "facility-port":
                 return other_data.get("name", "")
         return ""
+
+    def _network_has_vlan(network_id: str, vlan: str) -> bool:
+        if not network_id or not vlan:
+            return False
+        for edge in all_edges:
+            data = edge.get("data", {})
+            if network_id not in {data.get("source"), data.get("target")}:
+                continue
+            if str(data.get("vlan", "")) == str(vlan):
+                return True
+        return False
+
+    def _network_has_endpoint(network_id: str, endpoint_id: str) -> bool:
+        if not network_id or not endpoint_id:
+            return False
+        for edge in all_edges:
+            data = edge.get("data", {})
+            source = data.get("source", "")
+            target = data.get("target", "")
+            if network_id not in {source, target}:
+                continue
+            other_id = target if source == network_id else source
+            if other_id == endpoint_id:
+                return True
+            if data.get("source_vm") == endpoint_id or data.get("target_vm") == endpoint_id:
+                return True
+            other = _node_by_id(other_id)
+            if other and other.get("data", {}).get("parent_vm") == endpoint_id:
+                return True
+        return False
+
+    def _network_endpoint_attachment_id(provider_prefix: str, member_id: str, node_name: str, network_id: str) -> str:
+        endpoint_id = _find_member_node_id(provider_prefix, member_id, node_name) if node_name else ""
+        if not network_id:
+            return endpoint_id
+        for edge in all_edges:
+            data = edge.get("data", {})
+            source = data.get("source", "")
+            target = data.get("target", "")
+            if network_id not in {source, target}:
+                continue
+            other_id = target if source == network_id else source
+            if not endpoint_id:
+                other = _node_by_id(other_id)
+                other_data = other.get("data", {}) if other else {}
+                if other_data.get("element_type") in {"node", "chameleon_instance", "component"}:
+                    return other_id
+                continue
+            if other_id == endpoint_id or data.get("source_vm") == endpoint_id or data.get("target_vm") == endpoint_id:
+                return other_id
+            other = _node_by_id(other_id)
+            if other and other.get("data", {}).get("parent_vm") == endpoint_id:
+                return other_id
+        return endpoint_id
+
+    def _find_facility_l2_network_id(
+        provider_prefix: str,
+        member_id: str,
+        endpoint: dict,
+        conn: dict,
+        fp_name: str,
+        vlan: str,
+    ) -> str:
+        explicit_network = (
+            conn.get(f"{'fabric' if provider_prefix == 'fab' else 'chameleon'}_network")
+            or endpoint.get("network", "")
+            or (conn.get("network", "") if provider_prefix == "fab" else "")
+        )
+        explicit_id = _find_member_network_id(provider_prefix, member_id, explicit_network)
+        if explicit_id:
+            return explicit_id
+
+        endpoint_node = endpoint.get("node") or (
+            conn.get("fabric_node") if provider_prefix == "fab" else conn.get("chameleon_node")
+        )
+        endpoint_id = _find_member_node_id(provider_prefix, member_id, endpoint_node) if endpoint_node else ""
+        prefix = f"{provider_prefix}:{member_id}:"
+        candidates: list[tuple[int, str]] = []
+        for node in all_nodes:
+            data = node.get("data", {})
+            node_id = str(data.get("id", ""))
+            if not node_id.startswith(prefix) or data.get("element_type") != "network":
+                continue
+            name = str(data.get("name") or data.get("network_name") or "")
+            score = 0
+            facility_signal = False
+            if provider_prefix == "fab" and fp_name and _find_facility_port_name_for_network(node_id) == fp_name:
+                score += 5
+                facility_signal = True
+            if provider_prefix == "chi" and (
+                data.get("type") == "facility_port_l2"
+                or data.get("connection_type") == "facility_port_l2"
+                or (fp_name and data.get("facility_port") == fp_name)
+            ):
+                score += 5
+                facility_signal = True
+            if vlan and (str(data.get("vlan", "")) == str(vlan) or _network_has_vlan(node_id, vlan)):
+                score += 2
+                facility_signal = True
+            if endpoint_id and _network_has_endpoint(node_id, endpoint_id):
+                score += 2
+            if name.startswith("fp-l2-") or "stitch" in name.lower():
+                score += 1
+                facility_signal = True
+            if facility_signal and score:
+                candidates.append((score, node_id))
+        if not candidates:
+            return ""
+        candidates.sort(reverse=True)
+        return candidates[0][1]
+
+    def _hide_local_facility_port_nodes(provider_prefix: str, member_id: str, fp_name: str) -> None:
+        if not fp_name:
+            return
+        prefix = f"{provider_prefix}:{member_id}:"
+        for node in all_nodes:
+            data = node.get("data", {})
+            if not str(data.get("id", "")).startswith(prefix):
+                continue
+            if data.get("element_type") == "facility-port" and data.get("name") == fp_name:
+                hidden_transport_node_ids.add(data.get("id", ""))
+
+    def _normalized_token(value: str) -> str:
+        return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+    def _hide_related_facility_l2_networks(
+        provider_prefix: str,
+        member_id: str,
+        primary_network_id: str,
+        explicit_network: str,
+        fp_name: str,
+        vlan: str,
+    ) -> None:
+        prefix = f"{provider_prefix}:{member_id}:"
+        primary = _node_by_id(primary_network_id)
+        primary_name = (primary.get("data", {}) if primary else {}).get("name", "")
+        fp_token = _normalized_token(fp_name)
+        for node in all_nodes:
+            data = node.get("data", {})
+            node_id = str(data.get("id", ""))
+            if not node_id.startswith(prefix) or data.get("element_type") != "network":
+                continue
+            if primary_network_id and node_id == primary_network_id:
+                continue
+
+            name = str(data.get("name") or data.get("network_name") or "")
+            hide = bool(primary_name and name == primary_name)
+            hide = hide or bool(explicit_network and name == explicit_network)
+
+            if provider_prefix == "fab":
+                hide = hide or bool(fp_name and _find_facility_port_name_for_network(node_id) == fp_name)
+                hide = hide or bool(fp_token and fp_token in _normalized_token(name) and data.get("type") == "VLAN")
+            else:
+                hide = hide or data.get("type") == "facility_port_l2"
+                hide = hide or data.get("connection_type") == "facility_port_l2"
+                hide = hide or bool(fp_name and data.get("facility_port") == fp_name)
+                hide = hide or (name.startswith("fp-l2-") and (not vlan or str(data.get("vlan", "")) in {"", str(vlan)}))
+                hide = hide or ("stitch" in name.lower() and bool(primary_network_id or explicit_network or vlan))
+
+            if vlan:
+                hide = hide or str(data.get("vlan", "")) == str(vlan)
+                hide = hide or _network_has_vlan(node_id, vlan)
+
+            if hide:
+                hidden_transport_node_ids.add(node_id)
 
     def _slug(value: str) -> str:
         chars = [
@@ -1703,6 +2006,81 @@ def build_composite_graph(
         })
         return shared_id
 
+    def _facility_l2_network_name(provider_prefix: str, endpoint: dict, conn: dict, fp_name: str) -> str:
+        explicit_name = (
+            conn.get(f"{'fabric' if provider_prefix == 'fab' else 'chameleon'}_network")
+            or endpoint.get("network")
+            or (conn.get("network") if provider_prefix == "fab" else "")
+        )
+        return str(explicit_name or fp_name or "Facility L2")
+
+    def _local_facility_l2_network_id(
+        provider_prefix: str,
+        member_id: str,
+        endpoint: dict,
+        conn: dict,
+        fp_name: str,
+        vlan: str,
+    ) -> str:
+        name = _facility_l2_network_name(provider_prefix, endpoint, conn, fp_name)
+        parts = ["facility-l2-net", _slug(name)]
+        if vlan:
+            parts.append(f"vlan-{_slug(vlan)}")
+        else:
+            parts.append(_slug(conn.get("id") or member_id))
+        return f"{provider_prefix}:{member_id}:{':'.join(parts)}"
+
+    def _upsert_local_facility_l2_network(
+        provider_prefix: str,
+        member_id: str,
+        endpoint: dict,
+        conn: dict,
+        fp_name: str,
+        vlan: str,
+    ) -> str:
+        local_id = _local_facility_l2_network_id(provider_prefix, member_id, endpoint, conn, fp_name, vlan)
+        for node in all_nodes:
+            if node.get("data", {}).get("id") == local_id:
+                return local_id
+
+        name = _facility_l2_network_name(provider_prefix, endpoint, conn, fp_name)
+        label_lines = [str(name)]
+        if vlan:
+            label_lines.append(f"VLAN {vlan}")
+        all_nodes.append({
+            "data": {
+                "id": local_id,
+                "label": "\n".join(label_lines),
+                "element_type": "network",
+                "name": name,
+                "type": "facility_port_l2",
+                "layer": "L2",
+                "vlan": str(vlan),
+                "connection_type": "facility_port_l2",
+                "facility_port": fp_name,
+                "testbed": _member_testbed(provider_prefix),
+                "slice_id": member_id,
+                "slice_name": member_slice_names.get((provider_prefix, member_id), member_id),
+            },
+            "classes": "network-l2 composite-facility-l2-network",
+        })
+        return local_id
+
+    def _mark_facility_l2_network(network_id: str, vlan: str, fp_name: str) -> None:
+        node = _node_by_id(network_id)
+        if not node:
+            return
+        data = node.get("data", {})
+        data["connection_type"] = "facility_port_l2"
+        data.setdefault("layer", "L2")
+        if vlan:
+            data["vlan"] = str(vlan)
+        if fp_name:
+            data["facility_port"] = fp_name
+        classes = node.get("classes", "")
+        if "composite-facility-l2-network" not in classes:
+            node["classes"] = f"{classes} composite-facility-l2-network".strip()
+
     def _promote_matching_facility_port_node(shared_id: str, provider_prefix: str, member_id: str, fp_name: str) -> None:
         if not fp_name:
             return
@@ -1729,7 +2107,6 @@ def build_composite_graph(
                     edge["data"]["connection_type"] = "facility_port_l2"
                     edge["classes"] = "edge-cross-testbed edge-facility-port-l2"
             all_nodes.remove(node)
-            return
 
     def _add_stitch_edge(conn_id: str, source_id: str, target_id: str, label: str, suffix: str) -> None:
         if not source_id or not target_id:
@@ -1759,10 +2136,86 @@ def build_composite_graph(
             "classes": "edge-cross-testbed edge-facility-port-l2",
         })
 
+    def _add_local_facility_l2_edge(conn_id: str, source_id: str, target_id: str, label: str, suffix: str) -> None:
+        if not source_id or not target_id:
+            return
+        for edge in all_edges:
+            data = edge.get("data", {})
+            existing_pair = {data.get("source"), data.get("target")}
+            if existing_pair == {source_id, target_id}:
+                if label and not data.get("label"):
+                    data["label"] = label
+                data["connection_type"] = "facility_port_l2"
+                classes = edge.get("classes", "")
+                if "edge-facility-port-l2" not in classes:
+                    edge["classes"] = f"{classes} edge-facility-port-l2".strip()
+                return
+        edge_id = f"xconn:{conn_id}:{suffix}"
+        if any(edge.get("data", {}).get("id") == edge_id for edge in all_edges):
+            return
+        all_edges.append({
+            "data": {
+                "id": edge_id,
+                "source": source_id,
+                "target": target_id,
+                "label": label,
+                "element_type": "interface",
+                "connection_type": "facility_port_l2",
+            },
+            "classes": "edge-l2 edge-facility-port-l2",
+        })
+
+    def _connection_type_key(conn_type: Any) -> str:
+        normalized = str(conn_type or "").lower()
+        if normalized in {"fabnetv4", "fabnet_v4"}:
+            return "fabnetv4_l3"
+        if normalized == "l2_stitch":
+            return "facility_port_l2"
+        return normalized
+
+    def _is_fabnetv4_network_node(data: dict[str, Any]) -> bool:
+        if data.get("element_type") != "network":
+            return False
+        for value in (data.get("name"), data.get("network_name"), data.get("type"), data.get("net_type")):
+            normalized = "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+            if normalized.startswith("fabnetv4"):
+                return True
+        return False
+
+    def _has_fabnet_internet_uplink(network_id: str) -> bool:
+        for edge in all_edges:
+            data = edge.get("data", {})
+            if data.get("element_type") != "fabnet-internet-edge":
+                continue
+            source = data.get("source", "")
+            target = data.get("target", "")
+            if network_id == source:
+                other_id = target
+            elif network_id == target:
+                other_id = source
+            else:
+                continue
+            other = _node_by_id(other_id)
+            if other and other.get("data", {}).get("element_type") == "fabnet-internet":
+                return True
+        return False
+
+    def _member_has_fabnetv4_path(provider_prefix: str, member_id: str) -> bool:
+        prefix = f"{provider_prefix}:{member_id}:"
+        for node in all_nodes:
+            data = node.get("data", {})
+            node_id = str(data.get("id", ""))
+            if not node_id.startswith(prefix):
+                continue
+            if _is_fabnetv4_network_node(data) and _has_fabnet_internet_uplink(node_id):
+                return True
+        return False
+
     # --- Cross-connections ---
     if cross_connections:
         for conn in cross_connections:
             conn_type = conn.get("type", "fabnetv4")
+            conn_type_key = _connection_type_key(conn_type)
             endpoints = [conn.get("endpoint_a"), conn.get("endpoint_b"), conn.get("source"), conn.get("target")]
             fab_endpoint = next((e for e in endpoints if isinstance(e, dict) and e.get("provider") == "fabric"), {})
             chi_endpoint = next((e for e in endpoints if isinstance(e, dict) and e.get("provider") == "chameleon"), {})
@@ -1772,7 +2225,7 @@ def build_composite_graph(
             chi_node = conn.get("chameleon_node") or chi_endpoint.get("node", "")
 
             if fab_slice and chi_slice_id:
-                if conn_type in {"l2_stitch", "facility_port_l2"}:
+                if conn_type_key == "facility_port_l2":
                     conn_id = conn.get("id") or f"{fab_slice}-{chi_slice_id}-{fab_node}-{chi_node}"
                     fp_name = (
                         conn.get("facility_port")
@@ -1780,30 +2233,56 @@ def build_composite_graph(
                         or chi_endpoint.get("facility_port")
                         or ""
                     )
-                    fab_network = conn.get("fabric_network") or fab_endpoint.get("network", "")
-                    chi_network = conn.get("chameleon_network") or chi_endpoint.get("network", "")
-                    fab_net_id = _find_member_network_id("fab", fab_slice, fab_network)
-                    chi_net_id = _find_member_network_id("chi", chi_slice_id, chi_network)
+                    vlan = conn.get("vlan") or fab_endpoint.get("vlan") or chi_endpoint.get("vlan") or ""
+                    fab_explicit_network = (
+                        conn.get("fabric_network")
+                        or fab_endpoint.get("network", "")
+                        or conn.get("network", "")
+                    )
+                    chi_explicit_network = conn.get("chameleon_network") or chi_endpoint.get("network", "")
+                    fab_net_id = _find_facility_l2_network_id("fab", fab_slice, fab_endpoint, conn, fp_name, str(vlan))
+                    chi_net_id = _find_facility_l2_network_id("chi", chi_slice_id, chi_endpoint, conn, fp_name, str(vlan))
 
-                    if fab_net_id or chi_net_id:
-                        if not fp_name:
-                            fp_name = _find_facility_port_name_for_network(fab_net_id)
-                        conn_for_fp = {**conn}
-                        if fp_name:
-                            conn_for_fp["facility_port"] = fp_name
-                        shared_fp_id = _upsert_shared_facility_port(conn_for_fp, fab_endpoint, chi_endpoint)
-                        _promote_matching_facility_port_node(shared_fp_id, "fab", fab_slice, fp_name)
-                        vlan = conn.get("vlan") or fab_endpoint.get("vlan") or chi_endpoint.get("vlan") or ""
-                        edge_label = f"VLAN {vlan}" if vlan else ""
-                        _add_stitch_edge(conn_id, fab_net_id, shared_fp_id, edge_label, "fabric")
-                        _add_stitch_edge(conn_id, chi_net_id, shared_fp_id, edge_label, "chameleon")
-                        continue
+                    if not fp_name:
+                        fp_name = _find_facility_port_name_for_network(fab_net_id)
+                    conn_for_fp = {**conn}
+                    if fp_name:
+                        conn_for_fp["facility_port"] = fp_name
+                    if not fab_net_id:
+                        fab_net_id = _upsert_local_facility_l2_network("fab", fab_slice, fab_endpoint, conn_for_fp, fp_name, str(vlan))
+                    if not chi_net_id:
+                        chi_net_id = _upsert_local_facility_l2_network("chi", chi_slice_id, chi_endpoint, conn_for_fp, fp_name, str(vlan))
+                    shared_fp_id = _upsert_shared_facility_port(conn_for_fp, fab_endpoint, chi_endpoint)
+                    _promote_matching_facility_port_node(shared_fp_id, "fab", fab_slice, fp_name)
+                    edge_label = f"VLAN {vlan}" if vlan else ""
+                    _mark_facility_l2_network(fab_net_id, str(vlan), fp_name)
+                    _mark_facility_l2_network(chi_net_id, str(vlan), fp_name)
+                    fab_source_id = _network_endpoint_attachment_id("fab", fab_slice, fab_node, fab_net_id)
+                    chi_source_id = _network_endpoint_attachment_id("chi", chi_slice_id, chi_node, chi_net_id)
+                    _hide_related_facility_l2_networks("fab", fab_slice, fab_net_id, fab_explicit_network, fp_name, str(vlan))
+                    _hide_related_facility_l2_networks("chi", chi_slice_id, chi_net_id, chi_explicit_network, fp_name, str(vlan))
+                    _hide_local_facility_port_nodes("fab", fab_slice, fp_name)
+                    _hide_local_facility_port_nodes("chi", chi_slice_id, fp_name)
+                    _add_local_facility_l2_edge(conn_id, fab_source_id, fab_net_id, edge_label, "fabric-endpoint")
+                    _add_local_facility_l2_edge(conn_id, chi_source_id, chi_net_id, edge_label, "chameleon-endpoint")
+                    _add_stitch_edge(conn_id, fab_net_id, shared_fp_id, edge_label, "fabric-facility-port")
+                    _add_stitch_edge(conn_id, chi_net_id, shared_fp_id, edge_label, "chameleon-facility-port")
+                    continue
+
+                if (
+                    conn_type_key == "fabnetv4_l3"
+                    and _member_has_fabnetv4_path("fab", fab_slice)
+                    and _member_has_fabnetv4_path("chi", chi_slice_id)
+                ):
+                    continue
 
                 source_id = _find_member_node_id("fab", fab_slice, fab_node) if fab_node else ""
                 target_id = _find_member_node_id("chi", chi_slice_id, chi_node) if chi_node else ""
-                source_id = source_id or (member_container_fallbacks.get(("fab", fab_slice)) or f"member:fab:{fab_slice}")
-                target_id = target_id or (member_container_fallbacks.get(("chi", chi_slice_id)) or f"member:chi:{chi_slice_id}")
-                if conn_type in {"l2_stitch", "facility_port_l2"}:
+                source_id = source_id or member_endpoint_fallbacks.get(("fab", fab_slice), "")
+                target_id = target_id or member_endpoint_fallbacks.get(("chi", chi_slice_id), "")
+                if not source_id or not target_id:
+                    continue
+                if conn_type_key == "facility_port_l2":
                     label_parts = ["Facility Port L2"]
                     if conn.get("facility_port") or fab_endpoint.get("facility_port"):
                         label_parts.append(str(conn.get("facility_port") or fab_endpoint.get("facility_port")))
@@ -1824,5 +2303,45 @@ def build_composite_graph(
                     },
                     "classes": f"edge-cross-testbed edge-{conn_type.replace('_', '-')}",
                 })
+
+    if hidden_transport_node_ids:
+        all_nodes = [
+            node for node in all_nodes
+            if node.get("data", {}).get("id") not in hidden_transport_node_ids
+        ]
+        all_edges = [
+            edge for edge in all_edges
+            if edge.get("data", {}).get("source") not in hidden_transport_node_ids
+            and edge.get("data", {}).get("target") not in hidden_transport_node_ids
+        ]
+
+    deduped_edges: list[dict] = []
+    seen_edge_ids: dict[str, dict] = {}
+    seen_facility_pairs: dict[frozenset[str], dict] = {}
+    for edge in all_edges:
+        data = edge.get("data", {})
+        edge_id = str(data.get("id", ""))
+        source = str(data.get("source", ""))
+        target = str(data.get("target", ""))
+        classes = edge.get("classes", "")
+        existing = seen_edge_ids.get(edge_id) if edge_id else None
+        if not existing and "edge-facility-port-l2" in classes:
+            existing = seen_facility_pairs.get(frozenset({source, target}))
+        if existing:
+            existing_data = existing.get("data", {})
+            if data.get("label") and not existing_data.get("label"):
+                existing_data["label"] = data.get("label")
+            existing_classes = existing.get("classes", "")
+            for cls in classes.split():
+                if cls not in existing_classes.split():
+                    existing_classes = f"{existing_classes} {cls}".strip()
+            existing["classes"] = existing_classes
+            continue
+        deduped_edges.append(edge)
+        if edge_id:
+            seen_edge_ids[edge_id] = edge
+        if "edge-facility-port-l2" in classes:
+            seen_facility_pairs[frozenset({source, target})] = edge
+    all_edges = deduped_edges
 
     return {"nodes": all_nodes, "edges": all_edges}

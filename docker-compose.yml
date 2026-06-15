@@ -2,10 +2,11 @@ services:
   loomai:
     image: fabrictestbed/loomai:latest
     ports:
-      - "127.0.0.1:3000:3000"        # Web UI (nginx)
-      - "127.0.0.1:8000:8000"        # Backend API (direct access)
-      - "127.0.0.1:8889:8889"        # JupyterLab
+      - "127.0.0.1:3000:3000"        # Web UI (nginx) — the only entrypoint; proxies /api, /jupyter, /aider, /opencode, /tunnel with auth
       - "127.0.0.1:9100-9199:9100-9199"  # SSH tunnels for My Web Apps
+      # Backend (8000) and JupyterLab (8889) are intentionally NOT published:
+      # reach them through nginx on 3000 so the loomai_session auth gate applies.
+      # Publishing 8889 would expose JupyterLab (no token/password) unauthenticated.
     volumes:
       - fabric_work:/home/fabric/work
     environment:

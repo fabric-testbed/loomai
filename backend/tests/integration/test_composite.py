@@ -710,14 +710,17 @@ class TestBuildCompositeGraph:
             "port_mirrors": [],
         }
         result = build_composite_graph([(slice_data, "slice-123")], [])
-        # Should have the native FABRIC slice container + node, without an
-        # extra federated member wrapper box.
+        # Composite views should render member resources directly, without
+        # slice/folder containers around each member.
         node_ids = [n["data"]["id"] for n in result["nodes"]]
         assert "member:fab:slice-123" not in node_ids
-        assert "fab:slice-123:slice:slice-123" in node_ids
+        assert "fab:slice-123:slice:slice-123" not in node_ids
+        assert not any(n["data"].get("element_type") == "slice" for n in result["nodes"])
         # All FABRIC elements should be prefixed
         fab_nodes = [n for n in result["nodes"] if n["data"]["id"].startswith("fab:slice-123:")]
-        assert len(fab_nodes) >= 2  # at least slice container + VM node
+        assert len(fab_nodes) >= 1
+        vm = next(n for n in fab_nodes if n["data"].get("element_type") == "node")
+        assert "parent" not in vm["data"]
 
     def test_id_prefixing(self):
         from app.graph_builder import _prefix_graph_ids
@@ -759,7 +762,12 @@ class TestBuildCompositeGraph:
         assert "member:chi:chi-slice-abc" not in node_ids
         chi_nodes = [n for n in result["nodes"] if n["data"]["id"].startswith("chi:chi-slice-abc:")]
         assert len(chi_nodes) >= 1
-        assert any(n["data"].get("element_type") == "chameleon_draft" for n in chi_nodes)
+        assert not any(
+            n["data"].get("element_type") in {"chameleon_draft", "chameleon_cluster"}
+            for n in chi_nodes
+        )
+        instance = next(n for n in chi_nodes if n["data"].get("element_type") == "chameleon_instance")
+        assert "parent" not in instance["data"]
 
     def test_slice_level_federated_connection_edge(self):
         from app.graph_builder import build_composite_graph
@@ -767,7 +775,9 @@ class TestBuildCompositeGraph:
             "name": "fab",
             "id": "fab-1",
             "state": "StableOK",
-            "nodes": [],
+            "nodes": [{"name": "fab-node", "site": "TACC", "cores": 2, "ram": 8, "disk": 10,
+                        "image": "rocky", "state": "Active", "management_ip": "",
+                        "username": "rocky", "host": "", "components": []}],
             "networks": [],
             "facility_ports": [],
             "port_mirrors": [],
@@ -776,7 +786,9 @@ class TestBuildCompositeGraph:
             "id": "chi-1",
             "name": "chi",
             "state": "Active",
-            "nodes": [],
+            "nodes": [{"id": "chi-node-1", "name": "chi-node", "site": "CHI@TACC",
+                        "node_type": "compute_skylake", "image": "CC-Ubuntu22.04",
+                        "count": 1, "status": "ACTIVE"}],
             "networks": [],
             "floating_ips": [],
             "resources": [],
@@ -792,11 +804,88 @@ class TestBuildCompositeGraph:
             }],
         )
         edge = next(e for e in result["edges"] if e["data"]["id"] == "xconn:conn-1")
-        assert edge["data"]["source"] == "fab:fab-1:slice:fab-1"
-        assert edge["data"]["target"].startswith("chi:chi-1:chi-draft:chi-1:")
+        assert edge["data"]["source"] == "fab:fab-1:node:fab-1:fab-node"
+        assert edge["data"]["target"] == "chi:chi-1:chi-draft-node:chi-1:chi-node-1"
         assert edge["data"]["label"] == "FABNetv4 L3"
+        assert not any(
+            n["data"].get("element_type") in {"slice", "chameleon_draft", "chameleon_cluster"}
+            for n in result["nodes"]
+        )
 
-    def test_facility_port_l2_edge_targets_endpoint_nodes(self):
+    def test_fabnetv4_connection_uses_gateway_path_without_direct_edge(self):
+        from app.graph_builder import build_composite_graph
+        fabric_slice = {
+            "name": "fab",
+            "id": "fab-1",
+            "state": "StableOK",
+            "nodes": [{
+                "name": "fabric-vm", "site": "TACC", "cores": 2, "ram": 8, "disk": 10,
+                "image": "rocky", "management_ip": "", "username": "rocky", "host": "",
+                "components": [{
+                    "name": "fabric-vm-nic1", "model": "NIC_Basic",
+                    "interfaces": [{"name": "fabric-vm-nic1-p1", "node_name": "fabric-vm"}],
+                }],
+            }],
+            "networks": [{
+                "name": "FABNetv4",
+                "type": "FABNetv4",
+                "layer": "L3",
+                "interfaces": [{"name": "fabric-vm-nic1-p1", "node_name": "fabric-vm"}],
+            }],
+            "facility_ports": [],
+            "port_mirrors": [],
+        }
+        chi_slice = {
+            "id": "chi-1",
+            "name": "chi",
+            "state": "Draft",
+            "nodes": [{
+                "id": "chi-node-1", "name": "chi-server", "site": "CHI@TACC",
+                "node_type": "compute_skylake", "image": "CC-Ubuntu22.04",
+                "count": 1, "connection_type": "fabnet_v4", "status": "DRAFT",
+            }],
+            "networks": [],
+            "floating_ips": [],
+            "resources": [],
+        }
+        result = build_composite_graph(
+            [(fabric_slice, "fab-1")],
+            [(chi_slice, "chi-1")],
+            cross_connections=[{
+                "id": "conn-fabnet",
+                "type": "fabnetv4_l3",
+                "endpoint_a": {"provider": "fabric", "slice_id": "fab-1", "node": "fabric-vm"},
+                "endpoint_b": {"provider": "chameleon", "slice_id": "chi-1", "node": "chi-server"},
+            }],
+        )
+
+        assert not any(e["data"].get("id") == "xconn:conn-fabnet" for e in result["edges"])
+
+        internet_nodes = [
+            n for n in result["nodes"]
+            if n["data"].get("element_type") == "fabnet-internet"
+        ]
+        assert len(internet_nodes) == 1
+        assert internet_nodes[0]["data"]["id"] == "shared:fabnet-internet-v4"
+
+        gateway_edges = [
+            e for e in result["edges"]
+            if e["data"].get("element_type") == "fabnet-internet-edge"
+        ]
+        gateway_pairs = {
+            (e["data"].get("source"), e["data"].get("target"))
+            for e in gateway_edges
+        }
+        assert (
+            "fab:fab-1:net:fab-1:FABNetv4",
+            "shared:fabnet-internet-v4",
+        ) in gateway_pairs
+        assert (
+            "chi:chi-1:chi-fabnetv4:chi-1:CHI@TACC",
+            "shared:fabnet-internet-v4",
+        ) in gateway_pairs
+
+    def test_facility_port_l2_uses_local_networks_when_missing_from_members(self):
         from app.graph_builder import build_composite_graph
         fabric_slice = {
             "name": "fab",
@@ -830,11 +919,38 @@ class TestBuildCompositeGraph:
                 "endpoint_b": {"provider": "chameleon", "slice_id": "chi-1", "node": "chi-router"},
             }],
         )
-        edge = next(e for e in result["edges"] if e["data"]["id"] == "xconn:conn-l2")
-        assert edge["data"]["source"].startswith("fab:fab-1:node:")
-        assert edge["data"]["target"] == "chi:chi-1:chi-draft-node:chi-1:node-uuid-1"
-        assert edge["data"]["label"] == "Facility Port L2\nChameleon-TACC\nVLAN 3301"
-        assert "edge-facility-port-l2" in edge["classes"]
+        assert not any(e["data"].get("id") == "xconn:conn-l2" for e in result["edges"])
+
+        shared_port = next(
+            n for n in result["nodes"]
+            if n["data"].get("element_type") == "facility-port"
+            and n["data"].get("name") == "Chameleon-TACC"
+        )
+        facility_networks = [
+            n for n in result["nodes"]
+            if n["data"].get("element_type") == "network"
+            and n["data"].get("connection_type") == "facility_port_l2"
+        ]
+        assert {n["data"].get("testbed") for n in facility_networks} == {"FABRIC", "Chameleon"}
+        by_testbed = {n["data"]["testbed"]: n["data"]["id"] for n in facility_networks}
+
+        stitch_pairs = {
+            frozenset({e["data"].get("source"), e["data"].get("target")})
+            for e in result["edges"]
+            if "edge-facility-port-l2" in e.get("classes", "")
+        }
+        assert any(
+            by_testbed["FABRIC"] in pair
+            and any(str(node_id).startswith("fab:fab-1:node:") for node_id in pair)
+            for pair in stitch_pairs
+        )
+        assert any(
+            by_testbed["Chameleon"] in pair
+            and "chi:chi-1:chi-draft-node:chi-1:node-uuid-1" in pair
+            for pair in stitch_pairs
+        )
+        assert frozenset({by_testbed["FABRIC"], shared_port["data"]["id"]}) in stitch_pairs
+        assert frozenset({by_testbed["Chameleon"], shared_port["data"]["id"]}) in stitch_pairs
 
     def test_chameleon_runtime_resources_render_in_federated_graph(self):
         from app.graph_builder import build_composite_graph
@@ -929,19 +1045,173 @@ class TestBuildCompositeGraph:
         assert "composite-shared-network" in shared_port["classes"]
         assert "VLAN 3319" in shared_port["data"]["label"]
 
-        network_ids = {
-            n["data"].get("name"): n["data"]["id"]
+        assert not any(
+            n["data"].get("element_type") == "network"
+            and n["data"].get("connection_type") == "facility_port_l2"
+            and n["data"].get("testbed") == "SHARED"
             for n in result["nodes"]
+        )
+
+        local_l2_networks = [
+            n for n in result["nodes"]
             if n["data"].get("element_type") == "network"
-        }
+            and n["data"].get("connection_type") == "facility_port_l2"
+            and n["data"].get("testbed") in {"FABRIC", "Chameleon"}
+        ]
+        assert len(local_l2_networks) == 2
+        local_l2_by_testbed = {n["data"]["testbed"]: n for n in local_l2_networks}
+        assert local_l2_by_testbed["FABRIC"]["data"]["name"] == "chameleon-stitch-l2"
+        assert local_l2_by_testbed["Chameleon"]["data"]["name"] == "chameleon-fabric-fabnet-gb8u-stitch"
+        fab_l2_id = local_l2_by_testbed["FABRIC"]["data"]["id"]
+        chi_l2_id = local_l2_by_testbed["Chameleon"]["data"]["id"]
+
         stitch_pairs = {
             frozenset({e["data"].get("source"), e["data"].get("target")})
             for e in result["edges"]
             if "edge-facility-port-l2" in e.get("classes", "")
         }
-        assert frozenset({network_ids["chameleon-stitch-l2"], shared_port["data"]["id"]}) in stitch_pairs
-        assert frozenset({network_ids["chameleon-fabric-fabnet-gb8u-stitch"], shared_port["data"]["id"]}) in stitch_pairs
+        assert any(
+            fab_l2_id in pair
+            and any(str(node_id).startswith("fab:fab-1:comp:") for node_id in pair)
+            for pair in stitch_pairs
+        )
+        assert any(
+            chi_l2_id in pair
+            and any(str(node_id).startswith("chi:chi-1:chi-resource-comp:") for node_id in pair)
+            for pair in stitch_pairs
+        )
+        assert frozenset({fab_l2_id, shared_port["data"]["id"]}) in stitch_pairs
+        assert frozenset({chi_l2_id, shared_port["data"]["id"]}) in stitch_pairs
         assert not any(e["data"].get("id") == "xconn:conn-l2-runtime" for e in result["edges"])
+
+    def test_facility_port_l2_hides_prepared_transport_artifacts_without_explicit_networks(self):
+        from app.graph_builder import build_composite_graph
+        fabric_slice = {
+            "name": "fab",
+            "id": "fab-1",
+            "state": "StableOK",
+            "nodes": [{"name": "fabric-vm", "site": "TACC", "cores": 2, "ram": 8, "disk": 10,
+                        "image": "rocky", "management_ip": "", "username": "rocky", "host": "", "components": [
+                            {"name": "fp-l2-3301", "model": "NIC_Basic", "interfaces": [
+                                {"name": "fabric-vm-fp-l2-p1", "node_name": "fabric-vm"}
+                            ]}
+                        ]}],
+            "networks": [{
+                "name": "Chameleon-TACC-ns",
+                "type": "VLAN",
+                "layer": "L2",
+                "interfaces": [],
+            }, {
+                "name": "fp-l2-chameleon-tacc-3301",
+                "type": "L2Bridge",
+                "layer": "L2",
+                "interfaces": [
+                    {"name": "fabric-vm-fp-l2-p1", "node_name": "fabric-vm"},
+                    {"name": "Chameleon-TACC-p1", "node_name": "Chameleon-TACC", "vlan": "3301"},
+                ],
+            }],
+            "facility_ports": [{
+                "name": "Chameleon-TACC",
+                "site": "TACC",
+                "vlan": "3301",
+                "interfaces": [],
+            }],
+            "port_mirrors": [],
+        }
+        chi_slice = {
+            "id": "chi-1",
+            "name": "chi",
+            "state": "Draft",
+            "nodes": [{
+                "id": "chi-node-1", "name": "chi-router", "site": "CHI@TACC",
+                "node_type": "compute_skylake", "image": "CC-Ubuntu22.04", "count": 1,
+                "interfaces": [{"nic": 1, "network": {"id": "chi-fp-net", "name": "fp-l2-chi-tacc-3301"}}],
+            }],
+            "networks": [{
+                "id": "chi-fp-net",
+                "name": "fp-l2-chi-tacc-3301",
+                "site": "CHI@TACC",
+                "type": "facility_port_l2",
+                "vlan": "3301",
+                "facility_port": "Chameleon-TACC",
+                "connected_nodes": ["chi-node-1"],
+            }],
+            "floating_ips": [],
+            "resources": [{
+                "type": "network",
+                "id": "chi-fp-runtime-net",
+                "name": "fp-l2-chi-tacc-3301",
+                "site": "CHI@TACC",
+                "status": "ACTIVE",
+            }],
+        }
+        result = build_composite_graph(
+            [(fabric_slice, "fab-1")],
+            [(chi_slice, "chi-1")],
+            cross_connections=[{
+                "id": "conn-l2-prepared",
+                "type": "facility_port_l2",
+                "vlan": "3301",
+                "facility_port": "Chameleon-TACC",
+                "endpoint_a": {"provider": "fabric", "slice_id": "fab-1", "node": "fabric-vm", "site": "TACC"},
+                "endpoint_b": {"provider": "chameleon", "slice_id": "chi-1", "node": "chi-router", "site": "CHI@TACC"},
+            }],
+        )
+
+        assert not any(e["data"].get("id") == "xconn:conn-l2-prepared" for e in result["edges"])
+        assert not any(
+            n["data"].get("id") == "fab:fab-1:fp:fab-1:Chameleon-TACC"
+            for n in result["nodes"]
+        )
+        network_nodes = [
+            n for n in result["nodes"]
+            if n["data"].get("element_type") == "network"
+        ]
+        assert not any(n["data"].get("name") == "Chameleon-TACC-ns" for n in network_nodes)
+        assert sum(n["data"].get("name") == "fp-l2-chi-tacc-3301" for n in network_nodes) == 1
+
+        shared_ports = [
+            n for n in result["nodes"]
+            if n["data"].get("element_type") == "facility-port"
+            and n["data"].get("name") == "Chameleon-TACC"
+        ]
+        assert len(shared_ports) == 1
+        shared_port_id = shared_ports[0]["data"]["id"]
+        assert not any(
+            n["data"].get("element_type") == "network"
+            and n["data"].get("connection_type") == "facility_port_l2"
+            and n["data"].get("testbed") == "SHARED"
+            for n in result["nodes"]
+        )
+        local_l2_networks = [
+            n for n in result["nodes"]
+            if n["data"].get("element_type") == "network"
+            and n["data"].get("connection_type") == "facility_port_l2"
+            and n["data"].get("testbed") in {"FABRIC", "Chameleon"}
+        ]
+        assert len(local_l2_networks) == 2
+        local_l2_by_testbed = {n["data"]["testbed"]: n for n in local_l2_networks}
+        assert local_l2_by_testbed["FABRIC"]["data"]["name"] == "fp-l2-chameleon-tacc-3301"
+        assert local_l2_by_testbed["Chameleon"]["data"]["name"] == "fp-l2-chi-tacc-3301"
+        fab_l2_id = local_l2_by_testbed["FABRIC"]["data"]["id"]
+        chi_l2_id = local_l2_by_testbed["Chameleon"]["data"]["id"]
+        stitch_pairs = {
+            frozenset({e["data"].get("source"), e["data"].get("target")})
+            for e in result["edges"]
+            if "edge-facility-port-l2" in e.get("classes", "")
+        }
+        assert any(
+            fab_l2_id in pair
+            and any(str(node_id).startswith("fab:fab-1:comp:") for node_id in pair)
+            for pair in stitch_pairs
+        )
+        assert any(
+            chi_l2_id in pair
+            and any(str(node_id).startswith("chi:chi-1:chi-comp:") for node_id in pair)
+            for pair in stitch_pairs
+        )
+        assert frozenset({fab_l2_id, shared_port_id}) in stitch_pairs
+        assert frozenset({chi_l2_id, shared_port_id}) in stitch_pairs
 
 
 class TestChameleonInterfaceRendering:
@@ -966,6 +1236,28 @@ class TestChameleonInterfaceRendering:
         iface_edges = [e for e in result["edges"] if e["data"].get("element_type") == "interface"]
         assert len(iface_edges) == 1
         assert iface_edges[0]["data"]["target"] == "chi-draft-net:draft-1:net1"
+
+    def test_legacy_string_network_field_with_interfaces(self):
+        from app.graph_builder import build_chameleon_slice_graph
+        draft = {
+            "id": "draft-string-net", "name": "test", "nodes": [
+                {"id": "n1", "name": "s1", "site": "CHI@TACC", "node_type": "compute_skylake",
+                 "image": "CC-Ubuntu22.04", "count": 1, "status": "ACTIVE",
+                 "network": "facility_port_l2",
+                 "interfaces": [
+                     {"nic": 0, "network": "sharednet1", "network_name": "sharednet1"},
+                     {"nic": 1, "network": "fp-l2-test", "network_name": "fp-l2-test"},
+                 ]},
+            ],
+            "networks": [], "floating_ips": [], "resources": [],
+        }
+        result = build_chameleon_slice_graph(draft)
+        network_names = {
+            n["data"].get("name")
+            for n in result["nodes"]
+            if n["data"].get("element_type") == "network"
+        }
+        assert {"sharednet1", "fp-l2-test"} <= network_names
 
     def test_fabnetv4_chain(self):
         from app.graph_builder import build_chameleon_slice_graph

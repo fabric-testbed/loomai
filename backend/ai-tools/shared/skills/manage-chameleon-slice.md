@@ -43,18 +43,22 @@ by the backend:
 import os
 import requests
 
-BASE = os.environ.get("LOOMAI_API_URL") or "http://127.0.0.1:8000/api"
+BASE = os.environ.get("LOOMAI_API_URL") or os.environ.get("LOOMAI_URL") or "http://127.0.0.1:8000/api"
+BASE = BASE.rstrip("/") if BASE.rstrip("/").endswith("/api") else BASE.rstrip("/") + "/api"
+session = requests.Session()
+if os.environ.get("LOOMAI_SESSION_COOKIE"):
+    session.cookies.set("loomai_session", os.environ["LOOMAI_SESSION_COOKIE"])
 site = "CHI@TACC"
 
 # Create a LoomAI Chameleon slice record.
-chi_slice = requests.post(
+chi_slice = session.post(
     f"{BASE}/chameleon/slices",
     json={"name": "my-experiment", "site": site},
     timeout=60,
 ).json()
 
 # Add a planned server to a draft/slice topology.
-requests.post(f"{BASE}/chameleon/drafts/{chi_slice['id']}/nodes", json={
+session.post(f"{BASE}/chameleon/drafts/{chi_slice['id']}/nodes", json={
     "name": "node1",
     "site": site,
     "node_type": "compute_haswell",
@@ -66,7 +70,7 @@ requests.post(f"{BASE}/chameleon/drafts/{chi_slice['id']}/nodes", json={
 }, timeout=60)
 
 # Deploy the draft; LoomAI creates the lease and launches instances.
-requests.post(
+session.post(
     f"{BASE}/chameleon/drafts/{chi_slice['id']}/deploy",
     json={"duration_hours": 4, "full_deploy": True},
     timeout=60,

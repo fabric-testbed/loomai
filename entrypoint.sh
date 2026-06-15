@@ -367,10 +367,20 @@ fi
 # ---------------------------------------------------------------------------
 # Add JupyterLab to supervisord so it auto-restarts on crash
 # ---------------------------------------------------------------------------
+# JUPYTER_IP controls the bind address. The combined standalone image runs
+# nginx alongside JupyterLab and gates /jupyter/ with auth_request, so JupyterLab
+# binds to loopback and is only reachable through nginx. K8s keeps 0.0.0.0
+# (behavior unchanged — the Hub gates access and 8889 is never exposed), and the
+# split source build keeps 0.0.0.0 so its separate nginx container can reach it.
 if [ -n "$LOOMAI_BASE_PATH" ]; then
     JUPYTER_BASE_URL="${LOOMAI_BASE_PATH}/jupyter/"
+    JUPYTER_IP="0.0.0.0"
+elif [ "$LOOMAI_COMBINED_IMAGE" = "1" ]; then
+    JUPYTER_BASE_URL="/jupyter/"
+    JUPYTER_IP="127.0.0.1"
 else
     JUPYTER_BASE_URL="/jupyter/"
+    JUPYTER_IP="0.0.0.0"
 fi
 
 # Drop the JupyterLab launch into a small wrapper so we don't have to fight
@@ -382,7 +392,7 @@ cat > /usr/local/bin/start-jupyterlab.sh <<JLAUNCH
 set -e
 exec jupyter lab \\
     --no-browser \\
-    --ip=0.0.0.0 \\
+    --ip=${JUPYTER_IP} \\
     --port=8889 \\
     --ServerApp.token= \\
     --ServerApp.password= \\

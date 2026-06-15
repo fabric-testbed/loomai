@@ -356,11 +356,12 @@ def get_slices_dir() -> str:
 
 
 def get_notebooks_dir() -> str:
-    """Notebooks live at the flat ``/home/fabric/work/notebooks`` (shared) —
-    that's JupyterLab's root dir, and they need no per-user mount."""
-    d = os.path.join(get_root_storage_dir(), "notebooks")
-    os.makedirs(d, exist_ok=True)
-    return d
+    """Return the shared JupyterLab notebook workspace path.
+
+    The directory is created on demand when a notebook artifact is launched,
+    not during settings reads or app startup.
+    """
+    return os.path.join(get_root_storage_dir(), "notebooks")
 
 
 def get_ai_tools_dir() -> str:

@@ -26,10 +26,14 @@ route-metric userdata.
 import os
 import requests
 
-BASE = os.environ.get("LOOMAI_API_URL") or "http://127.0.0.1:8000/api"
+BASE = os.environ.get("LOOMAI_API_URL") or os.environ.get("LOOMAI_URL") or "http://127.0.0.1:8000/api"
+BASE = BASE.rstrip("/") if BASE.rstrip("/").endswith("/api") else BASE.rstrip("/") + "/api"
+session = requests.Session()
+if os.environ.get("LOOMAI_SESSION_COOKIE"):
+    session.cookies.set("loomai_session", os.environ["LOOMAI_SESSION_COOKIE"])
 site = "CHI@TACC"
 
-lease = requests.post(f"{BASE}/chameleon/leases", json={
+lease = session.post(f"{BASE}/chameleon/leases", json={
     "site": site,
     "name": "my-chameleon-exp",
     "node_type": "compute_haswell",
@@ -39,7 +43,7 @@ lease = requests.post(f"{BASE}/chameleon/leases", json={
 
 reservation_id = lease["reservations"][0]["id"]
 
-server = requests.post(f"{BASE}/chameleon/instances", json={
+server = session.post(f"{BASE}/chameleon/instances", json={
     "site": site,
     "name": "node1",
     "reservation_id": reservation_id,
@@ -50,7 +54,7 @@ server = requests.post(f"{BASE}/chameleon/instances", json={
     "user_data": "<cloud-init text>",
 }, timeout=60).json()
 
-fip = requests.post(
+fip = session.post(
     f"{BASE}/chameleon/instances/{server['id']}/associate-ip",
     json={"site": site},
     timeout=60,

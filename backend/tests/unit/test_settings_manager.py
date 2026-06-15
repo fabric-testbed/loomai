@@ -48,6 +48,11 @@ class TestStorageDirs:
     def test_get_root_storage_dir(self, isolated_storage):
         assert sm.get_root_storage_dir() == str(isolated_storage)
 
+    def test_get_notebooks_dir_does_not_create_folder(self, isolated_storage):
+        notebooks_dir = os.path.join(str(isolated_storage), "notebooks")
+        assert sm.get_notebooks_dir() == notebooks_dir
+        assert not os.path.exists(notebooks_dir)
+
 
 # ---------------------------------------------------------------------------
 # load_settings
