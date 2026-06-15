@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { cleanupAllE2ESlices } from '../helpers/gui-helpers';
+import { cleanupAllE2ESlices, completeAppPrompt } from '../helpers/gui-helpers';
 
 /**
  * Composite slice workflow E2E tests.
@@ -71,14 +71,10 @@ test.describe('Composite Slice Workflow', () => {
     await compositeOption.click();
     await page.waitForTimeout(2000);
 
-    // Register dialog handler BEFORE clicking
-    page.once('dialog', async dialog => {
-      await dialog.accept('e2e-test-composite');
-    });
-
     // Click "+ New" button
     const newBtn = page.locator('.composite-bar-btn', { hasText: '+ New' });
     await newBtn.click();
+    await completeAppPrompt(page, 'e2e-test-composite', 'Federated slice name');
     await page.waitForTimeout(3000);
 
     // Should be in the selector as an option
@@ -98,10 +94,8 @@ test.describe('Composite Slice Workflow', () => {
     await page.waitForTimeout(1000);
 
     // Create a composite if none exists
-    page.on('dialog', async dialog => {
-      await dialog.accept('e2e-editor-test');
-    });
     await page.locator('.composite-bar').locator('text=+ New').click();
+    await completeAppPrompt(page, 'e2e-editor-test', 'Federated slice name');
     await page.waitForTimeout(2000);
 
     // Check for the editor panel tabs
@@ -122,10 +116,8 @@ test.describe('Composite Slice Workflow', () => {
     await compositeOption.click();
     await page.waitForTimeout(1000);
 
-    page.on('dialog', async dialog => {
-      await dialog.accept('e2e-fabric-tab-test');
-    });
     await page.locator('.composite-bar').locator('text=+ New').click();
+    await completeAppPrompt(page, 'e2e-fabric-tab-test', 'Federated slice name');
     await page.waitForTimeout(2000);
 
     // Click the FABRIC tab in the editor
@@ -187,15 +179,11 @@ test.describe('FABRIC View Basics', () => {
     await fabricOption.click();
     await page.waitForTimeout(2000);
 
-    // Register dialog handler BEFORE clicking
-    page.once('dialog', async dialog => {
-      await dialog.accept('e2e-fabric-test');
-    });
-
     // Look for New button in FABRIC bar
     const newBtn = page.locator('.fabric-bar-action-btn', { hasText: 'New' });
     if (await newBtn.isVisible()) {
       await newBtn.click();
+      await completeAppPrompt(page, 'e2e-fabric-test', 'Slice name');
 
       // Wait for the slice to appear in the selector (retry up to 10s)
       const select = page.locator('.fabric-bar-slice-select');

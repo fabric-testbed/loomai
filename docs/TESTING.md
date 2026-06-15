@@ -119,7 +119,7 @@ These tests create real slices on FABRIC and Chameleon, deploy them, and verify 
 | `tests/fabric/test_fabric_provision_e2e.py` | Single/multi node, FABNetv4, exec on node, 2-node ping, delete, state transitions | `fabric` | 900s |
 | `tests/fabric/test_fabric_hardware_e2e.py` | Multi-site FABNetv4/L2STS/L2PTP ping, GPU+Ollama, NVMe r/w, FPGA PCI, ConnectX-5/6/7 | `fabric` | 1800s |
 | `tests/chameleon/test_chameleon_provision_e2e.py` | Deploy single/multi node, state transitions | `chameleon` | 900s |
-| `tests/composite/test_composite_e2e.py` | FABRIC-only, Chameleon-only, cross-testbed ping | `composite` | 1200s |
+| `tests/composite/test_composite_e2e.py` | Federated FABRIC-only, Chameleon-only, cross-testbed ping (legacy test path) | `composite` | 1200s |
 | `tests/fabric/test_fabric_terminal_e2e.py` | Server-held SSH node terminal: attach over WS, run, detach + reattach (PTY persistence) | `fabric` | 1200s |
 | `tests/chameleon/test_chameleon_terminal_e2e.py` | Server-held SSH instance terminal: attach, run, detach + reattach | `chameleon` | 1800s |
 
@@ -150,7 +150,7 @@ FABRIC_GPU_SITE=DALL pytest tests/fabric/test_fabric_hardware_e2e.py -v -s -m fa
 # Chameleon provisioning tests
 pytest tests/chameleon/test_chameleon_provision_e2e.py -v -s -m chameleon --timeout=900
 
-# Composite provisioning tests (requires both FABRIC + Chameleon)
+# Federated provisioning tests (requires both FABRIC + Chameleon; legacy marker/path)
 pytest tests/composite/test_composite_e2e.py -v -s -m composite --timeout=1200
 
 # Terminal persistence over a real node/instance (server-held PTY: attach,
@@ -172,7 +172,7 @@ pytest tests/fabric/ tests/chameleon/ tests/composite/ -v -s -m "fabric or chame
 | `e2e/tests/fabric-hardware.spec.ts` | 9 topology tests (no gate) + 9 real provisioning tests | `E2E_FULL=1` for provisioning |
 | `e2e/tests/fabric-provision.spec.ts` | Submit via GUI, multi-node, StableOK badge, exec on node, delete | `E2E_FULL=1` |
 | `e2e/tests/chameleon-provision.spec.ts` | Deploy via GUI, verify ACTIVE badges | `E2E_FULL=1` |
-| `e2e/tests/composite-provision.spec.ts` | Submit composite, state badge updates | `E2E_FULL=1` |
+| `e2e/tests/composite-provision.spec.ts` | Submit federated slice, state badge updates (legacy test filename) | `E2E_FULL=1` |
 
 ```bash
 # FABRIC GUI provisioning
@@ -181,7 +181,7 @@ E2E_FULL=1 npx playwright test fabric-provision
 # Chameleon GUI provisioning
 E2E_FULL=1 npx playwright test chameleon-provision
 
-# Composite GUI provisioning
+# Federated GUI provisioning (legacy spec name)
 E2E_FULL=1 npx playwright test composite-provision
 
 # FABRIC hardware topology (no auth needed — just tests graph rendering)
@@ -199,8 +199,8 @@ E2E_FULL=1 npx playwright test fabric-provision fabric-hardware chameleon-provis
 `test_composite_cross_testbed_with_ping` in `test_composite_e2e.py`:
 1. Creates a FABRIC node with NIC + FABNetv4 network
 2. Creates a Chameleon node
-3. Wraps both in a composite with a `fabnetv4` cross-connection
-4. Submits composite (parallel deploy)
+3. Wraps both in a federated slice with a `fabnetv4` cross-connection
+4. Submits the federated slice (parallel deploy)
 5. Waits for both Active/StableOK
 6. Executes `ping` from FABRIC node to Chameleon node IP
 7. Asserts 0% packet loss
@@ -248,7 +248,7 @@ pytest tests/assistant/test_assistant_knowledge.py -v -s -m llm -k test_fabric_n
 ## CLI Tests
 
 **Framework**: pytest with Click's `CliRunner`
-**Location**: `backend/cli/tests/`
+**Location**: `cli/tests/` and mirrored `backend/cli/tests/`
 **Pattern**: Mock tests run without backend; integration tests need `--integration` flag
 
 ### CLI Test Files
@@ -257,31 +257,37 @@ pytest tests/assistant/test_assistant_knowledge.py -v -s -m llm -k test_fabric_n
 |------|--------------|------------|-------------------|
 | `test_cli_slices.py` | FABRIC slice CRUD, submit, nodes, networks | Help, list, create, delete, submit, validate | Create+delete draft, add node+validate |
 | `test_cli_chameleon.py` | Chameleon sites, leases, instances, drafts, slices | Help, list/create/delete for each subgroup | List sites, draft lifecycle |
-| `test_cli_composite.py` | Composite CRUD, members, cross-connections, submit | Help, CRUD, add/remove members, submit | Create+show+delete, full lifecycle |
+| `test_cli_federated.py` | Federated CRUD, members, cross-testbed connections, submit | Help, CRUD, add/remove members, submit | Create+show+delete |
 | `test_cli_ai.py` | AI models, agents, chat (FABRIC + NRP) | Help, list models/agents, one-shot chat, errors | List real models, query FABRIC/NRP LLMs |
 | `test_cli_config.py` | Config, projects, keys, sites, SSH, weaves, artifacts | Help for all commands, mock CRUD | Config show, sites list, weaves/artifacts/recipes list |
+| `test_cli_roadmap.py` | CLI modernization roadmap coverage | Natural `--format` placement, JSON cleanliness, new feature command parity | None |
 
 ### Running CLI Tests
 
 ```bash
-cd backend/cli
+cd cli
 
 # All mock tests (no backend needed)
-pytest tests/test_cli_slices.py tests/test_cli_chameleon.py tests/test_cli_composite.py tests/test_cli_ai.py tests/test_cli_config.py -v
+python -m pytest tests -q
+
+# Run the backend mirror after syncing CLI changes
+cd ../backend/cli
+python -m pytest tests -q
 
 # Run tests for a specific CLI area
 pytest tests/test_cli_slices.py -v        # FABRIC slices only
 pytest tests/test_cli_chameleon.py -v     # Chameleon only
-pytest tests/test_cli_composite.py -v     # Composite only
+pytest tests/test_cli_federated.py -v     # Federated only
 pytest tests/test_cli_ai.py -v            # AI/LLM only
 pytest tests/test_cli_config.py -v        # Config, sites, weaves, etc.
+pytest tests/test_cli_roadmap.py -v       # Modernized output and new command parity
 
 # Integration tests (requires running backend)
 pytest tests/ -v --integration
 
 # Run a specific test class
 pytest tests/test_cli_ai.py::TestAIMockModels -v
-pytest tests/test_cli_composite.py::TestCompositeMockCRUD -v
+pytest tests/test_cli_federated.py::TestFederatedMockCRUD -v
 ```
 
 ## Coverage

@@ -854,7 +854,8 @@
 .ai-chat-key-modal-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(13, 21, 32, 0.52);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -862,26 +863,30 @@
 }
 .ai-chat-key-modal {
   background: var(--bg-primary);
-  border: 1px solid var(--border-color);
+  border: 1px solid rgba(39, 170, 225, 0.36);
   border-radius: 8px;
-  padding: 20px;
+  padding: 0;
   max-width: 400px;
   width: 90%;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(13, 21, 32, 0.32);
 }
 .ai-chat-key-modal h3 {
-  margin: 0 0 12px 0;
+  margin: 0 0 14px;
+  padding: 16px 20px 14px;
   font-size: 15px;
-  color: var(--text-primary);
+  color: #fff;
+  background: linear-gradient(135deg, var(--loomai-navy, #1c2e4a) 0%, var(--loomai-sky, #27aae1) 100%);
 }
 .ai-chat-key-modal p {
   font-size: 13px;
   line-height: 1.5;
   color: var(--text-secondary);
-  margin: 0 0 10px 0;
+  margin: 0 20px 10px;
 }
 .ai-chat-key-modal-close {
-  margin-top: 8px;
+  margin: 8px 20px 18px auto;
+  display: block;
   padding: 6px 16px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
@@ -892,4 +897,13 @@
 }
 .ai-chat-key-modal-close:hover {
   background: var(--bg-hover);
+}
+
+[data-theme="dark"] .ai-chat-key-modal {
+  border-color: rgba(39, 170, 225, 0.42);
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.56);
+}
+
+[data-theme="dark"] .ai-chat-key-modal h3 {
+  background: linear-gradient(135deg, #0d1520 0%, var(--loomai-navy, #1c2e4a) 50%, var(--loomai-sky, #27aae1) 100%);
 }

@@ -1,6 +1,7 @@
 'use client';
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { ChameleonInstance } from '../types/chameleon';
+import { confirmDialog } from './AppDialogProvider';
 import '../styles/chameleon-table-view.css';
 import '../styles/context-menu.css';
 
@@ -120,9 +121,13 @@ export default React.memo(function ChameleonTableView({
     });
   }, [sorted]);
 
-  const handleBulkDelete = useCallback(() => {
+  const handleBulkDelete = useCallback(async () => {
     if (selectedItems.size === 0) return;
-    if (!window.confirm(`Delete ${selectedItems.size} instance(s)?`)) return;
+    if (!await confirmDialog(`Delete ${selectedItems.size} instance(s)?`, {
+      title: 'Delete Chameleon Instances',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     for (const id of selectedItems) {
       const inst = instances.find(i => i.id === id);
       if (inst) onInstanceAction(id, inst.site, 'delete');

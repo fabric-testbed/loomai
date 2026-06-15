@@ -71,6 +71,11 @@ HELP_CASES = [
     (["vm-templates", "--help"], ["list", "show"]),
     # Monitor
     (["monitor", "--help"], ["enable", "disable", "status", "metrics"]),
+    # Federated
+    (["federated", "--help"], ["list", "show", "create", "delete", "members", "connections"]),
+    (["federated", "members", "--help"], ["list", "add", "remove", "replace-fabric"]),
+    (["federated", "connections", "--help"], ["list", "add", "remove", "clear", "set", "plan"]),
+    (["federated", "connections", "add", "--help"], ["--fabric-slice", "--chameleon-slice"]),
     # Config / projects / keys
     (["config", "--help"], ["show"]),
     (["projects", "--help"], ["list", "switch"]),
@@ -93,3 +98,10 @@ def test_help(invoke, args, expected):
     assert result.exit_code == 0, f"Failed: {args}\n{result.output}"
     for s in expected:
         assert s in result.output, f"Missing '{s}' in help for {args}"
+
+
+def test_root_help_uses_federated_not_composite(invoke):
+    result = invoke("--help")
+    assert result.exit_code == 0
+    assert "federated" in result.output.lower()
+    assert "composite" not in result.output.lower()

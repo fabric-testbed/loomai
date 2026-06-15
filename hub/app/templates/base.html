@@ -6,6 +6,9 @@
     <title>{% block title %}LoomAI Hub{% endblock %}</title>
     <style>
         :root {
+            --loomai-navy: #1c2e4a;
+            --loomai-sky: #27aae1;
+            --loomai-sky-dark: #0e7ab5;
             --fabric-primary: #5798bc;
             --fabric-dark: #1f6a8c;
             --fabric-teal: #008e7a;
@@ -33,7 +36,7 @@
         }
 
         .hub-header {
-            background: linear-gradient(135deg, var(--fabric-dark) 0%, var(--fabric-primary) 50%, var(--fabric-teal) 100%);
+            background: linear-gradient(135deg, var(--loomai-navy) 0%, var(--loomai-sky) 100%);
             padding: 16px 32px;
             display: flex;
             align-items: center;
@@ -198,5 +201,6 @@
     <main class="hub-content">
         {% block content %}{% endblock %}
     </main>
+    {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { acceptAppDialog } from '../helpers/gui-helpers';
 
 const FEDERATED_SLICE = {
   id: 'fed-regression-draft',
@@ -164,7 +165,7 @@ test.describe('Federated Slice listing', () => {
         return;
       }
       if (apiPath === '/views/status') {
-        await route.fulfill({ json: { fabric_enabled: true, chameleon_enabled: false, composite_enabled: true } });
+        await route.fulfill({ json: { fabric_enabled: true, chameleon_enabled: false, federated_enabled: true } });
         return;
       }
       if (apiPath === '/federated/slices') {
@@ -296,8 +297,8 @@ test.describe('Federated Slice listing', () => {
     await expect(page.getByText('2 Chameleon', { exact: true })).toBeVisible();
     await expect(page.getByRole('row', { name: /Chameleon chameleon-second/ })).toBeVisible();
 
-    page.once('dialog', async dialog => { await dialog.accept(); });
     await page.getByTitle('Detach this FABRIC slice from the federated slice').last().click();
+    await acceptAppDialog(page, 'Remove FABRIC slice');
     await expect(page.getByText('1 FABRIC', { exact: true })).toBeVisible();
     await expect(page.getByRole('row', { name: /FABRIC fabric-second/ })).toHaveCount(0);
   });

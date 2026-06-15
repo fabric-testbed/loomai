@@ -234,7 +234,7 @@ def _append_query(path: str, params: dict[str, Any] | None) -> str:
     return f"{path}{separator}{query}"
 
 # ---------------------------------------------------------------------------
-# In-memory Chameleon slices (composite resource groups, including drafts)
+# In-memory Chameleon slices (grouped resource records, including drafts)
 # ---------------------------------------------------------------------------
 _chameleon_slices: dict[str, dict] = {}
 _chameleon_slices_lock = threading.RLock()
@@ -2664,7 +2664,7 @@ async def delete_security_group_rule(sg_id: str, rule_id: str, site: str = Query
 
 
 # ---------------------------------------------------------------------------
-# Chameleon Slices (composite resource groups)
+# Chameleon Slices (grouped resource records)
 # ---------------------------------------------------------------------------
 
 

@@ -27,6 +27,14 @@ Coding conventions for the fabric-webgui project, inferred from the existing cod
 - **WebSocket**: For terminals (`xterm.js` → `/ws/terminal/*`), AI tool sessions (`/ws/ai/*`), log tailing (`/ws/logs`)
 - **Polling**: 15-second auto-refresh for transitional slice states; visibility-aware (pauses when tab hidden)
 
+## CLI Pattern
+
+- **Canonical tree**: Edit `cli/loomai_cli/` first, then mirror `cli/loomai_cli/` and `cli/tests/` to `backend/cli/`. Keep both `pyproject.toml` files aligned.
+- **Output formats**: Non-interactive commands should support `--format table|json|yaml`. The default `table` view should be readable for a human; `json` and `yaml` should emit clean structured data with no status prose on stdout.
+- **Format placement**: Commands should work with natural placement such as `loomai slices list --format json`, not only root placement.
+- **Mutations**: Mutating commands should return useful structured data when the API provides it. Human status messages should go through `output_message()` and should be emitted only for table output when tests expect parseable JSON.
+- **Streaming exceptions**: `ssh`, `exec`, `scp`, `rsync`, `weaves logs`, `ai chat`, and raw upload/download commands are terminal or stream oriented. Preserve their live behavior unless adding a separate JSONL or final-summary mode is clearly useful.
+
 ## Error Handling
 
 ### Backend

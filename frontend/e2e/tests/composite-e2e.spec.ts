@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import {
   navigateToView, createSliceViaBar, clickBarTab,
   clickEditorTab, waitForText, isAuthenticated,
-  deleteCompositeSliceViaApi, overridePrompt,
+  deleteCompositeSliceViaApi,
   cleanupAllE2ESlices,
 } from '../helpers/gui-helpers';
 

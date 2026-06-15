@@ -86,7 +86,7 @@ View in chat: click the agent selector dropdown, or:
 - **data-analyst** — Reports, usage statistics, visualization
 - **cli-helper** — All 65+ `loomai` CLI commands
 - **fablib-coder** — FABlib Python code patterns
-- **composite-manager** — Cross-testbed experiments
+- **federated-slice-manager** — Cross-facility experiments
 
 ### Skills (Slash Commands)
 Skills are reusable prompts for common tasks:

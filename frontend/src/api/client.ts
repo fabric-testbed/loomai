@@ -1391,7 +1391,7 @@ export function submitFederatedSliceById(federatedId: string, leaseHours = 24): 
   return fetchJson(`/federated/slices/${encodeURIComponent(federatedId)}/submit`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lease_hours: leaseHours }) });
 }
 
-// --- Composite Slice compatibility aliases ---
+// --- Federated Slice compatibility aliases ---
 
 export function listCompositeSlices(): Promise<FederatedSlice[]> {
   return listFederatedSlices();
@@ -1444,7 +1444,12 @@ export function submitCompositeSliceById(compositeId: string, leaseHours = 24): 
   return submitFederatedSliceById(compositeId, leaseHours);
 }
 
-export function getViewsStatus(): Promise<{ fabric_enabled: boolean; chameleon_enabled: boolean; composite_enabled: boolean }> {
+export function getViewsStatus(): Promise<{
+  fabric_enabled: boolean;
+  chameleon_enabled: boolean;
+  federated_enabled: boolean;
+  composite_enabled?: boolean;
+}> {
   return fetchJson('/views/status');
 }
 

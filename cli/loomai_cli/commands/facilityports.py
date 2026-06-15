@@ -55,6 +55,30 @@ def add_fp(ctx, slice_name, fp_name, site, vlan, bandwidth):
     output(ctx, data)
 
 
+@facility_ports.command("update")
+@click.argument("slice_name", type=SLICE)
+@click.argument("fp_name")
+@click.option("--site", help="FABRIC site name.")
+@click.option("--vlan", help="VLAN tag.")
+@click.option("--bandwidth", type=int, help="Bandwidth in Gbps.")
+@click.pass_context
+def update_fp(ctx, slice_name, fp_name, site, vlan, bandwidth):
+    """Update a draft facility port while preserving attachments."""
+    body = {}
+    if site is not None:
+        body["site"] = site
+    if vlan is not None:
+        body["vlan"] = vlan
+    if bandwidth is not None:
+        body["bandwidth"] = bandwidth
+    if not body:
+        raise click.UsageError("Specify at least one property to update.")
+    data = ctx.obj["client"].put(f"/slices/{slice_name}/facility-ports/{fp_name}", json=body)
+    if ctx.obj["format"] == "table":
+        output_message(f"Updated facility port '{fp_name}'")
+    output(ctx, data)
+
+
 @facility_ports.command("remove")
 @click.argument("slice_name", type=SLICE)
 @click.argument("fp_name")

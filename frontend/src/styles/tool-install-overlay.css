@@ -6,8 +6,9 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 1000;
+  background: rgba(13, 21, 32, 0.52);
+  backdrop-filter: blur(2px);
+  z-index: 10000;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -15,21 +16,33 @@
 
 .tool-install-modal {
   background: var(--fabric-white);
+  border: 1px solid rgba(39, 170, 225, 0.36);
   border-radius: 8px;
-  padding: 24px;
+  padding: 20px 24px 24px;
   width: 420px;
   max-width: 90vw;
   max-height: 80vh;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 24px 64px rgba(13, 21, 32, 0.32);
   text-align: center;
   display: flex;
   flex-direction: column;
 }
 
 .tool-install-modal h4 {
-  margin: 10px 0 4px;
+  margin: -20px -24px 16px;
+  padding: 16px 20px 14px;
   font-size: 15px;
-  color: var(--fabric-text);
+  color: #fff;
+  background: linear-gradient(135deg, var(--loomai-navy, #1c2e4a) 0%, var(--loomai-sky, #27aae1) 100%);
+}
+
+[data-theme="dark"] .tool-install-modal {
+  border-color: rgba(39, 170, 225, 0.42);
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.56);
+}
+
+[data-theme="dark"] .tool-install-modal h4 {
+  background: linear-gradient(135deg, #0d1520 0%, var(--loomai-navy, #1c2e4a) 50%, var(--loomai-sky, #27aae1) 100%);
 }
 
 .tool-install-size {

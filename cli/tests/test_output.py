@@ -27,6 +27,19 @@ class TestFormatTable:
         result = format_table(rows, ["n"], headers=["Name"])
         assert "Name" in result
 
+    def test_callable_column(self):
+        rows = [{"items": [1, 2, 3]}]
+        result = format_table(rows, [lambda r: len(r["items"])], headers=["Count"])
+        assert "Count" in result
+        assert "3" in result
+
+    def test_nested_cells_are_summarized(self):
+        rows = [{"name": "exp", "members": [{"id": "a"}, {"id": "b"}]}]
+        result = format_table(rows, ["name", "members"])
+        assert "exp" in result
+        assert "2 items" in result
+        assert '{"id": "a"}' not in result
+
 
 class TestFormatJson:
     def test_basic(self):

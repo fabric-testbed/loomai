@@ -30,8 +30,11 @@ class Client:
     def post(self, path: str, json: Optional[dict] = None, params: Optional[dict] = None) -> Any:
         return self._request("POST", path, json=json, params=params)
 
-    def put(self, path: str, json: Optional[dict] = None) -> Any:
-        return self._request("PUT", path, json=json)
+    def post_file(self, path: str, files: dict, params: Optional[dict] = None) -> Any:
+        return self._request("POST", path, files=files, params=params)
+
+    def put(self, path: str, json: Optional[dict] = None, params: Optional[dict] = None) -> Any:
+        return self._request("PUT", path, json=json, params=params)
 
     def delete(self, path: str, params: Optional[dict] = None) -> Any:
         return self._request("DELETE", path, params=params)

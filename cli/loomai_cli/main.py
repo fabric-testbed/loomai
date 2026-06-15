@@ -7,10 +7,43 @@ import click
 from loomai_cli.client import Client
 
 
+_FORMAT_CHOICE = click.Choice(["table", "json", "yaml"])
+
+
+def _set_local_format(ctx: click.Context, _param: click.Parameter, value: str | None) -> None:
+    """Allow --format at the command level, not only before subcommands."""
+    if value:
+        ctx.ensure_object(dict)
+        ctx.obj["format"] = value
+
+
+def _has_format_option(command: click.Command) -> bool:
+    return any(
+        isinstance(param, click.Option) and "--format" in param.opts
+        for param in command.params
+    )
+
+
+def _attach_format_options(command: click.Command) -> None:
+    """Add --format to all subcommands so placement is natural for users."""
+    if command is not cli and not _has_format_option(command):
+        command.params.append(click.Option(
+            ["--format", "fmt"],
+            type=_FORMAT_CHOICE,
+            expose_value=False,
+            callback=_set_local_format,
+            help="Output format.",
+        ))
+
+    if isinstance(command, click.Group):
+        for subcommand in command.commands.values():
+            _attach_format_options(subcommand)
+
+
 @click.group(invoke_without_command=True)
 @click.option("--url", envvar="LOOMAI_URL", default="http://localhost:8000",
               help="LoomAI backend URL (env: LOOMAI_URL).")
-@click.option("--format", "fmt", type=click.Choice(["table", "json", "yaml"]),
+@click.option("--format", "fmt", type=_FORMAT_CHOICE,
               default="table", help="Output format.")
 @click.pass_context
 def cli(ctx: click.Context, url: str, fmt: str) -> None:
@@ -37,12 +70,13 @@ from loomai_cli.commands.networks import networks  # noqa: E402
 from loomai_cli.commands.components import components  # noqa: E402
 from loomai_cli.commands.sites import sites  # noqa: E402
 from loomai_cli.commands.resources import images, component_models  # noqa: E402
+from loomai_cli.commands.portmirrors import port_mirrors  # noqa: E402
 
 # Phase 3: SSH & exec
 from loomai_cli.commands.ssh import ssh, exec_cmd  # noqa: E402
 
 # Phase 4: File transfer
-from loomai_cli.commands.files import scp, rsync  # noqa: E402
+from loomai_cli.commands.files import files_group, scp, rsync  # noqa: E402
 from loomai_cli.commands.facilityports import facility_ports  # noqa: E402
 
 # Phase 5: Weaves & boot config
@@ -58,10 +92,18 @@ from loomai_cli.commands.vmtemplates import vm_templates  # noqa: E402
 from loomai_cli.commands.monitor import monitor  # noqa: E402
 
 # Phase 8: Config, projects, keys, AI
-from loomai_cli.commands.config import config, projects, keys  # noqa: E402
+from loomai_cli.commands.config import config, projects, keys, settings  # noqa: E402
 from loomai_cli.commands.ai import ai  # noqa: E402
 from loomai_cli.commands.chameleon import chameleon  # noqa: E402
 from loomai_cli.commands.composite import composite  # noqa: E402
+from loomai_cli.commands.federated import federated  # noqa: E402
+from loomai_cli.commands.schedule import schedule  # noqa: E402
+from loomai_cli.commands.status import status  # noqa: E402
+from loomai_cli.commands.tunnels import tunnels  # noqa: E402
+from loomai_cli.commands.jupyter import jupyter, notebooks  # noqa: E402
+from loomai_cli.commands.experiments import experiments  # noqa: E402
+from loomai_cli.commands.users import users  # noqa: E402
+from loomai_cli.commands.trovi import trovi  # noqa: E402
 
 cli.add_command(slices)
 cli.add_command(nodes)
@@ -72,9 +114,11 @@ cli.add_command(images)
 cli.add_command(component_models)
 cli.add_command(ssh)
 cli.add_command(exec_cmd)
+cli.add_command(files_group)
 cli.add_command(scp)
 cli.add_command(rsync)
 cli.add_command(facility_ports)
+cli.add_command(port_mirrors)
 cli.add_command(weaves)
 cli.add_command(boot_config)
 cli.add_command(artifacts)
@@ -82,11 +126,22 @@ cli.add_command(recipes)
 cli.add_command(vm_templates)
 cli.add_command(monitor)
 cli.add_command(config)
+cli.add_command(settings)
 cli.add_command(projects)
 cli.add_command(keys)
 cli.add_command(ai)
 cli.add_command(chameleon)
+composite.hidden = True
 cli.add_command(composite)
+cli.add_command(federated)
+cli.add_command(schedule)
+cli.add_command(status)
+cli.add_command(tunnels)
+cli.add_command(jupyter)
+cli.add_command(notebooks)
+cli.add_command(experiments)
+cli.add_command(users)
+cli.add_command(trovi)
 
 
 # Shell completion helper
@@ -180,3 +235,6 @@ def help_cmd(ctx, command):
     # Build a context for the target command and print its help
     with click.Context(cmd_obj, info_name=' '.join(['loomai'] + list(command))) as sub_ctx:
         click.echo(cmd_obj.get_help(sub_ctx))
+
+
+_attach_format_options(cli)

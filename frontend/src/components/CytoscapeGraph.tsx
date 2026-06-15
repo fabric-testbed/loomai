@@ -1463,18 +1463,29 @@ export default React.memo(function CytoscapeGraph({
         <div style={{
           position: 'fixed', inset: 0, zIndex: 9999,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.5)',
+          background: 'rgba(13,21,32,0.52)',
+          backdropFilter: 'blur(2px)',
         }} onClick={() => { if (!pngSaving) setPngDialog(null); }}>
           <div style={{
             background: dark ? '#1e1e2e' : '#fff',
             color: dark ? '#e0e0e0' : '#222',
-            border: `1px solid ${dark ? '#444' : '#ccc'}`,
-            borderRadius: 8, padding: '20px 24px', minWidth: 380, maxWidth: 480,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+            border: '1px solid rgba(39,170,225,0.4)',
+            borderRadius: 8, padding: 0, minWidth: 380, maxWidth: 480,
+            overflow: 'hidden',
+            boxShadow: dark ? '0 24px 72px rgba(0,0,0,0.56)' : '0 24px 64px rgba(13,21,32,0.32)',
           }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 16 }}>Save PNG to Container</div>
+            <div style={{
+              fontWeight: 600,
+              fontSize: 15,
+              marginBottom: 16,
+              padding: '16px 20px 14px',
+              color: '#fff',
+              background: dark
+                ? 'linear-gradient(135deg, #0d1520 0%, #1c2e4a 50%, #27aae1 100%)'
+                : 'linear-gradient(135deg, #1c2e4a 0%, #27aae1 100%)',
+            }}>Save PNG to Container</div>
 
-            <div style={{ marginBottom: 10 }}>
+            <div style={{ margin: '0 20px 10px' }}>
               <label style={{ display: 'block', fontSize: 12, marginBottom: 4, opacity: 0.7 }}>Filename</label>
               <input
                 style={{
@@ -1487,7 +1498,7 @@ export default React.memo(function CytoscapeGraph({
               />
             </div>
 
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ margin: '0 20px 16px' }}>
               <label style={{ display: 'block', fontSize: 12, marginBottom: 4, opacity: 0.7 }}>Save to directory</label>
               <input
                 style={{
@@ -1501,7 +1512,7 @@ export default React.memo(function CytoscapeGraph({
             </div>
 
             {/* Thumbnail preview */}
-            <div style={{ marginBottom: 16, textAlign: 'center' }}>
+            <div style={{ margin: '0 20px 16px', textAlign: 'center' }}>
               <img
                 src={pngDialog.dataUrl}
                 alt="PNG preview"
@@ -1511,7 +1522,7 @@ export default React.memo(function CytoscapeGraph({
 
             {pngSaveResult && (
               <div style={{
-                fontSize: 12, marginBottom: 12, padding: '6px 10px', borderRadius: 4,
+                fontSize: 12, margin: '0 20px 12px', padding: '6px 10px', borderRadius: 4,
                 background: pngSaveResult.ok ? (dark ? '#1a3a2a' : '#e8f5e9') : (dark ? '#3a1a1a' : '#fce4ec'),
                 color: pngSaveResult.ok ? (dark ? '#66bb6a' : '#2e7d32') : (dark ? '#ef5350' : '#c62828'),
               }}>
@@ -1519,7 +1530,14 @@ export default React.memo(function CytoscapeGraph({
               </div>
             )}
 
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <div style={{
+              display: 'flex',
+              gap: 8,
+              justifyContent: 'flex-end',
+              padding: '14px 20px 18px',
+              borderTop: '1px solid rgba(87,152,188,0.22)',
+              background: dark ? 'rgba(15,22,40,0.72)' : 'rgba(237,242,248,0.64)',
+            }}>
               <button
                 onClick={() => setPngDialog(null)}
                 disabled={pngSaving}
@@ -1533,7 +1551,7 @@ export default React.memo(function CytoscapeGraph({
                 disabled={pngSaving || !pngFilename.trim()}
                 style={{
                   padding: '6px 14px', borderRadius: 4, border: 'none',
-                  background: '#5798bc', color: '#fff', cursor: 'pointer', fontSize: 13,
+                  background: 'linear-gradient(135deg, #27aae1 0%, #0e7ab5 100%)', color: '#fff', cursor: 'pointer', fontSize: 13,
                   opacity: pngSaving || !pngFilename.trim() ? 0.6 : 1,
                 }}
               >{pngSaving ? 'Saving...' : 'Save'}</button>

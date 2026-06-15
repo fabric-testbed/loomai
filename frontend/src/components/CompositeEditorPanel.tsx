@@ -943,7 +943,7 @@ export default React.memo(function CompositeEditorPanel({
       {addMemberDialogOpen && typeof document !== 'undefined' && createPortal(
         <div
           className="template-modal-overlay"
-          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }}
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(13,21,32,0.52)', backdropFilter: 'blur(2px)', zIndex: 99999 }}
           onClick={() => setAddMemberDialogOpen(false)}
           data-testid="federated-subslice-modal-overlay"
         >

@@ -1,6 +1,11 @@
 /* LoomAI — Global styles */
 
 :root {
+  /* LoomAI product colors */
+  --loomai-navy: #1c2e4a;
+  --loomai-sky: #27aae1;
+  --loomai-sky-dark: #0e7ab5;
+
   /* Official FABRIC brand colors (from fabvis/styles.py) */
   --fabric-primary: #5798bc;
   --fabric-primary-light: #8ac9ef;

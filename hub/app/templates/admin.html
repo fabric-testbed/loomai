@@ -52,9 +52,10 @@
                 </td>
                 <td>
                     {% if u.server_state in ['ready', 'pending'] %}
-                    <form method="POST" action="{{ hub_prefix }}/admin/users/{{ u.username }}/stop" style="display: inline;">
+                    <form method="POST" action="{{ hub_prefix }}/admin/users/{{ u.username }}/stop" style="display: inline;"
+                          data-confirm-message="Stop server for {{ u.email or u.username }}?">
                         <button type="submit" class="btn btn-danger btn-sm"
-                                onclick="return confirm('Stop server for {{ u.email or u.username }}?')">
+                                data-confirm-submit>
                             Stop
                         </button>
                     </form>
@@ -72,4 +73,121 @@
     </p>
     {% endif %}
 </div>
+
+<div class="hub-confirm-overlay" data-confirm-overlay hidden>
+    <div class="hub-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="hub-confirm-title">
+        <h3 id="hub-confirm-title">Confirm Action</h3>
+        <p data-confirm-text></p>
+        <div class="hub-confirm-actions">
+            <button type="button" class="btn" data-confirm-cancel>Cancel</button>
+            <button type="button" class="btn btn-danger" data-confirm-accept>Confirm</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_head %}
+{{ super() }}
+<style>
+    .hub-confirm-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(13, 21, 32, 0.62);
+        backdrop-filter: blur(2px);
+    }
+
+    .hub-confirm-overlay[hidden] {
+        display: none;
+    }
+
+    .hub-confirm-modal {
+        width: min(420px, 100%);
+        border: 1px solid rgba(39, 170, 225, 0.42);
+        border-radius: 8px;
+        background: var(--bg-card);
+        color: var(--text-primary);
+        box-shadow: 0 24px 72px rgba(0, 0, 0, 0.5);
+        padding: 0;
+        overflow: hidden;
+    }
+
+    .hub-confirm-modal h3 {
+        margin: 0;
+        padding: 16px 20px 14px;
+        color: white;
+        background: linear-gradient(135deg, var(--loomai-navy) 0%, var(--loomai-sky) 100%);
+        font-size: 17px;
+    }
+
+    .hub-confirm-modal p {
+        margin: 18px 20px 0;
+        color: var(--text-primary);
+        font-size: 14px;
+        line-height: 1.45;
+    }
+
+    .hub-confirm-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 22px;
+        padding: 14px 20px 18px;
+        border-top: 1px solid rgba(39, 170, 225, 0.18);
+        background: rgba(15, 22, 40, 0.72);
+    }
+
+    .hub-confirm-actions .btn-danger {
+        background: linear-gradient(135deg, var(--fabric-coral) 0%, var(--fabric-orange) 100%);
+    }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+    const overlay = document.querySelector('[data-confirm-overlay]');
+    const messageEl = document.querySelector('[data-confirm-text]');
+    const acceptBtn = document.querySelector('[data-confirm-accept]');
+    const cancelBtn = document.querySelector('[data-confirm-cancel]');
+    let activeForm = null;
+
+    const closeConfirm = () => {
+        overlay.hidden = true;
+        activeForm = null;
+    };
+
+    document.querySelectorAll('form[data-confirm-message]').forEach((form) => {
+        form.addEventListener('submit', (event) => {
+            if (form.dataset.confirmed === 'true') {
+                delete form.dataset.confirmed;
+                return;
+            }
+            event.preventDefault();
+            activeForm = form;
+            messageEl.textContent = form.dataset.confirmMessage || 'Continue?';
+            overlay.hidden = false;
+            acceptBtn.focus();
+        });
+    });
+
+    acceptBtn.addEventListener('click', () => {
+        if (!activeForm) return;
+        activeForm.dataset.confirmed = 'true';
+        activeForm.requestSubmit();
+    });
+
+    cancelBtn.addEventListener('click', closeConfirm);
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) closeConfirm();
+    });
+    window.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !overlay.hidden) closeConfirm();
+    });
+})();
+</script>
 {% endblock %}

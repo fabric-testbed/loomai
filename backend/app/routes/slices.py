@@ -1047,21 +1047,21 @@ async def _run_post_boot_config_after_stable(slice_name: str) -> None:
             state = await run_in_fablib_pool(_get_state)
             if state in ("StableOK", "Active"):
                 logger.info(
-                    "Composite post_boot_config: slice '%s' reached %s, running config",
+                    "Federated post_boot_config: slice '%s' reached %s, running config",
                     slice_name, state,
                 )
                 break
             if state in ("StableError", "Dead", "Closing"):
                 logger.warning(
-                    "Composite post_boot_config: slice '%s' entered %s, aborting",
+                    "Federated post_boot_config: slice '%s' entered %s, aborting",
                     slice_name, state,
                 )
                 return
         except Exception as e:
-            logger.debug("Composite post_boot_config: waiting for %s: %s", slice_name, e)
+            logger.debug("Federated post_boot_config: waiting for %s: %s", slice_name, e)
     else:
         logger.warning(
-            "Composite post_boot_config: slice '%s' did not reach StableOK within %ds",
+            "Federated post_boot_config: slice '%s' did not reach StableOK within %ds",
             slice_name, poll_interval * max_attempts,
         )
         return
@@ -1073,9 +1073,9 @@ async def _run_post_boot_config_after_stable(slice_name: str) -> None:
             return
         try:
             slice_obj.post_boot_config()
-            logger.info("Composite post_boot_config: completed for '%s'", slice_name)
+            logger.info("Federated post_boot_config: completed for '%s'", slice_name)
         except Exception as e:
-            logger.error("Composite post_boot_config: failed for '%s': %s", slice_name, e)
+            logger.error("Federated post_boot_config: failed for '%s': %s", slice_name, e)
             return
 
         # Add FABNet aggregate routes so nodes can reach all FABNet subnets
@@ -1104,24 +1104,24 @@ async def _run_post_boot_config_after_stable(slice_name: str) -> None:
                         cmd = f"sudo ip route replace {subnet} via {gw} dev {dev}"
                         node.execute(cmd)
                         logger.info(
-                            "Composite post_boot_config: route %s via %s dev %s on '%s'",
+                            "Federated post_boot_config: route %s via %s dev %s on '%s'",
                             subnet, gw, dev, node_name,
                         )
                     except Exception as e:
                         logger.warning(
-                            "Composite post_boot_config: route on '%s' failed: %s",
+                            "Federated post_boot_config: route on '%s' failed: %s",
                             node_name, e,
                         )
             except Exception as e:
                 logger.warning(
-                    "Composite post_boot_config: network '%s': %s",
+                    "Federated post_boot_config: network '%s': %s",
                     net.get_name(), e,
                 )
 
     try:
         await run_in_fablib_pool(_do_post_boot)
     except Exception as e:
-        logger.warning("Composite post_boot_config: background task failed: %s", e)
+        logger.warning("Federated post_boot_config: background task failed: %s", e)
 
 
 async def _deploy_chameleon_instances_for_composite(
@@ -1130,7 +1130,7 @@ async def _deploy_chameleon_instances_for_composite(
     lease_id: str,
     site: str,
 ) -> None:
-    """Background task: wait for a composite-slice Chameleon lease to become
+    """Background task: wait for a federated-slice Chameleon lease to become
     ACTIVE, then launch instances and assign floating IPs to any node with
     floating_ip=True.
     """
@@ -1210,7 +1210,7 @@ async def _deploy_chameleon_instances_for_composite(
             _persist_slices()
 
     if not site:
-        logger.warning("Composite: no site for Chameleon lease %s", lease_id)
+        logger.warning("Federated: no site for Chameleon lease %s", lease_id)
         _update_legacy_chameleon_member(error=f"No site for Chameleon lease {lease_id}")
         return
 
@@ -1234,14 +1234,14 @@ async def _deploy_chameleon_instances_for_composite(
                     break
                 if status == "ERROR":
                     logger.warning(
-                        "Composite: Chameleon lease %s entered ERROR state", lease_id
+                        "Federated: Chameleon lease %s entered ERROR state", lease_id
                     )
                     _update_legacy_chameleon_member(error=f"Chameleon lease {lease_id} entered ERROR", lease_status="ERROR")
                     return
             except Exception as e:
-                logger.debug("Composite: waiting for lease %s: %s", lease_id, e)
+                logger.debug("Federated: waiting for lease %s: %s", lease_id, e)
         if not lease_reservations:
-            logger.warning("Composite: lease %s did not become ACTIVE", lease_id)
+            logger.warning("Federated: lease %s did not become ACTIVE", lease_id)
             _update_legacy_chameleon_member(error=f"Chameleon lease {lease_id} did not become ACTIVE")
             return
 
@@ -1283,7 +1283,7 @@ async def _deploy_chameleon_instances_for_composite(
                 if not instance_id:
                     continue
                 logger.info(
-                    "Composite: launched Chameleon instance %s for %s",
+                    "Federated: launched Chameleon instance %s for %s",
                     instance_id, node_name,
                 )
                 _update_legacy_chameleon_member(
@@ -1326,7 +1326,7 @@ async def _deploy_chameleon_instances_for_composite(
                             pass
                     if not active:
                         logger.warning(
-                            "Composite: instance %s not ACTIVE, skipping FIP", instance_id,
+                            "Federated: instance %s not ACTIVE, skipping FIP", instance_id,
                         )
                         continue
 
@@ -1364,7 +1364,7 @@ async def _deploy_chameleon_instances_for_composite(
                         fip = await run_in_chi_pool(_assign_fip)
                         if fip:
                             logger.info(
-                                "Composite: assigned floating IP %s to %s", fip, node_name,
+                                "Federated: assigned floating IP %s to %s", fip, node_name,
                             )
                             _update_legacy_chameleon_member(
                                 state="Active",
@@ -1374,21 +1374,21 @@ async def _deploy_chameleon_instances_for_composite(
                             )
                     except Exception as e:
                         logger.warning(
-                            "Composite: FIP assignment for %s failed: %s", node_name, e,
+                            "Federated: FIP assignment for %s failed: %s", node_name, e,
                         )
             except Exception as e:
                 logger.warning(
-                    "Composite: launch instance for %s failed: %s", node_name, e,
+                    "Federated: launch instance for %s failed: %s", node_name, e,
                 )
                 _update_legacy_chameleon_member(error=f"Launch instance for {node_name} failed: {e}")
     except Exception as e:
-        logger.warning("Composite: background deploy failed for %s: %s", slice_name, e)
+        logger.warning("Federated: background deploy failed for %s: %s", slice_name, e)
         _update_legacy_chameleon_member(error=f"Background deploy failed: {e}")
 
 
 @router.post("/slices/{slice_name}/submit-composite")
 async def submit_composite_slice(slice_name: str) -> dict[str, Any]:
-    """Submit a composite slice with both FABRIC and Chameleon resources.
+    """Submit a federated slice with both FABRIC and Chameleon resources.
 
     If the slice has Chameleon nodes attached, this orchestrates parallel
     submission of the FABRIC slice and creation of a Chameleon lease.
@@ -1410,7 +1410,7 @@ async def submit_composite_slice(slice_name: str) -> dict[str, Any]:
         # No Chameleon nodes — delegate to normal submit
         return await submit_slice(slice_name)
 
-    # --- Composite submission: FABRIC + Chameleon in parallel ---
+    # --- Federated submission: FABRIC + Chameleon in parallel ---
     federated_slice: dict[str, Any] | None = None
     try:
         from app.routes.composite import create_or_update_legacy_federated_slice
@@ -1421,7 +1421,7 @@ async def submit_composite_slice(slice_name: str) -> dict[str, Any]:
             chameleon_status="Deploying",
         )
     except Exception:
-        logger.warning("Composite submit: failed to materialize federated slice for '%s'", slice_name, exc_info=True)
+        logger.warning("Federated submit: failed to materialize federated slice for '%s'", slice_name, exc_info=True)
 
     async def _submit_fabric() -> dict[str, Any]:
         """Submit the FABRIC portion of the slice."""
@@ -1520,15 +1520,15 @@ async def submit_composite_slice(slice_name: str) -> dict[str, Any]:
                 _run_post_boot_config_after_stable(slice_name)
             )
 
-    # Build composite response
+    # Build federated response
     response: dict[str, Any] = {
-        "status": "submitting_composite",
+        "status": "submitting_federated",
     }
 
     if isinstance(fabric_result, Exception):
         response["fabric_status"] = "Error"
         response["fabric_error"] = str(fabric_result)
-        logger.warning("Composite submit: FABRIC submission failed for '%s': %s",
+        logger.warning("Federated submit: FABRIC submission failed for '%s': %s",
                         slice_name, fabric_result)
     else:
         response["fabric_status"] = fabric_result.get("state", "Configuring")
@@ -1538,7 +1538,7 @@ async def submit_composite_slice(slice_name: str) -> dict[str, Any]:
         response["chameleon_status"] = "ERROR"
         response["chameleon_lease_id"] = None
         response["chameleon_error"] = str(chameleon_result)
-        logger.warning("Composite submit: Chameleon lease creation failed for '%s': %s",
+        logger.warning("Federated submit: Chameleon lease creation failed for '%s': %s",
                         slice_name, chameleon_result)
     else:
         response["chameleon_lease_id"] = chameleon_result.get("id")
@@ -1557,7 +1557,7 @@ async def submit_composite_slice(slice_name: str) -> dict[str, Any]:
             chameleon_lease=chameleon_result if isinstance(chameleon_result, dict) else None,
         )
     except Exception:
-        logger.warning("Composite submit: failed to update federated slice for '%s'", slice_name, exc_info=True)
+        logger.warning("Federated submit: failed to update federated slice for '%s'", slice_name, exc_info=True)
     if federated_slice:
         response["federated_slice"] = federated_slice
         response["federated_slice_id"] = federated_slice.get("id")

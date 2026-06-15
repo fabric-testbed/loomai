@@ -351,12 +351,12 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("Chameleon slice loading failed (non-fatal)", exc_info=True)
 
-    # Load persisted composite slices
+    # Load persisted federated slices
     try:
         from app.routes.composite import load_composite_slices
         load_composite_slices()
     except Exception:
-        logger.warning("Composite slice loading failed (non-fatal)", exc_info=True)
+        logger.warning("Federated slice loading failed (non-fatal)", exc_info=True)
 
     # Mark stale runs from previous container lifecycle
     try:
@@ -499,7 +499,7 @@ async def lifespan(app: FastAPI):
 _enable_docs = os.environ.get("LOOMAI_ENABLE_DOCS", "").strip() == "1"
 _docs_kwargs = {} if _enable_docs else {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
-app = FastAPI(title="LoomAI API", version="0.7.1", lifespan=lifespan, **_docs_kwargs)
+app = FastAPI(title="LoomAI API", version="0.7.2", lifespan=lifespan, **_docs_kwargs)
 
 from app.error_handler import install_error_handlers
 install_error_handlers(app)

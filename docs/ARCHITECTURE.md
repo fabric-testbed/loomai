@@ -687,7 +687,12 @@ Hub mode restrictions: installable AI tools (Antigravity, Codex, Aider, OpenCode
 
 ## CLI Tool (`loomai`)
 
-A Click-based Python CLI providing full FABRIC testbed management from the terminal. Pre-installed in the Docker container at `/usr/local/bin/loomai`. Source: `cli/loomai_cli/`.
+A Click-based Python CLI providing full FABRIC, Chameleon, federated, file, artifact, monitoring, and AI-tool management from the terminal. Pre-installed in the Docker container at `/usr/local/bin/loomai`. Source: `cli/loomai_cli/`; mirrored copy for Docker/backend packaging: `backend/cli/loomai_cli/`.
+
+The `cli/loomai_cli/` tree is the canonical edit target. After CLI edits, mirror
+`cli/loomai_cli/` and `cli/tests/` into `backend/cli/` and keep both
+`pyproject.toml` files aligned. Both mirrors currently declare
+`loomai-cli` `0.7.0` and Python `>=3.11`.
 
 ### Command Groups
 
@@ -698,22 +703,46 @@ A Click-based Python CLI providing full FABRIC testbed management from the termi
 | `networks` | add, update, remove | L2/L3 network management |
 | `components` | add, remove | GPU, NIC, FPGA attachment |
 | `facility-ports` | list, add, remove | External connectivity |
+| `port-mirrors` | add, update, remove | Draft port-mirror intent |
 | `sites` | list, show, hosts, find | Resource discovery |
 | `ssh` | — | SSH into VMs |
 | `exec` | — | Run commands on one/all nodes |
 | `scp` | — | File transfer to/from VMs |
 | `rsync` | — | Directory sync to VMs |
+| `files` | list, read, write, mkdir, delete, upload, download, vm, chameleon, provisions, boot | Storage, VM, Chameleon, provisioning, and boot-log file operations |
 | `weaves` | list, show, load, run, stop, logs, runs | Weave management |
-| `boot-config` | show, set, run, log | Boot configuration |
+| `boot-config` | show, set, run, log, running | Boot configuration |
 | `artifacts` | list, search, show, get, publish, update, delete, tags, versions, push-version, delete-version | Artifact marketplace |
+| `trovi` | list, search, show, tags, get | Chameleon Trovi marketplace |
 | `recipes` | list, show, run | Software recipes |
 | `vm-templates` | list, show | VM templates |
-| `monitor` | enable, disable, status, metrics | Node monitoring |
-| `config` | show, settings | Configuration |
+| `monitor` | enable, disable, status, metrics, history, infrastructure, nodes, chameleon-enable | Node and site monitoring |
+| `schedule` | calendar, next-available, alternatives, reservations | Resource scheduling and future submissions |
+| `config` | show, settings, paste-token, logout, auto-setup, check-update, rebuild-storage, views-status, AI tool toggles | Configuration |
+| `settings` | get, set, test, test-all, test-provider | Settings inspection and validation |
 | `projects` | list, switch | FABRIC projects |
 | `keys` | list, generate | SSH keys |
-| `ai` | chat, models, agents | AI assistant |
+| `ai` | chat, models, agents, skills, rag, tools, propagate-config | AI assistant, model, RAG, agent, skill, and tool lifecycle |
+| `chameleon` | status, sites, images, leases, instances, networks, keypairs, boot-config, ips, security-groups, slices, drafts, OpenStack helpers | Chameleon Cloud resources |
+| `federated` | list, show, create, delete, graph, submit, members, connections | Cross-testbed provider-slice membership and connection intent |
+| `jupyter` / `notebooks` | start, stop, status; launch, reset, status, publish-fork | JupyterLab and notebook artifacts |
+| `experiments` | list, create, show, update, delete, readme, scripts, load, save, template, load-experiment | Runnable and cross-testbed templates |
+| `tunnels` | list, open, close | VM service tunnels |
+| `users` | list, switch, delete, migrate-current | Multi-user profile storage |
 | `completions` | bash, zsh, fish | Shell completion scripts |
+
+### Output Contract
+
+Most non-interactive commands support `--format table|json|yaml`, and the option
+can be placed after subcommands, for example
+`loomai slices list --format json`. The default `table` output is optimized for
+humans on a terminal; `json` and `yaml` are structured for automation.
+
+Operational commands that naturally stream or attach to a terminal preserve that
+behavior by default: `ssh`, `exec`, `scp`, `rsync`, `weaves logs`,
+`ai chat`, and raw download/upload operations. Those commands
+should only add JSONL or final-summary JSON where it improves automation without
+breaking the live terminal workflow.
 
 ### Interactive Shell
 

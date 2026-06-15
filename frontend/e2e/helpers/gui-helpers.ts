@@ -97,36 +97,78 @@ export async function navigateToView(page: Page, view: 'fabric' | 'chameleon' | 
 }
 
 /**
- * Create a slice via the bar's "New" button + prompt dialog.
+ * Complete the shared in-app prompt dialog.
  */
-export async function createSliceViaBar(page: Page, barClass: string, name: string) {
-  // Set up a persistent dialog auto-accepter
-  const handler = async (dialog: any) => {
-    await dialog.accept(name);
-  };
-  page.on('dialog', handler);
-
-  // Find and click the New button
-  const btn = page.locator(`.${barClass}`).locator('button', { hasText: /New/ }).first();
-  await btn.click();
-  await page.waitForTimeout(4000);
-
-  // Remove handler after use
-  page.off('dialog', handler);
+export async function completeAppPrompt(page: Page, value: string, expectedText?: string | RegExp) {
+  const dialog = page.locator('.app-dialog').last();
+  await expect(dialog).toBeVisible({ timeout: 5000 });
+  if (expectedText) await expect(dialog).toContainText(expectedText);
+  const dialogId = await dialog.getAttribute('aria-labelledby');
+  await dialog.locator('.app-dialog-input').fill(value);
+  await dialog.locator('.app-dialog-button-primary').click();
+  await expectDialogClosedOrAdvanced(page, dialogId);
 }
 
 /**
- * Override window.prompt to return a specific value (one-shot).
- * Call this BEFORE clicking a button that triggers prompt().
+ * Accept the shared in-app confirm/alert dialog.
+ */
+export async function acceptAppDialog(page: Page, expectedText?: string | RegExp) {
+  const dialog = page.locator('.app-dialog').last();
+  await expect(dialog).toBeVisible({ timeout: 5000 });
+  if (expectedText) await expect(dialog).toContainText(expectedText);
+  const dialogId = await dialog.getAttribute('aria-labelledby');
+  await dialog.locator('.app-dialog-button-primary').click();
+  await expectDialogClosedOrAdvanced(page, dialogId);
+}
+
+/**
+ * Dismiss the shared in-app confirm/prompt dialog.
+ */
+export async function dismissAppDialog(page: Page, expectedText?: string | RegExp) {
+  const dialog = page.locator('.app-dialog').last();
+  await expect(dialog).toBeVisible({ timeout: 5000 });
+  if (expectedText) await expect(dialog).toContainText(expectedText);
+  const dialogId = await dialog.getAttribute('aria-labelledby');
+  await dialog.locator('.app-dialog-button-secondary').click();
+  await expectDialogClosedOrAdvanced(page, dialogId);
+}
+
+/**
+ * Dismiss the shared in-app dialog if it appears.
+ */
+export async function dismissAppDialogIfVisible(page: Page, expectedText?: string | RegExp) {
+  const dialog = page.locator('.app-dialog').last();
+  if (!await dialog.isVisible({ timeout: 1000 }).catch(() => false)) return false;
+  if (expectedText) await expect(dialog).toContainText(expectedText);
+  const dialogId = await dialog.getAttribute('aria-labelledby');
+  await dialog.locator('.app-dialog-button-secondary').click();
+  await expectDialogClosedOrAdvanced(page, dialogId);
+  return true;
+}
+
+async function expectDialogClosedOrAdvanced(page: Page, previousDialogId: string | null) {
+  await expect.poll(async () => {
+    const next = page.locator('.app-dialog').last();
+    if (!await next.isVisible().catch(() => false)) return true;
+    return await next.getAttribute('aria-labelledby') !== previousDialogId;
+  }, { timeout: 5000 }).toBe(true);
+}
+
+/**
+ * Create a slice via the bar's "New" button + in-app prompt dialog.
+ */
+export async function createSliceViaBar(page: Page, barClass: string, name: string) {
+  const btn = page.locator(`.${barClass}`).locator('button', { hasText: /New/ }).first();
+  await btn.click();
+  await completeAppPrompt(page, name);
+  await page.waitForTimeout(4000);
+}
+
+/**
+ * Complete the currently visible in-app prompt.
  */
 export async function overridePrompt(page: Page, value: string) {
-  await page.evaluate((v) => {
-    const orig = window.prompt;
-    window.prompt = () => {
-      window.prompt = orig;
-      return v;
-    };
-  }, value);
+  await completeAppPrompt(page, value);
 }
 
 /**

@@ -359,7 +359,7 @@ export function makeSettings(overrides: Record<string, unknown> = {}) {
       avoid_sites: [],
       ssh_command_line: 'ssh -F {config_dir}/ssh_config {{ _self_.username }}@{{ _self_.management_ip }}',
     },
-    views: { composite_enabled: true },
+    views: { federated_enabled: true },
     chameleon: { enabled: true, sites: {} },
     ai: {
       fabric_api_key: 'mock-ai-key',
@@ -449,7 +449,7 @@ export function makeDefaultApiScenario(overrides: Record<string, unknown> = {}) 
   return {
     health: healthResponse,
     configStatus,
-    viewsStatus: { fabric_enabled: true, chameleon_enabled: true, composite_enabled: true },
+    viewsStatus: { fabric_enabled: true, chameleon_enabled: true, federated_enabled: true },
     slices: [fabricSlice],
     sites: sitesList,
     links: [],
@@ -485,7 +485,7 @@ export function makeDefaultApiScenario(overrides: Record<string, unknown> = {}) 
 export function scenarioChameleonDisabled(overrides: Record<string, unknown> = {}) {
   return makeDefaultApiScenario({
     chameleonStatus: { enabled: false, configured: false, sites: {} },
-    viewsStatus: { fabric_enabled: true, chameleon_enabled: false, composite_enabled: true },
+    viewsStatus: { fabric_enabled: true, chameleon_enabled: false, federated_enabled: true },
     chameleonSlices: [],
     ...overrides,
   });

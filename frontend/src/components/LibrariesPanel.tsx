@@ -4,6 +4,7 @@ import type { SliceData, VMTemplateSummary, RecipeSummary } from '../types/fabri
 import type { TemplateSummary, ScriptArg, BackgroundRun, LocalArtifact } from '../api/client';
 import * as api from '../api/client';
 import Tooltip from './Tooltip';
+import { alertDialog } from './AppDialogProvider';
 import '../styles/template-panel.css';
 import '../styles/vm-template-panel.css';
 
@@ -433,7 +434,9 @@ export default React.memo(function LibrariesPanel({
         onLaunchNotebook?.(result.jupyter_path);
       }
     } catch (e: any) {
-      alert(`Failed to launch notebook: ${e.message}`);
+      await alertDialog(`Failed to launch notebook: ${e.message}`, {
+        title: 'Notebook Launch Failed',
+      });
     } finally {
       setLaunchingNotebook(null);
     }
@@ -447,7 +450,9 @@ export default React.memo(function LibrariesPanel({
         onLaunchNotebook?.(`/jupyter/lab/tree/my_artifacts/${encodeURIComponent(dirName)}`);
       }
     } catch (e: any) {
-      alert(`Failed to open in JupyterLab: ${e.message}`);
+      await alertDialog(`Failed to open in JupyterLab: ${e.message}`, {
+        title: 'JupyterLab Failed',
+      });
     } finally {
       setLaunchingNotebook(null);
     }
@@ -474,7 +479,9 @@ export default React.memo(function LibrariesPanel({
         refreshNotebooks();
       }
     } catch (e: any) {
-      alert(`Delete failed: ${e.message}`);
+      await alertDialog(`Delete failed: ${e.message}`, {
+        title: 'Delete Failed',
+      });
     } finally {
       setDeleting(false);
       setDeleteConfirm(null);
@@ -850,11 +857,11 @@ export default React.memo(function LibrariesPanel({
                 </p>
                 {scriptModal.argDefs.map((arg, i) => (
                   <div key={arg.name} style={{ marginBottom: 8 }}>
-                    <label style={{ display: 'block', fontSize: 12, color: '#8aa', marginBottom: 2 }}>
+                    <label style={{ display: 'block', fontSize: 12, color: 'var(--fabric-text-muted)', marginBottom: 2 }}>
                       {arg.label}{arg.required ? ' *' : ''}
                     </label>
                     {arg.description && (
-                      <div style={{ fontSize: 11, color: '#688', marginBottom: 3 }}>{arg.description}</div>
+                      <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginBottom: 3 }}>{arg.description}</div>
                     )}
                     {arg.type === 'boolean' ? (
                       <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
@@ -1199,7 +1206,7 @@ export default React.memo(function LibrariesPanel({
             <p>Are you sure you want to delete <strong>{deleteConfirm.name}</strong>? This cannot be undone.</p>
             <div className="template-modal-actions">
               <button onClick={() => setDeleteConfirm(null)} disabled={deleting}>Cancel</button>
-              <button className="primary" style={{ background: '#e25241' }} onClick={handleDeleteArtifact} disabled={deleting}>
+              <button className="danger" onClick={handleDeleteArtifact} disabled={deleting}>
                 {deleting ? 'Deleting...' : 'Delete'}
               </button>
             </div>

@@ -6,6 +6,7 @@ import ContainerFileBrowser from './ContainerFileBrowser';
 import * as api from '../api/client';
 import type { SliceData, SiteInfo, ComponentModel, FileEntry, ProjectInfo } from '../types/fabric';
 import type { PersonSearchResult } from '../api/client';
+import { alertDialog } from './AppDialogProvider';
 import '../styles/artifact-editor.css';
 
 interface ArtifactEditorViewProps {
@@ -311,7 +312,9 @@ export default function ArtifactEditorView({
         onLaunchJupyter(`/jupyter/lab/tree/my_artifacts/${encodeURIComponent(dirName)}`);
       }
     } catch (e: any) {
-      alert(`Failed to open JupyterLab: ${e.message}`);
+      await alertDialog(`Failed to open JupyterLab: ${e.message}`, {
+        title: 'JupyterLab Failed',
+      });
     }
   };
 

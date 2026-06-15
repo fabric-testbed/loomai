@@ -394,12 +394,13 @@
 .chi-sv-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 10000;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(13, 21, 32, 0.52);
+  backdrop-filter: blur(2px);
 }
 
 .chi-sv-lease-modal {
@@ -409,14 +410,17 @@
   max-height: 82vh;
   overflow: hidden;
   padding: 20px;
+  border: 1px solid rgba(39, 170, 225, 0.36);
   border-radius: 8px;
   background: var(--fabric-white);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 24px 64px rgba(13, 21, 32, 0.32);
 }
 
 .chi-sv-lease-modal h4 {
-  margin: 0 0 8px;
-  color: var(--fabric-text);
+  margin: -20px -20px 16px;
+  padding: 16px 20px 14px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--loomai-navy, #1c2e4a) 0%, var(--loomai-sky, #27aae1) 100%);
   font-size: 15px;
 }
 
@@ -601,7 +605,10 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 12px;
+  margin: 16px -20px -20px;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--fabric-border-solid, rgba(87, 152, 188, 0.22));
+  background: color-mix(in srgb, var(--fabric-bg-tint, #edf2f8) 64%, transparent);
 }
 
 .chi-sv-modal-actions button {
@@ -773,6 +780,17 @@
 
 [data-theme="dark"] .chi-sv-lease-modal {
   background: #16213e;
+  border-color: rgba(39, 170, 225, 0.42);
+  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.56);
+}
+
+[data-theme="dark"] .chi-sv-lease-modal h4 {
+  background: linear-gradient(135deg, #0d1520 0%, var(--loomai-navy, #1c2e4a) 50%, var(--loomai-sky, #27aae1) 100%);
+}
+
+[data-theme="dark"] .chi-sv-modal-actions {
+  border-top-color: rgba(138, 201, 239, 0.16);
+  background: rgba(15, 22, 40, 0.72);
 }
 
 [data-theme="dark"] .chi-sv-candidate-table-wrap,

@@ -41,6 +41,7 @@ const CompositeEditorPanel = dynamic(() => import('./components/CompositeEditorP
 import type { ClientTarget } from './components/ClientView';
 import HelpContextMenu from './components/HelpContextMenu';
 import GuidedTour from './components/GuidedTour';
+import { confirmDialog, promptDialog } from './components/AppDialogProvider';
 import { tours } from './data/tourSteps';
 import * as api from './api/client';
 import type { SliceSummary, SliceData, ComponentModel, ValidationIssue, ProjectInfo, VMTemplateSummary, BootConfig, RecipeSummary, ExperimentVariable, LoomAISettings } from './types/fabric';
@@ -387,7 +388,7 @@ export default function App() {
   const [selectedCompositeSliceId, setSelectedCompositeSliceId] = useState('');
   const [compositeRefreshNonce, setCompositeRefreshNonce] = useState(0);
   const [compositeGraph, setCompositeGraph] = useState<{ nodes: any[]; edges: any[] } | null>(null);
-  const [compositeEnabled, setCompositeEnabled] = useState(false);
+  const [federatedEnabled, setFederatedEnabled] = useState(false);
   const [compositeSlicesLoading, setCompositeSlicesLoading] = useState(false);
   const [checkedCompositeIds, setCheckedCompositeIds] = useState<Set<string>>(new Set());
   const [expandedCompositeMemberIds, setExpandedCompositeMemberIds] = useState<Set<string>>(new Set());
@@ -482,7 +483,12 @@ export default function App() {
 
   const PANEL_ICONS: Record<PanelId, string> = { editor: '\u270E', template: '__marketplace_icon__', chat: '__loomai_icon__', console: '\u2756', details: '\u2139' };
   const PANEL_LABELS: Record<PanelId, string> = { editor: 'Editor', template: 'Artifacts', chat: 'LoomAI', console: 'Console', details: 'Details' };
-  const ICON_MAP: Record<string, string> = { '__loomai_icon__': '/loomai-icon-transparent.svg', '__marketplace_icon__': '/marketplace-icon-transparent.svg', '__composite_icon__': '/loomai-icon-transparent.svg' };
+  const ICON_MAP: Record<string, string> = {
+    '__loomai_icon__': '/loomai-icon-transparent.svg',
+    '__marketplace_icon__': '/marketplace-icon-transparent.svg',
+    '__federated_icon__': '/loomai-icon-transparent.svg',
+    '__composite_icon__': '/loomai-icon-transparent.svg',
+  };
   const renderPanelIcon = (iconKey: string, size = 14) => ICON_MAP[iconKey] ? <img src={assetUrl(ICON_MAP[iconKey])} alt="" style={{ height: size }} /> : <>{iconKey}</>;
   const PANEL_IDS: PanelId[] = ['editor', 'template', 'chat', 'console', 'details'];
   const DEFAULT_PANEL_WIDTH = 280;
@@ -1011,8 +1017,9 @@ export default function App() {
 
     // Check view status and load federated slices
     api.getViewsStatus().then(status => {
-      setCompositeEnabled(status.composite_enabled);
-      if (status.composite_enabled) {
+      const enabled = status.federated_enabled ?? status.composite_enabled ?? false;
+      setFederatedEnabled(enabled);
+      if (enabled) {
         refreshFederatedSlices({ silent: true });
       }
     }).catch(() => {});
@@ -1897,7 +1904,7 @@ export default function App() {
     try {
       const list = await api.listFederatedSlices();
       setCompositeSlices(list);
-      setCompositeEnabled(true);
+      setFederatedEnabled(true);
       setCheckedCompositeIds(prev => {
         if (prev.size === 0) return prev;
         const available = new Set(list.map(s => s.id));
@@ -1994,7 +2001,10 @@ export default function App() {
     if (!federatedId || !sliceId) return;
     const providerLabel = provider === 'fabric' ? 'FABRIC' : 'Chameleon';
     const displayName = label || sliceId;
-    if (!window.confirm(`Remove ${providerLabel} slice "${displayName}" from this federated slice?\n\nThis only detaches it from the federated slice; it does not delete the provider slice.`)) return;
+    if (!await confirmDialog(`Remove ${providerLabel} slice "${displayName}" from this federated slice?\n\nThis only detaches it from the federated slice; it does not delete the provider slice.`, {
+      title: 'Remove Federated Member',
+      confirmLabel: 'Remove',
+    })) return;
     setFederatedMemberSaving(true);
     setStatusMessage(`Removing ${providerLabel} slice from federated slice...`);
     try {
@@ -2188,9 +2198,18 @@ export default function App() {
     const slice = compositeSlices.find(s => s.id === id);
     const name = slice?.name || id;
     const memberCount = federatedSubsliceCount(slice);
-    if (!window.confirm(`Delete federated slice "${name}"?`)) return;
-    const deleteMembers = memberCount > 0 && window.confirm(
+    if (!await confirmDialog(`Delete federated slice "${name}"?`, {
+      title: 'Delete Federated Slice',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
+    const deleteMembers = memberCount > 0 && await confirmDialog(
       `Also delete all ${memberCount} sub-slice${memberCount !== 1 ? 's' : ''} for "${name}"?\n\nThis will delete the linked FABRIC and Chameleon provider slices and release their managed resources.`,
+      {
+        title: 'Delete Member Slices',
+        confirmLabel: 'Delete All',
+        tone: 'danger',
+      },
     );
     setLoading(true);
     setStatusMessage(deleteMembers ? 'Deleting federated slice and sub-slices...' : 'Deleting federated slice...');
@@ -2222,9 +2241,18 @@ export default function App() {
     if (ids.length === 0) return;
     const selectedSlices = compositeSlices.filter(s => checkedCompositeIds.has(s.id));
     const memberCount = selectedSlices.reduce((total, slice) => total + federatedSubsliceCount(slice), 0);
-    if (!window.confirm(`Delete ${ids.length} federated slice${ids.length !== 1 ? 's' : ''}?`)) return;
-    const deleteMembers = memberCount > 0 && window.confirm(
+    if (!await confirmDialog(`Delete ${ids.length} federated slice${ids.length !== 1 ? 's' : ''}?`, {
+      title: 'Delete Federated Slices',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
+    const deleteMembers = memberCount > 0 && await confirmDialog(
       `Also delete all ${memberCount} sub-slice${memberCount !== 1 ? 's' : ''} from the selected federated slice${ids.length !== 1 ? 's' : ''}?\n\nThis will delete the linked FABRIC and Chameleon provider slices and release their managed resources.`,
+      {
+        title: 'Delete Member Slices',
+        confirmLabel: 'Delete All',
+        tone: 'danger',
+      },
     );
     setLoading(true);
     setStatusMessage(deleteMembers ? 'Deleting federated slices and sub-slices...' : 'Deleting federated slices...');
@@ -2302,7 +2330,7 @@ export default function App() {
   }, [selectedSliceId]);
 
   // Submit handles both new slice creation and modifications to existing slices
-  // Uses composite submit when Chameleon nodes are present
+  // Uses federated submit when Chameleon nodes are present.
   const handleSubmit = useCallback(async () => {
     if (!selectedSliceId) return;
     const sliceId = selectedSliceId;
@@ -2439,7 +2467,11 @@ export default function App() {
 
   // --- Chameleon callbacks (mirror FABRIC pattern) ---
   const handleCreateChameleonDraft = useCallback(async () => {
-    const name = prompt('Draft name:');
+    const name = await promptDialog('Draft name:', {
+      title: 'New Chameleon Draft',
+      confirmLabel: 'Create',
+      placeholder: 'Draft name',
+    });
     if (!name) return;
     const site = (chameleonSites || [])[0]?.name || 'CHI@TACC';
     try {
@@ -3093,7 +3125,11 @@ export default function App() {
     const d = chameleonSlices.find(x => x.id === selectedChameleonSliceId);
     // Draft slices with no deployed resources: simple confirm
     if (d?.state === 'Draft' && (!d.resources || d.resources.length === 0)) {
-      if (!window.confirm(`Delete draft "${d?.name}"?`)) return;
+      if (!await confirmDialog(`Delete draft "${d?.name}"?`, {
+        title: 'Delete Chameleon Draft',
+        confirmLabel: 'Delete',
+        tone: 'danger',
+      })) return;
       try {
         await api.deleteChameleonDraft(selectedChameleonSliceId);
         setSelectedChameleonSliceId('');
@@ -3546,7 +3582,7 @@ export default function App() {
     const newTabs: TerminalTab[] = [];
     for (const el of elements) {
       if (el.element_type === 'node' && el.management_ip) {
-        // Per-element slice wins (composite graph nodes carry their own
+        // Per-element slice wins (federated graph nodes carry their own
         // member slice_name); falls back to the explicit arg, then the
         // FABRIC view's selected slice as a last resort.
         const elSlice = (el.slice_name as string | undefined) || sliceName || selectedSliceName;
@@ -5103,7 +5139,11 @@ export default function App() {
                     }
                   }}
                   onCreateSlice={async (testbed) => {
-                    const name = prompt(`New ${testbed === 'fabric' ? 'FABRIC' : 'Chameleon'} slice name:`);
+                    const name = await promptDialog(`New ${testbed === 'fabric' ? 'FABRIC' : 'Chameleon'} slice name:`, {
+                      title: `New ${testbed === 'fabric' ? 'FABRIC' : 'Chameleon'} Slice`,
+                      confirmLabel: 'Create',
+                      placeholder: 'Slice name',
+                    });
                     if (!name) return;
                     try {
                       if (testbed === 'fabric') {
@@ -5454,7 +5494,7 @@ export default function App() {
         selectedAiTool={selectedAiTool}
         onLaunchAiTool={handleLaunchAiTool}
         chameleonEnabled={chameleonEnabled}
-        compositeEnabled={compositeEnabled}
+        federatedEnabled={federatedEnabled}
         hasToken={configStatus?.has_token ?? undefined}
         tokenExpired={configStatus?.has_token && configStatus?.token_info?.exp ? configStatus.token_info.exp * 1000 < Date.now() : false}
         userEmail={configStatus?.token_info?.email}
@@ -5593,7 +5633,11 @@ export default function App() {
               ))}
             </select>
             <button className="fabric-bar-action-btn" data-testid="fabric-bar-new-slice" onClick={async () => {
-              const name = prompt('Slice name:');
+              const name = await promptDialog('Slice name:', {
+                title: 'New FABRIC Slice',
+                confirmLabel: 'Create',
+                placeholder: 'Slice name',
+              });
               if (!name) return;
               try {
                 const data = await api.createSlice(name);
@@ -5617,7 +5661,11 @@ export default function App() {
               {checkingAvailability ? '\u23F3 Checking...' : '\uD83D\uDD0D Availability'}</button>
             <button className="fabric-bar-action-btn fabric-bar-action-danger" onClick={async () => {
               if (!selectedSliceId || !selectedSliceName) return;
-              if (!window.confirm(`Delete slice "${selectedSliceName}"?`)) return;
+              if (!await confirmDialog(`Delete slice "${selectedSliceName}"?`, {
+                title: 'Delete FABRIC Slice',
+                confirmLabel: 'Delete',
+                tone: 'danger',
+              })) return;
               handleDeleteSlice();
             }} disabled={!selectedSliceId} title="Delete selected slice" data-testid="fabric-bar-delete-slice">Delete</button>
             <button className="fabric-bar-action-btn" onClick={handleRefreshSlices} title="Refresh slices" data-testid="fabric-bar-refresh-slices">&#x21BB; Slices</button>
@@ -5676,7 +5724,11 @@ export default function App() {
             const all = chameleonSlices;
             const target = drafts.length > 0 && drafts.length < all.length ? drafts : all;
             const label = target.length === drafts.length && drafts.length < all.length ? 'drafts' : 'slices';
-            if (!window.confirm(`Delete all ${target.length} ${label}?`)) return;
+            if (!await confirmDialog(`Delete all ${target.length} ${label}?`, {
+              title: `Delete Chameleon ${label}`,
+              confirmLabel: 'Delete All',
+              tone: 'danger',
+            })) return;
             for (const s of target) {
               try { await api.deleteChameleonDraft(s.id); } catch {}
             }
@@ -5753,7 +5805,11 @@ export default function App() {
               ))}
             </select>
             <button className="composite-bar-btn" data-testid="federated-bar-new-slice" onClick={async () => {
-              const name = prompt('Federated slice name:');
+              const name = await promptDialog('Federated slice name:', {
+                title: 'New Federated Slice',
+                confirmLabel: 'Create',
+                placeholder: 'Federated slice name',
+              });
               if (!name) return;
               try {
                 const data = await api.createFederatedSlice(name);
@@ -6873,9 +6929,9 @@ export default function App() {
         </div>
       )}
 
-      {/* Chameleon Lease Creation Dialog — portal to body, inline styles for guaranteed centering */}
+      {/* Chameleon Lease Creation Dialog */}
       {showChameleonLeaseDialog && chameleonSliceData && typeof document !== 'undefined' && createPortal(
-        <div className="toolbar-modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }} onClick={() => setShowChameleonLeaseDialog(false)}>
+        <div className="toolbar-modal-overlay" onClick={() => setShowChameleonLeaseDialog(false)}>
           <div className="toolbar-modal toolbar-modal-wide" onClick={e => e.stopPropagation()} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
             <h4>Create Lease from Draft</h4>
             {/* Resource summary grouped by site */}
@@ -6996,7 +7052,7 @@ export default function App() {
 
       {/* Chameleon Delete Slice dialog */}
       {showChameleonDeleteDialog && typeof document !== 'undefined' && createPortal(
-        <div className="toolbar-modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }} onClick={() => setShowChameleonDeleteDialog(false)}>
+        <div className="toolbar-modal-overlay" onClick={() => setShowChameleonDeleteDialog(false)}>
           <div className="toolbar-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
             <h4>Delete Slice</h4>
             <p style={{ fontSize: 12, color: 'var(--fabric-text-muted)', margin: '8px 0 12px' }}>
@@ -7045,59 +7101,53 @@ export default function App() {
 
       {/* Post-login project picker modal */}
       {availabilityResult && createPortal(
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }}
+        <div className="toolbar-modal-overlay"
           onClick={() => setAvailabilityResult(null)}>
-          <div style={{ background: 'var(--fabric-white, #fff)', borderRadius: 12, padding: '24px 28px', maxWidth: 520, width: '90%', maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.3)' }}
+          <div className="toolbar-modal toolbar-modal-wide availability-modal"
             onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 12px', fontSize: 16, fontWeight: 700, color: 'var(--fabric-text)' }}>Resource Availability</h3>
-            <div style={{
-              padding: '10px 14px', borderRadius: 8, marginBottom: 14, fontSize: 13, fontWeight: 600,
-              background: availabilityResult.feasible_now ? '#e6f9f0' : availabilityResult.next_slot ? '#fff8e6' : '#fde8e8',
-              color: availabilityResult.feasible_now ? '#1a7a4c' : availabilityResult.next_slot ? '#8a6d00' : '#c0392b',
-              border: `1px solid ${availabilityResult.feasible_now ? '#b7e4c7' : availabilityResult.next_slot ? '#f0d980' : '#f0b4b4'}`,
-            }}>
+            <h4>Resource Availability</h4>
+            <div className={`availability-result-banner ${availabilityResult.feasible_now ? 'available' : availabilityResult.next_slot ? 'delayed' : 'unavailable'}`}>
               {availabilityResult.message}
             </div>
             {availabilityResult.slots.length > 0 && (
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fabric-text-muted)', marginBottom: 6 }}>Available Slots</div>
+              <div className="availability-section">
+                <div className="availability-section-title">Available Slots</div>
                 {availabilityResult.slots.map((slot, i) => (
-                  <div key={i} style={{ fontSize: 12, padding: '4px 0', color: 'var(--fabric-text)' }}>
+                  <div key={i} className="availability-slot">
                     {new Date(slot.start).toLocaleString()}
                   </div>
                 ))}
               </div>
             )}
             {availabilityResult.node_requirements.length > 0 && (
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fabric-text-muted)', marginBottom: 6 }}>Node Requirements</div>
-                <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+              <div className="availability-section">
+                <div className="availability-section-title">Node Requirements</div>
+                <table className="availability-table">
                   <thead>
-                    <tr style={{ borderBottom: '1px solid var(--fabric-border-solid, #dde)' }}>
-                      <th style={{ textAlign: 'left', padding: '4px 6px', fontWeight: 600 }}>Node</th>
-                      <th style={{ textAlign: 'right', padding: '4px 6px', fontWeight: 600 }}>Cores</th>
-                      <th style={{ textAlign: 'right', padding: '4px 6px', fontWeight: 600 }}>RAM</th>
-                      <th style={{ textAlign: 'right', padding: '4px 6px', fontWeight: 600 }}>Disk</th>
-                      <th style={{ textAlign: 'left', padding: '4px 6px', fontWeight: 600 }}>Site</th>
+                    <tr>
+                      <th>Node</th>
+                      <th className="numeric">Cores</th>
+                      <th className="numeric">RAM</th>
+                      <th className="numeric">Disk</th>
+                      <th>Site</th>
                     </tr>
                   </thead>
                   <tbody>
                     {availabilityResult.node_requirements.map((nr, i) => (
-                      <tr key={i} style={{ borderBottom: '1px solid var(--fabric-border-solid, #eef)' }}>
-                        <td style={{ padding: '4px 6px' }}>{nr.name}</td>
-                        <td style={{ textAlign: 'right', padding: '4px 6px' }}>{nr.cores}</td>
-                        <td style={{ textAlign: 'right', padding: '4px 6px' }}>{nr.ram} GB</td>
-                        <td style={{ textAlign: 'right', padding: '4px 6px' }}>{nr.disk} GB</td>
-                        <td style={{ padding: '4px 6px' }}>{nr.site || '—'}</td>
+                      <tr key={i}>
+                        <td>{nr.name}</td>
+                        <td className="numeric">{nr.cores}</td>
+                        <td className="numeric">{nr.ram} GB</td>
+                        <td className="numeric">{nr.disk} GB</td>
+                        <td>{nr.site || '—'}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             )}
-            <div style={{ textAlign: 'right' }}>
-              <button onClick={() => setAvailabilityResult(null)}
-                style={{ padding: '6px 18px', borderRadius: 6, border: '1px solid var(--fabric-border-solid, #ccc)', background: 'var(--fabric-bg, #f8f9fa)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+            <div className="toolbar-modal-actions">
+              <button onClick={() => setAvailabilityResult(null)}>
                 Close
               </button>
             </div>
@@ -7106,35 +7156,28 @@ export default function App() {
         document.body
       )}
       {showPostLoginProjectPicker && createPortal(
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }}>
-          <div style={{ background: 'var(--fabric-white, #fff)', borderRadius: 12, padding: '28px 32px', maxWidth: 420, width: '90%', maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.3)' }}>
-            <h3 style={{ margin: '0 0 6px', fontSize: 16, fontWeight: 700, color: 'var(--fabric-text)' }}>Select a Project</h3>
-            <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--fabric-text-muted)' }}>
+        <div className="toolbar-modal-overlay">
+          <div className="toolbar-modal project-picker-modal">
+            <h4>Select a Project</h4>
+            <p>
               You belong to multiple FABRIC projects. Choose one to get started.
             </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="project-picker-list">
               {postLoginProjects.map((p) => (
                 <button
                   key={p.uuid}
                   disabled={postLoginBusy}
                   onClick={() => runAutoSetup(p.uuid)}
-                  style={{
-                    padding: '10px 16px', borderRadius: 8, border: '1px solid var(--fabric-border-solid, #dde)',
-                    background: 'var(--fabric-bg, #f8f9fa)', cursor: postLoginBusy ? 'wait' : 'pointer',
-                    textAlign: 'left', fontSize: 13, fontWeight: 600, color: 'var(--fabric-text)',
-                    transition: 'border-color 0.15s, background 0.15s',
-                  }}
-                  onMouseEnter={(e) => { (e.target as HTMLElement).style.borderColor = '#5798bc'; }}
-                  onMouseLeave={(e) => { (e.target as HTMLElement).style.borderColor = 'var(--fabric-border-solid, #dde)'; }}
+                  className="project-picker-option"
                 >
                   {p.name}
-                  <span style={{ display: 'block', fontSize: 10, fontWeight: 400, opacity: 0.5, marginTop: 2 }}>{p.uuid}</span>
+                  <span>{p.uuid}</span>
                 </button>
               ))}
             </div>
             <button
               onClick={() => { setShowPostLoginProjectPicker(false); setSettingsOpen(true); }}
-              style={{ marginTop: 16, background: 'none', border: 'none', color: 'var(--fabric-text-muted)', fontSize: 12, cursor: 'pointer', padding: 0 }}
+              className="project-picker-skip"
             >
               Skip — configure manually in Settings
             </button>

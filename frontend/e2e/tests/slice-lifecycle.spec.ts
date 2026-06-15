@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { navigateToView, createSliceViaBar, cleanupAllE2ESlices } from '../helpers/gui-helpers';
+import { acceptAppDialog, navigateToView, createSliceViaBar, cleanupAllE2ESlices } from '../helpers/gui-helpers';
 
 test.describe('Slice Lifecycle', () => {
   test.afterAll(async ({ request }) => { await cleanupAllE2ESlices(request); });
@@ -45,13 +45,9 @@ test.describe('Slice Lifecycle', () => {
     if (match) await select.selectOption({ label: match });
     await page.waitForTimeout(1000);
 
-    // Handle the confirm dialog
-    page.once('dialog', async (dialog) => {
-      await dialog.accept();
-    });
-
     // Click Delete button
     await page.locator('.fabric-bar-action-btn', { hasText: 'Delete' }).click();
+    await acceptAppDialog(page, name);
     await page.waitForTimeout(2000);
   });
 });

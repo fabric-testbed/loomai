@@ -1805,10 +1805,12 @@ def views_status():
     from app.settings_manager import is_chameleon_enabled
     from app.settings_manager import _get_settings
     views = _get_settings().get("views", {})
+    federated_enabled = views.get("federated_enabled", views.get("composite_enabled", False))
     return {
         "fabric_enabled": True,  # always on
         "chameleon_enabled": is_chameleon_enabled(),
-        "composite_enabled": views.get("composite_enabled", False),
+        "federated_enabled": federated_enabled,
+        "composite_enabled": federated_enabled,  # Compatibility for older clients.
     }
 
 

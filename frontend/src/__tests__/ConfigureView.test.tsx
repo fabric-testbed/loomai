@@ -68,7 +68,7 @@ function mockSettings() {
     chameleon: { enabled: true, sites: {}, ssh_key_file: '' },
     services: { jupyter_port: 8889, model_proxy_port: 9199 },
     tool_configs: {},
-    views: { composite_enabled: true },
+    views: { federated_enabled: true },
   };
 }
 

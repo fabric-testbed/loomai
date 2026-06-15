@@ -5,6 +5,7 @@ import type { ContextMenuAction } from './CytoscapeGraph';
 import * as api from '../api/client';
 import Tooltip from './Tooltip';
 import { getFacilityPortSlivers } from '../utils/fabricSlivers';
+import { confirmDialog } from './AppDialogProvider';
 import '../styles/sliver-view.css';
 import '../styles/context-menu.css';
 
@@ -309,7 +310,11 @@ export default React.memo(function AllSliversView({
   const handleBulkDelete = useCallback(async () => {
     if (totalSelected === 0) return;
     const confirmMsg = `Delete ${selectedSliceNames.length} slice(s), ${selectedNodeKeys.length} node(s), ${selectedNetKeys.length} network(s), ${selectedFpKeys.length} facility port(s), and ${selectedPmKeys.length} port mirror(s)?`;
-    if (!window.confirm(confirmMsg)) return;
+    if (!await confirmDialog(confirmMsg, {
+      title: 'Delete Selected Resources',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     setDeleting(true);
     try {
       // Delete whole slices
@@ -758,7 +763,10 @@ export default React.memo(function AllSliversView({
             style={{ marginLeft: 'auto' }}
             onClick={async () => {
               const count = slices.filter(s => TERMINAL_STATES.has(s.state)).length;
-              if (!window.confirm(`Archive ${count} terminal slice(s) (Dead, Closing, StableError)? They will be hidden from the list.`)) return;
+              if (!await confirmDialog(`Archive ${count} terminal slice(s) (Dead, Closing, StableError)? They will be hidden from the list.`, {
+                title: 'Archive Terminal Slices',
+                confirmLabel: 'Archive',
+              })) return;
               await onArchiveAllTerminal();
             }}
             title="Hide all Dead, Closing, and StableError slices from the list"

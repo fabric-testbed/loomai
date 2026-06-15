@@ -3,6 +3,7 @@ import React, { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import * as api from '../api/client';
 import type { ChameleonDraft, ChameleonLease } from '../types/chameleon';
+import { alertDialog, confirmDialog } from './AppDialogProvider';
 import '../styles/chameleon-slices-view.css';
 
 type ChameleonLeaseRow = ChameleonLease & { site?: string };
@@ -257,7 +258,11 @@ export default React.memo(function ChameleonSlicesView({
   const handleBulkDelete = async () => {
     const ids = Array.from(checkedIds);
     if (ids.length === 0) return;
-    if (!window.confirm(`Delete ${ids.length} selected slice${ids.length !== 1 ? 's' : ''}?`)) return;
+    if (!await confirmDialog(`Delete ${ids.length} selected slice${ids.length !== 1 ? 's' : ''}?`, {
+      title: 'Delete Chameleon Slices',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     setBulkDeleting(true);
     onDeleteDrafts?.(ids);
     setCheckedIds(new Set());
@@ -298,7 +303,9 @@ export default React.memo(function ChameleonSlicesView({
       if (updated) onDraftUpdated?.(updated);
       await onRefresh?.();
     } catch (e: any) {
-      window.alert(e?.message || 'Failed to update Chameleon lease membership');
+      await alertDialog(e?.message || 'Failed to update Chameleon lease membership', {
+        title: 'Lease Update Failed',
+      });
     } finally {
       setLeaseMembershipBusy(prev => {
         const next = new Set(prev);

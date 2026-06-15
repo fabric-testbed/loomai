@@ -6,6 +6,7 @@ import Tooltip from './Tooltip';
 import SliverComboBox from './editor/SliverComboBox';
 import ImageComboBox from './editor/ImageComboBox';
 import AddSliverMenu, { type AddSliverType } from './editor/AddSliverMenu';
+import { alertDialog, confirmDialog } from './AppDialogProvider';
 import { getFacilityPortSlivers, type FabricFacilityPortSliver } from '../utils/fabricSlivers';
 import '../styles/editor.css';
 
@@ -135,7 +136,7 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
         if (chiVlanFabricSite) nodePayload.fabric_site = chiVlanFabricSite;
       }
       if (viewContext === 'composite') {
-        // Composite view: editing happens in the testbed views, not here
+        // Federated view: editing happens in the testbed views, not here.
         return;
       } else {
         await api.addChameleonSliceNode(sliceName, nodePayload);
@@ -169,7 +170,7 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
     }
   }, [sliceName, chiSite, chiNodeType, chiImage, chiConnType, chiVlan, chiVlanFabricSite, sliceData, onSliceUpdated]);
 
-  // Handler for adding a Chameleon network (stored locally, included in composite submit)
+  // Handler for adding a Chameleon network (stored locally, included in federated submit).
   const handleAddChameleonNetwork = useCallback(() => {
     if (!chiNetName) return;
     setChiNetworks(prev => [...prev, { name: chiNetName, cidr: chiNetCidr }]);
@@ -179,7 +180,7 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
   }, [chiNetName, chiNetCidr]);
 
   // Handler for adding a Chameleon floating IP — persists the flag on the
-  // backend so the composite submit can honor it during deployment
+  // backend so the federated submit can honor it during deployment.
   const handleAddChameleonFloatingIp = useCallback(async () => {
     if (!chiFloatingIpNode || !sliceName) return;
     try {
@@ -193,7 +194,9 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
         onSliceUpdated(updated);
       } catch { /* ignore */ }
     } catch (e: any) {
-      alert(`Failed to set floating IP: ${e?.message || e}`);
+      await alertDialog(`Failed to set floating IP: ${e?.message || e}`, {
+        title: 'Floating IP Failed',
+      });
     }
   }, [chiFloatingIpNode, sliceName, onSliceUpdated]);
 
@@ -477,7 +480,7 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                 vmTemplates={vmTemplates}
                 onSubmit={async (data) => {
                   if (viewContext === 'composite') {
-                    // Composite view: editing happens in the testbed views, not here
+                    // Federated view: editing happens in the testbed views, not here.
                     return;
                   } else {
                     let result = await apiCall(() => api.addNode(sliceName, data));
@@ -582,7 +585,11 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                   await apiCall(() => api.updateNode(sliceName, selectedNode.name, data));
                 }}
                 onDelete={async () => {
-                  if (!window.confirm(`Delete FABRIC node "${selectedNode.name}" and its attached components/interfaces from this slice?`)) return;
+                  if (!await confirmDialog(`Delete FABRIC node "${selectedNode.name}" and its attached components/interfaces from this slice?`, {
+                    title: 'Delete FABRIC Node',
+                    confirmLabel: 'Delete',
+                    tone: 'danger',
+                  })) return;
                   await apiCall(() => api.removeNode(sliceName, selectedNode.name));
                   setSelectedSliverKey('');
                 }}
@@ -590,7 +597,11 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                   await apiCall(() => api.addComponent(sliceName, selectedNode.name, compData));
                 }}
                 onDeleteComponent={async (compName) => {
-                  if (!window.confirm(`Delete component "${compName}" from node "${selectedNode.name}"? Attached network links using this component will be removed.`)) return;
+                  if (!await confirmDialog(`Delete component "${compName}" from node "${selectedNode.name}"? Attached network links using this component will be removed.`, {
+                    title: 'Delete Component',
+                    confirmLabel: 'Delete',
+                    tone: 'danger',
+                  })) return;
                   await apiCall(() => api.removeComponent(sliceName, selectedNode.name, compName));
                 }}
                 onAddFabnet={async (netType) => {
@@ -612,7 +623,11 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                 onSliceUpdated={onSliceUpdated}
                 onDelete={async () => {
                   const ifaceCount = selectedNetwork.interfaces.length;
-                  if (!window.confirm(`Delete network "${selectedNetwork.name}"${ifaceCount ? ` and detach ${ifaceCount} interface${ifaceCount === 1 ? '' : 's'}` : ''}?`)) return;
+                  if (!await confirmDialog(`Delete network "${selectedNetwork.name}"${ifaceCount ? ` and detach ${ifaceCount} interface${ifaceCount === 1 ? '' : 's'}` : ''}?`, {
+                    title: 'Delete Network',
+                    confirmLabel: 'Delete',
+                    tone: 'danger',
+                  })) return;
                   await apiCall(() => api.removeNetwork(sliceName, selectedNetwork.name));
                   setSelectedSliverKey('');
                 }}
@@ -630,7 +645,11 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                   await apiCall(() => api.updateFacilityPort(sliceName, selectedFP.name, data));
                 }}
                 onDelete={async () => {
-                  if (!window.confirm(`Delete facility port "${selectedFP.name}" from this slice? Connected network links will be removed.`)) return;
+                  if (!await confirmDialog(`Delete facility port "${selectedFP.name}" from this slice? Connected network links will be removed.`, {
+                    title: 'Delete Facility Port',
+                    confirmLabel: 'Delete',
+                    tone: 'danger',
+                  })) return;
                   await apiCall(() => api.removeFacilityPort(sliceName, selectedFP.name));
                   setSelectedSliverKey('');
                 }}
@@ -647,7 +666,11 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                   await apiCall(() => api.updatePortMirror(sliceName, selectedPM.name, data));
                 }}
                 onDelete={async () => {
-                  if (!window.confirm(`Delete port mirror "${selectedPM.name}"?`)) return;
+                  if (!await confirmDialog(`Delete port mirror "${selectedPM.name}"?`, {
+                    title: 'Delete Port Mirror',
+                    confirmLabel: 'Delete',
+                    tone: 'danger',
+                  })) return;
                   await apiCall(() => api.removePortMirror(sliceName, selectedPM.name));
                   setSelectedSliverKey('');
                 }}
@@ -829,7 +852,11 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                 </div>
                 <button className="btn" style={{ marginTop: 8, color: '#b00020', borderColor: '#b00020' }}
                   onClick={async () => {
-                    if (!window.confirm(`Delete Chameleon node "${selectedChi.name}"?`)) return;
+                    if (!await confirmDialog(`Delete Chameleon node "${selectedChi.name}"?`, {
+                      title: 'Delete Chameleon Node',
+                      confirmLabel: 'Delete',
+                      tone: 'danger',
+                    })) return;
                     try {
                       await api.removeChameleonSliceNode(sliceName, selectedChi.name);
                       try {

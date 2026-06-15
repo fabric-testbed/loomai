@@ -131,20 +131,20 @@ resources:
 loomai_slice_id=<slice-id>
 loomai_slice_name=<slice-name>
 loomai_managed=true
-loomai_composite_id=<optional-composite-id>
+loomai_federated_id=<optional-federated-id>
 ```
 
 The persisted LoomAI slice record remains authoritative because not every
 Chameleon resource exposes reliable metadata.
 
-### Composite Slices
+### Federated Slices
 
-A composite slice is a LoomAI grouping across provider slices. It should not own
+A federated slice is a LoomAI grouping across provider slices. It should not own
 low-level provider resources directly.
 
 ```json
 {
-  "id": "comp-...",
+  "id": "fed-...",
   "name": "cross-testbed-experiment",
   "state": "Draft|Provisioning|Active|Degraded|Terminated",
   "members": [
@@ -157,12 +157,12 @@ low-level provider resources directly.
 }
 ```
 
-The composite owns the relationship between provider slices and any cross-testbed
+The federated slice owns the relationship between provider slices and any cross-testbed
 connection intent. Lifecycle operations delegate to member slices:
 
 - Refresh: refresh each provider member and recompute aggregate state.
 - Submit: submit/deploy member slices that are still drafts.
-- Delete composite: delete only the composite grouping unless the user chooses a
+- Delete federated slice: delete only the federated grouping unless the user chooses a
   separate explicit provider-slice cleanup operation.
 
 ### User Interaction Rules
@@ -174,7 +174,7 @@ Users should be able to work at any level:
 - **Chameleon view**: create, edit, submit, refresh, inspect, and delete LoomAI
   Chameleon slices. Users can add planned servers or attach existing Chameleon
   resources to an existing slice.
-- **Composite view**: create a composite slice, add existing FABRIC or Chameleon
+- **Federated view**: create a federated slice, add existing FABRIC or Chameleon
   provider slices as members, create new member slices, edit member slices in
   place, and add future testbed members through the same provider-member model.
 

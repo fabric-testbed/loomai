@@ -1,6 +1,6 @@
-"""Composite/Federated Slice API — cross-testbed reference model.
+"""Federated Slice API — cross-testbed reference model.
 
-Federated slice is the forward product name.  The existing composite API,
+Federated slice is the product name.  The existing composite API,
 storage file, and code symbols remain as compatibility aliases while callers
 migrate to /api/federated.
 """
@@ -25,10 +25,10 @@ router = APIRouter(prefix="/api/composite", tags=["composite"])
 federated_router = APIRouter(prefix="/api/federated", tags=["federated"])
 
 # ---------------------------------------------------------------------------
-# In-memory composite slice store (persisted to JSON)
+# In-memory federated slice store (persisted to JSON)
 # ---------------------------------------------------------------------------
 
-_composite_slices: dict[str, dict] = {}  # id → composite slice dict
+_composite_slices: dict[str, dict] = {}  # id -> federated slice dict
 
 
 def _storage_path() -> str:
@@ -50,7 +50,7 @@ def _persist() -> None:
 
 
 def _new_composite_slice(name: str, *, id_prefix: str = "comp", kind: str = "composite") -> dict[str, Any]:
-    """Create a new empty composite/federated slice dict."""
+    """Create a new empty federated slice dict."""
     now = datetime.now(timezone.utc).isoformat()
     return {
         "id": f"{id_prefix}-{uuid.uuid4().hex[:12]}",
@@ -144,7 +144,7 @@ def _sync_legacy_member_fields(s: dict) -> None:
 
 
 def load_composite_slices() -> None:
-    """Load composite slices from disk (called at startup)."""
+    """Load federated slices from disk (called at startup)."""
     paths = [_federated_storage_path(), _storage_path()]
     existing_paths = [p for p in paths if os.path.exists(p)]
     if not existing_paths:
@@ -167,11 +167,11 @@ def load_composite_slices() -> None:
             _composite_slices[s["id"]] = s
         if any_migrated:
             _persist()
-            logger.info("Migrated %d federated/composite slices to reference model", len(_composite_slices))
+            logger.info("Migrated %d federated slices to reference model", len(_composite_slices))
         else:
-            logger.info("Loaded %d federated/composite slices", len(_composite_slices))
+            logger.info("Loaded %d federated slices", len(_composite_slices))
     except Exception as e:
-        logger.warning("Failed to load federated/composite slices: %s", e)
+        logger.warning("Failed to load federated slices: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +182,7 @@ def load_composite_slices() -> None:
 def _resolve_fabric_ref(slice_id: str) -> str:
     """Resolve a FABRIC slice reference to a name, handling stale draft IDs.
 
-    After composite submit, the fabric_slices array may contain a FABRIC UUID
+    After federated submit, the fabric_slices array may contain a FABRIC UUID
     that replaced the old draft-XXXX.  But if replacement failed, the array
     still has the old draft-XXXX which is no longer in the registry.  In that
     case, try all registered slices to find one whose name matches.
@@ -377,7 +377,7 @@ def _validate_member_ref(member: dict) -> bool:
 
 
 def _compute_composite_state_from_states(states: list[str]) -> str:
-    """Derive composite state from provider member states."""
+    """Derive federated state from provider member states."""
     if not states:
         return "Draft"
 
@@ -408,7 +408,7 @@ def _compute_composite_state_from_summaries(
 
 
 def _compute_composite_state(s: dict) -> str:
-    """Derive composite state from member states."""
+    """Derive federated state from member states."""
     if not s.get("fabric_slices") and not s.get("chameleon_slices"):
         return "Draft"
 
@@ -456,7 +456,7 @@ def _enrich_composite_slice(
     fabric_summary_overrides: list[dict[str, Any]] | None = None,
     chameleon_summary_overrides: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Return a federated/composite slice with live member summaries."""
+    """Return a federated slice with live member summaries."""
     _sync_legacy_member_fields(s)
     result = {**s}
     _sync_legacy_member_fields(result)
@@ -931,7 +931,7 @@ def _federated_connection_plan(s: dict) -> list[dict[str, Any]]:
 
 @router.get("/slices")
 async def list_composite_slices() -> list[dict]:
-    """List all composite slices."""
+    """List all federated slices."""
     return await asyncio.gather(*[
         _enrich_composite_slice_live(s)
         for s in _composite_slices.values()
@@ -940,20 +940,20 @@ async def list_composite_slices() -> list[dict]:
 
 @router.get("/slices/{slice_id}")
 async def get_composite_slice(slice_id: str) -> dict:
-    """Get a composite slice with member summaries."""
+    """Get a federated slice with member summaries."""
     s = _composite_slices.get(slice_id)
     if not s:
-        raise HTTPException(404, "Composite slice not found")
+        raise HTTPException(404, "Federated slice not found")
     return await _enrich_composite_slice_live(s)
 
 
 @router.post("/slices")
 async def create_composite_slice(body: dict = Body(...)) -> dict:
-    """Create a new composite slice.
+    """Create a new federated slice.
 
     Body: {"name": "my-experiment"}
     """
-    name = body.get("name", "composite-slice")
+    name = body.get("name", "federated-slice")
     s = _new_composite_slice(name)
     _composite_slices[s["id"]] = s
     _persist()
@@ -1014,10 +1014,10 @@ async def delete_composite_slice(
     delete_members: bool = False,
     delete_imported_resources: bool = False,
 ) -> dict:
-    """Delete a composite slice, optionally deleting provider member slices."""
+    """Delete a federated slice, optionally deleting provider member slices."""
     s = _composite_slices.get(slice_id)
     if not s:
-        raise HTTPException(404, "Composite slice not found")
+        raise HTTPException(404, "Federated slice not found")
 
     member_deletions: list[dict[str, Any]] = []
     if delete_members:
@@ -1046,7 +1046,7 @@ async def list_federated_slices() -> list[dict]:
     """List all federated slices.
 
     This is the forward API surface backed by the same store as the legacy
-    composite endpoints.
+    compatibility endpoints.
     """
     return await list_composite_slices()
 
@@ -1091,14 +1091,14 @@ async def delete_federated_slice(
 
 @router.put("/slices/{slice_id}/members")
 async def update_composite_members(slice_id: str, body: dict = Body(...)) -> dict:
-    """Update the member slices of a composite.
+    """Update the member slices of a federated slice.
 
     Body: {"fabric_slices": ["uuid1", ...], "chameleon_slices": ["chi-slice-xxx", ...]}
     Replaces the current member lists entirely.
     """
     s = _composite_slices.get(slice_id)
     if not s:
-        raise HTTPException(404, "Composite slice not found")
+        raise HTTPException(404, "Federated slice not found")
 
     member_input = body.get("members")
     if member_input is None:
@@ -1129,10 +1129,10 @@ async def update_composite_members(slice_id: str, body: dict = Body(...)) -> dic
 
 @router.post("/slices/{slice_id}/members/add")
 async def add_composite_member(slice_id: str, body: dict = Body(...)) -> dict:
-    """Attach one provider slice/member to an existing composite slice."""
+    """Attach one provider slice/member to an existing federated slice."""
     s = _composite_slices.get(slice_id)
     if not s:
-        raise HTTPException(404, "Composite slice not found")
+        raise HTTPException(404, "Federated slice not found")
     member = _normalize_member(body)
     if not _validate_member_ref(member):
         raise HTTPException(400, f"Invalid member reference: {member['provider']}: {member['slice_id']}")
@@ -1148,10 +1148,10 @@ async def add_composite_member(slice_id: str, body: dict = Body(...)) -> dict:
 
 @router.post("/slices/{slice_id}/members/remove")
 async def remove_composite_member(slice_id: str, body: dict = Body(...)) -> dict:
-    """Detach one provider slice/member from a composite slice."""
+    """Detach one provider slice/member from a federated slice."""
     s = _composite_slices.get(slice_id)
     if not s:
-        raise HTTPException(404, "Composite slice not found")
+        raise HTTPException(404, "Federated slice not found")
     provider = str(body.get("provider", "")).lower()
     member_slice_id = body.get("slice_id") or body.get("id") or ""
     if not provider or not member_slice_id:
@@ -1191,7 +1191,7 @@ async def remove_federated_member(slice_id: str, body: dict = Body(...)) -> dict
 
 @router.post("/replace-fabric-member")
 async def replace_fabric_member(body: dict = Body(...)) -> dict:
-    """Replace a FABRIC member ID across all composite slices.
+    """Replace a FABRIC member ID across all federated slices.
 
     Called when a FABRIC draft is submitted and gets a new UUID.
     Body: {"old_id": "draft-xxx", "new_id": "fabric-uuid"}
@@ -1228,20 +1228,20 @@ async def replace_fabric_member(body: dict = Body(...)) -> dict:
 
 @federated_router.post("/replace-fabric-member")
 async def replace_federated_fabric_member(body: dict = Body(...)) -> dict:
-    """Replace a FABRIC member ID across all federated/composite slices."""
+    """Replace a FABRIC member ID across all federated slices."""
     return await replace_fabric_member(body)
 
 
 @router.put("/slices/{slice_id}/cross-connections")
 async def update_cross_connections(slice_id: str, body: list = Body(...)) -> dict:
-    """Update cross-testbed connections for a composite slice.
+    """Update cross-testbed connections for a federated slice.
 
     Body: [{"type": "fabnetv4", "fabric_slice": "id", "fabric_node": "name",
             "chameleon_slice": "id", "chameleon_node": "name"}, ...]
     """
     s = _composite_slices.get(slice_id)
     if not s:
-        raise HTTPException(404, "Composite slice not found")
+        raise HTTPException(404, "Federated slice not found")
     normalized_connections = [_normalize_connection(conn) for conn in body]
     connection_keys = [_connection_dedupe_key(conn) for conn in normalized_connections]
     if len(set(connection_keys)) != len(connection_keys):
@@ -1324,7 +1324,7 @@ async def get_composite_graph(slice_id: str) -> dict:
     """
     s = _composite_slices.get(slice_id)
     if not s:
-        raise HTTPException(404, "Composite slice not found")
+        raise HTTPException(404, "Federated slice not found")
     _sync_legacy_member_fields(s)
 
     from app.graph_builder import build_composite_graph
@@ -1365,9 +1365,9 @@ async def get_composite_graph(slice_id: str) -> dict:
             if slice_data:
                 fabric_members.append((slice_data, fid))
             else:
-                logger.warning("FABRIC slice %s (name=%s) not available for composite graph", fid, name)
+                logger.warning("FABRIC slice %s (name=%s) not available for federated graph", fid, name)
         except Exception:
-            logger.warning("Could not fetch FABRIC slice %s for composite graph", fid)
+            logger.warning("Could not fetch FABRIC slice %s for federated graph", fid)
 
     # Gather Chameleon member data
     chameleon_members: list[tuple[dict, str]] = []
@@ -1378,7 +1378,7 @@ async def get_composite_graph(slice_id: str) -> dict:
             if chi:
                 chameleon_members.append((chi, cid))
         except Exception:
-            logger.warning("Could not fetch Chameleon slice %s for composite graph", cid)
+            logger.warning("Could not fetch Chameleon slice %s for federated graph", cid)
 
     return build_composite_graph(
         fabric_members=fabric_members,
@@ -1400,10 +1400,10 @@ async def get_federated_graph(slice_id: str) -> dict:
 
 @router.post("/slices/{slice_id}/submit")
 async def submit_composite_slice(slice_id: str, body: dict = Body(default={})) -> dict:
-    """Submit a composite slice — deploys all un-deployed member slices in parallel."""
+    """Submit a federated slice — deploys all un-deployed member slices in parallel."""
     s = _composite_slices.get(slice_id)
     if not s:
-        raise HTTPException(404, "Composite slice not found")
+        raise HTTPException(404, "Federated slice not found")
     _sync_legacy_member_fields(s)
 
     fabric_refs = s.get("fabric_slices", [])
@@ -1414,9 +1414,10 @@ async def submit_composite_slice(slice_id: str, body: dict = Body(default={})) -
     facility_port_l2_fabric_refs = _facility_port_l2_fabric_intents(s)
 
     if not fabric_refs and not chameleon_refs:
-        raise HTTPException(400, "Composite slice has no members to submit")
+        raise HTTPException(400, "Federated slice has no members to submit")
 
     results: dict[str, Any] = {
+        "federated_id": slice_id,
         "composite_id": slice_id,
         "connection_results": _federated_connection_plan(s),
     }
@@ -1425,7 +1426,7 @@ async def submit_composite_slice(slice_id: str, body: dict = Body(default={})) -
         try:
             from app.slice_registry import resolve_slice_name, get_slice_uuid
             name = resolve_slice_name(fid)
-            logger.info("Composite submit: FABRIC member fid=%s resolved to name=%s", fid, name)
+            logger.info("Federated submit: FABRIC member fid=%s resolved to name=%s", fid, name)
             connection_preparation = None
             if fid in fabnetv4_fabric_refs:
                 from app.routes.slices import prepare_slice_for_fabnetv4
@@ -1459,13 +1460,13 @@ async def submit_composite_slice(slice_id: str, body: dict = Body(default={})) -
                 reg_uuid = get_slice_uuid(name)
                 if reg_uuid:
                     new_id = reg_uuid
-                    logger.info("Composite submit: used registry UUID for %s: %s", name, new_id)
+                    logger.info("Federated submit: used registry UUID for %s: %s", name, new_id)
             if not new_id:
                 new_id = fid  # fallback to old ID
-            logger.info("Composite submit: FABRIC %s (fid=%s) → new_id=%s, state=%s",
+            logger.info("Federated submit: FABRIC %s (fid=%s) -> new_id=%s, state=%s",
                         name, fid, new_id, result.get("state", ""))
 
-            # Cache the submit result so the composite graph can find this slice
+            # Cache the submit result so the federated graph can find this slice.
             # immediately (before FABlib's next poll makes it available via get_slice).
             try:
                 import time as _time
@@ -1475,7 +1476,7 @@ async def submit_composite_slice(slice_id: str, body: dict = Body(default={})) -
                 entry.data = result
                 entry.timestamp = _time.time()
                 cm._cache[f"slice:{name}"] = entry
-                logger.info("Composite submit: cached slice data for '%s'", name)
+                logger.info("Federated submit: cached slice data for '%s'", name)
             except Exception:
                 pass
 
@@ -1486,10 +1487,10 @@ async def submit_composite_slice(slice_id: str, body: dict = Body(default={})) -
                 response["facility_port_l2_preparation"] = facility_port_preparation
             return response
         except HTTPException as e:
-            logger.warning("Composite submit: FABRIC %s failed: %s", fid, e.detail)
+            logger.warning("Federated submit: FABRIC %s failed: %s", fid, e.detail)
             return {"id": fid, "status": "error", "error": e.detail}
         except Exception as e:
-            logger.warning("Composite submit: FABRIC %s exception: %s", fid, e)
+            logger.warning("Federated submit: FABRIC %s exception: %s", fid, e)
             return {"id": fid, "status": "error", "error": str(e)}
 
     async def _submit_chameleon_member(cid: str) -> dict:
@@ -1560,7 +1561,7 @@ async def submit_composite_slice(slice_id: str, body: dict = Body(default={})) -
     results["fabric_results"] = fabric_results
     results["chameleon_results"] = chameleon_results
 
-    # Auto-replace draft IDs with real FABRIC UUIDs in the composite member list
+    # Auto-replace draft IDs with real FABRIC UUIDs in the federated member list.
     # so subsequent graph fetches can find the submitted slices.
     for fr in fabric_results:
         new_id = fr.get("new_id")
@@ -1581,9 +1582,9 @@ async def submit_composite_slice(slice_id: str, body: dict = Body(default={})) -
                         endpoint = conn.get(endpoint_key)
                         if isinstance(endpoint, dict) and endpoint.get("provider") == "fabric" and endpoint.get("slice_id") == old_id:
                             endpoint["slice_id"] = new_id
-                logger.info("Composite %s: replaced FABRIC member %s → %s", slice_id, old_id, new_id)
+                logger.info("Federated slice %s: replaced FABRIC member %s -> %s", slice_id, old_id, new_id)
 
-                # Record the old draft ID in the registry so the composite graph
+                # Record the old draft ID in the registry so the federated graph
                 # can still resolve it if subsequent code references the old ID.
                 if old_id.startswith("draft-") and fab_name:
                     try:
@@ -1596,9 +1597,9 @@ async def submit_composite_slice(slice_id: str, body: dict = Body(default={})) -
                     except Exception:
                         pass
             elif new_id == old_id:
-                logger.warning("Composite %s: FABRIC member %s submitted but ID unchanged (name=%s)", slice_id, old_id, fab_name)
+                logger.warning("Federated slice %s: FABRIC member %s submitted but ID unchanged (name=%s)", slice_id, old_id, fab_name)
             else:
-                logger.warning("Composite %s: FABRIC member %s submitted but no new ID (name=%s)", slice_id, old_id, fab_name)
+                logger.warning("Federated slice %s: FABRIC member %s submitted but no new ID (name=%s)", slice_id, old_id, fab_name)
 
     s["state"] = "Provisioning"
     _sync_legacy_member_fields(s)

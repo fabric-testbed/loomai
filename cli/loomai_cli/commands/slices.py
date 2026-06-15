@@ -238,6 +238,23 @@ def refresh_slice(ctx, name):
     output(ctx, data)
 
 
+@slices.command("state")
+@click.argument("name", type=SLICE)
+@click.pass_context
+def slice_state(ctx, name):
+    """Show the current slice state.
+
+    Examples:
+
+      loomai slices state my-slice
+
+      loomai slices state my-slice --format json
+    """
+    client = ctx.obj["client"]
+    data = client.get(f"/slices/{name}/state")
+    output(ctx, data)
+
+
 @slices.command("slivers")
 @click.argument("name", type=SLICE)
 @click.pass_context
@@ -265,6 +282,53 @@ def slivers(ctx, name):
         click.echo("(no slivers)")
 
 
+@slices.command("resolve-sites")
+@click.argument("name", type=SLICE)
+@click.option("--override", "overrides", multiple=True,
+              help="Pin a group to a site, e.g. --override @edge=TACC. Repeatable.")
+@click.option("--all", "resolve_all", is_flag=True,
+              help="Re-resolve every node, not only @group nodes.")
+@click.pass_context
+def resolve_sites(ctx, name, overrides, resolve_all):
+    """Re-resolve draft node site assignments from current availability."""
+    group_overrides = {}
+    for item in overrides:
+        if "=" not in item:
+            raise click.UsageError(f"Invalid override '{item}' (expected @group=SITE)")
+        group, site = item.split("=", 1)
+        group_overrides[group.strip()] = site.strip()
+
+    data = ctx.obj["client"].post(f"/slices/{name}/resolve-sites", json={
+        "group_overrides": group_overrides,
+        "resolve_all": resolve_all,
+    })
+    if ctx.obj["format"] == "table":
+        output_message(f"Resolved sites for '{name}'")
+    output(ctx, data)
+
+
+@slices.command("check-availability")
+@click.argument("name", type=SLICE)
+@click.pass_context
+def check_availability(ctx, name):
+    """Check whether a draft slice can be satisfied now or soon."""
+    data = ctx.obj["client"].post(f"/slices/{name}/check-availability")
+    if ctx.obj["format"] != "table":
+        output(ctx, data)
+        return
+
+    status = data.get("status") or data.get("availability") or data.get("message", "")
+    if status:
+        click.echo(f"Availability: {status}")
+    if data.get("node_requirements"):
+        click.echo("\nNode requirements:")
+        output(ctx, data["node_requirements"],
+               columns=["name", "site", "cores", "ram", "disk", "components"],
+               headers=["Node", "Site", "Cores", "RAM", "Disk", "Components"])
+    elif isinstance(data, dict):
+        output(ctx, data)
+
+
 @slices.command("wait")
 @click.argument("name", type=SLICE)
 @click.option("--timeout", default=600, help="Timeout in seconds.")
@@ -284,6 +348,7 @@ def wait_slice(ctx, name, timeout):
         output_message(f"Slice '{name}' is ready ({state})")
     else:
         output_message(f"Slice '{name}' reached state: {state}")
+    output(ctx, result)
 
 
 @slices.command("clone")
@@ -350,6 +415,48 @@ def import_slice(ctx, file, name):
     output(ctx, data)
 
 
+@slices.command("reconcile-projects")
+@click.pass_context
+def reconcile_projects(ctx):
+    """Refresh local slice project tags from FABRIC."""
+    data = ctx.obj["client"].post("/slices/reconcile-projects")
+    if ctx.obj["format"] == "table":
+        output_message("Reconciled slice project metadata")
+    output(ctx, data)
+
+
+@slices.command("save-to-storage")
+@click.argument("name", type=SLICE)
+@click.pass_context
+def save_to_storage(ctx, name):
+    """Save a slice definition to container storage."""
+    data = ctx.obj["client"].post(f"/slices/{name}/save-to-storage")
+    if ctx.obj["format"] == "table":
+        output_message(f"Saved '{name}' to storage")
+    output(ctx, data)
+
+
+@slices.command("storage-files")
+@click.pass_context
+def storage_files(ctx):
+    """List saved .fabric.json slice definitions."""
+    data = ctx.obj["client"].get("/slices/storage-files")
+    output(ctx, data,
+           columns=["name", "size", "modified"],
+           headers=["Name", "Size", "Modified"])
+
+
+@slices.command("open-from-storage")
+@click.argument("filename")
+@click.pass_context
+def open_from_storage(ctx, filename):
+    """Open a saved slice definition from container storage."""
+    data = ctx.obj["client"].post("/slices/open-from-storage", json={"filename": filename})
+    if ctx.obj["format"] == "table":
+        output_message(f"Opened '{filename}' from storage")
+    output(ctx, data)
+
+
 @slices.command("archive")
 @click.argument("name", type=SLICE, required=False)
 @click.option("--all-terminal", is_flag=True, help="Archive all dead/closed slices.")
@@ -369,14 +476,19 @@ def archive_slice(ctx, name, all_terminal, force):
         data = client.post("/slices/archive-terminal")
         count = data.get("count", 0)
         archived = data.get("archived", [])
-        output_message(f"Archived {count} terminal slice(s)")
-        if archived:
+        if ctx.obj["format"] == "table":
+            output_message(f"Archived {count} terminal slice(s)")
+        if archived and ctx.obj["format"] == "table":
             for s in archived:
                 click.echo(f"  {s}")
+        else:
+            output(ctx, data)
     elif name:
         if not force:
             click.confirm(f"Archive slice '{name}'?", abort=True)
         data = client.post(f"/slices/{name}/archive")
-        output_message(f"Archived slice '{name}'")
+        if ctx.obj["format"] == "table":
+            output_message(f"Archived slice '{name}'")
+        output(ctx, data)
     else:
         raise click.UsageError("Specify a slice NAME or use --all-terminal")

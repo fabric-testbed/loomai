@@ -164,8 +164,8 @@ inside backend-owned code. Chameleon maps to OpenStack services: Blazar
 for images.
 
 **Federated Slices (Cross-Facility):**
-- `list_composite_slices` — Compatibility tool for Federated Slice list
-- `get_composite_slice(slice_id)` — Compatibility tool for details with member slices
+- `list_composite_slices` — Compatibility tool for listing Federated Slices
+- `get_composite_slice(slice_id)` — Compatibility tool for Federated Slice details with member slices
 - `create_composite_slice(name)` — Compatibility tool that creates a Federated Slice
 - Forward REST API: `/api/federated/slices`; legacy alias: `/api/composite/slices`
 
@@ -233,7 +233,7 @@ for `sharednet1` and `eno2np1` for `fabnetv4`. For FABNet-only or single-NIC
 servers, set metric 500 on whichever interface is attached to `fabnetv4`.
 
 Use Federated Slices to manage cross-facility experiments as one logical unit.
-The old "Composite Slice" name remains as an API/tool compatibility alias.
+The old API/tool names remain as compatibility aliases, but user-facing text should say "Federated Slice".
 
 ### Federated Slices
 
@@ -479,9 +479,9 @@ Then report:
 - **"deploy my Chameleon draft"** → `deploy_chameleon_slice(draft_id, hours)`
 
 ### Federated Slices (Cross-Facility)
-- **"list federated slices" / "list composite slices"** → `list_composite_slices`
+- **"list federated slices"** → `list_composite_slices`
 - **"create a cross-testbed experiment"** → `create_composite_slice(name)`, then add members via WebUI or `/api/federated/slices/{id}/members`
-- **"show federated X" / "show composite X"** → `get_composite_slice(slice_id)`
+- **"show federated X"** → `get_composite_slice(slice_id)`
 - **"make a weave that spans FABRIC and Chameleon"** → create provider resources, then create/update a Federated Slice entry during the weave run
 - **"connect FABRIC and Chameleon over FABNet"** → add `fabnetv4_l3` connection intent
 - **"connect via facility port/L2/VLAN"** → query facility ports and add `facility_port_l2` connection intent

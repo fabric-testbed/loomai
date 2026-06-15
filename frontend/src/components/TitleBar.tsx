@@ -25,7 +25,7 @@ interface TitleBarProps {
   aiTools?: AiToolInfo[];
   selectedAiTool?: string | null;
   chameleonEnabled?: boolean;
-  compositeEnabled?: boolean;
+  federatedEnabled?: boolean;
   onLaunchAiTool?: (toolId: string) => void;
   hasToken?: boolean;
   tokenExpired?: boolean;
@@ -34,8 +34,8 @@ interface TitleBarProps {
   onLogout?: () => void;
 }
 
-const VIEWS: Array<{ key: TopView; label: string; icon: string; desc: string; requiresChameleon?: boolean; requiresComposite?: boolean }> = [
-  { key: 'slices', label: 'Federated Slice', icon: '__composite_icon__', desc: 'Federated Slice — build, monitor, transfer files, and launch apps', requiresComposite: true },
+const VIEWS: Array<{ key: TopView; label: string; icon: string; desc: string; requiresChameleon?: boolean; requiresFederated?: boolean }> = [
+  { key: 'slices', label: 'Federated Slice', icon: '__federated_icon__', desc: 'Federated Slice — build, monitor, transfer files, and launch apps', requiresFederated: true },
   { key: 'infrastructure', label: 'FABRIC', icon: '__fabric_logo__', desc: 'FABRIC — testbed slices, resources, and availability' },
   { key: 'chameleon', label: 'Chameleon', icon: '__chameleon_logo__', desc: 'Chameleon Cloud — leases, instances, and bare-metal resources', requiresChameleon: true },
   { key: 'artifacts', label: 'Marketplace', icon: '__marketplace_icon__', desc: 'Marketplace — browse, publish, and download experiment artifacts' },
@@ -56,7 +56,7 @@ function ViewIcon({ icon, size = 12, dark }: { icon: string; size?: number; dark
   if (icon === '__loomai_icon__') {
     return <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
   }
-  if (icon === '__composite_icon__') {
+  if (icon === '__federated_icon__' || icon === '__composite_icon__') {
     return <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
   }
   if (icon === '__marketplace_icon__') {
@@ -65,7 +65,7 @@ function ViewIcon({ icon, size = 12, dark }: { icon: string; size?: number; dark
   return <>{icon}</>;
 }
 
-export default React.memo(function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, aiTools, selectedAiTool, onLaunchAiTool, chameleonEnabled, compositeEnabled, hasToken, tokenExpired, userEmail, userName, onLogout }: TitleBarProps) {
+export default React.memo(function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, aiTools, selectedAiTool, onLaunchAiTool, chameleonEnabled, federatedEnabled, hasToken, tokenExpired, userEmail, userName, onLogout }: TitleBarProps) {
   const isHubMode = typeof window !== 'undefined' && !!(window as any).__LOOMAI_BASE_PATH;
   const [viewOpen, setViewOpen] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -225,7 +225,7 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
           </button>
           {viewOpen && (
             <div className="title-pill-dropdown">
-              {VIEWS.filter(v => (!v.requiresChameleon || chameleonEnabled) && (!v.requiresComposite || compositeEnabled)).map((v) => {
+              {VIEWS.filter(v => (!v.requiresChameleon || chameleonEnabled) && (!v.requiresFederated || federatedEnabled)).map((v) => {
                 const isJupyter = v.key === 'jupyter';
                 const handleClick = () => {
                   if (isJupyter) {

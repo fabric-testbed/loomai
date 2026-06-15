@@ -146,7 +146,7 @@ reliable public SSH plus FABNet dataplane connectivity, prefer
 2. Create Chameleon lease and instances with a NIC on `fabnetv4` and route-metric userdata
 3. Both sides get FABNet IPs (10.128.x.x range)
 4. Traffic routes through FABRIC backbone automatically
-5. Use composite slices in LoomAI to manage both together
+5. Use Federated Slices in LoomAI to manage both together
 
 ## Backend REST API
 ```bash

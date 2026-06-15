@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { mockAllApis } from '../fixtures/api-mocks';
+import { acceptAppDialog, completeAppPrompt } from '../helpers/gui-helpers';
 import { scenarioNoSlices } from '../fixtures/test-data';
 
 test.describe('FABRIC mocked slice workflow', () => {
@@ -15,11 +16,8 @@ test.describe('FABRIC mocked slice workflow', () => {
     await page.goto('/');
     await expect(page.getByTestId('fabric-bar')).toBeVisible({ timeout: 10_000 });
 
-    page.once('dialog', async dialog => {
-      expect(dialog.message()).toContain('Slice name');
-      await dialog.accept(sliceName);
-    });
     await page.getByTestId('fabric-bar-new-slice').click();
+    await completeAppPrompt(page, sliceName, 'Slice name');
 
     await expect(page.getByTestId('fabric-bar-slice-select')).toHaveValue(`${sliceName}-id`);
     await expect(page.locator('[data-testid="fabric-bar-slice-select"] option:checked')).toContainText(sliceName);
@@ -59,11 +57,8 @@ test.describe('FABRIC mocked slice workflow', () => {
     await expect.poll(() => getCreatedSlice()?.state).toBe('StableOK');
     await expect(page.locator('[data-testid="fabric-bar-slice-select"] option:checked')).toContainText('StableOK');
 
-    page.once('dialog', async dialog => {
-      expect(dialog.message()).toContain(sliceName);
-      await dialog.accept();
-    });
     await page.getByTestId('fabric-bar-delete-slice').click();
+    await acceptAppDialog(page, sliceName);
 
     await expect.poll(() => getCreatedSlice()?.state).toBe('Dead');
     await expect(page.getByTestId('fabric-bar-slice-select')).toHaveValue('');

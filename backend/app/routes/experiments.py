@@ -469,7 +469,7 @@ def _build_cross_testbed_connections(
 
 @router.post("/save")
 def save_experiment_template(body: dict = Body(...)) -> dict[str, Any]:
-    """Save the current composite slice as a cross-testbed experiment template.
+    """Save the current federated slice as a cross-testbed experiment template.
 
     Captures both FABRIC topology (via ``build_slice_model``) and Chameleon
     nodes (from in-memory ``_chameleon_slice_nodes``) into a single

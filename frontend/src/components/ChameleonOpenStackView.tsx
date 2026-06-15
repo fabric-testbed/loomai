@@ -1,6 +1,7 @@
 'use client';
 import React, { useState, useEffect, useCallback } from 'react';
 import * as api from '../api/client';
+import { alertDialog, confirmDialog, promptDialog } from './AppDialogProvider';
 import '../styles/chameleon-openstack.css';
 
 type OsTab = 'instances' | 'networks' | 'leases' | 'images' | 'keypairs' | 'floating-ips' | 'security-groups';
@@ -157,7 +158,11 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
   };
 
   const handleDeleteKeypair = async (name: string, site: string) => {
-    if (!confirm(`Delete key pair "${name}" at ${site}?`)) return;
+    if (!await confirmDialog(`Delete key pair "${name}" at ${site}?`, {
+      title: 'Delete Key Pair',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     try {
       await api.deleteChameleonKeypair(name, site);
       setRefreshKey(k => k + 1);
@@ -168,7 +173,10 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
 
   // --- Instance actions ---
   const handleRebootInstance = async (id: string, site: string) => {
-    if (!confirm(`Reboot instance ${id.slice(0, 8)}... at ${site}?`)) return;
+    if (!await confirmDialog(`Reboot instance ${id.slice(0, 8)}... at ${site}?`, {
+      title: 'Reboot Instance',
+      confirmLabel: 'Reboot',
+    })) return;
     try {
       await api.rebootChameleonInstance(id, site);
       setRefreshKey(k => k + 1);
@@ -178,7 +186,11 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
   };
 
   const handleDeleteInstance = async (id: string, site: string) => {
-    if (!confirm(`Delete instance ${id.slice(0, 8)}... at ${site}?`)) return;
+    if (!await confirmDialog(`Delete instance ${id.slice(0, 8)}... at ${site}?`, {
+      title: 'Delete Instance',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     try {
       await api.deleteChameleonInstance(id, site);
       setRefreshKey(k => k + 1);
@@ -189,7 +201,11 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
 
   // --- Network actions ---
   const handleDeleteNetwork = async (id: string, site: string) => {
-    if (!confirm(`Delete network ${id.slice(0, 8)}... at ${site}?`)) return;
+    if (!await confirmDialog(`Delete network ${id.slice(0, 8)}... at ${site}?`, {
+      title: 'Delete Network',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     try {
       await api.deleteChameleonNetwork(id, site);
       setRefreshKey(k => k + 1);
@@ -213,7 +229,12 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
 
   // --- Lease actions ---
   const handleExtendLease = async (id: string, site: string) => {
-    const hoursStr = prompt('Hours to extend:', '2');
+    const hoursStr = await promptDialog('Hours to extend:', {
+      title: 'Extend Lease',
+      confirmLabel: 'Extend',
+      defaultValue: '2',
+      placeholder: 'Hours',
+    });
     if (!hoursStr) return;
     const hours = parseInt(hoursStr, 10);
     if (isNaN(hours) || hours <= 0) return;
@@ -226,7 +247,11 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
   };
 
   const handleDeleteLease = async (id: string, site: string) => {
-    if (!confirm(`Delete lease ${id.slice(0, 8)}... at ${site}?`)) return;
+    if (!await confirmDialog(`Delete lease ${id.slice(0, 8)}... at ${site}?`, {
+      title: 'Delete Lease',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     try {
       await api.deleteChameleonLease(id, site);
       setRefreshKey(k => k + 1);
@@ -237,7 +262,11 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
 
   // --- Security group actions ---
   const handleDeleteSecurityGroup = async (id: string, site: string) => {
-    if (!confirm(`Delete security group ${id.slice(0, 8)}... at ${site}?`)) return;
+    if (!await confirmDialog(`Delete security group ${id.slice(0, 8)}... at ${site}?`, {
+      title: 'Delete Security Group',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     try {
       await api.deleteChameleonSecurityGroup(id, site);
       setRefreshKey(k => k + 1);
@@ -258,7 +287,11 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
   };
 
   const handleReleaseFloatingIp = async (id: string, site: string) => {
-    if (!confirm(`Release floating IP ${id.slice(0, 8)}... at ${site}?`)) return;
+    if (!await confirmDialog(`Release floating IP ${id.slice(0, 8)}... at ${site}?`, {
+      title: 'Release Floating IP',
+      confirmLabel: 'Release',
+      tone: 'danger',
+    })) return;
     try {
       await api.releaseChameleonFloatingIp(id, site);
       setRefreshKey(k => k + 1);
@@ -268,7 +301,10 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
   };
 
   const handleDisassociateFloatingIp = async (ipId: string, site: string) => {
-    if (!confirm('Disassociate this floating IP from its port?')) return;
+    if (!await confirmDialog('Disassociate this floating IP from its port?', {
+      title: 'Disassociate Floating IP',
+      confirmLabel: 'Disassociate',
+    })) return;
     try {
       await api.associateChameleonFloatingIp(ipId, site, '');
       setRefreshKey(k => k + 1);
@@ -309,7 +345,11 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
   };
 
   const handleDeleteSecurityGroupRule = async (sgId: string, ruleId: string, site: string) => {
-    if (!confirm('Delete this security group rule?')) return;
+    if (!await confirmDialog('Delete this security group rule?', {
+      title: 'Delete Security Group Rule',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     try {
       await api.deleteChameleonSecurityGroupRule(sgId, ruleId, site);
       setRefreshKey(k => k + 1);
@@ -329,7 +369,11 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
   // --- Bulk actions ---
   const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
-    if (!confirm(`Delete ${selectedIds.size} selected item(s)?`)) return;
+    if (!await confirmDialog(`Delete ${selectedIds.size} selected item(s)?`, {
+      title: 'Delete Selected Items',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     setBulkLoading(true);
     const items = Array.from(selectedIds);
     for (const id of items) {
@@ -480,11 +524,17 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
         <span className="chi-os-row-actions">
           <button className="chi-os-btn chi-os-btn-sm" onClick={() => handleExtendLease(l.id, l._site || 'CHI@TACC')} title="Extend">Extend</button>
           <button className="chi-os-btn chi-os-btn-sm" style={{ color: 'var(--fabric-teal, #008e7a)' }} onClick={async () => {
-            const sliceId = prompt('Enter slice ID to import instances into:');
+            const sliceId = await promptDialog('Enter slice ID to import instances into:', {
+              title: 'Import Reservation',
+              confirmLabel: 'Import',
+              placeholder: 'Chameleon slice ID',
+            });
             if (!sliceId) return;
             try {
               const result = await api.importChameleonReservation(sliceId, l._site || 'CHI@TACC', l.id);
-              alert(`Attached lease and imported ${result.imported} instance(s): ${result.instances?.join(', ') || 'none'}`);
+              await alertDialog(`Attached lease and imported ${result.imported} instance(s): ${result.instances?.join(', ') || 'none'}`, {
+                title: 'Reservation Imported',
+              });
             } catch (e: any) { onError?.(`Import failed: ${e}`); }
           }} title="Import instances from this lease into a slice">Import</button>
           <button className="chi-os-btn chi-os-btn-sm chi-os-btn-danger" onClick={() => handleDeleteLease(l.id, l._site || 'CHI@TACC')} title="Delete">Delete</button>

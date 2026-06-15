@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { buildWsUrl } from '../utils/wsUrl';
 import { getAiModels, getClaudeConfigFiles, updateClaudeConfigFile, triggerClaudeBackup, resetToolConfig, browseAiFolders, createAiTerminal, mintTerminalTicket, deleteTerminal, type ClaudeConfigFile, type FolderBrowseResult } from '../api/client';
+import { confirmDialog } from './AppDialogProvider';
 import '../styles/terminal-companion.css';
 
 const TERM_THEME = {
@@ -506,8 +507,12 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
                         setTimeout(() => setConfigMsg(''), 3000);
                       }).catch(() => setConfigMsg('Backup failed'));
                     }}>Save Current Config</button>
-                    <button className="tc-config-btn danger" onClick={() => {
-                      if (confirm('Reset Claude Code config to defaults? You will need to log in again.')) {
+                    <button className="tc-config-btn danger" onClick={async () => {
+                      if (await confirmDialog('Reset Claude Code config to defaults? You will need to log in again.', {
+                        title: 'Reset Claude Code Config',
+                        confirmLabel: 'Reset',
+                        tone: 'danger',
+                      })) {
                         resetToolConfig('claude-code').then(() => {
                           setConfigMsg('Reset to defaults');
                           loadClaudeConfig();

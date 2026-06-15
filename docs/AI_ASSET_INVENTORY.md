@@ -179,7 +179,7 @@ declares domains, triggers, source paths, tool targets, and
   Chameleon SSH slice.
 - Chameleon/OpenStack Blazar, Nova, Neutron, floating-IP, security-group, and
   FABNetv4 route-metric patterns.
-- Federated Slice and Composite/Federated member workflows.
+- Federated Slice member workflows.
 - Troubleshooting runbooks for SSH, transitional slice states, post-boot
   failures, Chameleon failures, topology refresh/cache issues, and UI/backend
   regression triage.

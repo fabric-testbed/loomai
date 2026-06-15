@@ -1506,7 +1506,7 @@ def build_chameleon_elements(instances: list[dict], connections: list[dict] | No
 
 
 # ---------------------------------------------------------------------------
-# Composite graph — merge member slice graphs
+# Federated graph — merge member slice graphs
 # ---------------------------------------------------------------------------
 
 _ID_FIELDS = ("id", "parent", "source", "target", "source_vm", "source_comp", "parent_vm", "parent_node")
@@ -1542,7 +1542,7 @@ def _prefix_graph_ids(graph: dict[str, Any], prefix: str, member_parent: str | N
                 data[field] = id_map.get(data[field], f"{prefix}:{data[field]}")
 
         # Top-level slice/cluster container nodes become children of the member bounding box.
-        # fabnet-internet nodes stay independent (shared across all members in composite).
+        # fabnet-internet nodes stay independent (shared across all federated members).
         etype = data.get("element_type", "")
         if etype == "fabnet-internet":
             pass  # Never parent under a member — stays top-level
@@ -1632,7 +1632,7 @@ def build_composite_graph(
     chameleon_members: list[tuple[dict, str]],
     cross_connections: list[dict] | None = None,
 ) -> dict[str, Any]:
-    """Build a merged Cytoscape.js graph from composite slice members.
+    """Build a merged Cytoscape.js graph from federated slice members.
 
     Args:
         fabric_members: list of ``(slice_data, member_id)`` for FABRIC slices
@@ -1657,12 +1657,12 @@ def build_composite_graph(
 
         # FABRIC member graphs already include the same slice container used by
         # the standalone FABRIC topology view. Do not wrap them in an extra
-        # composite-member box; otherwise federated FABRIC sub-slices show two
+        # federated member box; otherwise FABRIC sub-slices show two
         # nested boxes for the same slice.
         prefixed = _prefix_graph_ids(member_graph, prefix, None)
         # Tag every prefixed FABRIC node with its parent slice context so the
         # frontend can dispatch terminal/SSH actions against the right slice
-        # (the composite view's selectedSliceName is the *composite* slice,
+        # (the federated view's selectedSliceName is the federated slice,
         # not the member, so we can't fall back to it).
         for n in prefixed["nodes"]:
             n["data"]["slice_name"] = member_slice_name

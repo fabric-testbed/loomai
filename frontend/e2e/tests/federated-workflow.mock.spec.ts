@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { mockAllApis } from '../fixtures/api-mocks';
+import { acceptAppDialog, completeAppPrompt, dismissAppDialogIfVisible } from '../helpers/gui-helpers';
 import {
   makeChameleonInstance,
   makeChameleonLease,
@@ -258,11 +259,8 @@ test.describe('Federated mocked slice workflow', () => {
     await page.locator('.title-pill-option', { hasText: /^Federated Slice$/ }).click();
     await expect(page.getByTestId('federated-bar')).toBeVisible({ timeout: 10_000 });
 
-    page.once('dialog', async dialog => {
-      expect(dialog.message()).toContain('Federated slice name');
-      await dialog.accept(federatedName);
-    });
     await page.getByTestId('federated-bar-new-slice').click();
+    await completeAppPrompt(page, federatedName, 'Federated slice name');
 
     await expect(page.getByTestId('federated-bar-slice-select')).toHaveValue(federatedId);
     await expect(page.locator('[data-testid="federated-bar-slice-select"] option:checked')).toContainText(federatedName);
@@ -317,6 +315,7 @@ test.describe('Federated mocked slice workflow', () => {
     const graphAfterSubmit = await page.evaluate(async (id) => fetch(`/api/federated/slices/${id}/graph`).then(response => response.json()), federatedId);
     expect(graphAfterSubmit.nodes.some((node: any) => node.data?.testbed === 'fabric')).toBe(true);
     expect(graphAfterSubmit.nodes.some((node: any) => node.data?.testbed === 'chameleon')).toBe(true);
+    await page.waitForTimeout(500);
 
     const fabricRow = editor.locator(`[data-testid="federated-member-row"][data-provider="fabric"][data-subslice-id="${fabricId}"]`);
     await fabricRow.getByTestId('federated-member-remove').click();
@@ -324,14 +323,9 @@ test.describe('Federated mocked slice workflow', () => {
     await expect(editor.locator(`[data-testid="federated-member-row"][data-provider="chameleon"][data-subslice-id="${chameleonId}"]`)).toBeVisible();
     await expect.poll(() => getFederated()?.fabric_slices ?? []).not.toContain(fabricId);
 
-    page.on('dialog', async dialog => {
-      if (dialog.message().startsWith('Delete federated slice')) {
-        await dialog.accept();
-        return;
-      }
-      await dialog.dismiss();
-    });
     await page.getByTestId('federated-bar-delete-slice').click();
+    await acceptAppDialog(page, 'Delete federated slice');
+    await dismissAppDialogIfVisible(page, 'Also delete all');
     await expect(page.getByTestId('federated-bar-slice-select')).toHaveValue('');
     await expect.poll(() => getFederated()).toBeUndefined();
   });

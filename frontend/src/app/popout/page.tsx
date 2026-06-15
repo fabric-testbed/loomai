@@ -3,6 +3,7 @@ import { Suspense, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
 import TerminalCompanionView from '../../components/TerminalCompanionView';
 import AIChatPanel from '../../components/AIChatPanel';
+import { AppDialogProvider } from '../../components/AppDialogProvider';
 import '../../styles/ai-chat-panel.css';
 
 const TOOL_TITLES: Record<string, string> = {
@@ -58,8 +59,10 @@ function PopoutContent() {
 
 export default function PopoutPage() {
   return (
-    <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#888' }}>Loading...</div>}>
-      <PopoutContent />
-    </Suspense>
+    <AppDialogProvider>
+      <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#888' }}>Loading...</div>}>
+        <PopoutContent />
+      </Suspense>
+    </AppDialogProvider>
   );
 }

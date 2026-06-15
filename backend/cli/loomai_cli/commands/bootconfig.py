@@ -10,6 +10,15 @@ from loomai_cli.completions import SLICE
 from loomai_cli.output import output, output_message
 
 
+def _is_table(ctx: click.Context) -> bool:
+    return ctx.obj["format"] == "table"
+
+
+def _table_message(ctx: click.Context, message: str) -> None:
+    if _is_table(ctx):
+        output_message(message)
+
+
 @click.group("boot-config")
 def boot_config():
     """Manage node boot configurations."""
@@ -47,11 +56,11 @@ def run_boot(ctx, slice_name, node_name, all_nodes):
     """
     client = ctx.obj["client"]
     if all_nodes:
-        output_message(f"Running boot config on all nodes of '{slice_name}'...")
+        _table_message(ctx, f"Running boot config on all nodes of '{slice_name}'...")
         data = client.post(f"/files/boot-config/{slice_name}/execute-all")
         output(ctx, data)
     elif node_name:
-        output_message(f"Running boot config on '{node_name}'...")
+        _table_message(ctx, f"Running boot config on '{node_name}'...")
         data = client.post(f"/files/boot-config/{slice_name}/{node_name}/execute")
         output(ctx, data)
     else:
@@ -70,10 +79,30 @@ def boot_log(ctx, slice_name):
     """
     client = ctx.obj["client"]
     data = client.get(f"/files/boot-config/{slice_name}/log")
-    if isinstance(data, dict) and "log" in data:
+    if _is_table(ctx) and isinstance(data, dict) and "log" in data:
         click.echo(data["log"])
+    elif _is_table(ctx) and isinstance(data, dict) and "lines" in data:
+        for item in data.get("lines", []):
+            if isinstance(item, dict):
+                click.echo(item.get("message") or item)
+            else:
+                click.echo(item)
     else:
         output(ctx, data)
+
+
+@boot_config.command("running")
+@click.pass_context
+def boot_running(ctx):
+    """List slices with boot configuration currently running.
+
+    Examples:
+
+      loomai boot-config running
+    """
+    client = ctx.obj["client"]
+    data = client.get("/files/boot-config/running")
+    output(ctx, data)
 
 
 @boot_config.command("set")
@@ -106,5 +135,6 @@ def set_boot(ctx, slice_name, node_name, commands, config_file):
         }
     else:
         raise click.UsageError("Specify --command/-c or --from-file")
-    client.put(f"/files/boot-config/{slice_name}/{node_name}", json=body)
-    output_message(f"Boot config set for {node_name} in '{slice_name}'")
+    data = client.put(f"/files/boot-config/{slice_name}/{node_name}", json=body)
+    _table_message(ctx, f"Boot config set for {node_name} in '{slice_name}'")
+    output(ctx, data)

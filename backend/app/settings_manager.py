@@ -521,9 +521,15 @@ def is_chameleon_enabled() -> bool:
     return _get_settings().get("chameleon", {}).get("enabled", False)
 
 
+def is_federated_enabled() -> bool:
+    """Return whether the Federated Slice view is enabled."""
+    views = _get_settings().get("views", {})
+    return views.get("federated_enabled", views.get("composite_enabled", False))
+
+
 def is_composite_enabled() -> bool:
-    """Return ``views.composite_enabled``."""
-    return _get_settings().get("views", {}).get("composite_enabled", False)
+    """Compatibility alias for the old view-toggle accessor."""
+    return is_federated_enabled()
 
 
 def get_chameleon_sites() -> dict:

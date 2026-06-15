@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { mockAllApis } from '../fixtures/api-mocks';
+import { acceptAppDialog, completeAppPrompt } from '../helpers/gui-helpers';
 import { makeChameleonLease, scenarioNoSlices } from '../fixtures/test-data';
 
 test.describe('Chameleon mocked slice workflow', () => {
@@ -21,11 +22,8 @@ test.describe('Chameleon mocked slice workflow', () => {
     await page.locator('.title-pill-option', { hasText: /^Chameleon$/ }).click();
     await expect(page.getByTestId('chameleon-bar')).toBeVisible({ timeout: 10_000 });
 
-    page.once('dialog', async dialog => {
-      expect(dialog.message()).toContain('Draft name');
-      await dialog.accept(sliceName);
-    });
     await page.getByTestId('chameleon-bar-new-draft').click();
+    await completeAppPrompt(page, sliceName, 'Draft name');
 
     await expect(page.getByTestId('chameleon-bar-slice-select')).toHaveValue(`${sliceName}-id`);
     await expect(page.locator('[data-testid="chameleon-bar-slice-select"] option:checked')).toContainText(sliceName);
@@ -98,11 +96,8 @@ test.describe('Chameleon mocked slice workflow', () => {
     await modal.getByTestId('chameleon-lease-modal-close').click();
     await expect(modal).toBeHidden();
 
-    page.once('dialog', async dialog => {
-      expect(dialog.message()).toContain(`Delete draft "${sliceName}"`);
-      await dialog.accept();
-    });
     await page.getByTestId('chameleon-bar-delete-draft').click();
+    await acceptAppDialog(page, `Delete draft "${sliceName}"`);
 
     await expect(page.getByTestId('chameleon-bar-slice-select')).toHaveValue('');
     await expect.poll(() => getDraft()).toBeUndefined();

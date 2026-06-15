@@ -1065,12 +1065,12 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
-    # --- Composite slice tools (cross-testbed) ---
+    # --- Federated slice tools (cross-testbed) ---
     {
         "type": "function",
         "function": {
             "name": "list_composite_slices",
-            "description": "List composite slices — cross-testbed meta-slices that group FABRIC and Chameleon slices together.",
+            "description": "List federated slices — cross-testbed groupings that connect FABRIC and Chameleon slices.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -1078,10 +1078,10 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "get_composite_slice",
-            "description": "Get details of a composite slice including its FABRIC and Chameleon member slices.",
+            "description": "Get details of a federated slice including its FABRIC and Chameleon member slices.",
             "parameters": {
                 "type": "object",
-                "properties": {"slice_id": {"type": "string", "description": "Composite slice ID"}},
+                "properties": {"slice_id": {"type": "string", "description": "Federated slice ID"}},
                 "required": ["slice_id"],
             },
         },
@@ -1090,10 +1090,10 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "create_composite_slice",
-            "description": "Create a new composite slice (cross-testbed meta-slice) to group FABRIC and Chameleon slices together.",
+            "description": "Create a new federated slice to group FABRIC and Chameleon slices together.",
             "parameters": {
                 "type": "object",
-                "properties": {"name": {"type": "string", "description": "Name for the composite slice"}},
+                "properties": {"name": {"type": "string", "description": "Name for the federated slice"}},
                 "required": ["name"],
             },
         },
@@ -1662,7 +1662,7 @@ def _tool_summary(name: str, args: dict, result: str) -> str:
         return f"Deployed draft — {leases} lease{'s' if leases != 1 else ''} created"
 
     if name == "list_composite_slices" and isinstance(data, list):
-        return f"Found {len(data)} composite slices"
+        return f"Found {len(data)} federated slices"
 
     if name == "get_composite_slice" and isinstance(data, dict):
         name_val = data.get("name", "?")
@@ -1671,7 +1671,7 @@ def _tool_summary(name: str, args: dict, result: str) -> str:
         return f"'{name_val}' — {fab} FABRIC + {chi} Chameleon members"
 
     if name == "create_composite_slice" and isinstance(data, dict):
-        return f"Created composite '{data.get('name', '?')}'"
+        return f"Created federated slice '{data.get('name', '?')}'"
 
     if name == "search_examples" and isinstance(data, dict):
         results = data.get("results", [])

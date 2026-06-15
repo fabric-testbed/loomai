@@ -595,7 +595,8 @@ export interface LoomAISettings {
   };
   tool_configs: Record<string, object>;
   views?: {
-    composite_enabled: boolean;
+    federated_enabled?: boolean;
+    composite_enabled?: boolean;
   };
 }
 

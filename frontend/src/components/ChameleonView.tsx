@@ -858,9 +858,9 @@ export default function ChameleonView({ onError, forcedTab, hideBar, onOpenTermi
         </div>
       )}
 
-      {/* Create Lease Modal — portal to body, inline styles for guaranteed centering */}
+      {/* Create Lease Modal */}
       {showCreateLease && typeof document !== 'undefined' && createPortal(
-        <div className="toolbar-modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }} onClick={() => setShowCreateLease(false)}>
+        <div className="toolbar-modal-overlay" onClick={() => setShowCreateLease(false)}>
           <div className="toolbar-modal toolbar-modal-wide" onClick={e => e.stopPropagation()} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
             <h4>Create Chameleon Lease</h4>
             {createError && <div className="chi-error" style={{ marginBottom: 8 }}>{createError}</div>}
@@ -978,7 +978,7 @@ export default function ChameleonView({ onError, forcedTab, hideBar, onOpenTermi
 
       {/* Confirmation modal — shared by all confirm actions */}
       {confirmAction && typeof document !== 'undefined' && createPortal(
-        <div className="toolbar-modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }} onClick={() => setConfirmAction(null)}>
+        <div className="toolbar-modal-overlay" onClick={() => setConfirmAction(null)}>
           <div className="toolbar-modal" onClick={e => e.stopPropagation()}>
             <h4>{confirmAction.title}</h4>
             <p>{confirmAction.message}</p>

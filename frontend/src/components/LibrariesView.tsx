@@ -6,6 +6,7 @@ import type {
   LocalArtifact, PersonSearchResult,
 } from '../api/client';
 import * as api from '../api/client';
+import { alertDialog, confirmDialog, promptDialog } from './AppDialogProvider';
 import '../styles/libraries-view.css';
 
 interface LibrariesViewProps {
@@ -459,15 +460,22 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     setVersionPickerArt(null);
     try {
       const result = await api.downloadArtifact(art.uuid, versionUuid);
-      alert(`Got "${result.title}" — added to local ${result.category} artifacts as "${result.local_name}"`);
+      await alertDialog(`Got "${result.title}" — added to local ${result.category} artifacts as "${result.local_name}"`, {
+        title: 'Artifact Downloaded',
+      });
       fetchMyArtifacts();
     } catch (e: any) {
       if (e.message.includes('409')) {
         // Name conflict — ask user what to do
-        const choice = prompt(
+        const choice = await promptDialog(
           `"${art.title}" already exists locally.\n\n` +
           `Enter a new folder name, or leave blank and click OK to overwrite the existing copy:`,
-          ''
+          {
+            title: 'Artifact Already Exists',
+            confirmLabel: 'Continue',
+            defaultValue: '',
+            placeholder: 'New folder name, or blank to overwrite',
+          },
         );
         if (choice === null) {
           // User cancelled
@@ -478,18 +486,26 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
           if (choice.trim()) {
             // Use a different local name
             const result = await api.downloadArtifact(art.uuid, versionUuid, choice.trim());
-            alert(`Got "${result.title}" — saved as "${result.local_name}"`);
+            await alertDialog(`Got "${result.title}" — saved as "${result.local_name}"`, {
+              title: 'Artifact Downloaded',
+            });
           } else {
             // Overwrite existing
             const result = await api.downloadArtifact(art.uuid, versionUuid, undefined, true);
-            alert(`Updated "${result.title}" in local artifacts`);
+            await alertDialog(`Updated "${result.title}" in local artifacts`, {
+              title: 'Artifact Updated',
+            });
           }
           fetchMyArtifacts();
         } catch (e2: any) {
-          alert(`Failed: ${e2.message}`);
+          await alertDialog(`Failed: ${e2.message}`, {
+            title: 'Download Failed',
+          });
         }
       } else {
-        alert(`Failed to get artifact: ${e.message}`);
+        await alertDialog(`Failed to get artifact: ${e.message}`, {
+          title: 'Download Failed',
+        });
       }
     } finally {
       setMpDownloading(null);
@@ -524,7 +540,11 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     const msg = isPublished
       ? `Delete "${art.name}"?\n\nThis artifact is published on the FABRIC Artifact Manager. This will only delete the local copy. To permanently remove it from the marketplace, use the Published tab.`
       : `Delete local artifact "${art.name}"?`;
-    if (!confirm(msg)) return;
+    if (!await confirmDialog(msg, {
+      title: 'Delete Local Artifact',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     try {
       if (art.category === 'weave') {
         await api.deleteTemplate(art.dir_name);
@@ -682,11 +702,17 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       fetchMyArtifacts();
       fetchMarketplace(true);
       if (result.status === 'updated') {
-        alert(`Updated "${result.title}" — version ${result.version} published\nArtifact: ${result.uuid}`);
+        await alertDialog(`Updated "${result.title}" — version ${result.version} published\nArtifact: ${result.uuid}`, {
+          title: 'Artifact Updated',
+        });
       } else if (result.forked_from) {
-        alert(`Forked "${result.title}" as new artifact (${result.visibility})\nNew artifact: ${result.uuid}`);
+        await alertDialog(`Forked "${result.title}" as new artifact (${result.visibility})\nNew artifact: ${result.uuid}`, {
+          title: 'Artifact Forked',
+        });
       } else {
-        alert(`Published "${result.title}" to FABRIC Artifact Manager (${result.visibility})\nArtifact: ${result.uuid}`);
+        await alertDialog(`Published "${result.title}" to FABRIC Artifact Manager (${result.visibility})\nArtifact: ${result.uuid}`, {
+          title: 'Artifact Published',
+        });
       }
     } catch (e: any) {
       setPubError(e.message);
@@ -722,7 +748,9 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       setMpLoaded(false);
       fetchMyArtifacts();
       fetchMarketplace(true);
-      alert(`New version published: ${result.version}`);
+      await alertDialog(`New version published: ${result.version}`, {
+        title: 'Version Published',
+      });
     } catch (e: any) {
       setUvError(e.message);
     } finally {
@@ -769,7 +797,9 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         onLaunchNotebook?.(result.jupyter_path);
       }
     } catch (e: any) {
-      alert(`Failed to open notebook in JupyterLab: ${e.message}`);
+      await alertDialog(`Failed to open notebook in JupyterLab: ${e.message}`, {
+        title: 'JupyterLab Failed',
+      });
     } finally {
       setLaunchingNotebook(null);
     }
@@ -836,7 +866,9 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
         onLaunchNotebook?.(`/jupyter/lab/tree/my_artifacts/${encodeURIComponent(dirName)}`);
       }
     } catch (e: any) {
-      alert(`Failed to open in JupyterLab: ${e.message}`);
+      await alertDialog(`Failed to open in JupyterLab: ${e.message}`, {
+        title: 'JupyterLab Failed',
+      });
     } finally {
       setLaunchingNotebook(null);
     }
@@ -847,9 +879,13 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     try {
       await api.resetNotebook(dirName);
       setResetConfirmNotebook(null);
-      alert('Notebook workspace reset to original.');
+      await alertDialog('Notebook workspace reset to original.', {
+        title: 'Notebook Reset',
+      });
     } catch (e: any) {
-      alert(`Failed to reset: ${e.message}`);
+      await alertDialog(`Failed to reset: ${e.message}`, {
+        title: 'Reset Failed',
+      });
     } finally {
       setResettingNotebook(null);
     }
@@ -864,9 +900,13 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       setMpLoaded(false);
       fetchMyArtifacts();
       fetchMarketplace(true);
-      alert('Artifact deleted from FABRIC Artifact Manager.');
+      await alertDialog('Artifact deleted from FABRIC Artifact Manager.', {
+        title: 'Artifact Deleted',
+      });
     } catch (e: any) {
-      alert(`Delete failed: ${e.message}`);
+      await alertDialog(`Delete failed: ${e.message}`, {
+        title: 'Delete Failed',
+      });
     } finally {
       setDeleteBusy(false);
     }
@@ -924,9 +964,13 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       setMpLoaded(false);
       fetchMarketplace(true);
       fetchMyArtifacts();
-      alert('Artifact deleted from marketplace.');
+      await alertDialog('Artifact deleted from marketplace.', {
+        title: 'Artifact Deleted',
+      });
     } catch (e: any) {
-      alert(`Delete failed: ${e.message}`);
+      await alertDialog(`Delete failed: ${e.message}`, {
+        title: 'Delete Failed',
+      });
     } finally {
       setMpDeleteBusy(false);
     }
@@ -951,7 +995,9 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       setDetailEditing(null);
       fetchMyArtifacts();
     } catch (e: any) {
-      alert(`Failed to save: ${e.message}`);
+      await alertDialog(`Failed to save: ${e.message}`, {
+        title: 'Save Failed',
+      });
     } finally {
       setDetailSaving(false);
     }
@@ -1138,7 +1184,11 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   };
 
   const deleteEditFile = async (filename: string, isDir: boolean) => {
-    if (!editing || !confirm(`Delete "${filename}"${isDir ? ' and all its contents' : ''}?`)) return;
+    if (!editing || !await confirmDialog(`Delete "${filename}"${isDir ? ' and all its contents' : ''}?`, {
+      title: 'Delete File',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     const base = artBasePath(editing.dir_name);
     const fullPath = editCwd ? `${base}/${editCwd}/${filename}` : `${base}/${filename}`;
     setEditError('');
@@ -1170,7 +1220,11 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
 
   const handleRevertArtifact = async (versionUuid?: string) => {
     if (!editing) return;
-    if (!confirm('Revert will replace all local files with the published version. Continue?')) return;
+    if (!await confirmDialog('Revert will replace all local files with the published version. Continue?', {
+      title: 'Revert Artifact',
+      confirmLabel: 'Revert',
+      tone: 'danger',
+    })) return;
     setEditReverting(true);
     setEditError('');
     try {
@@ -1272,7 +1326,11 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
   const handleDeleteVersion = async (versionUuid: string) => {
     const uuid = editingRemote?.uuid || editing?.remote_artifact?.uuid;
     if (!uuid) return;
-    if (!confirm('Delete this version? This cannot be undone.')) return;
+    if (!await confirmDialog('Delete this version? This cannot be undone.', {
+      title: 'Delete Version',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    })) return;
     setDeletingVersion(versionUuid);
     setEditError('');
     try {

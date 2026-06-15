@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loomai-cli"
-version = "0.7.1"
+version = "0.7.2"
 description = "Command-line interface for the FABRIC LoomAI testbed manager"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     "click>=8.0",
     "httpx>=0.24",

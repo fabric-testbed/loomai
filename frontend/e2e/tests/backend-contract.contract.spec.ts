@@ -541,13 +541,13 @@ test.describe('backend contract', () => {
 
     const updated = {
       ...settings,
-      views: { ...(settings.views || {}), composite_enabled: false },
+      views: { ...(settings.views || {}), federated_enabled: false },
       services: { ...settings.services, jupyter_port: 8899 },
     };
     const saved = await (await expectOk(
       await request.put(`${backendBaseUrl}/api/settings`, { data: updated }),
     )).json();
-    expect(saved.views.composite_enabled).toBe(false);
+    expect(saved.views.federated_enabled).toBe(false);
     expect(saved.services.jupyter_port).toBe(8899);
 
     const tokenCheck = await (await expectOk(

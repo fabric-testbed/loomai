@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import click
 
 from loomai_cli.output import output, output_message
+
+
+def _is_table(ctx: click.Context) -> bool:
+    return ctx.obj["format"] == "table"
+
+
+def _table_message(ctx: click.Context, message: str) -> None:
+    if _is_table(ctx):
+        output_message(message)
 
 
 @click.group()
@@ -19,11 +29,22 @@ def chameleon(ctx):
     client = ctx.obj["client"]
     try:
         status = client.get("/chameleon/status")
-        if not status.get("enabled"):
-            click.echo("Chameleon integration is disabled. Enable it in Settings.")
-            ctx.abort()
+        if isinstance(status, dict) and status.get("enabled") is False:
+            if ctx.invoked_subcommand == "status":
+                return
+            raise click.ClickException("Chameleon integration is disabled. Enable it in Settings.")
+    except click.ClickException:
+        raise
     except Exception:
         pass  # Let individual commands handle errors
+
+
+@chameleon.command("status")
+@click.pass_context
+def status_cmd(ctx):
+    """Show Chameleon integration status and configured sites."""
+    data = ctx.obj["client"].get("/chameleon/status")
+    output(ctx, data)
 
 
 # ---------------------------------------------------------------------------
@@ -43,44 +64,31 @@ def sites_cmd(ctx, site):
       loomai chameleon sites CHI@TACC
     """
     client = ctx.obj["client"]
-    fmt = ctx.obj["format"]
 
     if site:
         # Show availability for a specific site
-        try:
-            data = client.get(f"/chameleon/sites/{site}/availability")
-            if fmt == "json":
-                click.echo(json.dumps(data, indent=2))
-            else:
-                click.echo(f"Site: {site}")
-                hosts = data.get("hosts", [])
-                flavors = data.get("flavors", [])
-                if hosts:
-                    click.echo(f"\nHosts: {len(hosts)}")
-                    for h in hosts[:10]:
-                        name = h.get("hypervisor_hostname", h.get("id", "?"))
-                        click.echo(f"  {name}")
-                if flavors:
-                    click.echo(f"\nFlavors: {len(flavors)}")
-                    for f in flavors[:10]:
-                        click.echo(f"  {f.get('name', '?')} — {f.get('vcpus', '?')} vCPUs, {f.get('ram', '?')} MB RAM, {f.get('disk', '?')} GB disk")
-        except Exception as e:
-            click.echo(f"Error: {e}", err=True)
+        data = client.get(f"/chameleon/sites/{site}/availability")
+        if not _is_table(ctx):
+            output(ctx, data)
+            return
+        click.echo(f"Site: {site}")
+        hosts = data.get("hosts", [])
+        flavors = data.get("flavors", [])
+        if hosts:
+            click.echo(f"\nHosts: {len(hosts)}")
+            for h in hosts[:10]:
+                name = h.get("hypervisor_hostname", h.get("id", "?"))
+                click.echo(f"  {name}")
+        if flavors:
+            click.echo(f"\nFlavors: {len(flavors)}")
+            for f in flavors[:10]:
+                click.echo(f"  {f.get('name', '?')} — {f.get('vcpus', '?')} vCPUs, {f.get('ram', '?')} MB RAM, {f.get('disk', '?')} GB disk")
     else:
         # List all sites
-        try:
-            sites = client.get("/chameleon/sites")
-            if fmt == "json":
-                click.echo(json.dumps(sites, indent=2))
-            else:
-                click.echo("Chameleon Sites:")
-                for s in sites:
-                    status = "configured" if s.get("configured") else "not configured"
-                    loc = s.get("location", {})
-                    city = loc.get("city", "")
-                    click.echo(f"  {s['name']} ({status}){' — ' + city if city else ''}")
-        except Exception as e:
-            click.echo(f"Error: {e}", err=True)
+        sites = client.get("/chameleon/sites")
+        output(ctx, sites,
+               columns=["name", "configured", lambda r: (r.get("location") or {}).get("city", "")],
+               headers=["Name", "Configured", "City"])
 
 
 @chameleon.command("images")
@@ -96,21 +104,163 @@ def images_cmd(ctx, site):
       loomai chameleon images CHI@UC
     """
     client = ctx.obj["client"]
-    fmt = ctx.obj["format"]
+    images = client.get(f"/chameleon/sites/{site}/images")
+    if not _is_table(ctx):
+        output(ctx, images)
+        return
+    click.echo(f"Images at {site}: ({len(images)} available)")
+    for img in images[:30]:
+        size = f" ({img['size_mb']} MB)" if img.get("size_mb") else ""
+        click.echo(f"  {img['name']}{size}")
+    if len(images) > 30:
+        click.echo(f"  ... and {len(images) - 30} more")
 
+
+@chameleon.group("node-types")
+def node_types():
+    """Inspect Chameleon bare-metal node types."""
+
+
+@node_types.command("list")
+@click.argument("site", default="CHI@TACC")
+@click.option("--detail", is_flag=True, help="Include hardware detail when available.")
+@click.pass_context
+def node_types_list(ctx, site, detail):
+    """List available node types at a Chameleon site."""
+    data = ctx.obj["client"].get(f"/chameleon/sites/{site}/node-types", params={"detail": detail})
+    if ctx.obj["format"] != "table":
+        output(ctx, data)
+        return
+    rows = data.get("node_types", data) if isinstance(data, dict) else data
+    output(ctx, rows,
+           columns=["node_type", "total", "reservable", "cpu_arch", "ram_gb", "gpu", "gpu_count"],
+           headers=["Node Type", "Total", "Reservable", "Arch", "RAM GB", "GPU", "GPUs"])
+
+
+@node_types.command("detail")
+@click.argument("site", default="CHI@TACC")
+@click.pass_context
+def node_types_detail(ctx, site):
+    """List detailed hardware properties for node types at a site."""
+    data = ctx.obj["client"].get(f"/chameleon/sites/{site}/node-types/detail")
+    if ctx.obj["format"] != "table":
+        output(ctx, data)
+        return
+    output(ctx, data.get("node_types", []),
+           columns=["node_type", "total", "reservable", "cpu_count", "cpu_model", "ram_gb", "disk_gb", "gpu", "gpu_count"],
+           headers=["Node Type", "Total", "Reservable", "CPUs", "CPU Model", "RAM", "Disk", "GPU", "GPUs"])
+
+
+@chameleon.command("facility-ports")
+@click.option("--site", help="Filter by Chameleon site.")
+@click.pass_context
+def facility_ports_cmd(ctx, site):
+    """List Chameleon facility ports."""
+    params = {"site": site} if site else {}
+    data = ctx.obj["client"].get("/chameleon/facility-ports", params=params)
+    output(ctx, data,
+           columns=["name", "site", "vlan", "provider", "status"],
+           headers=["Name", "Site", "VLAN", "Provider", "Status"])
+
+
+@chameleon.command("find-availability")
+@click.option("--site", default="CHI@TACC", help="Chameleon site.")
+@click.option("--type", "node_type", required=True, help="Node type, e.g. compute_skylake.")
+@click.option("--count", default=1, type=int, help="Number of nodes.")
+@click.option("--hours", default=4, type=int, help="Duration in hours.")
+@click.pass_context
+def find_availability_cmd(ctx, site, node_type, count, hours):
+    """Find approximate Chameleon node availability."""
+    data = ctx.obj["client"].post("/chameleon/find-availability", json={
+        "site": site,
+        "node_type": node_type,
+        "node_count": count,
+        "duration_hours": hours,
+    })
+    output(ctx, data)
+
+
+@chameleon.command("schedule-calendar")
+@click.option("--days", default=14, type=click.IntRange(1, 90), help="Days to include.")
+@click.pass_context
+def schedule_calendar_cmd(ctx, days):
+    """Show Chameleon lease/resource calendar data."""
+    data = ctx.obj["client"].get("/chameleon/schedule/calendar", params={"days": days})
+    if ctx.obj["format"] != "table":
+        output(ctx, data)
+        return
+    rows = data.get("sites", data.get("data", [])) if isinstance(data, dict) else data
+    output(ctx, rows,
+           columns=["site", "leases", "node_types"],
+           headers=["Site", "Leases", "Node Types"])
+
+
+def _parse_json_object(value: str, label: str):
+    if not value:
+        return None
     try:
-        images = client.get(f"/chameleon/sites/{site}/images")
-        if fmt == "json":
-            click.echo(json.dumps(images, indent=2))
-        else:
-            click.echo(f"Images at {site}: ({len(images)} available)")
-            for img in images[:30]:
-                size = f" ({img['size_mb']} MB)" if img.get("size_mb") else ""
-                click.echo(f"  {img['name']}{size}")
-            if len(images) > 30:
-                click.echo(f"  ... and {len(images) - 30} more")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise click.UsageError(f"Invalid {label}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise click.UsageError(f"{label} must be a JSON object.")
+    return parsed
+
+
+@chameleon.command("openstack-request")
+@click.option("--site", default="CHI@TACC", help="Chameleon site.")
+@click.option("--service", "service_type", required=True,
+              type=click.Choice(["compute", "reservation", "network", "image"]),
+              help="OpenStack service type.")
+@click.option("--method", default="GET",
+              type=click.Choice(["GET", "POST", "PUT", "DELETE"]),
+              help="HTTP method.")
+@click.option("--path", required=True, help="Service-relative OpenStack API path.")
+@click.option("--params-json", default="", help="JSON object of query parameters.")
+@click.option("--body-json", default="", help="JSON object request body.")
+@click.option("--timeout", default=120, type=int, help="Request timeout in seconds.")
+@click.pass_context
+def openstack_request_cmd(ctx, site, service_type, method, path, params_json,
+                          body_json, timeout):
+    """Proxy an advanced OpenStack API request through LoomAI's Chameleon auth."""
+    body = {
+        "site": site,
+        "service_type": service_type,
+        "method": method,
+        "path": path,
+        "timeout": timeout,
+    }
+    params = _parse_json_object(params_json, "--params-json")
+    request_body = _parse_json_object(body_json, "--body-json")
+    if params is not None:
+        body["params"] = params
+    if request_body is not None:
+        body["body"] = request_body
+    data = ctx.obj["client"].post("/chameleon/openstack/request", json=body)
+    output(ctx, data)
+
+
+@chameleon.command("password-projects")
+@click.option("--username", required=True, help="Chameleon username.")
+@click.option("--password", prompt=True, hide_input=True,
+              help="Chameleon password. Prefer prompt/env handling over shell history.")
+@click.option("--site", "sites", multiple=True,
+              help="Site to query; repeatable. Defaults to configured sites.")
+@click.pass_context
+def password_projects_cmd(ctx, username, password, sites):
+    """List projects visible to password-auth Chameleon credentials."""
+    data = ctx.obj["client"].post("/chameleon/password-auth/projects", json={
+        "username": username,
+        "password": password,
+        "sites": list(sites),
+    })
+    if ctx.obj["format"] != "table":
+        output(ctx, data)
+        return
+    rows = data.get("projects", [])
+    output(ctx, rows,
+           columns=["name", "site_count", "sites"],
+           headers=["Project", "Sites", "Project IDs By Site"])
 
 
 # ---------------------------------------------------------------------------
@@ -135,27 +285,11 @@ def leases_list(ctx, site):
       loomai chameleon leases list --site CHI@TACC
     """
     client = ctx.obj["client"]
-    fmt = ctx.obj["format"]
-
-    try:
-        params = {"site": site} if site else {}
-        data = client.get("/chameleon/leases", params=params)
-        if fmt == "json":
-            click.echo(json.dumps(data, indent=2))
-        else:
-            if not data:
-                click.echo("No leases found.")
-                return
-            click.echo(f"Leases ({len(data)}):")
-            for l in data:
-                status = l.get("status", "?")
-                name = l.get("name", "?")
-                site_name = l.get("_site", "?")
-                start = l.get("start_date", "")[:16]
-                end = l.get("end_date", "")[:16]
-                click.echo(f"  {name} ({status}) @ {site_name}  [{start} → {end}]")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    params = {"site": site} if site else {}
+    data = client.get("/chameleon/leases", params=params)
+    output(ctx, data,
+           columns=["name", "id", "status", "_site", "start_date", "end_date"],
+           headers=["Name", "ID", "Status", "Site", "Start", "End"])
 
 
 @leases.command("create")
@@ -174,19 +308,17 @@ def leases_create(ctx, site, name, node_type, count, hours):
     """
     client = ctx.obj["client"]
 
-    try:
-        result = client.post("/chameleon/leases", json={
-            "site": site,
-            "name": name,
-            "node_type": node_type,
-            "node_count": count,
-            "duration_hours": hours,
-        })
-        lease_id = result.get("id", "?")
-        status = result.get("status", "?")
-        click.echo(f"Lease created: {name} ({lease_id}) — {status}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    result = client.post("/chameleon/leases", json={
+        "site": site,
+        "name": name,
+        "node_type": node_type,
+        "node_count": count,
+        "duration_hours": hours,
+    })
+    lease_id = result.get("id", "?")
+    status = result.get("status", "?")
+    _table_message(ctx, f"Lease created: {name} ({lease_id}) — {status}")
+    output(ctx, result)
 
 
 @leases.command("delete")
@@ -202,11 +334,10 @@ def leases_delete(ctx, lease_id, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.delete(f"/chameleon/leases/{lease_id}", params={"site": site})
-        click.echo(f"Lease {lease_id} deleted.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.delete(f"/chameleon/leases/{lease_id}", params={"site": site})
+    _table_message(ctx, f"Lease {lease_id} deleted.")
+    if not _is_table(ctx):
+        output(ctx, data)
 
 
 @leases.command("extend")
@@ -223,11 +354,9 @@ def leases_extend(ctx, lease_id, site, hours):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.put(f"/chameleon/leases/{lease_id}/extend", json={"site": site, "hours": hours})
-        click.echo(f"Lease {lease_id} extended by {hours} hour(s).")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.put(f"/chameleon/leases/{lease_id}/extend", json={"site": site, "hours": hours})
+    _table_message(ctx, f"Lease {lease_id} extended by {hours} hour(s).")
+    output(ctx, data)
 
 
 # ---------------------------------------------------------------------------
@@ -252,26 +381,32 @@ def instances_list(ctx, site):
       loomai chameleon instances list --site CHI@UC
     """
     client = ctx.obj["client"]
-    fmt = ctx.obj["format"]
+    params = {"site": site} if site else {}
+    data = client.get("/chameleon/instances", params=params)
+    output(ctx, data,
+           columns=["name", "id", "status", "site", lambda r: r.get("floating_ip") or ", ".join(r.get("ip_addresses", []))],
+           headers=["Name", "ID", "Status", "Site", "IP"])
 
-    try:
-        params = {"site": site} if site else {}
-        data = client.get("/chameleon/instances", params=params)
-        if fmt == "json":
-            click.echo(json.dumps(data, indent=2))
-        else:
-            if not data:
-                click.echo("No instances found.")
-                return
-            click.echo(f"Instances ({len(data)}):")
-            for i in data:
-                name = i.get("name", "?")
-                status = i.get("status", "?")
-                site_name = i.get("site", "?")
-                ip = i.get("floating_ip") or ", ".join(i.get("ip_addresses", []))
-                click.echo(f"  {name} ({status}) @ {site_name}  IP: {ip or 'none'}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+
+@instances.command("show")
+@click.argument("instance_id")
+@click.option("--site", default="CHI@TACC", help="Chameleon site.")
+@click.pass_context
+def instances_show(ctx, instance_id, site):
+    """Show details for one Chameleon instance."""
+    data = ctx.obj["client"].get(f"/chameleon/instances/{instance_id}", params={"site": site})
+    output(ctx, data)
+
+
+@instances.command("unaffiliated")
+@click.option("--site", default="CHI@TACC", help="Chameleon site.")
+@click.pass_context
+def instances_unaffiliated(ctx, site):
+    """List Chameleon instances not attached to a LoomAI Chameleon slice."""
+    data = ctx.obj["client"].get("/chameleon/instances/unaffiliated", params={"site": site})
+    output(ctx, data,
+           columns=["id", "name", "status", "site", "floating_ip"],
+           headers=["ID", "Name", "Status", "Site", "Floating IP"])
 
 
 @instances.command("create")
@@ -305,12 +440,36 @@ def instances_create(ctx, site, name, lease_id, reservation_id, image_id, key_na
     if network_id:
         body["network_id"] = network_id
 
-    try:
-        result = client.post("/chameleon/instances", json=body)
-        instance_id = result.get("id", "?")
-        click.echo(f"Instance created: {name} ({instance_id})")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    result = client.post("/chameleon/instances", json=body)
+    instance_id = result.get("id", "?")
+    _table_message(ctx, f"Instance created: {name} ({instance_id})")
+    output(ctx, result)
+
+
+@instances.command("associate-ip")
+@click.argument("instance_id")
+@click.option("--site", default="CHI@TACC", help="Chameleon site.")
+@click.pass_context
+def instances_associate_ip(ctx, instance_id, site):
+    """Allocate and associate a floating IP with an instance."""
+    data = ctx.obj["client"].post(f"/chameleon/instances/{instance_id}/associate-ip", json={"site": site})
+    if ctx.obj["format"] == "table":
+        output_message(f"Associated floating IP with {instance_id[:12]}...")
+    output(ctx, data)
+
+
+@instances.command("execute-recipe")
+@click.argument("instance_id")
+@click.argument("recipe_dir")
+@click.option("--site", default="CHI@TACC", help="Chameleon site.")
+@click.pass_context
+def instances_execute_recipe(ctx, instance_id, recipe_dir, site):
+    """Execute a LoomAI recipe on a Chameleon instance."""
+    data = ctx.obj["client"].post(f"/chameleon/instances/{instance_id}/execute-recipe", json={
+        "site": site,
+        "recipe_dir": recipe_dir,
+    })
+    output(ctx, data)
 
 
 @instances.command("delete")
@@ -326,11 +485,10 @@ def instances_delete(ctx, instance_id, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.delete(f"/chameleon/instances/{instance_id}", params={"site": site})
-        click.echo(f"Instance {instance_id} deleted.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.delete(f"/chameleon/instances/{instance_id}", params={"site": site})
+    _table_message(ctx, f"Instance {instance_id} deleted.")
+    if not _is_table(ctx):
+        output(ctx, data)
 
 
 @instances.command("reboot")
@@ -349,11 +507,9 @@ def instances_reboot(ctx, instance_id, site, reboot_type):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.post(f"/chameleon/instances/{instance_id}/reboot", json={"site": site, "type": reboot_type})
-        click.echo(f"Instance {instance_id} rebooting ({reboot_type}).")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.post(f"/chameleon/instances/{instance_id}/reboot", json={"site": site, "type": reboot_type})
+    _table_message(ctx, f"Instance {instance_id} rebooting ({reboot_type}).")
+    output(ctx, data)
 
 
 @instances.command("stop")
@@ -369,11 +525,9 @@ def instances_stop(ctx, instance_id, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.post(f"/chameleon/instances/{instance_id}/stop", json={"site": site})
-        click.echo(f"Instance {instance_id} stopping.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.post(f"/chameleon/instances/{instance_id}/stop", json={"site": site})
+    _table_message(ctx, f"Instance {instance_id} stopping.")
+    output(ctx, data)
 
 
 @instances.command("start")
@@ -389,11 +543,9 @@ def instances_start(ctx, instance_id, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.post(f"/chameleon/instances/{instance_id}/start", json={"site": site})
-        click.echo(f"Instance {instance_id} starting.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.post(f"/chameleon/instances/{instance_id}/start", json={"site": site})
+    _table_message(ctx, f"Instance {instance_id} starting.")
+    output(ctx, data)
 
 
 # ---------------------------------------------------------------------------
@@ -418,30 +570,12 @@ def networks_list(ctx, site):
       loomai chameleon networks list --site CHI@TACC
     """
     client = ctx.obj["client"]
-    fmt = ctx.obj["format"]
-
-    try:
-        params = {"site": site} if site else {}
-        data = client.get("/chameleon/networks", params=params)
-        if fmt == "json":
-            click.echo(json.dumps(data, indent=2))
-        else:
-            if not data:
-                click.echo("No networks found.")
-                return
-            click.echo(f"Networks ({len(data)}):")
-            for n in data:
-                name = n.get("name", "?")
-                site_name = n.get("site", "?")
-                status = n.get("status", "?")
-                shared = "shared" if n.get("shared") else "private"
-                subnets = ", ".join(
-                    s.get("cidr", s.get("name", "?"))
-                    for s in n.get("subnet_details", [])
-                ) or "none"
-                click.echo(f"  {name} ({status}, {shared}) @ {site_name}  subnets: {subnets}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    params = {"site": site} if site else {}
+    data = client.get("/chameleon/networks", params=params)
+    output(ctx, data,
+           columns=["name", "id", "status", "site", "shared",
+                    lambda r: ", ".join(s.get("cidr", s.get("name", "?")) for s in r.get("subnet_details", []))],
+           headers=["Name", "ID", "Status", "Site", "Shared", "Subnets"])
 
 
 @networks.command("create")
@@ -458,15 +592,13 @@ def networks_create(ctx, site, name, cidr):
     """
     client = ctx.obj["client"]
 
-    try:
-        body = {"site": site, "name": name}
-        if cidr:
-            body["cidr"] = cidr
-        result = client.post("/chameleon/networks", json=body)
-        net_id = result.get("id", "?")
-        click.echo(f"Network created: {name} ({net_id})")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    body = {"site": site, "name": name}
+    if cidr:
+        body["cidr"] = cidr
+    result = client.post("/chameleon/networks", json=body)
+    net_id = result.get("id", "?")
+    _table_message(ctx, f"Network created: {name} ({net_id})")
+    output(ctx, result)
 
 
 @networks.command("delete")
@@ -482,11 +614,10 @@ def networks_delete(ctx, network_id, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.delete(f"/chameleon/networks/{network_id}", params={"site": site})
-        click.echo(f"Network {network_id} deleted.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.delete(f"/chameleon/networks/{network_id}", params={"site": site})
+    _table_message(ctx, f"Network {network_id} deleted.")
+    if not _is_table(ctx):
+        output(ctx, data)
 
 
 # ---------------------------------------------------------------------------
@@ -511,26 +642,11 @@ def keypairs_list(ctx, site):
       loomai chameleon keypairs list --site CHI@TACC
     """
     client = ctx.obj["client"]
-    fmt = ctx.obj["format"]
-
-    try:
-        params = {"site": site} if site else {}
-        data = client.get("/chameleon/keypairs", params=params)
-        if fmt == "json":
-            click.echo(json.dumps(data, indent=2))
-        else:
-            if not data:
-                click.echo("No key pairs found.")
-                return
-            click.echo(f"Key Pairs ({len(data)}):")
-            for kp in data:
-                name = kp.get("name", "?")
-                site_name = kp.get("_site", "?")
-                fp = kp.get("fingerprint", "")
-                ktype = kp.get("type", "")
-                click.echo(f"  {name} @ {site_name}  {ktype}  {fp}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    params = {"site": site} if site else {}
+    data = client.get("/chameleon/keypairs", params=params)
+    output(ctx, data,
+           columns=["name", "_site", "type", "fingerprint", "has_private_key"],
+           headers=["Name", "Site", "Type", "Fingerprint", "Private Key"])
 
 
 @keypairs.command("create")
@@ -549,17 +665,17 @@ def keypairs_create(ctx, site, name, public_key):
     """
     client = ctx.obj["client"]
 
-    try:
-        body = {"site": site, "name": name}
-        if public_key:
-            body["public_key"] = public_key
-        result = client.post("/chameleon/keypairs", json=body)
+    body = {"site": site, "name": name}
+    if public_key:
+        body["public_key"] = public_key
+    result = client.post("/chameleon/keypairs", json=body)
+    if _is_table(ctx):
         click.echo(f"Key pair created: {name}")
         if result.get("private_key"):
             click.echo("Private key (save this — it won't be shown again):")
             click.echo(result["private_key"])
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    else:
+        output(ctx, result)
 
 
 @keypairs.command("delete")
@@ -575,11 +691,97 @@ def keypairs_delete(ctx, name, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.delete(f"/chameleon/keypairs/{name}", params={"site": site})
-        click.echo(f"Key pair '{name}' deleted.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.delete(f"/chameleon/keypairs/{name}", params={"site": site})
+    _table_message(ctx, f"Key pair '{name}' deleted.")
+    if not _is_table(ctx):
+        output(ctx, data)
+
+
+@keypairs.command("upload-private-key")
+@click.argument("name")
+@click.option("--site", default="CHI@TACC", help="Chameleon site.")
+@click.option("--file", "key_file", required=True,
+              type=click.Path(exists=True, dir_okay=False, readable=True),
+              help="Private key file to store for SSH/terminal access.")
+@click.pass_context
+def keypairs_upload_private_key(ctx, name, site, key_file):
+    """Upload the private key for an existing Chameleon key pair."""
+    client = ctx.obj["client"]
+    path = Path(key_file)
+    with path.open("rb") as fh:
+        data = client.post_file(
+            f"/chameleon/keypairs/{name}/private-key",
+            files={"private_key": (path.name, fh, "application/octet-stream")},
+            params={"site": site},
+        )
+    _table_message(ctx, f"Stored private key for key pair '{name}' at {site}")
+    output(ctx, data)
+
+
+@keypairs.command("ensure")
+@click.option("--site", default="CHI@TACC", help="Chameleon site.")
+@click.pass_context
+def keypairs_ensure(ctx, site):
+    """Ensure the managed loomai-key keypair exists for a site."""
+    data = ctx.obj["client"].post("/chameleon/keypairs/ensure", json={"site": site})
+    output(ctx, data)
+
+
+# ---------------------------------------------------------------------------
+# Boot config
+# ---------------------------------------------------------------------------
+
+@chameleon.group("boot-config")
+def boot_config():
+    """Manage Chameleon node boot configuration."""
+
+
+@boot_config.command("show")
+@click.argument("slice_id")
+@click.argument("node_name")
+@click.pass_context
+def boot_config_show(ctx, slice_id, node_name):
+    """Show boot config for a Chameleon node."""
+    data = ctx.obj["client"].get(f"/chameleon/boot-config/{slice_id}/{node_name}")
+    output(ctx, data)
+
+
+@boot_config.command("set")
+@click.argument("slice_id")
+@click.argument("node_name")
+@click.option("--from-file", "config_file", type=click.Path(exists=True),
+              help="JSON file containing full boot config.")
+@click.option("--command", "commands", multiple=True,
+              help="Shell command to add to boot config. Repeatable.")
+@click.pass_context
+def boot_config_set(ctx, slice_id, node_name, config_file, commands):
+    """Save boot config for a Chameleon node."""
+    if config_file:
+        with open(config_file) as f:
+            data = json.load(f)
+    elif commands:
+        data = {
+            "uploads": [],
+            "commands": [
+                {"id": f"cmd-{idx}", "command": command, "order": idx}
+                for idx, command in enumerate(commands)
+            ],
+            "network": [],
+        }
+    else:
+        raise click.UsageError("Use --from-file or at least one --command.")
+    result = ctx.obj["client"].put(f"/chameleon/boot-config/{slice_id}/{node_name}", json=data)
+    output(ctx, result)
+
+
+@boot_config.command("run")
+@click.argument("slice_id")
+@click.argument("node_name")
+@click.pass_context
+def boot_config_run(ctx, slice_id, node_name):
+    """Execute boot config for a Chameleon node."""
+    data = ctx.obj["client"].post(f"/chameleon/boot-config/{slice_id}/{node_name}/execute")
+    output(ctx, data)
 
 
 # ---------------------------------------------------------------------------
@@ -600,15 +802,15 @@ def test_cmd(ctx, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        results = client.post("/chameleon/test", json={"site": site})
-        for site_name, r in results.items():
-            status = "OK" if r.get("ok") else "FAILED"
-            latency = f" ({r['latency_ms']}ms)" if r.get("latency_ms") else ""
-            error = f" — {r['error']}" if r.get("error") else ""
-            click.echo(f"  {site_name}: {status}{latency}{error}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    results = client.post("/chameleon/test", json={"site": site})
+    if not _is_table(ctx):
+        output(ctx, results)
+        return
+    for site_name, r in results.items():
+        status = "OK" if r.get("ok") else "FAILED"
+        latency = f" ({r['latency_ms']}ms)" if r.get("latency_ms") else ""
+        error = f" — {r['error']}" if r.get("error") else ""
+        click.echo(f"  {site_name}: {status}{latency}{error}")
 
 
 # ---------------------------------------------------------------------------
@@ -633,26 +835,11 @@ def ips_list(ctx, site):
       loomai chameleon ips list --site CHI@TACC
     """
     client = ctx.obj["client"]
-    fmt = ctx.obj["format"]
-
-    try:
-        params = {"site": site} if site else {}
-        data = client.get("/chameleon/floating-ips", params=params)
-        if fmt == "json":
-            click.echo(json.dumps(data, indent=2))
-        else:
-            if not data:
-                click.echo("No floating IPs found.")
-                return
-            click.echo(f"Floating IPs ({len(data)}):")
-            for fip in data:
-                ip = fip.get("floating_ip_address", "?")
-                status = fip.get("status", "?")
-                site_name = fip.get("_site", "?")
-                port = fip.get("port_id") or "unassociated"
-                click.echo(f"  {ip} ({status}) @ {site_name}  port: {port[:12]}{'...' if len(str(port)) > 12 else ''}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    params = {"site": site} if site else {}
+    data = client.get("/chameleon/floating-ips", params=params)
+    output(ctx, data,
+           columns=["floating_ip_address", "id", "status", "_site", "port_id"],
+           headers=["IP", "ID", "Status", "Site", "Port"])
 
 
 @ips.command("allocate")
@@ -668,13 +855,11 @@ def ips_allocate(ctx, site, network):
     """
     client = ctx.obj["client"]
 
-    try:
-        result = client.post("/chameleon/floating-ips", json={"site": site, "network": network})
-        ip = result.get("floating_ip_address", "?")
-        fip_id = result.get("id", "?")
-        click.echo(f"Allocated: {ip} ({fip_id})")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    result = client.post("/chameleon/floating-ips", json={"site": site, "network": network})
+    ip = result.get("floating_ip_address", "?")
+    fip_id = result.get("id", "?")
+    _table_message(ctx, f"Allocated: {ip} ({fip_id})")
+    output(ctx, result)
 
 
 @ips.command("associate")
@@ -691,12 +876,10 @@ def ips_associate(ctx, ip_id, port_id, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        result = client.post(f"/chameleon/floating-ips/{ip_id}/associate", json={"site": site, "port_id": port_id})
-        ip = result.get("floating_ip_address", "?")
-        click.echo(f"Associated {ip} with port {port_id[:12]}...")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    result = client.post(f"/chameleon/floating-ips/{ip_id}/associate", json={"site": site, "port_id": port_id})
+    ip = result.get("floating_ip_address", "?")
+    _table_message(ctx, f"Associated {ip} with port {port_id[:12]}...")
+    output(ctx, result)
 
 
 @ips.command("disassociate")
@@ -713,11 +896,9 @@ def ips_disassociate(ctx, instance_id, floating_ip, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.post(f"/chameleon/instances/{instance_id}/disassociate-ip", json={"site": site, "floating_ip": floating_ip})
-        click.echo(f"Disassociated {floating_ip} from instance {instance_id[:12]}...")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.post(f"/chameleon/instances/{instance_id}/disassociate-ip", json={"site": site, "floating_ip": floating_ip})
+    _table_message(ctx, f"Disassociated {floating_ip} from instance {instance_id[:12]}...")
+    output(ctx, data)
 
 
 @ips.command("release")
@@ -733,11 +914,10 @@ def ips_release(ctx, ip_id, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.delete(f"/chameleon/floating-ips/{ip_id}", params={"site": site})
-        click.echo(f"Floating IP {ip_id} released.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.delete(f"/chameleon/floating-ips/{ip_id}", params={"site": site})
+    _table_message(ctx, f"Floating IP {ip_id} released.")
+    if not _is_table(ctx):
+        output(ctx, data)
 
 
 # ---------------------------------------------------------------------------
@@ -762,26 +942,11 @@ def sg_list(ctx, site):
       loomai chameleon security-groups list --site CHI@TACC
     """
     client = ctx.obj["client"]
-    fmt = ctx.obj["format"]
-
-    try:
-        params = {"site": site} if site else {}
-        data = client.get("/chameleon/security-groups", params=params)
-        if fmt == "json":
-            click.echo(json.dumps(data, indent=2))
-        else:
-            if not data:
-                click.echo("No security groups found.")
-                return
-            click.echo(f"Security Groups ({len(data)}):")
-            for sg in data:
-                name = sg.get("name", "?")
-                site_name = sg.get("_site", "?")
-                desc = sg.get("description", "")
-                rules = len(sg.get("security_group_rules", []))
-                click.echo(f"  {name} @ {site_name}  {rules} rules  {desc[:40]}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    params = {"site": site} if site else {}
+    data = client.get("/chameleon/security-groups", params=params)
+    output(ctx, data,
+           columns=["name", "id", "_site", lambda r: len(r.get("security_group_rules", [])), "description"],
+           headers=["Name", "ID", "Site", "Rules", "Description"])
 
 
 @security_groups.command("create")
@@ -798,12 +963,10 @@ def sg_create(ctx, name, site, description):
     """
     client = ctx.obj["client"]
 
-    try:
-        result = client.post("/chameleon/security-groups", json={"site": site, "name": name, "description": description})
-        sg_id = result.get("id", "?")
-        click.echo(f"Security group created: {name} ({sg_id})")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    result = client.post("/chameleon/security-groups", json={"site": site, "name": name, "description": description})
+    sg_id = result.get("id", "?")
+    _table_message(ctx, f"Security group created: {name} ({sg_id})")
+    output(ctx, result)
 
 
 @security_groups.command("delete")
@@ -819,11 +982,10 @@ def sg_delete(ctx, sg_id, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.delete(f"/chameleon/security-groups/{sg_id}", params={"site": site})
-        click.echo(f"Security group {sg_id} deleted.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.delete(f"/chameleon/security-groups/{sg_id}", params={"site": site})
+    _table_message(ctx, f"Security group {sg_id} deleted.")
+    if not _is_table(ctx):
+        output(ctx, data)
 
 
 @security_groups.command("add-rule")
@@ -857,12 +1019,10 @@ def sg_add_rule(ctx, sg_id, direction, protocol, port_min, port_max, remote_ip, 
     if remote_ip:
         body["remote_ip_prefix"] = remote_ip
 
-    try:
-        result = client.post(f"/chameleon/security-groups/{sg_id}/rules", json=body)
-        rule_id = result.get("id", "?")
-        click.echo(f"Rule added: {direction} {protocol or 'any'} {port_min or ''}-{port_max or ''} ({rule_id})")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    result = client.post(f"/chameleon/security-groups/{sg_id}/rules", json=body)
+    rule_id = result.get("id", "?")
+    _table_message(ctx, f"Rule added: {direction} {protocol or 'any'} {port_min or ''}-{port_max or ''} ({rule_id})")
+    output(ctx, result)
 
 
 @security_groups.command("remove-rule")
@@ -879,11 +1039,10 @@ def sg_remove_rule(ctx, sg_id, rule_id, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.delete(f"/chameleon/security-groups/{sg_id}/rules/{rule_id}", params={"site": site})
-        click.echo(f"Rule {rule_id} deleted.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.delete(f"/chameleon/security-groups/{sg_id}/rules/{rule_id}", params={"site": site})
+    _table_message(ctx, f"Rule {rule_id} deleted.")
+    if not _is_table(ctx):
+        output(ctx, data)
 
 
 # ---------------------------------------------------------------------------
@@ -905,25 +1064,29 @@ def slices_list(ctx):
       loomai chameleon slices list
     """
     client = ctx.obj["client"]
-    fmt = ctx.obj["format"]
+    data = client.get("/chameleon/slices")
+    output(ctx, data,
+           columns=["name", "id", "state", "site", lambda r: len(r.get("resources", []))],
+           headers=["Name", "ID", "State", "Site", "Resources"])
 
-    try:
-        data = client.get("/chameleon/slices")
-        if fmt == "json":
-            click.echo(json.dumps(data, indent=2))
-        else:
-            if not data:
-                click.echo("No slices found.")
-                return
-            click.echo(f"Chameleon Slices ({len(data)}):")
-            for s in data:
-                name = s.get("name", "?")
-                site_name = s.get("site", "?")
-                res_count = len(s.get("resources", []))
-                state = s.get("state", "?")
-                click.echo(f"  {name} ({state}) @ {site_name}  {res_count} resources  id: {s.get('id', '?')[:16]}...")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+
+@slices.command("all")
+@click.pass_context
+def slices_all(ctx):
+    """List all Chameleon slice records, including compatibility records."""
+    data = ctx.obj["client"].get("/chameleon/slices/all")
+    output(ctx, data,
+           columns=["id", "name", "state", "site"],
+           headers=["ID", "Name", "State", "Site"])
+
+
+@slices.command("show")
+@click.argument("slice_id")
+@click.pass_context
+def slices_show(ctx, slice_id):
+    """Show one Chameleon slice/draft record."""
+    data = ctx.obj["client"].get(f"/chameleon/drafts/{slice_id}")
+    output(ctx, data)
 
 
 @slices.command("create")
@@ -939,12 +1102,90 @@ def slices_create(ctx, name, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        result = client.post("/chameleon/slices", json={"name": name, "site": site})
-        slice_id = result.get("id", "?")
-        click.echo(f"Slice created: {name} ({slice_id})")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    result = client.post("/chameleon/slices", json={"name": name, "site": site})
+    slice_id = result.get("id", "?")
+    _table_message(ctx, f"Slice created: {name} ({slice_id})")
+    output(ctx, result)
+
+
+@slices.command("state")
+@click.argument("slice_id")
+@click.option("--state", "new_state", help="Set slice state instead of only showing it.")
+@click.pass_context
+def slices_state(ctx, slice_id, new_state):
+    """Show or update a Chameleon slice state."""
+    if new_state:
+        data = ctx.obj["client"].put(f"/chameleon/slices/{slice_id}/state", json={"state": new_state})
+    else:
+        data = ctx.obj["client"].get(f"/chameleon/drafts/{slice_id}")
+        data = {"id": slice_id, "state": data.get("state", ""), "name": data.get("name", "")}
+    output(ctx, data)
+
+
+@slices.command("graph")
+@click.argument("slice_id")
+@click.pass_context
+def slices_graph(ctx, slice_id):
+    """Show the topology graph for a Chameleon slice."""
+    data = ctx.obj["client"].get(f"/chameleon/slices/{slice_id}/graph")
+    output(ctx, data)
+
+
+@slices.command("auto-network-setup")
+@click.argument("slice_id")
+@click.pass_context
+def slices_auto_network_setup(ctx, slice_id):
+    """Ensure SSH security groups and floating IPs for slice instances."""
+    data = ctx.obj["client"].post(f"/chameleon/slices/{slice_id}/auto-network-setup")
+    output(ctx, data)
+
+
+@slices.command("import-reservation")
+@click.argument("slice_id")
+@click.option("--site", default="CHI@TACC", help="Chameleon site.")
+@click.option("--lease-id", default="", help="Blazar lease ID.")
+@click.option("--instance-id", "instance_ids", multiple=True,
+              help="Explicit instance ID to import. Repeatable.")
+@click.option("--instance-name", "instance_names", multiple=True,
+              help="Explicit instance name to import. Repeatable.")
+@click.option("--include-lease/--no-include-lease", default=True,
+              help="Track the lease resource in the slice.")
+@click.pass_context
+def slices_import_reservation(ctx, slice_id, site, lease_id, instance_ids, instance_names, include_lease):
+    """Import lease-associated instances into a Chameleon slice."""
+    data = ctx.obj["client"].post(f"/chameleon/slices/{slice_id}/import-reservation", json={
+        "site": site,
+        "lease_id": lease_id,
+        "instance_ids": list(instance_ids),
+        "instance_names": list(instance_names),
+        "include_lease": include_lease,
+    })
+    output(ctx, data)
+
+
+@slices.command("ensure-bastion")
+@click.argument("slice_id")
+@click.option("--site", default="CHI@TACC", help="Chameleon site.")
+@click.option("--experiment-net-id", default="", help="Experiment/private network ID.")
+@click.option("--reservation-id", default="", help="Reservation ID for the bastion.")
+@click.pass_context
+def slices_ensure_bastion(ctx, slice_id, site, experiment_net_id, reservation_id):
+    """Ensure a bastion exists for private Chameleon worker access."""
+    data = ctx.obj["client"].post(f"/chameleon/slices/{slice_id}/ensure-bastion", json={
+        "site": site,
+        "experiment_net_id": experiment_net_id,
+        "reservation_id": reservation_id,
+    })
+    output(ctx, data)
+
+
+@slices.command("check-readiness")
+@click.argument("slice_id")
+@click.pass_context
+def slices_check_readiness(ctx, slice_id):
+    """Probe SSH readiness for Chameleon slice instances."""
+    data = ctx.obj["client"].post(f"/chameleon/slices/{slice_id}/check-readiness")
+    output(ctx, data)
 
 
 @slices.command("delete")
@@ -959,11 +1200,10 @@ def slices_delete(ctx, slice_id):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.delete(f"/chameleon/slices/{slice_id}")
-        click.echo(f"Slice {slice_id} deleted.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.delete(f"/chameleon/slices/{slice_id}")
+    _table_message(ctx, f"Slice {slice_id} deleted.")
+    if not _is_table(ctx):
+        output(ctx, data)
 
 
 @slices.command("add-resource")
@@ -986,12 +1226,10 @@ def slices_add_resource(ctx, slice_id, res_type, res_id, res_name, site):
     if site:
         body["site"] = site
 
-    try:
-        result = client.post(f"/chameleon/slices/{slice_id}/add-resource", json=body)
-        count = len(result.get("resources", []))
-        click.echo(f"Resource added to slice. Total resources: {count}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    result = client.post(f"/chameleon/slices/{slice_id}/add-resource", json=body)
+    count = len(result.get("resources", []))
+    _table_message(ctx, f"Resource added to slice. Total resources: {count}")
+    output(ctx, result)
 
 
 @slices.command("remove-resource")
@@ -1007,12 +1245,10 @@ def slices_remove_resource(ctx, slice_id, resource_id):
     """
     client = ctx.obj["client"]
 
-    try:
-        result = client.post(f"/chameleon/slices/{slice_id}/remove-resource", json={"resource_id": resource_id})
-        count = len(result.get("resources", []))
-        click.echo(f"Resource removed. Remaining resources: {count}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    result = client.post(f"/chameleon/slices/{slice_id}/remove-resource", json={"resource_id": resource_id})
+    count = len(result.get("resources", []))
+    _table_message(ctx, f"Resource removed. Remaining resources: {count}")
+    output(ctx, result)
 
 
 # ---------------------------------------------------------------------------
@@ -1034,25 +1270,19 @@ def drafts_list(ctx):
       loomai chameleon drafts list
     """
     client = ctx.obj["client"]
-    fmt = ctx.obj["format"]
+    data = client.get("/chameleon/drafts")
+    output(ctx, data,
+           columns=["name", "id", "site", lambda r: len(r.get("nodes", [])), lambda r: len(r.get("networks", []))],
+           headers=["Name", "ID", "Site", "Nodes", "Networks"])
 
-    try:
-        data = client.get("/chameleon/drafts")
-        if fmt == "json":
-            click.echo(json.dumps(data, indent=2))
-        else:
-            if not data:
-                click.echo("No drafts found.")
-                return
-            click.echo(f"Drafts ({len(data)}):")
-            for d in data:
-                name = d.get("name", "?")
-                site_name = d.get("site", "?")
-                nodes = len(d.get("nodes", []))
-                nets = len(d.get("networks", []))
-                click.echo(f"  {name} @ {site_name}  {nodes} nodes, {nets} networks  id: {d.get('id', '?')[:16]}...")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+
+@drafts.command("show")
+@click.argument("draft_id")
+@click.pass_context
+def drafts_show(ctx, draft_id):
+    """Show a Chameleon draft/slice topology."""
+    data = ctx.obj["client"].get(f"/chameleon/drafts/{draft_id}")
+    output(ctx, data)
 
 
 @drafts.command("create")
@@ -1068,12 +1298,10 @@ def drafts_create(ctx, name, site):
     """
     client = ctx.obj["client"]
 
-    try:
-        result = client.post("/chameleon/drafts", json={"name": name, "site": site})
-        draft_id = result.get("id", "?")
-        click.echo(f"Draft created: {name} ({draft_id})")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    result = client.post("/chameleon/drafts", json={"name": name, "site": site})
+    draft_id = result.get("id", "?")
+    _table_message(ctx, f"Draft created: {name} ({draft_id})")
+    output(ctx, result)
 
 
 @drafts.command("delete")
@@ -1088,11 +1316,10 @@ def drafts_delete(ctx, draft_id):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.delete(f"/chameleon/drafts/{draft_id}")
-        click.echo(f"Draft {draft_id} deleted.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.delete(f"/chameleon/drafts/{draft_id}")
+    _table_message(ctx, f"Draft {draft_id} deleted.")
+    if not _is_table(ctx):
+        output(ctx, data)
 
 
 @drafts.command("add-node")
@@ -1110,14 +1337,41 @@ def drafts_add_node(ctx, draft_id, name, node_type, image):
     """
     client = ctx.obj["client"]
 
-    try:
-        result = client.post(f"/chameleon/drafts/{draft_id}/nodes", json={
-            "name": name, "node_type": node_type, "image": image,
-        })
-        nodes = result.get("nodes", [])
-        click.echo(f"Node '{name}' added. Total nodes: {len(nodes)}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    result = client.post(f"/chameleon/drafts/{draft_id}/nodes", json={
+        "name": name, "node_type": node_type, "image": image,
+    })
+    nodes = result.get("nodes", [])
+    _table_message(ctx, f"Node '{name}' added. Total nodes: {len(nodes)}")
+    output(ctx, result)
+
+
+@drafts.command("update-node")
+@click.argument("draft_id")
+@click.argument("node_id")
+@click.option("--name", help="Node display name.")
+@click.option("--type", "node_type", help="Node type.")
+@click.option("--image", help="Image name or ID.")
+@click.option("--count", type=int, help="Replica count.")
+@click.option("--site", help="Chameleon site.")
+@click.option("--key-name", help="Nova keypair name.")
+@click.pass_context
+def drafts_update_node(ctx, draft_id, node_id, name, node_type, image, count, site, key_name):
+    """Update a planned node in a Chameleon draft."""
+    body = {}
+    for key, value in {
+        "name": name,
+        "node_type": node_type,
+        "image": image,
+        "count": count,
+        "site": site,
+        "key_name": key_name,
+    }.items():
+        if value is not None:
+            body[key] = value
+    if not body:
+        raise click.UsageError("Specify at least one node property.")
+    data = ctx.obj["client"].put(f"/chameleon/drafts/{draft_id}/nodes/{node_id}", json=body)
+    output(ctx, data)
 
 
 @drafts.command("remove-node")
@@ -1133,11 +1387,50 @@ def drafts_remove_node(ctx, draft_id, node_id):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.delete(f"/chameleon/drafts/{draft_id}/nodes/{node_id}")
-        click.echo(f"Node {node_id} removed.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.delete(f"/chameleon/drafts/{draft_id}/nodes/{node_id}")
+    _table_message(ctx, f"Node {node_id} removed.")
+    if not _is_table(ctx):
+        output(ctx, data)
+
+
+@drafts.command("set-node-network")
+@click.argument("draft_id")
+@click.argument("node_id")
+@click.option("--network-id", default="", help="Network ID, or empty to disconnect.")
+@click.option("--network-name", default="", help="Network display name.")
+@click.pass_context
+def drafts_set_node_network(ctx, draft_id, node_id, network_id, network_name):
+    """Set the primary network for a planned node."""
+    body = None if not network_id and not network_name else {
+        "id": network_id,
+        "name": network_name or network_id,
+    }
+    data = ctx.obj["client"].put(f"/chameleon/drafts/{draft_id}/nodes/{node_id}/network", json=body)
+    output(ctx, data)
+
+
+@drafts.command("set-interfaces")
+@click.argument("draft_id")
+@click.argument("node_id")
+@click.option("--interface", "interfaces", multiple=True,
+              help="NIC assignment as NIC=NETWORK_ID[:NETWORK_NAME]. Repeatable.")
+@click.pass_context
+def drafts_set_interfaces(ctx, draft_id, node_id, interfaces):
+    """Set all NIC network assignments for a planned node."""
+    body = []
+    for raw in interfaces:
+        if "=" not in raw:
+            raise click.UsageError(f"Invalid interface '{raw}' (expected NIC=NETWORK_ID[:NETWORK_NAME])")
+        nic_raw, network_raw = raw.split("=", 1)
+        try:
+            nic = int(nic_raw)
+        except ValueError as exc:
+            raise click.UsageError(f"Invalid NIC index '{nic_raw}'") from exc
+        network_id, _, network_name = network_raw.partition(":")
+        network = None if not network_id else {"id": network_id, "name": network_name or network_id}
+        body.append({"nic": nic, "network": network})
+    data = ctx.obj["client"].put(f"/chameleon/drafts/{draft_id}/nodes/{node_id}/interfaces", json=body)
+    output(ctx, data)
 
 
 @drafts.command("add-network")
@@ -1160,12 +1453,10 @@ def drafts_add_network(ctx, draft_id, name, nodes):
     if nodes:
         body["connected_nodes"] = [n.strip() for n in nodes.split(",") if n.strip()]
 
-    try:
-        result = client.post(f"/chameleon/drafts/{draft_id}/networks", json=body)
-        nets = result.get("networks", [])
-        click.echo(f"Network '{name}' added. Total networks: {len(nets)}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    result = client.post(f"/chameleon/drafts/{draft_id}/networks", json=body)
+    nets = result.get("networks", [])
+    _table_message(ctx, f"Network '{name}' added. Total networks: {len(nets)}")
+    output(ctx, result)
 
 
 @drafts.command("remove-network")
@@ -1181,11 +1472,54 @@ def drafts_remove_network(ctx, draft_id, network_id):
     """
     client = ctx.obj["client"]
 
-    try:
-        client.delete(f"/chameleon/drafts/{draft_id}/networks/{network_id}")
-        click.echo(f"Network {network_id} removed.")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    data = client.delete(f"/chameleon/drafts/{draft_id}/networks/{network_id}")
+    _table_message(ctx, f"Network {network_id} removed.")
+    if not _is_table(ctx):
+        output(ctx, data)
+
+
+@drafts.command("floating-ips")
+@click.argument("draft_id")
+@click.option("--entry", "entries", multiple=True,
+              help="Floating IP intent as NODE_ID[:NIC]. Repeatable.")
+@click.pass_context
+def drafts_floating_ips(ctx, draft_id, entries):
+    """Set which planned nodes should get floating IPs."""
+    parsed = []
+    for raw in entries:
+        node_id, _, nic_raw = raw.partition(":")
+        if not node_id:
+            raise click.UsageError("NODE_ID cannot be empty")
+        nic = int(nic_raw) if nic_raw else 0
+        parsed.append({"node_id": node_id, "nic": nic})
+    data = ctx.obj["client"].put(f"/chameleon/drafts/{draft_id}/floating-ips", json={"entries": parsed})
+    output(ctx, data)
+
+
+@drafts.command("graph")
+@click.argument("draft_id")
+@click.pass_context
+def drafts_graph(ctx, draft_id):
+    """Show a Chameleon draft topology graph."""
+    data = ctx.obj["client"].get(f"/chameleon/drafts/{draft_id}/graph")
+    output(ctx, data)
+
+
+@drafts.command("precreate-leases")
+@click.argument("draft_id")
+@click.option("--lease-name", default=None, help="Lease name prefix.")
+@click.option("--hours", default=24, type=int, help="Lease duration in hours.")
+@click.option("--start-date", default=None, help="Start date (ISO format, or now).")
+@click.pass_context
+def drafts_precreate_leases(ctx, draft_id, lease_name, hours, start_date):
+    """Create Blazar leases for a draft without deploying instances."""
+    body = {"duration_hours": hours}
+    if lease_name:
+        body["lease_name"] = lease_name
+    if start_date:
+        body["start_date"] = start_date
+    data = ctx.obj["client"].post(f"/chameleon/drafts/{draft_id}/precreate-leases", json=body)
+    output(ctx, data)
 
 
 @drafts.command("deploy")
@@ -1211,9 +1545,9 @@ def drafts_deploy(ctx, draft_id, lease_name, hours, start_date):
     if start_date:
         body["start_date"] = start_date
 
-    try:
-        result = client.post(f"/chameleon/drafts/{draft_id}/deploy", json=body)
-        click.echo(f"Deployment started.")
+    result = client.post(f"/chameleon/drafts/{draft_id}/deploy", json=body)
+    if _is_table(ctx):
+        click.echo("Deployment started.")
         if result.get("lease_id"):
             click.echo(f"  Lease: {result['lease_id']}")
         if result.get("instances"):
@@ -1221,5 +1555,5 @@ def drafts_deploy(ctx, draft_id, lease_name, hours, start_date):
                 click.echo(f"  Instance: {inst.get('name', '?')} ({inst.get('id', '?')[:12]}...)")
         if result.get("error"):
             click.echo(f"  Warning: {result['error']}")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    else:
+        output(ctx, result)

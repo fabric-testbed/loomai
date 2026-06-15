@@ -7,6 +7,15 @@ import click
 from loomai_cli.output import output, output_message
 
 
+def _is_table(ctx: click.Context) -> bool:
+    return ctx.obj["format"] == "table"
+
+
+def _table_message(ctx: click.Context, message: str) -> None:
+    if _is_table(ctx):
+        output_message(message)
+
+
 @click.group()
 def artifacts():
     """Browse, get, and publish FABRIC artifacts."""
@@ -102,7 +111,7 @@ def get_artifact(ctx, uuid, local_name):
     if local_name:
         body["local_name"] = local_name
     data = client.post("/artifacts/download", json=body)
-    output_message(f"Downloaded artifact {uuid}")
+    _table_message(ctx, f"Downloaded artifact {uuid}")
     output(ctx, data)
 
 
@@ -136,7 +145,7 @@ def publish_artifact(ctx, dir_name, title, description, tags, category, visibili
     if tags:
         body["tags"] = [t.strip() for t in tags.split(",")]
     data = client.post("/artifacts/publish", json=body)
-    output_message(f"Published '{title}'")
+    _table_message(ctx, f"Published '{title}'")
     output(ctx, data)
 
 
@@ -164,7 +173,7 @@ def update_artifact(ctx, uuid, title, description, tags):
     if not body:
         raise click.UsageError("Specify at least one field to update.")
     data = client.put(f"/artifacts/remote/{uuid}", json=body)
-    output_message(f"Updated artifact {uuid}")
+    _table_message(ctx, f"Updated artifact {uuid}")
     output(ctx, data)
 
 
@@ -183,7 +192,9 @@ def delete_artifact(ctx, uuid, force):
         click.confirm(f"Delete artifact {uuid}?", abort=True)
     client = ctx.obj["client"]
     data = client.delete(f"/artifacts/remote/{uuid}")
-    output_message(f"Deleted artifact {uuid}")
+    _table_message(ctx, f"Deleted artifact {uuid}")
+    if not _is_table(ctx):
+        output(ctx, data)
 
 
 @artifacts.command("tags")
@@ -218,7 +229,10 @@ def list_versions(ctx, uuid):
     data = client.get(f"/artifacts/remote/{uuid}")
     versions = data.get("versions", [])
     if not versions:
-        click.echo("(no versions)")
+        if _is_table(ctx):
+            click.echo("(no versions)")
+        else:
+            output(ctx, [])
         return
     if isinstance(versions, list) and versions and isinstance(versions[0], dict):
         output(ctx, versions,
@@ -247,7 +261,7 @@ def push_version(ctx, uuid, dir_name, category):
     client = ctx.obj["client"]
     body = {"artifact_uuid": uuid, "dir_name": dir_name, "category": category}
     data = client.post(f"/artifacts/remote/{uuid}/version", json=body)
-    output_message(f"Pushed new version for artifact {uuid}")
+    _table_message(ctx, f"Pushed new version for artifact {uuid}")
     output(ctx, data)
 
 
@@ -267,4 +281,6 @@ def delete_version(ctx, uuid, version_uuid, force):
         click.confirm(f"Delete version {version_uuid} of artifact {uuid}?", abort=True)
     client = ctx.obj["client"]
     data = client.delete(f"/artifacts/remote/{uuid}/version/{version_uuid}")
-    output_message(f"Deleted version {version_uuid}")
+    _table_message(ctx, f"Deleted version {version_uuid}")
+    if not _is_table(ctx):
+        output(ctx, data)

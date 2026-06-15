@@ -4,6 +4,7 @@ import * as api from '../api/client';
 import type { ConfigStatus, ProjectInfo, SliceKeySet, LoomAISettings, ToolConfigStatus, UserInfo } from '../types/fabric';
 import type { SettingTestResult, ToolInstallInfo } from '../api/client';
 import ToolInstallOverlay from './ToolInstallOverlay';
+import { confirmDialog } from './AppDialogProvider';
 import '../styles/configure.css';
 
 /* ---------- Section definitions ---------- */
@@ -170,7 +171,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   const [llmKeyMessage, setLlmKeyMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Views
-  const [compositeViewEnabled, setCompositeViewEnabled] = useState(false);
+  const [federatedViewEnabled, setFederatedViewEnabled] = useState(false);
 
   // Chameleon Cloud
   const [chameleonEnabled, setChameleonEnabled] = useState(false);
@@ -252,7 +253,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
       setCustomProviders(s.ai.custom_providers || []);
       // Views
       if (s.views) {
-        setCompositeViewEnabled(s.views.composite_enabled || false);
+        setFederatedViewEnabled(s.views.federated_enabled ?? s.views.composite_enabled ?? false);
       }
       // Chameleon
       if (s.chameleon) {
@@ -616,7 +617,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
         },
         tool_configs: settings?.tool_configs ?? {},
         views: {
-          composite_enabled: compositeViewEnabled,
+          federated_enabled: federatedViewEnabled,
         },
       };
 
@@ -739,7 +740,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     if (sshCommandLine !== settings.fabric.ssh_command_line) return true;
     if (aiServerUrl !== settings.ai.ai_server_url) return true;
     if (nrpServerUrl !== settings.ai.nrp_server_url) return true;
-    if (compositeViewEnabled !== !!settings.views?.composite_enabled) return true;
+    if (federatedViewEnabled !== !!(settings.views?.federated_enabled ?? settings.views?.composite_enabled)) return true;
     if (chameleonEnabled !== !!settings.chameleon?.enabled) return true;
     if (chameleonSshKey !== (settings.chameleon?.ssh_key_file || '')) return true;
     if (chameleonPasswordUsername !== (settings.chameleon?.password_auth?.username || '')) return true;
@@ -755,15 +756,19 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     settings, selectedProject, bastionLogin,
     credmgrHost, orchestratorHost, coreApiHost, bastionHost, amHost,
     logLevel, sshCommandLine, aiServerUrl, nrpServerUrl,
-    compositeViewEnabled, chameleonEnabled, chameleonSshKey, chameleonPasswordUsername,
+    federatedViewEnabled, chameleonEnabled, chameleonSshKey, chameleonPasswordUsername,
     chameleonPassword, chameleonSites, avoidSet,
     litellmApiKey, nrpApiKey,
   ]);
 
-  const requestClose = useCallback(() => {
+  const requestClose = useCallback(async () => {
     if (!onClose) return;
     if (hasUnsavedChanges) {
-      const ok = window.confirm('You have unsaved settings changes. Discard them and close?');
+      const ok = await confirmDialog('You have unsaved settings changes. Discard them and close?', {
+        title: 'Discard Settings Changes',
+        confirmLabel: 'Discard',
+        tone: 'danger',
+      });
       if (!ok) return;
     }
     onClose();
@@ -938,9 +943,14 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
               className="btn btn-sm btn-danger"
               disabled={switchingUser}
               onClick={async () => {
-                if (!confirm(
+                if (!await confirmDialog(
                   `Delete ${activeUser.name || activeUser.email || activeUser.uuid}? This permanently `
                   + `removes their folder — tokens, keys, slices, artifacts, and settings.`,
+                  {
+                    title: 'Delete User',
+                    confirmLabel: 'Delete',
+                    tone: 'danger',
+                  },
                 )) return;
                 try {
                   await api.removeUser(activeUser.uuid, true);
@@ -1075,7 +1085,11 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           <button
             className="btn"
             onClick={async () => {
-              if (status?.has_bastion_key && !confirm('Regenerate bastion key? This will replace the existing key.')) return;
+              if (status?.has_bastion_key && !await confirmDialog('Regenerate bastion key? This will replace the existing key.', {
+                title: 'Regenerate Bastion Key',
+                confirmLabel: 'Regenerate',
+                tone: 'danger',
+              })) return;
               setLoading(true);
               try {
                 const res = await api.generateBastionKey(!!status?.has_bastion_key);
@@ -1658,7 +1672,11 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   );
 
   const handleUninstall = async (toolId: string) => {
-    if (!confirm(`Uninstall ${installStatus?.[toolId]?.display_name || toolId}? This will remove the tool and free disk space.`)) return;
+    if (!await confirmDialog(`Uninstall ${installStatus?.[toolId]?.display_name || toolId}? This will remove the tool and free disk space.`, {
+      title: 'Uninstall AI Tool',
+      confirmLabel: 'Uninstall',
+      tone: 'danger',
+    })) return;
     setUninstallingToolId(toolId);
     try {
       const result = await api.uninstallTool(toolId);
@@ -1811,8 +1829,8 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
         <label style={{ fontSize: 12, cursor: 'pointer' }}>
           <input
             type="checkbox"
-            checked={compositeViewEnabled}
-            onChange={e => setCompositeViewEnabled(e.target.checked)}
+            checked={federatedViewEnabled}
+            onChange={e => setFederatedViewEnabled(e.target.checked)}
             style={{ marginRight: 4 }}
           />
           Enable Federated Slices View
@@ -2232,7 +2250,11 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                   )}
                   {item.source !== 'built-in' && (
                     <button className="btn-sm btn-danger" onClick={async () => {
-                      if (!confirm(`Delete ${type} "${item.name}"?`)) return;
+                      if (!await confirmDialog(`Delete ${type} "${item.name}"?`, {
+                        title: `Delete ${type}`,
+                        confirmLabel: 'Delete',
+                        tone: 'danger',
+                      })) return;
                       try {
                         const delFn = type === 'agent' ? api.deleteAgent : api.deleteSkill;
                         await delFn(item.id);
