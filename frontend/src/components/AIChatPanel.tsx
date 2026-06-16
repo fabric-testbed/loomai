@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { getAiModels, getDefaultModel, setDefaultModel as apiSetDefaultModel, refreshAiModels, getChatAgents, streamChat, stopChatStream, getConfig } from '../api/client';
@@ -828,7 +829,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
       </div>
 
       <div className="ai-chat-config">
-        <select className="ai-chat-select" value={selectedModel} onChange={e => {
+        <InAppSelect className="ai-chat-select" value={selectedModel} onChange={e => {
           const val = e.target.value;
           const isNrp = nrpModels.some(m => m.id === val.replace('nrp:', ''));
           const isFabric = fabricModels.some(m => m.id === val);
@@ -866,7 +867,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
               ))}
             </optgroup>
           ))}
-        </select>
+        </InAppSelect>
         <button
           className="ai-chat-refresh-models-btn"
           onClick={async () => {

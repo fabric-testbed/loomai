@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import React, { useState, useMemo } from 'react';
 import type { FacilityPortInfo } from '../types/fabric';
 
@@ -93,14 +94,14 @@ export default function FacilityPortsBrowser({ facilityPorts, loading }: Facilit
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <select
+        <InAppSelect
           className="fp-sort-select"
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value as 'name' | 'site')}
         >
           <option value="site">Sort by Site</option>
           <option value="name">Sort by Name</option>
-        </select>
+        </InAppSelect>
         <span className="rb-count">{filtered.length} facility ports</span>
       </div>
       <div className="rb-table-wrap">

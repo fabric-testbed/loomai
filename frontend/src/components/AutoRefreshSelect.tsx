@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import React from 'react';
 
 const REFRESH_INTERVALS = [
@@ -22,7 +23,7 @@ export default function AutoRefreshSelect({
   title: string;
 }) {
   return (
-    <select
+    <InAppSelect
       className={className}
       value={value}
       onChange={(e) => onChange(parseInt(e.target.value, 10))}
@@ -32,6 +33,6 @@ export default function AutoRefreshSelect({
       {REFRESH_INTERVALS.map((option) => (
         <option key={option.value} value={option.value}>{option.label}</option>
       ))}
-    </select>
+    </InAppSelect>
   );
 }

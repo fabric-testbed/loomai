@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import TestbedViewShell, { CHAMELEON_THEME } from './TestbedViewShell';
@@ -390,7 +391,7 @@ export default function ChameleonView({ onError, forcedTab, hideBar, onOpenTermi
   // Lease selector toolbar content
   const toolbarContent = (
     <div className="testbed-lease-selector">
-      <select
+      <InAppSelect
         value={selectedLease?.id || ''}
         onChange={(e) => {
           const id = e.target.value;
@@ -425,7 +426,7 @@ export default function ChameleonView({ onError, forcedTab, hideBar, onOpenTermi
             ))}
           </optgroup>
         )}
-      </select>
+      </InAppSelect>
       <button
         className="chi-create-btn"
         onClick={() => setShowCreateLease(true)}
@@ -714,11 +715,11 @@ export default function ChameleonView({ onError, forcedTab, hideBar, onOpenTermi
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                       <div style={{ flex: 1, minWidth: 120 }}>
                         <label className="chi-form-label" style={{ margin: '0 0 2px 0' }}>Site</label>
-                        <select className="chi-form-input" value={newNetSite} onChange={e => setNewNetSite(e.target.value)}>
+                        <InAppSelect className="chi-form-input" value={newNetSite} onChange={e => setNewNetSite(e.target.value)}>
                           {sites.filter(s => s.configured).map(s => (
                             <option key={s.name} value={s.name}>{s.name}</option>
                           ))}
-                        </select>
+                        </InAppSelect>
                       </div>
                       <div style={{ flex: 1, minWidth: 120 }}>
                         <label className="chi-form-label" style={{ margin: '0 0 2px 0' }}>Name</label>
@@ -866,26 +867,26 @@ export default function ChameleonView({ onError, forcedTab, hideBar, onOpenTermi
             {createError && <div className="chi-error" style={{ marginBottom: 8 }}>{createError}</div>}
 
             <label className="toolbar-modal-label">Site</label>
-            <select className="toolbar-modal-input" value={createSite} onChange={e => { setCreateSite(e.target.value); setCreateNodeType(''); setAvailResult(null); }}>
+            <InAppSelect className="toolbar-modal-input" value={createSite} onChange={e => { setCreateSite(e.target.value); setCreateNodeType(''); setAvailResult(null); }}>
               {sites.filter(s => s.configured).map(s => (
                 <option key={s.name} value={s.name}>{s.name}</option>
               ))}
-            </select>
+            </InAppSelect>
 
             <label className="toolbar-modal-label">Lease Name</label>
             <input className="toolbar-modal-input" type="text" value={createName} onChange={e => setCreateName(e.target.value)} placeholder="my-experiment" />
 
             <label className="toolbar-modal-label">Resource Type</label>
-            <select className="toolbar-modal-input" value={resourceType} onChange={e => setResourceType(e.target.value)}>
+            <InAppSelect className="toolbar-modal-input" value={resourceType} onChange={e => setResourceType(e.target.value)}>
               <option value="physical:host">Compute / GPU (bare-metal)</option>
               <option value="network">Network (isolated VLAN)</option>
               <option value="virtual:floatingip">Floating IPs</option>
-            </select>
+            </InAppSelect>
 
             {resourceType === 'physical:host' && (
               <>
                 <label className="toolbar-modal-label">Node Type {nodeTypesLoading && '(loading...)'}</label>
-                <select className="toolbar-modal-input" value={createNodeType} onChange={e => { setCreateNodeType(e.target.value); setAvailResult(null); }} disabled={nodeTypesLoading}>
+                <InAppSelect className="toolbar-modal-input" value={createNodeType} onChange={e => { setCreateNodeType(e.target.value); setAvailResult(null); }} disabled={nodeTypesLoading}>
                   {nodeTypes.length === 0 && <option value="">-- select --</option>}
                   {nodeTypes.map(nt => {
                     const detail = getDetailForNodeType(nt.node_type);
@@ -905,7 +906,7 @@ export default function ChameleonView({ onError, forcedTab, hideBar, onOpenTermi
                       </option>
                     );
                   })}
-                </select>
+                </InAppSelect>
               </>
             )}
 

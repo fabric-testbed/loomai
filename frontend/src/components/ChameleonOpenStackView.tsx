@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import React, { useState, useEffect, useCallback } from 'react';
 import * as api from '../api/client';
 import { alertDialog, confirmDialog, promptDialog } from './AppDialogProvider';
@@ -638,18 +639,18 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
                         <tr style={{ background: 'var(--fabric-bg-tint, #f8f9fa)', fontSize: 11 }}>
                           <td></td>
                           <td>
-                            <select value={ruleDirection} onChange={e => setRuleDirection(e.target.value)} style={{ fontSize: 11 }}>
+                            <InAppSelect value={ruleDirection} onChange={e => setRuleDirection(e.target.value)} style={{ fontSize: 11 }}>
                               <option value="ingress">ingress</option>
                               <option value="egress">egress</option>
-                            </select>
+                            </InAppSelect>
                           </td>
                           <td>
-                            <select value={ruleProtocol} onChange={e => setRuleProtocol(e.target.value)} style={{ fontSize: 11 }}>
+                            <InAppSelect value={ruleProtocol} onChange={e => setRuleProtocol(e.target.value)} style={{ fontSize: 11 }}>
                               <option value="tcp">tcp</option>
                               <option value="udp">udp</option>
                               <option value="icmp">icmp</option>
                               <option value="">any</option>
-                            </select>
+                            </InAppSelect>
                           </td>
                           <td>
                             <input type="number" placeholder="min" value={rulePortMin} onChange={e => setRulePortMin(e.target.value)} style={{ width: 50, fontSize: 11 }} />
@@ -737,13 +738,13 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
           onChange={e => setFilter(e.target.value)}
         />
         {activeTab === 'images' && (
-          <select className="chi-os-site-select" value={imageSite} onChange={e => { setImageSite(e.target.value); }}>
+          <InAppSelect className="chi-os-site-select" value={imageSite} onChange={e => { setImageSite(e.target.value); }}>
             <option value="CHI@TACC">CHI@TACC</option>
             <option value="CHI@UC">CHI@UC</option>
             <option value="CHI@NU">CHI@NU</option>
             <option value="CHI@EVL">CHI@EVL</option>
             <option value="KVM@TACC">KVM@TACC</option>
-          </select>
+          </InAppSelect>
         )}
         {activeTab === 'keypairs' && (
           <button className="chi-os-btn chi-os-btn-primary" onClick={() => setShowCreateKp(true)}>+ Create Key Pair</button>
@@ -781,13 +782,13 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
           </div>
           <div className="chi-os-create-kp-row">
             <label>Site:</label>
-            <select value={newKpSite} onChange={e => setNewKpSite(e.target.value)}>
+            <InAppSelect value={newKpSite} onChange={e => setNewKpSite(e.target.value)}>
               <option value="CHI@TACC">CHI@TACC</option>
               <option value="CHI@UC">CHI@UC</option>
               <option value="CHI@NU">CHI@NU</option>
               <option value="CHI@EVL">CHI@EVL</option>
               <option value="KVM@TACC">KVM@TACC</option>
-            </select>
+            </InAppSelect>
           </div>
           <div className="chi-os-create-kp-row">
             <label>Public Key (optional):</label>
@@ -809,13 +810,13 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
           </div>
           <div className="chi-os-create-kp-row">
             <label>Site:</label>
-            <select value={newNetSite} onChange={e => setNewNetSite(e.target.value)}>
+            <InAppSelect value={newNetSite} onChange={e => setNewNetSite(e.target.value)}>
               <option value="CHI@TACC">CHI@TACC</option>
               <option value="CHI@UC">CHI@UC</option>
               <option value="CHI@NU">CHI@NU</option>
               <option value="CHI@EVL">CHI@EVL</option>
               <option value="KVM@TACC">KVM@TACC</option>
-            </select>
+            </InAppSelect>
           </div>
           <div className="chi-os-create-kp-row">
             <label>CIDR (optional):</label>
@@ -833,11 +834,11 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
         <div className="chi-os-create-kp">
           <div className="chi-os-create-kp-row">
             <label>Site:</label>
-            <select value={allocFipSite} onChange={e => setAllocFipSite(e.target.value)}>
+            <InAppSelect value={allocFipSite} onChange={e => setAllocFipSite(e.target.value)}>
               <option value="CHI@TACC">CHI@TACC</option>
               <option value="CHI@UC">CHI@UC</option>
               <option value="KVM@TACC">KVM@TACC</option>
-            </select>
+            </InAppSelect>
           </div>
           <div className="chi-os-create-kp-actions">
             <button className="chi-os-btn chi-os-btn-primary" onClick={handleAllocateFloatingIp}>Allocate</button>
@@ -855,11 +856,11 @@ export default function ChameleonOpenStackView({ onError, onOpenTerminal }: Cham
           </div>
           <div className="chi-os-create-kp-row">
             <label>Site:</label>
-            <select value={newSgSite} onChange={e => setNewSgSite(e.target.value)}>
+            <InAppSelect value={newSgSite} onChange={e => setNewSgSite(e.target.value)}>
               <option value="CHI@TACC">CHI@TACC</option>
               <option value="CHI@UC">CHI@UC</option>
               <option value="KVM@TACC">KVM@TACC</option>
-            </select>
+            </InAppSelect>
           </div>
           <div className="chi-os-create-kp-row">
             <label>Description:</label>

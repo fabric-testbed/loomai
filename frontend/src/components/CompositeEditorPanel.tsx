@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import * as api from '../api/client';
@@ -676,7 +677,7 @@ export default React.memo(function CompositeEditorPanel({
               )}
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, alignItems: 'center' }}>
-                <select
+                <InAppSelect
                   value={connectionType}
                   onChange={(e) => {
                     setConnectionType(e.target.value as 'fabnetv4_l3' | 'facility_port_l2');
@@ -690,8 +691,8 @@ export default React.memo(function CompositeEditorPanel({
                 >
                   <option value="fabnetv4_l3">FABNetv4 L3</option>
                   <option value="facility_port_l2">Facility Port L2</option>
-                </select>
-                <select
+                </InAppSelect>
+                <InAppSelect
                   value={connectionFabricSliceId}
                   onChange={(e) => setConnectionFabricSliceId(e.target.value)}
                   style={{ fontSize: 11, padding: '3px 6px', borderRadius: 3, border: '1px solid var(--fabric-border)', background: 'var(--fabric-bg)', color: 'var(--fabric-text)', minWidth: 0 }}
@@ -701,8 +702,8 @@ export default React.memo(function CompositeEditorPanel({
                   {fabricMemberOptions.map(member => (
                     <option key={member.id} value={member.id}>{member.name}{member.state ? ` (${member.state})` : ''}</option>
                   ))}
-                </select>
-                <select
+                </InAppSelect>
+                <InAppSelect
                   value={connectionChameleonSliceId}
                   onChange={(e) => setConnectionChameleonSliceId(e.target.value)}
                   style={{ fontSize: 11, padding: '3px 6px', borderRadius: 3, border: '1px solid var(--fabric-border)', background: 'var(--fabric-bg)', color: 'var(--fabric-text)', minWidth: 0 }}
@@ -712,11 +713,11 @@ export default React.memo(function CompositeEditorPanel({
                   {chameleonMemberOptions.map(member => (
                     <option key={member.id} value={member.id}>{member.name}{member.site ? ` @ ${member.site}` : ''}</option>
                   ))}
-                </select>
+                </InAppSelect>
               </div>
               {connectionType === 'facility_port_l2' && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, alignItems: 'center', marginTop: 4 }}>
-                  <select
+                  <InAppSelect
                     value={connectionChameleonSite}
                     onChange={(e) => {
                       setConnectionChameleonSite(e.target.value);
@@ -731,8 +732,8 @@ export default React.memo(function CompositeEditorPanel({
                     {connectionChameleonSites.map(site => (
                       <option key={site} value={site}>{site}</option>
                     ))}
-                  </select>
-                  <select
+                  </InAppSelect>
+                  <InAppSelect
                     value={connectionFacilityPort}
                     onChange={(e) => {
                       const name = e.target.value;
@@ -749,8 +750,8 @@ export default React.memo(function CompositeEditorPanel({
                     {(connectionFacilityPorts?.facility_ports || []).map(fp => (
                       <option key={fp.name} value={fp.name}>{fp.name} @ {fp.fabric_site || fp.site}</option>
                     ))}
-                  </select>
-                  <select
+                  </InAppSelect>
+                  <InAppSelect
                     value={connectionFabricNode}
                     onChange={(e) => {
                       const nodeName = e.target.value;
@@ -765,8 +766,8 @@ export default React.memo(function CompositeEditorPanel({
                     {connectionFabricNodeOptions.map(node => (
                       <option key={node.name} value={node.name}>{node.name}{node.site ? ` @ ${node.site}` : ''}</option>
                     ))}
-                  </select>
-                  <select
+                  </InAppSelect>
+                  <InAppSelect
                     value={connectionChameleonNode}
                     onChange={(e) => setConnectionChameleonNode(e.target.value)}
                     style={{ fontSize: 11, padding: '3px 6px', borderRadius: 3, border: '1px solid var(--fabric-border)', background: 'var(--fabric-bg)', color: 'var(--fabric-text)', minWidth: 0 }}
@@ -776,9 +777,9 @@ export default React.memo(function CompositeEditorPanel({
                     {connectionChameleonNodeOptions.map(node => (
                       <option key={node.id || node.name} value={node.name}>{node.name}{node.site ? ` @ ${node.site}` : ''}</option>
                     ))}
-                  </select>
+                  </InAppSelect>
                   {selectedFacilityPortVlans.length > 0 ? (
-                    <select
+                    <InAppSelect
                       value={connectionVlan}
                       onChange={(e) => setConnectionVlan(e.target.value)}
                       style={{ fontSize: 11, padding: '3px 6px', borderRadius: 3, border: '1px solid var(--fabric-border)', background: 'var(--fabric-bg)', color: 'var(--fabric-text)', minWidth: 0 }}
@@ -788,7 +789,7 @@ export default React.memo(function CompositeEditorPanel({
                       {selectedFacilityPortVlans.map(vlan => (
                         <option key={vlan} value={vlan}>{vlan}</option>
                       ))}
-                    </select>
+                    </InAppSelect>
                   ) : (
                     <input
                       value={connectionVlan}
@@ -828,7 +829,7 @@ export default React.memo(function CompositeEditorPanel({
           <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', height: '100%' }}>
             {/* Slice selector */}
             <div style={{ display: 'flex', gap: 4, marginBottom: 8, alignItems: 'center' }}>
-              <select
+              <InAppSelect
                 style={{ flex: 1, fontSize: 11, padding: '3px 6px', borderRadius: 3, border: '1px solid var(--fabric-border)', background: 'var(--fabric-bg)', color: 'var(--fabric-text)' }}
                 value={selectedFabricMemberId}
                 onChange={(e) => setSelectedFabricMemberId(e.target.value)}
@@ -838,7 +839,7 @@ export default React.memo(function CompositeEditorPanel({
                 {memberFabricSummaries.map((m: any) => (
                   <option key={m.id} value={m.id}>{m.name} ({m.state})</option>
                 ))}
-              </select>
+              </InAppSelect>
               {onCreateSlice && (
                 <button
                   style={{ fontSize: 10, padding: '3px 8px', borderRadius: 3, border: '1px solid #5798bc', background: 'rgba(87,152,188,0.1)', color: '#5798bc', cursor: 'pointer', whiteSpace: 'nowrap' }}
@@ -891,7 +892,7 @@ export default React.memo(function CompositeEditorPanel({
           <div style={{ fontSize: 12, display: 'flex', flexDirection: 'column', height: '100%' }}>
             {/* Slice selector */}
             <div style={{ display: 'flex', gap: 4, marginBottom: 8, alignItems: 'center' }}>
-              <select
+              <InAppSelect
                 style={{ flex: 1, fontSize: 11, padding: '3px 6px', borderRadius: 3, border: '1px solid var(--fabric-border)', background: 'var(--fabric-bg)', color: 'var(--fabric-text)' }}
                 value={selectedChameleonMemberId}
                 onChange={(e) => setSelectedChameleonMemberId(e.target.value)}
@@ -901,7 +902,7 @@ export default React.memo(function CompositeEditorPanel({
                 {memberChameleonSummaries.map((m: any) => (
                   <option key={m.id} value={m.id}>{m.name} ({m.state})</option>
                 ))}
-              </select>
+              </InAppSelect>
               {onCreateSlice && (
                 <button
                   style={{ fontSize: 10, padding: '3px 8px', borderRadius: 3, border: '1px solid #39B54A', background: 'rgba(57,181,74,0.1)', color: '#39B54A', cursor: 'pointer', whiteSpace: 'nowrap' }}
@@ -972,7 +973,7 @@ export default React.memo(function CompositeEditorPanel({
               </div>
               <div className="federated-subslice-filter" style={{ flex: '0 0 180px', minWidth: 160 }}>
                 <label htmlFor="federated-subslice-provider">Provider</label>
-                <select
+                <InAppSelect
                   id="federated-subslice-provider"
                   className="template-input"
                   value={memberProviderFilter}
@@ -982,7 +983,7 @@ export default React.memo(function CompositeEditorPanel({
                   <option value="all">All providers</option>
                   <option value="fabric">FABRIC</option>
                   {chameleonEnabled && <option value="chameleon">Chameleon</option>}
-                </select>
+                </InAppSelect>
               </div>
               <span>{filteredSubsliceCandidates.length} of {allSubsliceCandidates.length} subslices</span>
             </div>

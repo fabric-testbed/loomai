@@ -80,7 +80,7 @@ test.describe('Federated Facility Port L2 workflow', () => {
     await page.locator('.title-pill-option', { hasText: /Federated Slice|Composite/i }).click();
     await expect(page.locator('.composite-bar')).toBeVisible({ timeout: 10_000 });
 
-    const select = page.locator('.composite-bar-select');
+    const select = page.locator('select.composite-bar-select');
     const options = await select.locator('option').all();
     let selected = false;
     for (const option of options) {

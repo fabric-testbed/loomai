@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import React, { useState, useEffect } from 'react';
 import type { SliceData, SliceNode, SliceNetwork, SliceErrorMessage, SiteDetail, SiteMetrics, LinkMetrics } from '../types/fabric';
 import { getSiteDetail } from '../api/client';
@@ -411,7 +412,7 @@ function MetricsControls({
       <button onClick={onRefreshMetrics} disabled={metricsLoading} title="Refresh metrics now">
         {metricsLoading ? '↻...' : '↻'}
       </button>
-      <select
+      <InAppSelect
         value={metricsRefreshRate}
         onChange={(e) => onMetricsRefreshRateChange(Number(e.target.value))}
         title="How often to refresh site and link metrics (seconds)"
@@ -423,7 +424,7 @@ function MetricsControls({
         <option value={60}>1 min</option>
         <option value={300}>5 min</option>
         <option value={600}>10 min</option>
-      </select>
+      </InAppSelect>
     </div>
   );
 }

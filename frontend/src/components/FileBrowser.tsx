@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../api/client';
 import type { FileEntry, SliceData, SliceNode } from '../types/fabric';
@@ -399,11 +400,11 @@ export default function FileBrowser({ mode, sliceName, nodeName, sliceData, onPr
         <div className="fb-provision-dialog">
           <h4>Provision to VM</h4>
           <label>Target Node</label>
-          <select value={provNode} onChange={(e) => setProvNode(e.target.value)}>
+          <InAppSelect value={provNode} onChange={(e) => setProvNode(e.target.value)}>
             {nodes.map((n) => (
               <option key={n.name} value={n.name}>{n.name} ({n.site})</option>
             ))}
-          </select>
+          </InAppSelect>
           <label>Destination Path</label>
           <input
             value={provDest}

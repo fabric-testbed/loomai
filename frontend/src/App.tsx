@@ -3,6 +3,7 @@ import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom';
 import dynamic from 'next/dynamic';
 import TitleBar from './components/TitleBar';
+import InAppSelect from './components/InAppSelect';
 import CytoscapeGraph from './components/CytoscapeGraph';
 import type { ContextMenuAction } from './components/CytoscapeGraph';
 import SliverView from './components/SliverView';
@@ -5301,7 +5302,7 @@ export default function App() {
             </div>
             {/* Searchable resource selector */}
             <div style={{ padding: '6px 8px', borderBottom: '1px solid var(--fabric-border)' }}>
-              <select
+              <InAppSelect
                 className="details-resource-select"
                 value={selectedResourceKey}
                 onChange={(e) => {
@@ -5347,7 +5348,7 @@ export default function App() {
                     return <option key={`link:${linkLabel}`} value={`link:${linkLabel}`}>{linkLabel}</option>;
                   })}
                 </optgroup>
-              </select>
+              </InAppSelect>
             </div>
             {/* Detail content */}
             <div style={{ flex: 1, overflow: 'auto' }}>
@@ -5612,7 +5613,7 @@ export default function App() {
             ))}
           </div>
           {(infraSubView === 'table' || infraSubView === 'topology' || infraSubView === 'map') && (<>
-            <select
+            <InAppSelect
               className="fabric-bar-slice-select"
               value={selectedSliceId}
               data-testid="fabric-bar-slice-select"
@@ -5631,7 +5632,7 @@ export default function App() {
               {slices.filter(s => ['Dead', 'Closing'].includes(s.state)).slice(0, 10).map(s => (
                 <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
               ))}
-            </select>
+            </InAppSelect>
             <button className="fabric-bar-action-btn" data-testid="fabric-bar-new-slice" onClick={async () => {
               const name = await promptDialog('Slice name:', {
                 title: 'New FABRIC Slice',
@@ -5706,7 +5707,7 @@ export default function App() {
                 onClick={() => setChameleonSubView(t.key)}>{t.label}</button>
             ))}
           </div>
-          <select className="chameleon-bar-select" value={selectedChameleonSliceId}
+          <InAppSelect className="chameleon-bar-select" value={selectedChameleonSliceId}
             data-testid="chameleon-bar-slice-select"
             onChange={(e) => { setSelectedChameleonSliceId(e.target.value); if (e.target.value) setChameleonSubView('topology'); }}>
             <option value="">-- Select Slice --</option>
@@ -5715,7 +5716,7 @@ export default function App() {
               const siteLabel = sites.length > 0 ? sites.join(', ') : 'no nodes';
               return <option key={s.id} value={s.id}>{s.name} [{s.state}] ({siteLabel})</option>;
             })}
-          </select>
+          </InAppSelect>
           <button className="chameleon-bar-btn" data-testid="chameleon-bar-new-draft" onClick={handleCreateChameleonDraft} title="Create new draft">+ New</button>
           <button className="chameleon-bar-btn" data-testid="chameleon-bar-submit-draft" disabled={!selectedChameleonSliceId} onClick={handleSubmitChameleonDraft} title="Deploy as lease">Submit</button>
           <button className="chameleon-bar-btn chameleon-bar-btn-danger" data-testid="chameleon-bar-delete-draft" disabled={!selectedChameleonSliceId} onClick={handleDeleteChameleonDraft} title="Delete draft">Delete</button>
@@ -5783,7 +5784,7 @@ export default function App() {
             ))}
           </div>
           {(slicesSubView === 'slices' || slicesSubView === 'topology' || slicesSubView === 'map') && (<>
-            <select
+            <InAppSelect
               className="composite-bar-select"
               data-testid="federated-bar-slice-select"
               value={selectedCompositeSliceId}
@@ -5803,7 +5804,7 @@ export default function App() {
               {compositeSlices.map(s => (
                 <option key={s.id} value={s.id}>{s.name} ({s.state})</option>
               ))}
-            </select>
+            </InAppSelect>
             <button className="composite-bar-btn" data-testid="federated-bar-new-slice" onClick={async () => {
               const name = await promptDialog('Federated slice name:', {
                 title: 'New Federated Slice',
@@ -6840,7 +6841,7 @@ export default function App() {
                     onChange={(e) => handleExpVarChange(i, 'label', e.target.value)}
                     style={{ width: 100 }}
                   />
-                  <select
+                  <InAppSelect
                     className="experiment-var-input"
                     value={v.type}
                     onChange={(e) => handleExpVarChange(i, 'type', e.target.value)}
@@ -6850,7 +6851,7 @@ export default function App() {
                     <option value="number">Number</option>
                     <option value="site">FABRIC Site</option>
                     <option value="chameleon_site">Chameleon Site</option>
-                  </select>
+                  </InAppSelect>
                   <input
                     type={v.type === 'number' ? 'number' : 'text'}
                     className="experiment-var-input"
@@ -6973,12 +6974,12 @@ export default function App() {
             {/* Network selector */}
             <div style={{ marginTop: 8 }}>
               <label className="toolbar-modal-label">Network</label>
-              <select className="toolbar-modal-input" value={chiSelectedNetworkId} onChange={e => setChiSelectedNetworkId(e.target.value)}>
+              <InAppSelect className="toolbar-modal-input" value={chiSelectedNetworkId} onChange={e => setChiSelectedNetworkId(e.target.value)}>
                 <option value="">-- Auto (first shared) --</option>
                 {chiDeployNetworks.map((n: any) => (
                   <option key={n.id} value={n.id}>{n.name}{n.shared ? ' (shared)' : ''}</option>
                 ))}
-              </select>
+              </InAppSelect>
             </div>
             {/* Deploy mode */}
             <div style={{ marginTop: 12 }}>
@@ -6998,12 +6999,12 @@ export default function App() {
                 </label>
               </div>
               {chiDeployMode === 'existing-lease' && (
-                <select className="toolbar-modal-input" value={chiExistingLeaseId} onChange={e => setChiExistingLeaseId(e.target.value)} style={{ marginTop: 4 }}>
+                <InAppSelect className="toolbar-modal-input" value={chiExistingLeaseId} onChange={e => setChiExistingLeaseId(e.target.value)} style={{ marginTop: 4 }}>
                   <option value="">-- Select ACTIVE Lease --</option>
                   {chiActiveLeases.map((l: any) => (
                     <option key={l.id} value={l.id}>{l.name} ({l._site})</option>
                   ))}
-                </select>
+                </InAppSelect>
               )}
             </div>
             {/* Availability check */}

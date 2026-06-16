@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as api from '../api/client';
 import type { FileEntry, SliceData } from '../types/fabric';
@@ -796,7 +797,7 @@ export default function FileTransferView({ sliceName, sliceData, fabricSlices, c
           <>
             <div className="ftv-panel-header">
               <span>VM Files</span>
-              <select
+              <InAppSelect
                 className="ftv-node-select"
                 value={vmNode}
                 data-testid="vm-node-select"
@@ -811,7 +812,7 @@ export default function FileTransferView({ sliceName, sliceData, fabricSlices, c
                 {vmNodeOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
-              </select>
+              </InAppSelect>
             </div>
             <div className="fb-breadcrumbs">
               <button onClick={() => rightGoToSegment(-1)}>/</button>

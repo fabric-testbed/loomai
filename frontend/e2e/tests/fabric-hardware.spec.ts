@@ -87,7 +87,7 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
     ], { name: 'fabnet', type: 'FABNetv4' });
 
     await navigateToView(page, 'fabric');
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
@@ -105,7 +105,7 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
     ], { name: 'l2sts-link', type: 'L2STS', subnet: '192.168.100.0/24' });
 
     await navigateToView(page, 'fabric');
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
@@ -123,7 +123,7 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
     ], { name: 'p2p-link', type: 'L2PTP', subnet: '10.10.10.0/30' });
 
     await navigateToView(page, 'fabric');
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
@@ -141,7 +141,7 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
     ]);
 
     await navigateToView(page, 'fabric');
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
@@ -159,7 +159,7 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
     ]);
 
     await navigateToView(page, 'fabric');
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
@@ -177,7 +177,7 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
     ]);
 
     await navigateToView(page, 'fabric');
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
@@ -195,7 +195,7 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
     ], { name: 'fabnet', type: 'FABNetv4' });
 
     await navigateToView(page, 'fabric');
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
@@ -213,7 +213,7 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
     ], { name: 'fabnet', type: 'FABNetv4' });
 
     await navigateToView(page, 'fabric');
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
@@ -231,7 +231,7 @@ test.describe('FABRIC Hardware Topology — GUI Rendering', () => {
     ], { name: 'fabnet', type: 'FABNetv4' });
 
     await navigateToView(page, 'fabric');
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();

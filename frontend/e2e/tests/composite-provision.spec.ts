@@ -80,7 +80,7 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
     await navigateToView(page, 'composite');
 
     // Select the composite
-    const compSelect = page.locator('.composite-bar-select');
+    const compSelect = page.locator('select.composite-bar-select');
     await compSelect.selectOption({ value: comp.id });
     await page.waitForTimeout(2000);
 
@@ -178,7 +178,7 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
     if (!ok) { test.skip(); return; }
 
     // Select the composite
-    const compSelect = page.locator('.composite-bar-select');
+    const compSelect = page.locator('select.composite-bar-select');
     await compSelect.selectOption({ value: compId });
     await page.waitForTimeout(3000);
 
@@ -355,7 +355,7 @@ test.describe('Composite Provisioning — Real Deploy E2E', () => {
     const ok = await navigateToView(page, 'composite');
     if (!ok) { test.skip(true, 'Composite view not available'); return; }
 
-    const compSelect = page.locator('.composite-bar-select');
+    const compSelect = page.locator('select.composite-bar-select');
     await compSelect.selectOption({ value: compId });
     await page.waitForTimeout(2000);
     await clickBarTab(page, 'composite-bar', 'Topology');

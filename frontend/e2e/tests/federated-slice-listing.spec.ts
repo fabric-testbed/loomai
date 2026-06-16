@@ -257,7 +257,7 @@ test.describe('Federated Slice listing', () => {
 
     await expect(page.locator('.composite-bar')).toBeVisible();
 
-    const selector = page.locator('.composite-bar-select');
+    const selector = page.locator('select.composite-bar-select');
     await expect(selector.locator('option', { hasText: 'fed-regression-draft (Draft)' })).toHaveCount(1);
 
     await selector.selectOption(FEDERATED_SLICE.id);

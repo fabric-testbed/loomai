@@ -40,7 +40,7 @@ test.describe('FABRIC View — GUI Tests', () => {
     if (!ok) { test.skip(); return; }
     await createSliceViaBar(page, 'fabric-bar', SLICE_NAME);
     // Wait for slice to appear in selector (retry up to 10s)
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(SLICE_NAME))).toBeTruthy();

@@ -34,7 +34,7 @@ test.describe('Composite View — GUI Tests', () => {
     await createSliceViaBar(page, 'composite-bar', name);
     await page.waitForTimeout(2000);
     // Composite should appear in the dropdown selector (as an option)
-    const select = page.locator('.composite-bar-select');
+    const select = page.locator('select.composite-bar-select');
     const options = await select.locator('option').allTextContents();
     expect(options.some(o => o.includes(name))).toBeTruthy();
   });
@@ -106,7 +106,7 @@ test.describe('Composite View — GUI Tests', () => {
     if (!ok) { test.skip(); return; }
 
     // Select the composite
-    const compSelect = page.locator('.composite-bar-select');
+    const compSelect = page.locator('select.composite-bar-select');
     await compSelect.selectOption({ value: comp.id });
     await page.waitForTimeout(3000);
 
@@ -194,7 +194,7 @@ test.describe('Composite View — GUI Tests', () => {
     if (await refreshBtn.isVisible({ timeout: 3000 })) await refreshBtn.click();
     await page.waitForTimeout(2000);
 
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(fabName))).toBeTruthy();

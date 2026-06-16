@@ -118,7 +118,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
     await navigateToView(page, 'fabric');
 
     // Select the slice
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
@@ -270,7 +270,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
     await page.waitForTimeout(3000);
     await navigateToView(page, 'fabric');
 
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
@@ -381,7 +381,7 @@ test.describe('FABRIC Provisioning — Real Deploy E2E', () => {
     await page.goto('/');
     await page.waitForTimeout(3000);
     await navigateToView(page, 'fabric');
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();

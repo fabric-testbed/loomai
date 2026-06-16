@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import CytoscapeGraph from './CytoscapeGraph';
@@ -1473,7 +1474,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
     return ifaces.map((ifc: any, ifcIdx: number) => (
       <div key={ifcIdx} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, marginTop: ifcIdx > 0 ? 2 : 0 }}>
         <span style={{ fontWeight: 600, color: 'var(--fabric-text-muted)', minWidth: 36 }}>NIC {ifc.nic ?? ifcIdx}:</span>
-        <select
+        <InAppSelect
           style={{ flex: 1, fontSize: 10, padding: '2px 4px', borderRadius: 3, border: '1px solid var(--fabric-border)', background: 'var(--fabric-bg)', color: 'var(--fabric-text)' }}
           value={ifc.network?.id || ''}
           onChange={async (e) => {
@@ -1496,7 +1497,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
               {sn.name}{sn.shared ? ' (shared)' : ''}{networkCidrs(sn) ? ` [${networkCidrs(sn)}]` : ''}
             </option>
           ))}
-        </select>
+        </InAppSelect>
       </div>
     ));
   };
@@ -1661,7 +1662,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                                 <label style={{ display: 'block', fontSize: 10, fontWeight: 600, color: 'var(--fabric-text-muted)', marginBottom: 2 }}>
                                   {site}
                                 </label>
-                                <select
+                                <InAppSelect
                                   className="chi-form-input"
                                   value={selectedExistingLeases[site] || ''}
                                   onChange={e => setSelectedExistingLeases(prev => ({ ...prev, [site]: e.target.value }))}
@@ -1673,7 +1674,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                                       {lease.name} ({lease.status})
                                     </option>
                                   ))}
-                                </select>
+                                </InAppSelect>
                                 {siteLeases.length === 0 && !loadingLeases && (
                                   <div style={{ fontSize: 9, color: 'var(--fabric-text-muted)', marginTop: 2 }}>
                                     No active leases at {site}. Switch to "Create new lease".
@@ -1860,14 +1861,14 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
               {chiEditorTab === 'servers' && (
                 <div>
                   <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>Add Server</h5>
-                  <select className="chi-form-input" value={nodeSite} onChange={e => { setNodeSite(e.target.value); setNodeType(''); setNodeImage(''); setNodeKeyName(''); }} style={{ marginBottom: 4, fontSize: 11 }} data-testid="chameleon-server-site-select">
+                  <InAppSelect className="chi-form-input" value={nodeSite} onChange={e => { setNodeSite(e.target.value); setNodeType(''); setNodeImage(''); setNodeKeyName(''); }} style={{ marginBottom: 4, fontSize: 11 }} data-testid="chameleon-server-site-select">
                     {configuredSites.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
-                  </select>
+                  </InAppSelect>
                   <ChameleonNodeTypeComboBox nodeTypes={nodeTypes} value={nodeType} onSelect={setNodeType} disabled={loadingData} compact />
                   <div style={{ marginTop: 4 }}>
                     <ChameleonImageComboBox images={images} value={nodeImage} onSelect={setNodeImage} disabled={loadingData} compact />
                   </div>
-                  <select
+                  <InAppSelect
                     className="chi-form-input"
                     value={nodeKeyName}
                     onChange={e => setNodeKeyName(e.target.value)}
@@ -1879,7 +1880,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                     {getKeypairNamesForSite(effectiveSite, nodeKeyName).map(keyName => (
                       <option key={keyName} value={keyName}>{keyName}</option>
                     ))}
-                  </select>
+                  </InAppSelect>
                   <button className="chi-editor-deploy-btn" disabled={!nodeType || !nodeImage || addingNode} onClick={handleAddNode} style={{ marginTop: 4 }} data-testid="chameleon-add-server">
                     {addingNode ? 'Adding...' : '+ Add Server'}
                   </button>
@@ -1954,7 +1955,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                                     compact
                                   />
                                 </div>
-                                <select
+                                <InAppSelect
                                   className="chi-form-input"
                                   value={editNodeKeyName}
                                   onChange={e => setEditNodeKeyName(e.target.value)}
@@ -1966,7 +1967,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                                   {getKeypairNamesForSite(n.site || draft.site || effectiveSite, editNodeKeyName).map(keyName => (
                                     <option key={keyName} value={keyName}>{keyName}</option>
                                   ))}
-                                </select>
+                                </InAppSelect>
                                 <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
                                   <button
                                     className="chi-editor-deploy-btn"
@@ -1991,7 +1992,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                             {((n as any).interfaces || [{ nic: 0, network: (n as any).network || null }, { nic: 1, network: null }]).map((ifc: any, ifcIdx: number) => (
                               <div key={ifcIdx} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, marginTop: ifcIdx > 0 ? 2 : 0 }}>
                                 <span style={{ fontWeight: 600, color: 'var(--fabric-text-muted)', minWidth: 36 }}>NIC {ifc.nic ?? ifcIdx}:</span>
-                                <select
+                                <InAppSelect
                                   style={{ flex: 1, fontSize: 10, padding: '2px 4px', borderRadius: 3, border: '1px solid var(--fabric-border)', background: 'var(--fabric-bg)', color: 'var(--fabric-text)' }}
                                   value={ifc.network?.id || ''}
                                   onChange={async (e) => {
@@ -2018,12 +2019,12 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                                       {sn.name}{sn.shared ? ' (shared)' : ''}{sn.subnet_details?.[0]?.cidr ? ` [${sn.subnet_details[0].cidr}]` : ''}
                                     </option>
                                   ))}
-                                </select>
+                                </InAppSelect>
                               </div>
                             ))}
                             <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, marginTop: 2 }}>
                               <span style={{ fontSize: 9, whiteSpace: 'nowrap', color: 'var(--fabric-text-muted)' }}>Floating IP:</span>
-                              <select
+                              <InAppSelect
                                 value={fipHasNode(draft.floating_ips || [], n.id) ? String(fipGetNic(draft.floating_ips || [], n.id)) : 'none'}
                                 onChange={async (e) => {
                                   if (!draft) return;
@@ -2045,7 +2046,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                                     NIC {ifc.nic ?? idx}{ifc.network ? ` (${ifc.network.name})` : ''}
                                   </option>
                                 ))}
-                              </select>
+                              </InAppSelect>
                             </div>
                           </div>
                         );
@@ -2252,9 +2253,9 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                     testId="chameleon-network-filter"
                   />
                   <input className="chi-form-input" value={newRealNetName} onChange={e => setNewRealNetName(e.target.value)} placeholder="Network name" style={{ marginBottom: 4 }} />
-                  <select className="chi-form-input" value={newRealNetSite} onChange={e => setNewRealNetSite(e.target.value)} style={{ marginBottom: 4, fontSize: 11 }}>
+                  <InAppSelect className="chi-form-input" value={newRealNetSite} onChange={e => setNewRealNetSite(e.target.value)} style={{ marginBottom: 4, fontSize: 11 }}>
                     {configuredSites.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
-                  </select>
+                  </InAppSelect>
                   <input className="chi-form-input" value={newRealNetCidr} onChange={e => setNewRealNetCidr(e.target.value)} placeholder="Optional CIDR, e.g. 192.168.100.0/24" style={{ marginBottom: 4 }} />
                   <button className="chi-editor-deploy-btn" disabled={!newRealNetName.trim() || !newRealNetSite || resourceBusy === 'create-network'} onClick={handleCreateTrackedNetwork}>
                     {resourceBusy === 'create-network' ? 'Creating...' : 'Create and track network'}
@@ -2262,14 +2263,14 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
 
                   <div style={{ borderBottom: '1px solid var(--fabric-border)', margin: '12px 0' }} />
                   <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>Attach Existing Network</h5>
-                  <select className="chi-form-input" value={selectedExistingNetResource} onChange={e => setSelectedExistingNetResource(e.target.value)}>
+                  <InAppSelect className="chi-form-input" value={selectedExistingNetResource} onChange={e => setSelectedExistingNetResource(e.target.value)}>
                     <option value="">-- Select Network --</option>
                     {filteredExistingNetworkResources.map(n => (
                       <option key={n.id} value={n.id}>
                         {n.name}{n.shared ? ' (shared)' : ''}{networkCidrs(n) ? ` - ${networkCidrs(n)}` : ''} @ {n.site}
                       </option>
                     ))}
-                  </select>
+                  </InAppSelect>
                   <button className="chi-editor-deploy-btn" disabled={!selectedExistingNetResource || resourceBusy.startsWith('network:')} onClick={handleAttachExistingNetworkResource} style={{ marginTop: 4 }}>
                     Attach to slice
                   </button>
@@ -2432,7 +2433,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                       data-node-name={n.name}
                     >
                       <div style={{ fontWeight: 600, fontSize: 11 }}>{n.name}</div>
-                      <select
+                      <InAppSelect
                         value={fipHasNode(draft.floating_ips || [], n.id) ? String(fipGetNic(draft.floating_ips || [], n.id)) : 'none'}
                         onChange={async (e) => {
                           const val = e.target.value;
@@ -2452,7 +2453,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                         {(n.interfaces || []).map((ifc: any, idx: number) => (
                           <option key={idx} value={String(ifc.nic ?? idx)}>NIC {ifc.nic ?? idx}{ifc.network ? ` (${ifc.network.name})` : ''}</option>
                         ))}
-                      </select>
+                      </InAppSelect>
                     </div>
                   )) : (
                     <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>Add planned servers before setting deploy-time floating IP intent.</div>
@@ -2460,27 +2461,27 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
 
                   <div style={{ borderBottom: '1px solid var(--fabric-border)', margin: '12px 0' }} />
                   <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>Allocate Floating IP</h5>
-                  <select className="chi-form-input" value={allocFipSite} onChange={e => setAllocFipSite(e.target.value)} style={{ marginBottom: 4, fontSize: 11 }}>
+                  <InAppSelect className="chi-form-input" value={allocFipSite} onChange={e => setAllocFipSite(e.target.value)} style={{ marginBottom: 4, fontSize: 11 }}>
                     {configuredSites.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
-                  </select>
+                  </InAppSelect>
                   <button className="chi-editor-deploy-btn" disabled={!allocFipSite || resourceBusy === 'allocate-fip'} onClick={handleAllocateTrackedFloatingIp}>
                     {resourceBusy === 'allocate-fip' ? 'Allocating...' : 'Allocate and track IP'}
                   </button>
 
                   <div style={{ borderBottom: '1px solid var(--fabric-border)', margin: '12px 0' }} />
                   <h5 style={{ fontSize: 11, fontWeight: 600, margin: '0 0 6px' }}>Attach Existing Floating IP</h5>
-                  <select className="chi-form-input" value={selectedFipId} onChange={e => setSelectedFipId(e.target.value)} style={{ marginBottom: 4 }}>
+                  <InAppSelect className="chi-form-input" value={selectedFipId} onChange={e => setSelectedFipId(e.target.value)} style={{ marginBottom: 4 }}>
                     <option value="">-- Select floating IP --</option>
                     {filteredFloatingIps.map(ip => (
                       <option key={ip.id} value={ip.id}>{ip.floating_ip_address || ip.id} ({ip.status || 'UNKNOWN'}) @ {resourceSite(ip, '')}</option>
                     ))}
-                  </select>
-                  <select className="chi-form-input" value={selectedFipTargetPort} onChange={e => setSelectedFipTargetPort(e.target.value)} style={{ marginBottom: 4 }}>
+                  </InAppSelect>
+                  <InAppSelect className="chi-form-input" value={selectedFipTargetPort} onChange={e => setSelectedFipTargetPort(e.target.value)} style={{ marginBottom: 4 }}>
                     <option value="">Track only / unattached</option>
                     {liveServerTargets.filter(t => t.portId).map(target => (
                       <option key={target.portId} value={target.portId}>{target.name} NIC port {shortId(target.portId)}</option>
                     ))}
-                  </select>
+                  </InAppSelect>
                   <button className="chi-editor-deploy-btn" disabled={!selectedFipId || resourceBusy.startsWith('fip:')} onClick={handleAttachFloatingIpResource}>
                     Attach to slice
                   </button>
@@ -2786,15 +2787,15 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
               data-testid="chameleon-node-name"
             />
             <label className="chi-form-label">Site</label>
-            <select className="chi-form-input" value={nodeSite} onChange={e => { setNodeSite(e.target.value); setNodeType(''); setNodeImage(''); setNodeKeyName(''); }} data-testid="chameleon-node-site">
+            <InAppSelect className="chi-form-input" value={nodeSite} onChange={e => { setNodeSite(e.target.value); setNodeType(''); setNodeImage(''); setNodeKeyName(''); }} data-testid="chameleon-node-site">
               {configuredSites.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
-            </select>
+            </InAppSelect>
             <label className="chi-form-label">Node Type {loadingData && '(loading...)'}</label>
             <ChameleonNodeTypeComboBox nodeTypes={nodeTypes} value={nodeType} onSelect={setNodeType} disabled={loadingData} />
             <label className="chi-form-label">Image</label>
             <ChameleonImageComboBox images={images} value={nodeImage} onSelect={setNodeImage} disabled={loadingData} />
             <label className="chi-form-label">SSH Key</label>
-            <select
+            <InAppSelect
               className="chi-form-input"
               value={nodeKeyName}
               onChange={e => setNodeKeyName(e.target.value)}
@@ -2805,7 +2806,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
               {getKeypairNamesForSite(effectiveSite, nodeKeyName).map(keyName => (
                 <option key={keyName} value={keyName}>{keyName}</option>
               ))}
-            </select>
+            </InAppSelect>
             <div className="chi-editor-form-row">
               <label className="chi-form-label">Count</label>
               <input
@@ -2845,7 +2846,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                       {' '}| key: {n.key_name || 'site default'}
                     </span>
                   </div>
-                  <select
+                  <InAppSelect
                     value={fipHasNode(draft.floating_ips || [], n.id) ? String(fipGetNic(draft.floating_ips || [], n.id)) : 'none'}
                     onChange={async (e) => {
                       if (!draft) return;
@@ -2868,7 +2869,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                         NIC {ifc.nic ?? idx}{ifc.network ? ` (${ifc.network.name})` : ''}
                       </option>
                     ))}
-                  </select>
+                  </InAppSelect>
                   <button
                     className="chi-editor-item-remove"
                     onClick={() => handleRemoveNode(n.id)}

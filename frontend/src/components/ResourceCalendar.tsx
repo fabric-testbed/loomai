@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import * as api from '../api/client';
 import type { SiteInfo, CalendarData, CalendarSiteSlot, CalendarHostSlot, CalendarTimeSlot, NextAvailableResult, AlternativeResult } from '../types/fabric';
@@ -475,21 +476,21 @@ export default function ResourceCalendar({ sites, slices = [] }: ResourceCalenda
             </div>
             <div className="rc-finder-field">
               <label>Component</label>
-              <select value={fGpu} onChange={e => setFGpu(e.target.value)}>
+              <InAppSelect value={fGpu} onChange={e => setFGpu(e.target.value)}>
                 <option value="None">None</option>
                 {Object.entries(COMPONENT_MODELS).map(([type, models]) => (
                   <optgroup key={type} label={type}>
                     {models.map(m => <option key={m} value={m}>{COMPONENT_DISPLAY[m] || m}</option>)}
                   </optgroup>
                 ))}
-              </select>
+              </InAppSelect>
             </div>
             <div className="rc-finder-field">
               <label>Site</label>
-              <select value={fSite} onChange={e => setFSite(e.target.value)}>
+              <InAppSelect value={fSite} onChange={e => setFSite(e.target.value)}>
                 <option value="">Any</option>
                 {propSiteNames.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
+              </InAppSelect>
             </div>
             <button className="rc-finder-btn" onClick={handleFind} disabled={finderLoading}>
               {finderLoading ? 'Searching...' : 'Find'}
@@ -578,10 +579,10 @@ export default function ResourceCalendar({ sites, slices = [] }: ResourceCalenda
           <div className="rc-finder-form">
             <div className="rc-finder-field">
               <label>Slice</label>
-              <select value={schedSlice} onChange={e => setSchedSlice(e.target.value)} style={{ width: 160 }}>
+              <InAppSelect value={schedSlice} onChange={e => setSchedSlice(e.target.value)} style={{ width: 160 }}>
                 <option value="">-- Select slice --</option>
                 {slices.map(s => <option key={s.id || s.name} value={s.name}>{s.name}</option>)}
-              </select>
+              </InAppSelect>
             </div>
             <div className="rc-finder-field">
               <label>Scheduled Time</label>
@@ -640,14 +641,14 @@ export default function ResourceCalendar({ sites, slices = [] }: ResourceCalenda
           <button className={`rc-toggle-btn ${showMode === 'sites' ? 'active' : ''}`} onClick={() => setShowMode('sites')}>Sites</button>
           <button className={`rc-toggle-btn ${showMode === 'hosts' ? 'active' : ''}`} onClick={() => setShowMode('hosts')}>Hosts</button>
         </div>
-        <select
+        <InAppSelect
           value={calInterval}
           onChange={e => setCalInterval(e.target.value as 'hour' | 'day' | 'week')}
           style={{ fontSize: 11, padding: '2px 4px' }}
         >
           {INTERVAL_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-        <select
+        </InAppSelect>
+        <InAppSelect
           value={calDays}
           onChange={e => setCalDays(Number(e.target.value))}
           style={{ fontSize: 11, padding: '2px 4px' }}
@@ -655,7 +656,7 @@ export default function ResourceCalendar({ sites, slices = [] }: ResourceCalenda
           <option value={7}>7 days</option>
           <option value={14}>14 days</option>
           <option value={30}>30 days</option>
-        </select>
+        </InAppSelect>
         <button
           className={`rc-filter-toggle-btn ${filterOpen ? 'active' : ''} ${hasAnyFilter ? 'has-filter' : ''}`}
           onClick={() => setFilterOpen(o => !o)}
@@ -701,7 +702,7 @@ export default function ResourceCalendar({ sites, slices = [] }: ResourceCalenda
           </div>
           <div className="rc-finder-field">
             <label>Model</label>
-            <select value={filterModel} onChange={e => setFilterModel(e.target.value)} style={{ width: 160 }}>
+            <InAppSelect value={filterModel} onChange={e => setFilterModel(e.target.value)} style={{ width: 160 }}>
               <option value="">Any</option>
               {filterTypes.size > 0
                 ? Array.from(filterTypes).map(type => (
@@ -717,16 +718,16 @@ export default function ResourceCalendar({ sites, slices = [] }: ResourceCalenda
                     </optgroup>
                   ))
               }
-            </select>
+            </InAppSelect>
           </div>
           <div className="rc-finder-field">
             <label>Color by</label>
-            <select value={colorBy} onChange={e => setColorBy(e.target.value)}>
+            <InAppSelect value={colorBy} onChange={e => setColorBy(e.target.value)}>
               <option value="cores">Cores</option>
               <option value="ram">RAM</option>
               <option value="disk">Disk</option>
               {COMPONENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
+            </InAppSelect>
           </div>
           <div className="rc-finder-field">
             <label>Min Cores</label>

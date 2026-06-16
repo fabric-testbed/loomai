@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import * as api from '../api/client';
 import type { ConfigStatus, ProjectInfo, SliceKeySet, LoomAISettings, ToolConfigStatus, UserInfo } from '../types/fabric';
@@ -907,7 +908,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           tokens, keys, slices, artifacts, and settings are stored separately.
         </p>
         <div className="user-selector-row" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <select
+          <InAppSelect
             className="user-selector"
             value={activeUser?.uuid || '__add__'}
             disabled={switchingUser}
@@ -936,7 +937,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
               </option>
             ))}
             <option value="__add__">➕ Add a user…</option>
-          </select>
+          </InAppSelect>
           {switchingUser && <span className="muted">Switching…</span>}
           {activeUser && (
             <button
@@ -1324,12 +1325,12 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
       <div className="configure-section">
         <h3>Logging</h3>
         <p>Log Level</p>
-        <select value={logLevel} onChange={(e) => setLogLevel(e.target.value)}>
+        <InAppSelect value={logLevel} onChange={(e) => setLogLevel(e.target.value)}>
           <option>DEBUG</option>
           <option>INFO</option>
           <option>WARNING</option>
           <option>ERROR</option>
-        </select>
+        </InAppSelect>
         <p>Log File</p>
         <input type="text" value={logFile} onChange={(e) => setLogFile(e.target.value)} />
       </div>
@@ -1869,7 +1870,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
               >
                 {loadingChameleonProjects ? 'Loading Projects...' : 'Load Projects'}
               </button>
-              <select
+              <InAppSelect
                 value={selectedChameleonPasswordProject}
                 onChange={e => applyChameleonPasswordProject(e.target.value)}
                 disabled={chameleonPasswordProjects.length === 0}
@@ -1881,7 +1882,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                     {project.name} ({project.site_count} site{project.site_count === 1 ? '' : 's'})
                   </option>
                 ))}
-              </select>
+              </InAppSelect>
               {chameleonProjectLookupMessage && (
                 <span style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>{chameleonProjectLookupMessage}</span>
               )}
@@ -1964,7 +1965,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                     Default SSH key
                   </label>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 4, alignItems: 'center' }}>
-                    <select
+                    <InAppSelect
                       value={siteDefaultKey}
                       onChange={e => updateSite({ default_key_name: e.target.value })}
                       style={{ fontSize: 11, width: '100%' }}
@@ -1976,7 +1977,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                           {keyName}
                         </option>
                       ))}
-                    </select>
+                    </InAppSelect>
                     <button
                       type="button"
                       className="test-btn"
@@ -2407,14 +2408,14 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
 
       {/* Mobile dropdown (< 768px) */}
       <div className="configure-mobile-nav">
-        <select
+        <InAppSelect
           value={activeSection}
           onChange={(e) => setActiveSection(e.target.value as SectionId)}
         >
           {SECTIONS.map((s) => (
             <option key={s.id} value={s.id}>{s.icon} {s.label}</option>
           ))}
-        </select>
+        </InAppSelect>
       </div>
 
       {/* Two-panel layout */}

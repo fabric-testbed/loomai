@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SliceSummary, SliceData } from '../types/fabric';
 import type { TunnelInfo } from '../api/client';
@@ -144,22 +145,22 @@ export default function ClientView({ slices, selectedSliceName, sliceData, clien
       {/* Create bar */}
       <div className="client-toolbar">
         <label>Slice</label>
-        <select value={sliceName} onChange={(e) => setSliceName(e.target.value)}>
+        <InAppSelect value={sliceName} onChange={(e) => setSliceName(e.target.value)}>
           <option value="">-- select --</option>
           {slices.filter((s) => s.state === 'StableOK' || s.state === 'ModifyOK').map((s) => (
             <option key={s.name} value={s.name}>{s.name}</option>
           ))}
-        </select>
+        </InAppSelect>
 
         <div className="client-sep" />
 
         <label>Node</label>
-        <select value={nodeName} onChange={(e) => setNodeName(e.target.value)}>
+        <InAppSelect value={nodeName} onChange={(e) => setNodeName(e.target.value)}>
           {nodes.length === 0 && <option value="">-- no nodes --</option>}
           {nodes.map((n) => (
             <option key={n.name} value={n.name}>{n.name}</option>
           ))}
-        </select>
+        </InAppSelect>
 
         <div className="client-sep" />
 
@@ -175,10 +176,10 @@ export default function ClientView({ slices, selectedSliceName, sliceData, clien
         <div className="client-sep" />
 
         <label>Protocol</label>
-        <select value={protocol} onChange={(e) => setProtocol(e.target.value)}>
+        <InAppSelect value={protocol} onChange={(e) => setProtocol(e.target.value)}>
           <option value="http">HTTP</option>
           <option value="https">HTTPS</option>
-        </select>
+        </InAppSelect>
 
         <button onClick={handleConnect} disabled={creating || !sliceName || !nodeName}>
           {creating ? 'Connecting...' : 'Connect'}

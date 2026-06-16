@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import CytoscapeGraph from './CytoscapeGraph';
 import EditorPanel from './EditorPanel';
@@ -372,12 +373,12 @@ export default function ArtifactEditorView({
 
               <div className="ae-field">
                 <label>Project</label>
-                <select value={metaProjectUuid} onChange={e => setMetaProjectUuid(e.target.value)}>
+                <InAppSelect value={metaProjectUuid} onChange={e => setMetaProjectUuid(e.target.value)}>
                   <option value="">— None —</option>
                   {projects.map(p => (
                     <option key={p.uuid} value={p.uuid}>{p.name}</option>
                   ))}
-                </select>
+                </InAppSelect>
               </div>
 
               <div className="ae-field">

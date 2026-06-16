@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import * as api from '../api/client';
 import type { ChameleonCalendarData } from '../api/client';
@@ -193,21 +194,21 @@ export default function ChameleonCalendar({ sites, onCreateLease }: ChameleonCal
           <div className="rc-finder-form">
             <div className="rc-finder-field">
               <label>Site</label>
-              <select value={fSite} onChange={e => { setFSite(e.target.value); setFNodeType(''); setFinderResult(null); }} style={{ width: 150 }}>
+              <InAppSelect value={fSite} onChange={e => { setFSite(e.target.value); setFNodeType(''); setFinderResult(null); }} style={{ width: 150 }}>
                 <option value="">-- select --</option>
                 {configuredSites.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
-              </select>
+              </InAppSelect>
             </div>
             <div className="rc-finder-field">
               <label>Node Type {nodeTypesLoading && '(...)'}</label>
-              <select value={fNodeType} onChange={e => { setFNodeType(e.target.value); setFinderResult(null); }} disabled={nodeTypesLoading || !fSite} style={{ width: 180 }}>
+              <InAppSelect value={fNodeType} onChange={e => { setFNodeType(e.target.value); setFinderResult(null); }} disabled={nodeTypesLoading || !fSite} style={{ width: 180 }}>
                 <option value="">-- select --</option>
                 {nodeTypes.map(nt => (
                   <option key={nt.node_type} value={nt.node_type}>
                     {nt.node_type} ({nt.reservable}/{nt.total})
                   </option>
                 ))}
-              </select>
+              </InAppSelect>
             </div>
             <div className="rc-finder-field">
               <label>Nodes</label>

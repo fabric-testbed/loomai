@@ -17,7 +17,7 @@ test.describe('Slice Lifecycle', () => {
     await createSliceViaBar(page, 'fabric-bar', name);
 
     // Wait for the slice to appear in the dropdown selector (retry up to 10s)
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();
@@ -33,7 +33,7 @@ test.describe('Slice Lifecycle', () => {
     await createSliceViaBar(page, 'fabric-bar', name);
 
     // Wait for the slice to appear in the dropdown selector
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const options = await select.locator('option').allTextContents();
       expect(options.some(o => o.includes(name))).toBeTruthy();

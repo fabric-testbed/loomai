@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import cytoscape, { type Core, type EventObject } from 'cytoscape';
 import type { CyGraph, SliceData, RecipeSummary } from '../types/fabric';
@@ -1166,14 +1167,14 @@ export default React.memo(function CytoscapeGraph({
       <div className="cytoscape-container" ref={containerRef} data-help-id="topology.graph" data-testid="topology-graph" />
       <div className="graph-controls" data-testid="topology-controls">
         <label>Layout:</label>
-        <select value={layout} onChange={(e) => onLayoutChange(e.target.value)} data-help-id="topology.layout" data-testid="topology-layout-select">
+        <InAppSelect value={layout} onChange={(e) => onLayoutChange(e.target.value)} data-help-id="topology.layout" data-testid="topology-layout-select">
           <option value="dagre" title="Hierarchical layout — best for tree topologies">dagre</option>
           <option value="cola" title="Force-directed layout — good for general topologies">cola</option>
           <option value="breadthfirst" title="Tree layout from root — good for hierarchical networks">breadthfirst</option>
           <option value="grid" title="Aligned grid — good for regular topologies">grid</option>
           <option value="concentric" title="Radial circles — good for star topologies">concentric</option>
           <option value="cose" title="Physics simulation — good for organic layouts">cose</option>
-        </select>
+        </InAppSelect>
         <button onClick={handleFit} title="Fit graph to viewport" data-help-id="topology.fit" data-testid="topology-fit">Fit</button>
         <button onClick={handleExport} title="Save graph as PNG image" data-help-id="topology.export" data-testid="topology-export">Save PNG</button>
         <span className="graph-controls-sep" />

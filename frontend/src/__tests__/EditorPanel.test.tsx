@@ -199,9 +199,12 @@ describe('EditorPanel facility port selector', () => {
     fireEvent.change(screen.getByTestId('node-cores-input'), { target: { value: '4' } });
     fireEvent.change(screen.getByTestId('node-ram-input'), { target: { value: '16' } });
     fireEvent.change(screen.getByTestId('node-disk-input'), { target: { value: '40' } });
-    fireEvent.change(screen.getByTestId('node-username-input'), { target: { value: 'ubuntu' } });
     fireEvent.change(screen.getByTestId('node-component-name-input'), { target: { value: 'nic1' } });
     fireEvent.click(screen.getByTestId('node-component-add'));
+
+    expect(screen.queryByTestId('node-image-type-select')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('node-username-input')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('node-instance-type-input')).not.toBeInTheDocument();
 
     expect(screen.getByTestId('node-pending-component-row')).toHaveAttribute('data-component-name', 'nic1');
 
@@ -215,7 +218,6 @@ describe('EditorPanel facility port selector', () => {
       ram: 16,
       disk: 40,
       image: 'default_ubuntu_22',
-      username: 'ubuntu',
       _pendingComponents: [{ name: 'nic1', model: 'NIC_Basic' }],
     }));
     await waitFor(() => expect(api.addComponent).toHaveBeenCalledWith('draft-slice', 'fabric-node-1', {

@@ -101,7 +101,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
 
     // Navigate to FABRIC view and select the slice
     await navigateToView(page, 'fabric');
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const opts = await select.locator('option').allTextContents();
       expect(opts.some(o => o.includes(name))).toBeTruthy();
@@ -164,7 +164,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
 
     // Navigate to FABRIC and load the slice
     await navigateToView(page, 'fabric');
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const opts = await select.locator('option').allTextContents();
       expect(opts.some(o => o.includes(name))).toBeTruthy();
@@ -229,7 +229,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
 
     // Navigate to composite view
     await navigateToView(page, 'composite');
-    const compSelect = page.locator('.composite-bar-select');
+    const compSelect = page.locator('select.composite-bar-select');
     await compSelect.selectOption({ value: compId });
     await page.waitForTimeout(2000);
 
@@ -296,7 +296,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
 
     // Navigate and verify Active
     await navigateToView(page, 'composite');
-    const compSelect = page.locator('.composite-bar-select');
+    const compSelect = page.locator('select.composite-bar-select');
     await compSelect.selectOption({ value: compId });
     await page.waitForTimeout(2000);
 
@@ -339,7 +339,7 @@ test.describe('Topology Refresh — Real E2E Tests', () => {
     await page.waitForTimeout(3000);
 
     // Select slice and go to topology
-    const select = page.locator('.fabric-bar-slice-select');
+    const select = page.locator('select.fabric-bar-slice-select');
     await expect(async () => {
       const opts = await select.locator('option').allTextContents();
       expect(opts.some(o => o.includes(name))).toBeTruthy();

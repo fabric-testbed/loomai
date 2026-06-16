@@ -78,7 +78,7 @@ test.describe('Composite Slice Workflow', () => {
     await page.waitForTimeout(3000);
 
     // Should be in the selector as an option
-    const select = page.locator('.composite-bar-select');
+    const select = page.locator('select.composite-bar-select');
     const options = await select.locator('option').allTextContents();
     expect(options.some(o => o.includes('e2e-test-composite'))).toBeTruthy();
   });
@@ -186,7 +186,7 @@ test.describe('FABRIC View Basics', () => {
       await completeAppPrompt(page, 'e2e-fabric-test', 'Slice name');
 
       // Wait for the slice to appear in the selector (retry up to 10s)
-      const select = page.locator('.fabric-bar-slice-select');
+      const select = page.locator('select.fabric-bar-slice-select');
       await expect(async () => {
         const options = await select.locator('option').allTextContents();
         expect(options.some(o => o.includes('e2e-fabric-test'))).toBeTruthy();

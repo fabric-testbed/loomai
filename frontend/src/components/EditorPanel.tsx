@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { SliceData, SiteInfo, ComponentModel, SliceNode, SliceNetwork, SlicePortMirror, BootConfig, BootUpload, BootCommand, BootExecResult, FileEntry, SliceKeySet, VMTemplateSummary, HostInfo, IpHint, L3Config, FacilityPortInfo } from '../types/fabric';
 import * as api from '../api/client';
@@ -417,12 +418,12 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
           {sliceName && keySets.length > 0 && (
             <div className="slice-key-select" style={{ border: 'none', padding: '0 0 8px' }}>
               <label>SSH Key:</label>
-              <select value={sliceKeyId} onChange={(e) => handleSliceKeyChange(e.target.value)}>
+              <InAppSelect value={sliceKeyId} onChange={(e) => handleSliceKeyChange(e.target.value)}>
                 <option value="">(default{keySets.find(k => k.is_default) ? `: ${keySets.find(k => k.is_default)!.name}` : ''})</option>
                 {keySets.filter(k => !k.is_default).map((ks) => (
                   <option key={ks.name} value={ks.name}>{ks.name}</option>
                 ))}
-              </select>
+              </InAppSelect>
             </div>
           )}
 
@@ -708,26 +709,26 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                 <h4 style={{ margin: '0 0 8px' }}>Add Chameleon Node</h4>
                 {error && <div style={{ color: 'var(--fabric-coral)', fontSize: 12, marginBottom: 8 }}>{error}</div>}
                 <label className="editor-label">Site</label>
-                <select className="editor-select" value={chiSite} onChange={e => { setChiSite(e.target.value); setChiNodeType(''); setChiImage(''); }}>
+                <InAppSelect className="editor-select" value={chiSite} onChange={e => { setChiSite(e.target.value); setChiNodeType(''); setChiImage(''); }}>
                   <option value="">-- Select Site --</option>
                   {(chameleonSites || []).filter(s => s.configured).map(s => (
                     <option key={s.name} value={s.name}>{s.name}</option>
                   ))}
-                </select>
+                </InAppSelect>
                 <label className="editor-label">Node Type</label>
-                <select className="editor-select" value={chiNodeType} onChange={e => setChiNodeType(e.target.value)} disabled={!chiSite || chiNodeTypesLoading}>
+                <InAppSelect className="editor-select" value={chiNodeType} onChange={e => setChiNodeType(e.target.value)} disabled={!chiSite || chiNodeTypesLoading}>
                   <option value="">{chiNodeTypesLoading ? 'Loading...' : '-- Select --'}</option>
                   {chiNodeTypes.map(nt => (
                     <option key={nt.node_type} value={nt.node_type}>{nt.node_type} ({nt.reservable ?? '?'}/{nt.total ?? '?'} avail)</option>
                   ))}
-                </select>
+                </InAppSelect>
                 <label className="editor-label">Image</label>
-                <select className="editor-select" value={chiImage} onChange={e => setChiImage(e.target.value)} disabled={!chiSite || chiImagesLoading}>
+                <InAppSelect className="editor-select" value={chiImage} onChange={e => setChiImage(e.target.value)} disabled={!chiSite || chiImagesLoading}>
                   <option value="">{chiImagesLoading ? 'Loading...' : '-- Select --'}</option>
                   {chiImages.map(img => (
                     <option key={img.id} value={img.id}>{img.name}</option>
                   ))}
-                </select>
+                </InAppSelect>
                 <label className="editor-label">Connection to FABRIC</label>
                 <div style={{ display: 'flex', gap: 12, fontSize: 12, marginBottom: 8 }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -742,10 +743,10 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                 {chiConnType === 'l2_stitch' && (
                   <>
                     <label className="editor-label">FABRIC Facility Port Site</label>
-                    <select className="editor-select" value={chiVlanFabricSite} onChange={e => setChiVlanFabricSite(e.target.value)}>
+                    <InAppSelect className="editor-select" value={chiVlanFabricSite} onChange={e => setChiVlanFabricSite(e.target.value)}>
                       <option value="">-- Select FABRIC site --</option>
                       {sites.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
-                    </select>
+                    </InAppSelect>
                     <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' }}>
                       <button className="btn" disabled={!chiVlanFabricSite || !chiSite || chiVlanNegotiating}
                         onClick={async () => {
@@ -808,12 +809,12 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
                   Reserve a floating IP for a Chameleon node. Select which node should receive it.
                 </p>
                 <label className="editor-label">Node</label>
-                <select className="editor-select" value={chiFloatingIpNode} onChange={e => setChiFloatingIpNode(e.target.value)}>
+                <InAppSelect className="editor-select" value={chiFloatingIpNode} onChange={e => setChiFloatingIpNode(e.target.value)}>
                   <option value="">-- Select node --</option>
                   {(sliceData?.chameleon_nodes || []).map(n => (
                     <option key={n.name} value={n.name}>{n.name}</option>
                   ))}
-                </select>
+                </InAppSelect>
                 <button className="btn" disabled={!chiFloatingIpNode} onClick={handleAddChameleonFloatingIp}>
                   Add Floating IP
                 </button>
@@ -1079,7 +1080,7 @@ function SiteMappingView({
                 {info.totalCores} cores, {info.totalRam} GB RAM, {info.totalDisk} GB disk
               </div>
               <div className="site-mapping-select-row">
-                <select
+                <InAppSelect
                   value={currentSite || ''}
                   onChange={(e) => handleGroupSiteChange(group, e.target.value)}
                   disabled={resolving}
@@ -1092,7 +1093,7 @@ function SiteMappingView({
                       {s.name} ({s.cores_available}c / {s.ram_available}G)
                     </option>
                   ))}
-                </select>
+                </InAppSelect>
               </div>
               {insufficientResources && (
                 <div className="site-mapping-warning">
@@ -1411,7 +1412,7 @@ function NodeForm({
         <div className="form-group" data-help-id="editor.node.site">
           <label><Tooltip text="FABRIC site where the VM will be deployed">Site</Tooltip></label>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <select value={site} onChange={(e) => { setSite(e.target.value); setHost(''); }} style={{ flex: 1 }} data-testid="node-site-select">
+            <InAppSelect value={site} onChange={(e) => { setSite(e.target.value); setHost(''); }} style={{ flex: 1 }} data-testid="node-site-select">
               <option value="auto">auto</option>
               {sites.filter(s => s.state === 'Active').map((s) => {
                 const sib = siblingUsageAtSite(sliceData, s.name, node?.name);
@@ -1420,7 +1421,7 @@ function NodeForm({
                 const adjRam = s.ram_available - sib.ram;
                 return <option key={s.name} value={s.name}>{fits ? '\u2713' : '\u26A0'} {s.name} ({adjCores}c / {adjRam}G)</option>;
               })}
-            </select>
+            </InAppSelect>
             {node?.site_group && (
               <span style={{ color: '#008e7a', fontSize: '0.85em', whiteSpace: 'nowrap' }} title="Co-location group from template">group: {node.site_group}</span>
             )}
@@ -1467,25 +1468,6 @@ function NodeForm({
             VM template applied: {appliedTemplateName}
           </div>
         )}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-          <div className="form-group">
-            <label><Tooltip text="FABRIC image format, usually qcow2">Image Type</Tooltip></label>
-            <select value={imageType} onChange={(e) => setImageType(e.target.value)} data-testid="node-image-type-select">
-              <option value="qcow2">qcow2</option>
-              <option value="docker">docker</option>
-              <option value="raw">raw</option>
-            </select>
-          </div>
-          <div className="form-group">
-            <label><Tooltip text="SSH username override. Leave blank for image default.">Username</Tooltip></label>
-            <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="image default" data-testid="node-username-input" />
-          </div>
-        </div>
-        <div className="form-group">
-          <label><Tooltip text="Optional FABRIC instance type/capacity hint">Instance Type</Tooltip></label>
-          <input type="text" value={instanceType} onChange={(e) => setInstanceType(e.target.value)} placeholder="optional" data-testid="node-instance-type-input" />
-        </div>
-
         {/* Components section for add mode */}
         <div className="editor-section-divider" style={{ margin: '12px 0 8px' }} />
         <div className="editor-section-label">Components</div>
@@ -1520,7 +1502,7 @@ function NodeForm({
         {componentModels.length > 0 && (
           <div className="form-group" data-help-id="editor.comp.model">
             <label><Tooltip text="Hardware type to attach">Add Component</Tooltip></label>
-            <select value={compModel} onChange={(e) => {
+            <InAppSelect value={compModel} onChange={(e) => {
               setCompModel(e.target.value);
               const allNames = [...(node?.components.map((c) => c.name) ?? []), ...pendingComponents.map((c) => c.name)];
               setCompName(nextName(compPrefix(e.target.value), allNames));
@@ -1528,7 +1510,7 @@ function NodeForm({
               {componentModels.map((c) => (
                 <option key={c.model} value={c.model}>{c.model} — {c.description}</option>
               ))}
-            </select>
+            </InAppSelect>
             <div style={{ display: 'flex', gap: 4 }}>
               <input
                 type="text"
@@ -1566,9 +1548,6 @@ function NodeForm({
               ram,
               disk,
               image,
-              image_type: imageType || undefined,
-              username: username || undefined,
-              instance_type: instanceType || undefined,
               _pendingBootConfig: pendingBootConfig,
               _pendingComponents: pendingComponents,
             })}
@@ -1656,7 +1635,7 @@ function NodeForm({
               <div className="form-group" data-help-id="editor.node.site">
                 <label><Tooltip text="FABRIC site where the VM will be deployed">Site</Tooltip></label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <select value={site} onChange={(e) => { setSite(e.target.value); setHost(''); }} style={{ flex: 1 }}>
+                  <InAppSelect value={site} onChange={(e) => { setSite(e.target.value); setHost(''); }} style={{ flex: 1 }}>
                     <option value="auto">auto</option>
                     {sites.filter(s => s.state === 'Active').map((s) => {
                       const sib = siblingUsageAtSite(sliceData, s.name, node?.name);
@@ -1665,7 +1644,7 @@ function NodeForm({
                       const adjRam = s.ram_available - sib.ram;
                       return <option key={s.name} value={s.name}>{fits ? '\u2713' : '\u26A0'} {s.name} ({adjCores}c / {adjRam}G)</option>;
                     })}
-                  </select>
+                  </InAppSelect>
                   {node?.site_group && (
                     <span style={{ color: '#008e7a', fontSize: '0.85em', whiteSpace: 'nowrap' }} title="Co-location group from template">group: {node.site_group}</span>
                   )}
@@ -1715,11 +1694,11 @@ function NodeForm({
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
                 <div className="form-group">
                   <label><Tooltip text="FABRIC image format, usually qcow2">Image Type</Tooltip></label>
-                  <select value={imageType} onChange={(e) => setImageType(e.target.value)}>
+                  <InAppSelect value={imageType} onChange={(e) => setImageType(e.target.value)}>
                     <option value="qcow2">qcow2</option>
                     <option value="docker">docker</option>
                     <option value="raw">raw</option>
-                  </select>
+                  </InAppSelect>
                 </div>
                 <div className="form-group">
                   <label><Tooltip text="SSH username override. Leave blank for image default.">Username</Tooltip></label>
@@ -1820,7 +1799,7 @@ function NodeForm({
           {!isLocked && (
             <div className="form-group" style={{ marginTop: 8 }} data-help-id="editor.comp.model">
               <label><Tooltip text="Hardware type to attach">Add Component</Tooltip></label>
-              <select value={compModel} onChange={(e) => {
+              <InAppSelect value={compModel} onChange={(e) => {
                 setCompModel(e.target.value);
                 const curCompNames = node?.components.map((c) => c.name) ?? [];
                 setCompName(nextName(compPrefix(e.target.value), curCompNames));
@@ -1828,7 +1807,7 @@ function NodeForm({
                 {componentModels.map((c) => (
                   <option key={c.model} value={c.model}>{c.model} — {c.description}</option>
                 ))}
-              </select>
+              </InAppSelect>
               <div style={{ display: 'flex', gap: 4 }}>
                 <input
                   type="text"
@@ -2353,7 +2332,7 @@ function NetworkForm({
       </div>
       <div className="form-group" data-help-id="editor.net.type">
         <label><Tooltip text="Specific network service type">Type</Tooltip></label>
-        <select value={netType} onChange={(e) => {
+        <InAppSelect value={netType} onChange={(e) => {
           const t = e.target.value;
           setNetType(t);
           setVlan(t === 'L2PTP' ? '100' : '');
@@ -2367,7 +2346,7 @@ function NetworkForm({
           }
         }} data-testid="network-type-select">
           {types.map((t) => <option key={t} value={t}>{typeLabels[t] || t}</option>)}
-        </select>
+        </InAppSelect>
       </div>
       {isExtType && (
         <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginTop: 4, marginBottom: 8 }}>
@@ -2376,14 +2355,14 @@ function NetworkForm({
       )}
       <div className="form-group" data-help-id="editor.net.interfaces">
         <label><Tooltip text="Select unattached NIC interfaces">Interfaces</Tooltip></label>
-        <select
+        <InAppSelect
           multiple
           value={selectedIfaces}
           data-testid="network-interfaces-select"
           onChange={(e) => setSelectedIfaces(Array.from(e.target.selectedOptions, (o) => o.value))}
         >
           {allIfaces.map((i) => <option key={i} value={i}>{i}</option>)}
-        </select>
+        </InAppSelect>
         {allIfaces.length === 0 && (
           <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)', marginTop: 4 }}>
             No unattached interfaces. Add components with NICs first.
@@ -2417,11 +2396,11 @@ function NetworkForm({
               )}
               <div className="form-group" data-help-id="editor.net.ip-mode">
                 <label><Tooltip text="How IPs are assigned">IP Assignment</Tooltip></label>
-                <select value={ipMode} onChange={(e) => setIpMode(e.target.value as 'none' | 'auto' | 'config')} data-testid="network-ip-mode-select">
+                <InAppSelect value={ipMode} onChange={(e) => setIpMode(e.target.value as 'none' | 'auto' | 'config')} data-testid="network-ip-mode-select">
                   <option value="none">None (configure after boot)</option>
                   <option value="auto">Auto (FABlib assigns)</option>
                   <option value="config">User-Defined (specify per interface)</option>
-                </select>
+                </InAppSelect>
               </div>
               {ipMode === 'config' && selectedIfaces.length > 0 && (
                 <div className="form-group" data-help-id="editor.net.interface-ips">
@@ -2852,29 +2831,29 @@ function PortMirrorForm({
       </div>
       <div className="form-group">
         <label><Tooltip text="Interface whose traffic will be mirrored">Mirror Interface (source)</Tooltip></label>
-        <select value={mirrorIface} onChange={(e) => setMirrorIface(e.target.value)} data-testid="port-mirror-source-select">
+        <InAppSelect value={mirrorIface} onChange={(e) => setMirrorIface(e.target.value)} data-testid="port-mirror-source-select">
           <option value="">-- Select --</option>
           {allIfaces.map((i) => (
             <option key={i.name} value={i.name}>{i.name} ({i.nodeName})</option>
           ))}
-        </select>
+        </InAppSelect>
       </div>
       <div className="form-group">
         <label><Tooltip text="Interface that receives the mirrored traffic for capture">Receive Interface (capture)</Tooltip></label>
-        <select value={receiveIface} onChange={(e) => setReceiveIface(e.target.value)} data-testid="port-mirror-receive-select">
+        <InAppSelect value={receiveIface} onChange={(e) => setReceiveIface(e.target.value)} data-testid="port-mirror-receive-select">
           <option value="">-- Select --</option>
           {allIfaces.filter((i) => i.name !== mirrorIface).map((i) => (
             <option key={i.name} value={i.name}>{i.name} ({i.nodeName})</option>
           ))}
-        </select>
+        </InAppSelect>
       </div>
       <div className="form-group">
         <label><Tooltip text="Which traffic direction to mirror">Direction</Tooltip></label>
-        <select value={direction} onChange={(e) => setDirection(e.target.value)} data-testid="port-mirror-direction-select">
+        <InAppSelect value={direction} onChange={(e) => setDirection(e.target.value)} data-testid="port-mirror-direction-select">
           <option value="both">Both (ingress + egress)</option>
           <option value="ingress">Ingress only</option>
           <option value="egress">Egress only</option>
-        </select>
+        </InAppSelect>
       </div>
 
       {allIfaces.length < 2 && (
@@ -2926,29 +2905,29 @@ function PortMirrorReadOnlyView({
       <div className="editor-section-label">Port Mirror: {pm.name}</div>
       <div className="form-group">
         <label>Mirror Interface</label>
-        <select value={mirrorIface} onChange={(e) => setMirrorIface(e.target.value)} disabled={loading}>
+        <InAppSelect value={mirrorIface} onChange={(e) => setMirrorIface(e.target.value)} disabled={loading}>
           <option value="">-- Select --</option>
           {allIfaces.map((i) => (
             <option key={i.name} value={i.name}>{i.name} ({i.nodeName})</option>
           ))}
-        </select>
+        </InAppSelect>
       </div>
       <div className="form-group">
         <label>Receive Interface</label>
-        <select value={receiveIface} onChange={(e) => setReceiveIface(e.target.value)} disabled={loading}>
+        <InAppSelect value={receiveIface} onChange={(e) => setReceiveIface(e.target.value)} disabled={loading}>
           <option value="">-- Select --</option>
           {allIfaces.filter((i) => i.name !== mirrorIface).map((i) => (
             <option key={i.name} value={i.name}>{i.name} ({i.nodeName})</option>
           ))}
-        </select>
+        </InAppSelect>
       </div>
       <div className="form-group">
         <label>Direction</label>
-        <select value={direction} onChange={(e) => setDirection(e.target.value)} disabled={loading}>
+        <InAppSelect value={direction} onChange={(e) => setDirection(e.target.value)} disabled={loading}>
           <option value="both">Both (ingress + egress)</option>
           <option value="ingress">Ingress only</option>
           <option value="egress">Egress only</option>
-        </select>
+        </InAppSelect>
       </div>
       <div className="form-actions">
         <button
@@ -3501,11 +3480,11 @@ function NetworkReadOnlyView({
         <>
           <div className="form-group" data-help-id="editor.net.ip-mode">
             <label><Tooltip text="How IPs are assigned to interfaces">IP Mode</Tooltip></label>
-            <select value={ipMode} onChange={(e) => setIpMode(e.target.value as 'none' | 'auto' | 'config')}>
+            <InAppSelect value={ipMode} onChange={(e) => setIpMode(e.target.value as 'none' | 'auto' | 'config')}>
               <option value="none">None (configure after boot)</option>
               <option value="auto">Auto (FABlib assigns)</option>
               <option value="config">User-Defined (specify per interface)</option>
-            </select>
+            </InAppSelect>
           </div>
 
           {(ipMode === 'auto' || ipMode === 'config') && (

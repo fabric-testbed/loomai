@@ -692,7 +692,7 @@ A Click-based Python CLI providing full FABRIC, Chameleon, federated, file, arti
 The `cli/loomai_cli/` tree is the canonical edit target. After CLI edits, mirror
 `cli/loomai_cli/` and `cli/tests/` into `backend/cli/` and keep both
 `pyproject.toml` files aligned. Both mirrors currently declare
-`loomai-cli` `0.7.0` and Python `>=3.11`.
+`loomai-cli` `0.7.2` and Python `>=3.11`.
 
 ### Command Groups
 

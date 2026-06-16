@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SliceData, FileEntry } from '../types/fabric';
 import type {
@@ -2057,12 +2058,12 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       {availableProjects.length > 0 && (
         <div className="tv-editor-field-row">
           <label className="tv-edit-label">Project</label>
-          <select className="tv-pub-input" value={editProjectUuid} onChange={e => setEditProjectUuid(e.target.value)}>
+          <InAppSelect className="tv-pub-input" value={editProjectUuid} onChange={e => setEditProjectUuid(e.target.value)}>
             <option value="">No project affiliation</option>
             {availableProjects.map(p => (
               <option key={p.uuid} value={p.uuid}>{p.name}</option>
             ))}
-          </select>
+          </InAppSelect>
         </div>
       )}
       {editRemoteValidTags.length > 0 && (
@@ -2416,17 +2417,17 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                 onChange={e => setSearch(e.target.value)} />
               {search && <button className="tv-mp-search-clear" onClick={() => setSearch('')} title="Clear search">x</button>}
             </div>
-            <select className="tv-mp-sort" value={myCategoryFilter} onChange={e => setMyCategoryFilter(e.target.value as CategoryFilter)}>
+            <InAppSelect className="tv-mp-sort" value={myCategoryFilter} onChange={e => setMyCategoryFilter(e.target.value as CategoryFilter)}>
               <option value="all">All Categories</option>
               <option value="weave">{categoryLabel('weave')}</option>
               <option value="vm-template">{categoryLabel('vm-template')}</option>
               <option value="recipe">{categoryLabel('recipe')}</option>
               <option value="notebook">{categoryLabel('notebook')}</option>
-            </select>
-            <select className="tv-mp-sort" value={mySort} onChange={e => setMySort(e.target.value as any)}>
+            </InAppSelect>
+            <InAppSelect className="tv-mp-sort" value={mySort} onChange={e => setMySort(e.target.value as any)}>
               <option value="newest">Newest First</option>
               <option value="az">A - Z</option>
-            </select>
+            </InAppSelect>
             {renderViewToggle()}
           </div>
 
@@ -2498,11 +2499,11 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                     onChange={e => setMpSearch(e.target.value)} />
                   {mpSearch && <button className="tv-mp-search-clear" onClick={() => setMpSearch('')} title="Clear search">x</button>}
                 </div>
-                <select className="tv-mp-sort" value={mpSort} onChange={e => setMpSort(e.target.value as any)}>
+                <InAppSelect className="tv-mp-sort" value={mpSort} onChange={e => setMpSort(e.target.value as any)}>
                   <option value="popular">Most Downloaded</option>
                   <option value="newest">Newest First</option>
                   <option value="az">A - Z</option>
-                </select>
+                </InAppSelect>
                 {renderViewToggle()}
               </div>
 
@@ -2562,11 +2563,11 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                     onChange={e => setMpSearch(e.target.value)} />
                   {mpSearch && <button className="tv-mp-search-clear" onClick={() => setMpSearch('')} title="Clear search">x</button>}
                 </div>
-                <select className="tv-mp-sort" value={mpSort} onChange={e => setMpSort(e.target.value as any)}>
+                <InAppSelect className="tv-mp-sort" value={mpSort} onChange={e => setMpSort(e.target.value as any)}>
                   <option value="popular">Most Downloaded</option>
                   <option value="newest">Newest First</option>
                   <option value="az">A - Z</option>
-                </select>
+                </InAppSelect>
                 {renderViewToggle()}
                 <button className="tv-btn" onClick={() => fetchMarketplace(true)} title="Refresh from Artifact Manager">Refresh</button>
               </div>
@@ -2585,13 +2586,13 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                 {mpUniqueAuthors.length > 0 && (
                   <div className="tv-my-filter-group">
                     <span className="tv-my-filter-label">Author:</span>
-                    <select className="tv-mp-sort" value={mpAuthorFilter} onChange={e => setMpAuthorFilter(e.target.value)}
+                    <InAppSelect className="tv-mp-sort" value={mpAuthorFilter} onChange={e => setMpAuthorFilter(e.target.value)}
                       style={{ fontSize: 12, minWidth: 140 }}>
                       <option value="">All Authors</option>
                       {mpUniqueAuthors.map(([name, count]) => (
                         <option key={name} value={name}>{name} ({count})</option>
                       ))}
-                    </select>
+                    </InAppSelect>
                   </div>
                 )}
               </div>
@@ -2766,10 +2767,10 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
             {pubVisibility === 'project' && pubProjects.length > 0 && (
               <div className="tv-pub-field">
                 <label className="tv-pub-label">Project</label>
-                <select className="tv-pub-select" value={pubProjectUuid} onChange={e => setPubProjectUuid(e.target.value)}>
+                <InAppSelect className="tv-pub-select" value={pubProjectUuid} onChange={e => setPubProjectUuid(e.target.value)}>
                   <option value="">Select a project...</option>
                   {pubProjects.map(p => <option key={p.uuid} value={p.uuid}>{p.name}</option>)}
-                </select>
+                </InAppSelect>
               </div>
             )}
             <div className="tv-pub-field">
@@ -2869,12 +2870,12 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
             </div>
             <div className="tv-pub-field">
               <label className="tv-pub-label">Source (local artifact)</label>
-              <select className="tv-mp-sort" value={uvDirName} onChange={e => setUvDirName(e.target.value)} style={{ width: '100%' }}>
+              <InAppSelect className="tv-mp-sort" value={uvDirName} onChange={e => setUvDirName(e.target.value)} style={{ width: '100%' }}>
                 <option value="">-- Select local artifact --</option>
                 {localArtifactsForCategory(uvCategory).map(a => (
                   <option key={a.dir_name} value={a.dir_name}>{a.name} ({a.dir_name})</option>
                 ))}
-              </select>
+              </InAppSelect>
             </div>
             {uvError && <div className="tv-error" style={{ padding: '8px 0' }}>{uvError}</div>}
             <div className="tv-pub-actions">

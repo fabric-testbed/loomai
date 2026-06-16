@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -451,7 +452,7 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
                 <span className="tc-model-loading">Loading models...</span>
               ) : availableModels.length > 0 ? (
                 <>
-                  <select
+                  <InAppSelect
                     className="tc-model-select"
                     value={selectedModel}
                     onChange={(e) => {
@@ -471,7 +472,7 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
                         ))}
                       </optgroup>
                     )}
-                  </select>
+                  </InAppSelect>
                   <div className="tc-model-hint">Change model and click &ldquo;New Session&rdquo; to apply</div>
                 </>
               ) : (

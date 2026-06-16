@@ -1,4 +1,5 @@
 'use client';
+import InAppSelect from './InAppSelect';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { startOpenCodeWeb, stopOpenCodeWeb, getOpenCodeWebStatus, getAiModels } from '../api/client';
 import ToolInstallOverlay from './ToolInstallOverlay';
@@ -176,7 +177,7 @@ export default function OpenCodeWebView({ visible = true }: Props) {
               <span className="tc-model-loading">Loading models...</span>
             ) : availableModels.length > 0 ? (
               <>
-                <select
+                <InAppSelect
                   className="tc-model-select"
                   value={selectedModel}
                   onChange={(e) => {
@@ -187,7 +188,7 @@ export default function OpenCodeWebView({ visible = true }: Props) {
                   {availableModels.map((m) => (
                     <option key={m} value={m}>{m}</option>
                   ))}
-                </select>
+                </InAppSelect>
                 <div className="tc-model-hint">Change model and click &ldquo;New Session&rdquo; to apply</div>
               </>
             ) : (
