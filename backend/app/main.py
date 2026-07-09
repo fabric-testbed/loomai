@@ -29,7 +29,7 @@ for _uv_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
     # messages bubble up to root which already has the timestamped formatter.
     _uv_logger.propagate = True
 
-from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, recipes, experiments, http_proxy, tunnels, ai_terminal, ai_chat, ai_agents, ai_rag, jupyter, artifacts, chameleon, chameleon_files, trovi, schedule, composite, monitoring
+from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, recipes, experiments, http_proxy, tunnels, ai_terminal, ai_chat, ai_agents, ai_rag, jupyter, artifacts, chameleon, chameleon_files, sphere, trovi, schedule, composite, monitoring
 from app.auth import router as auth_router, AuthMiddleware, is_auth_enabled
 from app.tunnel_manager import get_tunnel_manager
 
@@ -545,6 +545,7 @@ app.include_router(jupyter.router)
 app.include_router(artifacts.router)
 app.include_router(chameleon.router)
 app.include_router(chameleon_files.router)
+app.include_router(sphere.router)
 app.include_router(trovi.router)
 app.include_router(schedule.router, prefix="/api")
 app.include_router(composite.router)

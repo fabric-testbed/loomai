@@ -1,0 +1,5 @@
+# Files excluded when publishing this weave
+weave.log
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

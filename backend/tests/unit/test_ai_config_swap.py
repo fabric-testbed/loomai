@@ -5,6 +5,7 @@ import os
 def _setup(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("FABRIC_STORAGE_DIR", str(tmp_path / "storage"))
+    monkeypatch.setenv("LOOMAI_MANAGE_HOME_AI", "1")   # container-only behavior
     (tmp_path / "home").mkdir(parents=True, exist_ok=True)
     from app.routes import ai_terminal
     return ai_terminal

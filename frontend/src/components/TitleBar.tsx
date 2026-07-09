@@ -12,7 +12,7 @@ interface AiToolInfo {
   icon: string;
 }
 
-type TopView = 'landing' | 'slices' | 'artifacts' | 'infrastructure' | 'jupyter' | 'ai' | 'chameleon';
+type TopView = 'landing' | 'slices' | 'artifacts' | 'infrastructure' | 'jupyter' | 'ai' | 'chameleon' | 'sphere';
 
 interface TitleBarProps {
   dark: boolean;
@@ -25,6 +25,7 @@ interface TitleBarProps {
   aiTools?: AiToolInfo[];
   selectedAiTool?: string | null;
   chameleonEnabled?: boolean;
+  sphereEnabled?: boolean;
   federatedEnabled?: boolean;
   onLaunchAiTool?: (toolId: string) => void;
   hasToken?: boolean;
@@ -34,10 +35,11 @@ interface TitleBarProps {
   onLogout?: () => void;
 }
 
-const VIEWS: Array<{ key: TopView; label: string; icon: string; desc: string; requiresChameleon?: boolean; requiresFederated?: boolean }> = [
+const VIEWS: Array<{ key: TopView; label: string; icon: string; desc: string; requiresChameleon?: boolean; requiresFederated?: boolean; requiresSphere?: boolean }> = [
   { key: 'slices', label: 'Federated Slice', icon: '__federated_icon__', desc: 'Federated Slice — build, monitor, transfer files, and launch apps', requiresFederated: true },
   { key: 'infrastructure', label: 'FABRIC', icon: '__fabric_logo__', desc: 'FABRIC — testbed slices, resources, and availability' },
   { key: 'chameleon', label: 'Chameleon', icon: '__chameleon_logo__', desc: 'Chameleon Cloud — leases, instances, and bare-metal resources', requiresChameleon: true },
+  { key: 'sphere', label: 'SPHERE', icon: '__sphere_logo__', desc: 'SPHERE (MergeTB) — realizations and topology', requiresSphere: true },
   { key: 'artifacts', label: 'Marketplace', icon: '__marketplace_icon__', desc: 'Marketplace — browse, publish, and download experiment artifacts' },
   { key: 'jupyter', label: 'JupyterLab', icon: '__jupyter_logo__', desc: 'JupyterLab — interactive notebooks' },
 ];
@@ -53,6 +55,19 @@ function ViewIcon({ icon, size = 12, dark }: { icon: string; size?: number; dark
   if (icon === '__chameleon_logo__') {
     return <img src={assetUrl('/chameleon-icon.png')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
   }
+  if (icon === '__sphere_logo__') {
+    // Inline globe/sphere mark for SPHERE (sphere-project.net).
+    const c = dark ? '#7ec8ff' : '#1f6a8c';
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{ verticalAlign: 'middle' }} aria-hidden>
+        <circle cx="12" cy="12" r="9.5" stroke={c} strokeWidth="1.6" />
+        <ellipse cx="12" cy="12" rx="4.2" ry="9.5" stroke={c} strokeWidth="1.4" />
+        <line x1="2.5" y1="12" x2="21.5" y2="12" stroke={c} strokeWidth="1.4" />
+        <path d="M4 7.5 Q12 10.5 20 7.5" stroke={c} strokeWidth="1.2" fill="none" />
+        <path d="M4 16.5 Q12 13.5 20 16.5" stroke={c} strokeWidth="1.2" fill="none" />
+      </svg>
+    );
+  }
   if (icon === '__loomai_icon__') {
     return <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" style={{ height: size, verticalAlign: 'middle' }} />;
   }
@@ -65,7 +80,7 @@ function ViewIcon({ icon, size = 12, dark }: { icon: string; size?: number; dark
   return <>{icon}</>;
 }
 
-export default React.memo(function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, aiTools, selectedAiTool, onLaunchAiTool, chameleonEnabled, federatedEnabled, hasToken, tokenExpired, userEmail, userName, onLogout }: TitleBarProps) {
+export default React.memo(function TitleBar({ dark, currentView, onToggleDark, onViewChange, onOpenSettings, onOpenHelp, onGoHome, aiTools, selectedAiTool, onLaunchAiTool, chameleonEnabled, sphereEnabled, federatedEnabled, hasToken, tokenExpired, userEmail, userName, onLogout }: TitleBarProps) {
   const isHubMode = typeof window !== 'undefined' && !!(window as any).__LOOMAI_BASE_PATH;
   const [viewOpen, setViewOpen] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -225,7 +240,7 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
           </button>
           {viewOpen && (
             <div className="title-pill-dropdown">
-              {VIEWS.filter(v => (!v.requiresChameleon || chameleonEnabled) && (!v.requiresFederated || federatedEnabled)).map((v) => {
+              {VIEWS.filter(v => (!v.requiresChameleon || chameleonEnabled) && (!v.requiresFederated || federatedEnabled) && (!v.requiresSphere || sphereEnabled)).map((v) => {
                 const isJupyter = v.key === 'jupyter';
                 const handleClick = () => {
                   if (isJupyter) {

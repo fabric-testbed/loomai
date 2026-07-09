@@ -2345,3 +2345,117 @@ def build_composite_graph(
     all_edges = deduped_edges
 
     return {"nodes": all_nodes, "edges": all_edges}
+
+
+# ---------------------------------------------------------------------------
+# SPHERE / MergeTB realization graph
+# ---------------------------------------------------------------------------
+
+# SPHERE green-ish brand tint for the cluster; nodes inherit instance styling.
+SPHERE_STATE_COLORS = {
+    "complete": {"bg": "#eef4ff", "border": "#1f6a8c"},
+    "pending": {"bg": "#fff6ec", "border": "#ff8542"},
+}
+
+
+def build_sphere_realization_graph(realization: dict) -> dict[str, Any]:
+    """Build Cytoscape.js graph elements from a SPHERE realization.
+
+    Input is a realization dict as returned by ``sphere_manager`` (the
+    ``MessageToDict`` of the gRPC ``Realization``, identical in shape to the
+    ``mrg ... -j`` payload). Returns the standard ``{"nodes", "edges"}`` envelope
+    used by FABRIC and Chameleon graphs, so the existing CytoscapeGraph renders
+    it unchanged.
+
+    Topology model: each realization node becomes an instance node; each link
+    (a mergexp LAN/point-to-point) becomes an L2 network node with edges to its
+    member endpoints. The implicit ``infranet`` management link is rendered as a
+    de-emphasised management network.
+    """
+    from app.sphere_manager import parse_realization_links, parse_realization_nodes
+
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+
+    rid = realization.get("id", "realization")
+    eid = realization.get("eid", "")
+    pid = realization.get("pid", "")
+    complete = bool(realization.get("complete"))
+    ref = ".".join(p for p in (rid, eid, pid) if p)
+
+    # Compound "slice" container so all SPHERE resources are enclosed in a
+    # rectangle (matching FABRIC's slice box). The shared CytoscapeGraph renders
+    # ``element_type=="slice"`` as a dashed box and the SLICE BOX toggle / the
+    # federated (composite) view both key off this parent.
+    slice_id = f"slice:sphere:{ref or rid}"
+    nodes.append({
+        "data": {
+            "id": slice_id,
+            "label": ref or rid,
+            "element_type": "slice",
+            "testbed": "SPHERE",
+            "state": "complete" if complete else "pending",
+        },
+        "classes": "slice",
+    })
+
+    # Instance nodes ---------------------------------------------------------
+    parsed_nodes = parse_realization_nodes(realization)
+    node_ids: dict[str, str] = {}  # realization node name -> cytoscape id
+    for n in parsed_nodes:
+        name = n.get("name") or n.get("key") or "node"
+        cy_id = f"sphere-node-{name}"
+        node_ids[name] = cy_id
+        addrs = n.get("addrs", []) or []
+        facility = n.get("key", "").split("/", 1)[0] if "/" in n.get("key", "") else ""
+        label = name + (f"\n{addrs[0]}" if addrs else "")
+        nodes.append({
+            "data": {
+                "id": cy_id,
+                "label": label,
+                "name": name,
+                "element_type": "node",
+                "testbed": "SPHERE",
+                "addresses": addrs,
+                "facility": facility,
+                "parent": slice_id,
+            },
+            "classes": "sphere-instance",
+        })
+
+    # Link / network nodes ---------------------------------------------------
+    for idx, link in enumerate(parse_realization_links(realization)):
+        key = link.get("key", "")
+        endpoints = [e for e in (link.get("endpoints") or []) if e]
+        is_infranet = key == "infranet" or "infranet" in key
+        net_id = f"sphere-net-{idx}-{key}"
+        nodes.append({
+            "data": {
+                "id": net_id,
+                "label": "mgmt" if is_infranet else key,
+                "name": key,
+                "element_type": "network",
+                "testbed": "SPHERE",
+                "net_type": "L2",
+                "parent": slice_id,
+            },
+            "classes": "network-l2",
+        })
+        for ep in endpoints:
+            src = node_ids.get(ep)
+            if not src:
+                continue
+            edges.append({
+                "data": {
+                    "id": f"sphere-edge-{idx}-{key}-{ep}",
+                    "source": src,
+                    "target": net_id,
+                    "label": "",
+                    "element_type": "interface",
+                    "node_name": ep,
+                    "network_name": key,
+                },
+                "classes": "edge-l2",
+            })
+
+    return {"nodes": nodes, "edges": edges}

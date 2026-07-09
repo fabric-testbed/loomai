@@ -17,6 +17,7 @@ import {
   createTerminal,
   createSshTerminal,
   createChameleonTerminal,
+  createSphereTerminal,
   mintTerminalTicket,
   deleteTerminal,
 } from '../api/client';
@@ -285,11 +286,55 @@ function connectChameleon(
     });
 }
 
+/** Server-held SSH to a SPHERE node through its XDC jump chain — persists
+ *  across reload like the FABRIC/Chameleon node terminals. */
+export interface SphereInfo {
+  experiment: string; realization: string; node: string;
+  xdc: string; project?: string; name?: string;
+}
+
+async function resolveSphereSession(
+  tabId: string,
+  sphereInfo: SphereInfo,
+): Promise<{ id: string; ticket: string }> {
+  const existing = storedId(tabId);
+  if (existing) {
+    try {
+      const t = await mintTerminalTicket(existing);
+      return { id: existing, ticket: t.ticket };
+    } catch {
+      clearStoredId(tabId);
+    }
+  }
+  const meta = await createSphereTerminal(
+    sphereInfo.experiment, sphereInfo.realization, sphereInfo.node,
+    sphereInfo.xdc, sphereInfo.project, sphereInfo.name,
+  );
+  setStoredId(tabId, meta.id);
+  return { id: meta.id, ticket: meta.ticket! };
+}
+
+function connectSphere(session: TerminalSession, tabId: string, sphereInfo: SphereInfo): void {
+  resolveSphereSession(tabId, sphereInfo)
+    .then(({ id, ticket }) => {
+      if (session.closing) return;
+      session.backendId = id;
+      const url = buildWsUrl(
+        `/ws/terminal/attach/${encodeURIComponent(id)}?ticket=${encodeURIComponent(ticket)}`,
+      );
+      wireWs(session, url, () => connectSphere(session, tabId, sphereInfo));
+    })
+    .catch((err) => {
+      session.term.writeln(`\r\n\x1b[31m[sphere] connection failed: ${err}\x1b[0m`);
+    });
+}
+
 export function createTerminalSession(
   id: string,
-  type: 'ssh' | 'local' | 'chameleon',
+  type: 'ssh' | 'local' | 'chameleon' | 'sphere',
   sshInfo?: { sliceName: string; nodeName: string; managementIp: string },
   chameleonInfo?: { instanceId: string; site: string; name: string },
+  sphereInfo?: SphereInfo,
 ): TerminalSession {
   const existing = sessions.get(id);
   if (existing) return existing;
@@ -339,7 +384,12 @@ export function createTerminalSession(
   resizeObserver.observe(containerEl);
   session.resizeObserver = resizeObserver;
 
-  if (type === 'chameleon' && chameleonInfo) {
+  if (type === 'sphere' && sphereInfo) {
+    term.writeln(
+      `\x1b[32m[sphere] Opening SSH to ${sphereInfo.node} via XDC ${sphereInfo.xdc}...\x1b[0m`,
+    );
+    connectSphere(session, id, sphereInfo);
+  } else if (type === 'chameleon' && chameleonInfo) {
     term.writeln(
       `\x1b[32m[chameleon] Opening SSH to ${chameleonInfo.name} (${chameleonInfo.site})...\x1b[0m`,
     );

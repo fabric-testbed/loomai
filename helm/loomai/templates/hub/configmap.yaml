@@ -55,6 +55,9 @@ data:
   LOOMAI_USER_SCHEDULER: {{ printf "%s-user-scheduler" (include "loomai.fullname" .) | quote }}
   {{- end }}
 
+  # Node-purpose affinity mode for user pods ("prefer" soft / "require" hard)
+  LOOMAI_NODE_PURPOSE_MATCH: {{ .Values.scheduling.userPods.nodeAffinity.matchNodePurpose | quote }}
+
   # Proxy API URL (for Hub to manage CHP routes)
   PROXY_API_URL: "http://{{ include "loomai.proxy.fullname" . }}-api:8001"
 

@@ -1,0 +1,1585 @@
+{
+  "results": [
+    {
+      "realization": {
+        "complete": true,
+        "id": "world",
+        "eid": "hello",
+        "pid": "fabricsphere",
+        "xhash": "9bf82f2deb11deb5c44c7e9097714f8b21420d9a",
+        "nodes": {
+          "moddeter/a": {
+            "node": {
+              "id": "a",
+              "sockets": [
+                {
+                  "addrs": [
+                    "10.0.0.1/24"
+                  ],
+                  "endpoint": {
+                    "element": "a.0~b.0"
+                  },
+                  "port": {}
+                }
+              ],
+              "proc": {
+                "cores": {
+                  "op": "GE",
+                  "value": 1
+                }
+              },
+              "memory": {
+                "capacity": {
+                  "op": "GE",
+                  "value": "1073741824"
+                }
+              },
+              "NIC": {
+                "ports": [
+                  {
+                    "capacity": {
+                      "op": "EQ",
+                      "value": "100000000"
+                    }
+                  }
+                ]
+              },
+              "image": {
+                "op": "EQ",
+                "value": "bullseye"
+              },
+              "properties": {},
+              "facility": {
+                "op": "EQ",
+                "value": "moddeter"
+              }
+            },
+            "resource": {
+              "id": "md02",
+              "facility": "moddeter",
+              "procs": [
+                {
+                  "cores": 64,
+                  "productInfo": {
+                    "Manufacturer": "AMD",
+                    "Model": "64C 2.0Ghz 256mb 200W",
+                    "SKU": "Epyc 7702"
+                  },
+                  "reservedCores": 1
+                },
+                {
+                  "cores": 64,
+                  "productInfo": {
+                    "Manufacturer": "AMD",
+                    "Model": "64C 2.0Ghz 256mb 200W",
+                    "SKU": "Epyc 7702"
+                  },
+                  "reservedCores": 1
+                }
+              ],
+              "memory": [
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  },
+                  "reservedCapacity": "17179869184"
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  },
+                  "reservedCapacity": "17179869184"
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                }
+              ],
+              "NICs": [
+                {
+                  "ports": [
+                    {
+                      "parent": "md02",
+                      "capacity": "1000000000",
+                      "mac": "18:c0:4d:b7:6d:5d",
+                      "rlzOrdering": "259",
+                      "name": "ipmi0",
+                      "facility": "moddeter"
+                    }
+                  ],
+                  "kind": "IPMI"
+                },
+                {
+                  "ports": [
+                    {
+                      "parent": "md02",
+                      "index": 1,
+                      "capacity": "1000000000",
+                      "mac": "18:c0:4d:b7:6d:5a",
+                      "connector": {
+                        "element": "md02.1-ml252r207s12-mleaf.3",
+                        "facility": "moddeter"
+                      },
+                      "role": "MgmtLink",
+                      "rlzOrdering": "260",
+                      "name": "eno1",
+                      "facility": "moddeter"
+                    },
+                    {
+                      "parent": "md02",
+                      "index": 2,
+                      "capacity": "1000000000",
+                      "role": "MgmtLink",
+                      "rlzOrdering": "261",
+                      "name": "eno2",
+                      "facility": "moddeter"
+                    }
+                  ],
+                  "startingIndex": 1,
+                  "kind": "ENO"
+                },
+                {
+                  "ports": [
+                    {
+                      "parent": "md02",
+                      "index": 3,
+                      "capacity": "25000000000",
+                      "mac": "10:70:fd:51:82:0c",
+                      "connector": {
+                        "element": "md02.3-il252r207s10-ileaf.3",
+                        "facility": "moddeter"
+                      },
+                      "role": "InfraLink",
+                      "rlzOrdering": "262",
+                      "name": "enp65s0f0np0",
+                      "facility": "moddeter"
+                    },
+                    {
+                      "parent": "md02",
+                      "index": 4,
+                      "capacity": "25000000000",
+                      "role": "InfraLink",
+                      "rlzOrdering": "263",
+                      "name": "enp65s0f1np1",
+                      "facility": "moddeter"
+                    }
+                  ],
+                  "startingIndex": 1,
+                  "kind": "ENP",
+                  "productInfo": {
+                    "Manufacturer": "Mellanox",
+                    "Model": "CX4 Dual Port 25gbps PCIe4.0 x8",
+                    "SKU": "MCX4121A-ACAT"
+                  }
+                },
+                {
+                  "ports": [
+                    {
+                      "parent": "md02",
+                      "index": 5,
+                      "capacity": "100000000000",
+                      "mac": "08:c0:eb:ee:65:8e",
+                      "connector": {
+                        "element": "md02.5-xl252r207s8-xleaf.3",
+                        "facility": "moddeter"
+                      },
+                      "role": "XpLink",
+                      "rlzOrdering": "264",
+                      "name": "enp33s0f0np0",
+                      "facility": "moddeter"
+                    },
+                    {
+                      "parent": "md02",
+                      "index": 6,
+                      "capacity": "100000000000",
+                      "role": "XpLink",
+                      "rlzOrdering": "265",
+                      "name": "enp33s0f1np1",
+                      "facility": "moddeter"
+                    }
+                  ],
+                  "startingIndex": 1,
+                  "kind": "ENP",
+                  "productInfo": {
+                    "Manufacturer": "Mellanox",
+                    "Model": "CX6 Dual Port 100gbps PCIe4.0 x16",
+                    "SKU": "MCX653106A-ECAT"
+                  }
+                }
+              ],
+              "disks": [
+                {
+                  "capacity": "1099511627776",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Micron",
+                    "Model": "7400Max 800GB 3DWPD M.2 NVMe x4 22x80mm",
+                    "SKU": "MTFDKBA800TFC-1AZ1ZABYY"
+                  },
+                  "roles": [
+                    "System"
+                  ]
+                },
+                {
+                  "capacity": "1717986918400",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Kioxia",
+                    "Model": "CD6-V 1.6TB 3DWPD U.2 NVMe x4",
+                    "SKU": "KCD61VUL1T60"
+                  },
+                  "roles": [
+                    "Mariner"
+                  ],
+                  "NVMEControllerIndex": 1
+                },
+                {
+                  "capacity": "1717986918400",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Kioxia",
+                    "Model": "CD6-V 1.6TB 3DWPD U.2 NVMe x4",
+                    "SKU": "KCD61VUL1T60"
+                  },
+                  "roles": [
+                    "Mariner"
+                  ],
+                  "NVMEControllerIndex": 2
+                },
+                {
+                  "capacity": "1717986918400",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Kioxia",
+                    "Model": "CD6-V 1.6TB 3DWPD U.2 NVMe x4",
+                    "SKU": "KCD61VUL1T60"
+                  },
+                  "roles": [
+                    "Mariner"
+                  ],
+                  "NVMEControllerIndex": 3
+                },
+                {
+                  "capacity": "1717986918400",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Kioxia",
+                    "Model": "CD6-V 1.6TB 3DWPD U.2 NVMe x4",
+                    "SKU": "KCD61VUL1T60"
+                  },
+                  "roles": [
+                    "Mariner"
+                  ],
+                  "NVMEControllerIndex": 4
+                },
+                {
+                  "capacity": "1717986918400",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Kioxia",
+                    "Model": "CD6-V 1.6TB 3DWPD U.2 NVMe x4",
+                    "SKU": "KCD61VUL1T60"
+                  },
+                  "roles": [
+                    "Mariner"
+                  ],
+                  "NVMEControllerIndex": 5
+                },
+                {
+                  "capacity": "1717986918400",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Kioxia",
+                    "Model": "CD6-V 1.6TB 3DWPD U.2 NVMe x4",
+                    "SKU": "KCD61VUL1T60"
+                  },
+                  "roles": [
+                    "Mariner"
+                  ],
+                  "NVMEControllerIndex": 6
+                }
+              ],
+              "alloc": [
+                "Physical",
+                "Virtual"
+              ],
+              "roles": [
+                "TbNode",
+                "Hypervisor"
+              ],
+              "firmware": {
+                "kind": "UEFI"
+              },
+              "OS": {
+                "BGP": [
+                  {
+                    "vrf": "xfabric",
+                    "ASN": 4210000003,
+                    "Interfaces": [
+                      {
+                        "address": "10.99.1.4/24",
+                        "interface": "lo"
+                      }
+                    ]
+                  }
+                ],
+                "rootdev": "/dev/nvme0n1",
+                "defaultImage": "bullseye"
+              },
+              "productInfo": {
+                "Manufacturer": "Gigabyte",
+                "Model": "Custom Mod-Deter Server",
+                "SKU": "MDSERVER/CX22885g-NVMe4-E8"
+              },
+              "rlzOrdering": "258",
+              "ipmi": {
+                "host": "md02-ipmi"
+              },
+              "capabilities": [
+                "MgmtCapability",
+                "InfranetCapability",
+                "XpnetCapability",
+                "ControllablePowerCapability",
+                "XpImagableCapability",
+                "XpConfigurableCapability",
+                "VXLANCapability"
+              ]
+            },
+            "vmAlloc": {
+              "resource": "md02",
+              "facility": "moddeter",
+              "mzid": "world.hello.fabricsphere",
+              "node": "a",
+              "procs": {
+                "alloc": {
+                  "0": {
+                    "cores": 1
+                  }
+                }
+              },
+              "memory": {
+                "alloc": {
+                  "8": {
+                    "capacity": "1073741824"
+                  }
+                }
+              },
+              "NICs": {
+                "alloc": {
+                  "0": {
+                    "alloc": {
+                      "0": {
+                        "name": "eth0",
+                        "mac": "f6:db:fc:85:83:54",
+                        "Bridge": {
+                          "Bridge": "mbr",
+                          "Vid": 159
+                        }
+                      }
+                    }
+                  },
+                  "1": {
+                    "alloc": {
+                      "0": {
+                        "name": "eth1",
+                        "mac": "72:1f:a4:d5:06:3e",
+                        "Bridge": {
+                          "Bridge": "mbrx259"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "model": {
+                "id": "a",
+                "sockets": [
+                  {
+                    "addrs": [
+                      "10.0.0.1/24"
+                    ],
+                    "endpoint": {
+                      "element": "a.0~b.0"
+                    },
+                    "port": {}
+                  }
+                ],
+                "proc": {
+                  "cores": {
+                    "op": "GE",
+                    "value": 1
+                  }
+                },
+                "memory": {
+                  "capacity": {
+                    "op": "GE",
+                    "value": "1073741824"
+                  }
+                },
+                "NIC": {
+                  "ports": [
+                    {
+                      "capacity": {
+                        "op": "EQ",
+                        "value": "100000000"
+                      }
+                    }
+                  ]
+                },
+                "image": {
+                  "op": "EQ",
+                  "value": "bullseye"
+                },
+                "properties": {},
+                "facility": {
+                  "op": "EQ",
+                  "value": "moddeter"
+                }
+              },
+              "virtual": true
+            },
+            "facility": "moddeter",
+            "kind": "VirtualMachine",
+            "infranetAddr": "172.30.0.11"
+          },
+          "moddeter/b": {
+            "node": {
+              "id": "b",
+              "sockets": [
+                {
+                  "addrs": [
+                    "10.0.0.2/24"
+                  ],
+                  "endpoint": {
+                    "element": "a.0~b.0",
+                    "index": 1
+                  },
+                  "port": {}
+                }
+              ],
+              "proc": {
+                "cores": {
+                  "op": "GE",
+                  "value": 1
+                }
+              },
+              "memory": {
+                "capacity": {
+                  "op": "GE",
+                  "value": "1073741824"
+                }
+              },
+              "NIC": {
+                "ports": [
+                  {
+                    "capacity": {
+                      "op": "EQ",
+                      "value": "100000000"
+                    }
+                  }
+                ]
+              },
+              "image": {
+                "op": "EQ",
+                "value": "bullseye"
+              },
+              "properties": {},
+              "facility": {
+                "op": "EQ",
+                "value": "moddeter"
+              }
+            },
+            "resource": {
+              "id": "md25",
+              "facility": "moddeter",
+              "procs": [
+                {
+                  "cores": 64,
+                  "productInfo": {
+                    "Manufacturer": "AMD",
+                    "Model": "64C 2.0Ghz 256mb 200W",
+                    "SKU": "Epyc 7702"
+                  },
+                  "reservedCores": 1
+                },
+                {
+                  "cores": 64,
+                  "productInfo": {
+                    "Manufacturer": "AMD",
+                    "Model": "64C 2.0Ghz 256mb 200W",
+                    "SKU": "Epyc 7702"
+                  },
+                  "reservedCores": 1
+                }
+              ],
+              "memory": [
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  },
+                  "reservedCapacity": "17179869184"
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  },
+                  "reservedCapacity": "17179869184"
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                },
+                {
+                  "capacity": "17179869184",
+                  "productInfo": {
+                    "Manufacturer": "Gigabyte",
+                    "Model": "Platform Certified 16GB Memory module",
+                    "SKU": "GB16"
+                  }
+                }
+              ],
+              "NICs": [
+                {
+                  "ports": [
+                    {
+                      "parent": "md25",
+                      "capacity": "1000000000",
+                      "mac": "18:c0:4d:b7:6d:75",
+                      "rlzOrdering": "443",
+                      "name": "ipmi0",
+                      "facility": "moddeter"
+                    }
+                  ],
+                  "kind": "IPMI"
+                },
+                {
+                  "ports": [
+                    {
+                      "parent": "md25",
+                      "index": 1,
+                      "capacity": "1000000000",
+                      "mac": "18:c0:4d:b7:6d:72",
+                      "connector": {
+                        "element": "md25.1-ml252r207s12-mleaf.26",
+                        "facility": "moddeter"
+                      },
+                      "role": "MgmtLink",
+                      "rlzOrdering": "444",
+                      "name": "eno1",
+                      "facility": "moddeter"
+                    },
+                    {
+                      "parent": "md25",
+                      "index": 2,
+                      "capacity": "1000000000",
+                      "role": "MgmtLink",
+                      "rlzOrdering": "445",
+                      "name": "eno2",
+                      "facility": "moddeter"
+                    }
+                  ],
+                  "startingIndex": 1,
+                  "kind": "ENO"
+                },
+                {
+                  "ports": [
+                    {
+                      "parent": "md25",
+                      "index": 3,
+                      "capacity": "25000000000",
+                      "mac": "10:70:fd:57:0d:74",
+                      "connector": {
+                        "element": "md25.3-il252r207s10-ileaf.26",
+                        "facility": "moddeter"
+                      },
+                      "role": "InfraLink",
+                      "rlzOrdering": "446",
+                      "name": "enp65s0f0np0",
+                      "facility": "moddeter"
+                    },
+                    {
+                      "parent": "md25",
+                      "index": 4,
+                      "capacity": "25000000000",
+                      "role": "InfraLink",
+                      "rlzOrdering": "447",
+                      "name": "enp65s0f1np1",
+                      "facility": "moddeter"
+                    }
+                  ],
+                  "startingIndex": 1,
+                  "kind": "ENP",
+                  "productInfo": {
+                    "Manufacturer": "Mellanox",
+                    "Model": "CX4 Dual Port 25gbps PCIe4.0 x8",
+                    "SKU": "MCX4121A-ACAT"
+                  }
+                },
+                {
+                  "ports": [
+                    {
+                      "parent": "md25",
+                      "index": 5,
+                      "capacity": "100000000000",
+                      "mac": "08:c0:eb:ee:67:3e",
+                      "connector": {
+                        "element": "md25.5-xl252r207s8-xleaf.26",
+                        "facility": "moddeter"
+                      },
+                      "role": "XpLink",
+                      "rlzOrdering": "448",
+                      "name": "enp33s0f0np0",
+                      "facility": "moddeter"
+                    },
+                    {
+                      "parent": "md25",
+                      "index": 6,
+                      "capacity": "100000000000",
+                      "role": "XpLink",
+                      "rlzOrdering": "449",
+                      "name": "enp33s0f1np1",
+                      "facility": "moddeter"
+                    }
+                  ],
+                  "startingIndex": 1,
+                  "kind": "ENP",
+                  "productInfo": {
+                    "Manufacturer": "Mellanox",
+                    "Model": "CX6 Dual Port 100gbps PCIe4.0 x16",
+                    "SKU": "MCX653106A-ECAT"
+                  }
+                }
+              ],
+              "disks": [
+                {
+                  "capacity": "1099511627776",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Micron",
+                    "Model": "7400Max 800GB 3DWPD M.2 NVMe x4 22x80mm",
+                    "SKU": "MTFDKBA800TFC-1AZ1ZABYY"
+                  },
+                  "roles": [
+                    "System"
+                  ]
+                },
+                {
+                  "capacity": "1717986918400",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Kioxia",
+                    "Model": "CD6-V 1.6TB 3DWPD U.2 NVMe x4",
+                    "SKU": "KCD61VUL1T60"
+                  },
+                  "roles": [
+                    "Mariner"
+                  ],
+                  "NVMEControllerIndex": 1
+                },
+                {
+                  "capacity": "1717986918400",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Kioxia",
+                    "Model": "CD6-V 1.6TB 3DWPD U.2 NVMe x4",
+                    "SKU": "KCD61VUL1T60"
+                  },
+                  "roles": [
+                    "Mariner"
+                  ],
+                  "NVMEControllerIndex": 2
+                },
+                {
+                  "capacity": "1717986918400",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Kioxia",
+                    "Model": "CD6-V 1.6TB 3DWPD U.2 NVMe x4",
+                    "SKU": "KCD61VUL1T60"
+                  },
+                  "roles": [
+                    "Mariner"
+                  ],
+                  "NVMEControllerIndex": 3
+                },
+                {
+                  "capacity": "1717986918400",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Kioxia",
+                    "Model": "CD6-V 1.6TB 3DWPD U.2 NVMe x4",
+                    "SKU": "KCD61VUL1T60"
+                  },
+                  "roles": [
+                    "Mariner"
+                  ],
+                  "NVMEControllerIndex": 4
+                },
+                {
+                  "capacity": "1717986918400",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Kioxia",
+                    "Model": "CD6-V 1.6TB 3DWPD U.2 NVMe x4",
+                    "SKU": "KCD61VUL1T60"
+                  },
+                  "roles": [
+                    "Mariner"
+                  ],
+                  "NVMEControllerIndex": 5
+                },
+                {
+                  "capacity": "1717986918400",
+                  "formFactor": "SSD25",
+                  "diskInterface": "NVMEx4",
+                  "productInfo": {
+                    "Manufacturer": "Kioxia",
+                    "Model": "CD6-V 1.6TB 3DWPD U.2 NVMe x4",
+                    "SKU": "KCD61VUL1T60"
+                  },
+                  "roles": [
+                    "Mariner"
+                  ],
+                  "NVMEControllerIndex": 6
+                }
+              ],
+              "alloc": [
+                "Physical",
+                "Virtual"
+              ],
+              "roles": [
+                "TbNode",
+                "Hypervisor"
+              ],
+              "firmware": {
+                "kind": "UEFI"
+              },
+              "OS": {
+                "BGP": [
+                  {
+                    "vrf": "xfabric",
+                    "ASN": 4210000026,
+                    "Interfaces": [
+                      {
+                        "address": "10.99.1.27/24",
+                        "interface": "lo"
+                      }
+                    ]
+                  }
+                ],
+                "rootdev": "/dev/nvme0n1",
+                "defaultImage": "bullseye"
+              },
+              "productInfo": {
+                "Manufacturer": "Gigabyte",
+                "Model": "Custom Mod-Deter Server",
+                "SKU": "MDSERVER/CX22885g-NVMe4-E8"
+              },
+              "rlzOrdering": "442",
+              "ipmi": {
+                "host": "md25-ipmi"
+              },
+              "capabilities": [
+                "MgmtCapability",
+                "InfranetCapability",
+                "XpnetCapability",
+                "ControllablePowerCapability",
+                "XpImagableCapability",
+                "XpConfigurableCapability",
+                "VXLANCapability"
+              ]
+            },
+            "vmAlloc": {
+              "resource": "md25",
+              "facility": "moddeter",
+              "mzid": "world.hello.fabricsphere",
+              "node": "b",
+              "procs": {
+                "alloc": {
+                  "1": {
+                    "cores": 1
+                  }
+                }
+              },
+              "memory": {
+                "alloc": {
+                  "15": {
+                    "capacity": "1073741824"
+                  }
+                }
+              },
+              "NICs": {
+                "alloc": {
+                  "0": {
+                    "alloc": {
+                      "0": {
+                        "name": "eth0",
+                        "mac": "82:bd:71:db:39:3f",
+                        "Bridge": {
+                          "Bridge": "mbr",
+                          "Vid": 159
+                        }
+                      }
+                    }
+                  },
+                  "1": {
+                    "alloc": {
+                      "0": {
+                        "name": "eth1",
+                        "mac": "d2:73:81:29:0d:0f",
+                        "Bridge": {
+                          "Bridge": "mbrx259"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "model": {
+                "id": "b",
+                "sockets": [
+                  {
+                    "addrs": [
+                      "10.0.0.2/24"
+                    ],
+                    "endpoint": {
+                      "element": "a.0~b.0",
+                      "index": 1
+                    },
+                    "port": {}
+                  }
+                ],
+                "proc": {
+                  "cores": {
+                    "op": "GE",
+                    "value": 1
+                  }
+                },
+                "memory": {
+                  "capacity": {
+                    "op": "GE",
+                    "value": "1073741824"
+                  }
+                },
+                "NIC": {
+                  "ports": [
+                    {
+                      "capacity": {
+                        "op": "EQ",
+                        "value": "100000000"
+                      }
+                    }
+                  ]
+                },
+                "image": {
+                  "op": "EQ",
+                  "value": "bullseye"
+                },
+                "properties": {},
+                "facility": {
+                  "op": "EQ",
+                  "value": "moddeter"
+                }
+              },
+              "virtual": true
+            },
+            "facility": "moddeter",
+            "kind": "VirtualMachine",
+            "infranetAddr": "172.30.0.12"
+          }
+        },
+        "links": {
+          "a.0~b.0": {
+            "link": {
+              "id": "a.0~b.0",
+              "endpoints": [
+                {
+                  "socket": {
+                    "element": "a"
+                  }
+                },
+                {
+                  "index": 1,
+                  "socket": {
+                    "element": "b"
+                  }
+                }
+              ],
+              "properties": {}
+            },
+            "segments": {
+              "200": {
+                "endpoints": [
+                  {
+                    "facility": "moddeter",
+                    "host": "md02",
+                    "node": "a",
+                    "mac": "72:1f:a4:d5:06:3e",
+                    "phy": {
+                      "name": "eth1",
+                      "mac": "72:1f:a4:d5:06:3e"
+                    },
+                    "mtu": 1500,
+                    "virtual": true
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "md25",
+                    "node": "b",
+                    "mac": "d2:73:81:29:0d:0f",
+                    "phy": {
+                      "name": "eth1",
+                      "mac": "d2:73:81:29:0d:0f"
+                    },
+                    "mtu": 1500,
+                    "virtual": true
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "md02",
+                    "node": "a",
+                    "bridge": {
+                      "bridge": "mbrx259"
+                    },
+                    "mac": "08:c0:eb:ee:65:8e",
+                    "vtep": {
+                      "name": "vtep259",
+                      "vni": 259,
+                      "parent": {
+                        "name": "enp33s0f0np0",
+                        "mac": "08:c0:eb:ee:65:8e"
+                      },
+                      "tunnelIp": "10.99.1.4"
+                    }
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "md25",
+                    "node": "b",
+                    "bridge": {
+                      "bridge": "mbrx259"
+                    },
+                    "mac": "08:c0:eb:ee:67:3e",
+                    "vtep": {
+                      "name": "vtep259",
+                      "vni": 259,
+                      "parent": {
+                        "name": "enp33s0f0np0",
+                        "mac": "08:c0:eb:ee:67:3e"
+                      },
+                      "tunnelIp": "10.99.1.27"
+                    }
+                  }
+                ],
+                "waypoints": [
+                  {
+                    "facility": "moddeter",
+                    "host": "md02",
+                    "bridge": {
+                      "bridge": "mbrx259"
+                    },
+                    "tap": {
+                      "node": "a",
+                      "frontend": {
+                        "name": "eth1",
+                        "mac": "72:1f:a4:d5:06:3e"
+                      },
+                      "vni": 259
+                    }
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "md02",
+                    "bgpPeer": {
+                      "interface": {
+                        "name": "enp33s0f0np0",
+                        "mac": "08:c0:eb:ee:65:8e"
+                      },
+                      "localAsn": 4210000003,
+                      "remoteAsn": 4210000000,
+                      "network": "10.99.1.4",
+                      "routerId": "10.99.1.4",
+                      "transitIp": "10.99.1.1"
+                    },
+                    "mtu": 9216
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "xl252r207s8-xleaf",
+                    "bgpPeer": {
+                      "interface": {
+                        "name": "swp3"
+                      },
+                      "localAsn": 4210000000,
+                      "remoteAsn": 4210000003,
+                      "network": "10.99.1.1",
+                      "routerId": "10.99.1.1",
+                      "transitIp": "10.99.1.4"
+                    },
+                    "mtu": 9216
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "xl252r207s8-xleaf",
+                    "bgpPeer": {
+                      "interface": {
+                        "name": "swp26"
+                      },
+                      "localAsn": 4210000000,
+                      "remoteAsn": 4210000026,
+                      "network": "10.99.1.1",
+                      "routerId": "10.99.1.1",
+                      "transitIp": "10.99.1.27"
+                    },
+                    "mtu": 9216
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "md25",
+                    "bgpPeer": {
+                      "interface": {
+                        "name": "enp33s0f0np0",
+                        "mac": "08:c0:eb:ee:67:3e"
+                      },
+                      "localAsn": 4210000026,
+                      "remoteAsn": 4210000000,
+                      "network": "10.99.1.27",
+                      "routerId": "10.99.1.27",
+                      "transitIp": "10.99.1.1"
+                    },
+                    "mtu": 9216
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "md25",
+                    "bridge": {
+                      "bridge": "mbrx259"
+                    },
+                    "tap": {
+                      "node": "b",
+                      "frontend": {
+                        "name": "eth1",
+                        "mac": "d2:73:81:29:0d:0f"
+                      },
+                      "vni": 259
+                    }
+                  }
+                ],
+                "vni": 259
+              }
+            }
+          },
+          "infranet": {
+            "link": {
+              "id": "infranet"
+            },
+            "segments": {
+              "100": {
+                "endpoints": [
+                  {
+                    "facility": "moddeter",
+                    "host": "md02",
+                    "node": "a",
+                    "mac": "f6:db:fc:85:83:54",
+                    "phy": {
+                      "name": "eth0",
+                      "mac": "f6:db:fc:85:83:54"
+                    },
+                    "mtu": 1500,
+                    "virtual": true
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "md25",
+                    "node": "b",
+                    "mac": "82:bd:71:db:39:3f",
+                    "phy": {
+                      "name": "eth0",
+                      "mac": "82:bd:71:db:39:3f"
+                    },
+                    "mtu": 1500,
+                    "virtual": true
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "ifr1",
+                    "node": "ifr1",
+                    "bridge": {
+                      "bridge": "mbr",
+                      "untagged": [
+                        159
+                      ],
+                      "pvid": 159
+                    },
+                    "mac": "08:c0:eb:af:42:6b",
+                    "vtep": {
+                      "name": "vtep172.4",
+                      "vni": 172,
+                      "parent": {
+                        "name": "enp33s0f1np1",
+                        "mac": "08:c0:eb:af:42:6b"
+                      },
+                      "tunnelIp": "10.99.0.3"
+                    },
+                    "mtu": 1500
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "md02",
+                    "node": "a",
+                    "bridge": {
+                      "bridge": "mbr",
+                      "untagged": [
+                        159
+                      ],
+                      "pvid": 159
+                    },
+                    "mac": "10:70:fd:51:82:0c",
+                    "vlan": {
+                      "name": "vlan159",
+                      "vid": 159,
+                      "parent": {
+                        "name": "enp65s0f0np0",
+                        "mac": "10:70:fd:51:82:0c"
+                      }
+                    }
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "md25",
+                    "node": "b",
+                    "bridge": {
+                      "bridge": "mbr",
+                      "untagged": [
+                        159
+                      ],
+                      "pvid": 159
+                    },
+                    "mac": "10:70:fd:57:0d:74",
+                    "vlan": {
+                      "name": "vlan159",
+                      "vid": 159,
+                      "parent": {
+                        "name": "enp65s0f0np0",
+                        "mac": "10:70:fd:57:0d:74"
+                      }
+                    }
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "ifr1",
+                    "node": "ifr1",
+                    "veth": {
+                      "NameA": "vethax172",
+                      "NameB": "vethbx172",
+                      "BridgeB": {
+                        "bridge": "mbr",
+                        "untagged": [
+                          159
+                        ],
+                        "pvid": 159
+                      }
+                    },
+                    "mtu": 9216
+                  }
+                ],
+                "waypoints": [
+                  {
+                    "facility": "moddeter",
+                    "host": "ifr1",
+                    "bgpPeer": {
+                      "interface": {
+                        "name": "enp33s0f1np1",
+                        "mac": "08:c0:eb:af:42:6b"
+                      },
+                      "localAsn": 4200000002,
+                      "remoteAsn": 4200000000,
+                      "network": "10.99.0.3",
+                      "routerId": "10.99.0.3",
+                      "transitIp": "10.99.0.1"
+                    },
+                    "mtu": 9216
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "il252r207s10-ileaf",
+                    "bgpPeer": {
+                      "interface": {
+                        "name": "swp52"
+                      },
+                      "localAsn": 4200000000,
+                      "remoteAsn": 4200000002,
+                      "network": "10.99.0.1",
+                      "routerId": "10.99.0.1",
+                      "transitIp": "10.99.0.3"
+                    },
+                    "mtu": 9216
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "il252r207s10-ileaf",
+                    "bridge": {
+                      "bridge": "bridge",
+                      "untagged": [
+                        159
+                      ],
+                      "pvid": 159
+                    },
+                    "vtep": {
+                      "name": "vtep172",
+                      "vni": 172,
+                      "tunnelIp": "10.99.0.1"
+                    },
+                    "mtu": 9216
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "il252r207s10-ileaf",
+                    "bridge": {
+                      "bridge": "bridge",
+                      "tagged": [
+                        159
+                      ]
+                    },
+                    "trunk": {
+                      "port": {
+                        "name": "swp3"
+                      },
+                      "vids": [
+                        159
+                      ]
+                    },
+                    "mtu": 9216
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "md02",
+                    "bridge": {
+                      "bridge": "mbr",
+                      "untagged": [
+                        159
+                      ],
+                      "pvid": 159
+                    },
+                    "tap": {
+                      "node": "a",
+                      "frontend": {
+                        "name": "eth0",
+                        "mac": "f6:db:fc:85:83:54"
+                      },
+                      "vid": 159
+                    }
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "il252r207s10-ileaf",
+                    "bridge": {
+                      "bridge": "bridge",
+                      "tagged": [
+                        159
+                      ]
+                    },
+                    "trunk": {
+                      "port": {
+                        "name": "swp26"
+                      },
+                      "vids": [
+                        159
+                      ]
+                    },
+                    "mtu": 9216
+                  },
+                  {
+                    "facility": "moddeter",
+                    "host": "md25",
+                    "bridge": {
+                      "bridge": "mbr",
+                      "untagged": [
+                        159
+                      ],
+                      "pvid": 159
+                    },
+                    "tap": {
+                      "node": "b",
+                      "frontend": {
+                        "name": "eth0",
+                        "mac": "82:bd:71:db:39:3f"
+                      },
+                      "vid": 159
+                    }
+                  }
+                ],
+                "vid": 159,
+                "vni": 172
+              }
+            }
+          }
+        },
+        "infranet": {
+          "InfrapodServer": "ifr1",
+          "InfrapodSite": "moddeter",
+          "configs": [
+            {
+              "localAddr": "172.30.0.1/16",
+              "localEndpoint": {
+                "facility": "moddeter",
+                "host": "ifr1",
+                "node": "ifr1",
+                "veth": {
+                  "NameA": "vethax172",
+                  "NameB": "vethbx172",
+                  "BridgeB": {
+                    "bridge": "mbr",
+                    "untagged": [
+                      159
+                    ],
+                    "pvid": 159
+                  }
+                },
+                "mtu": 9216
+              }
+            }
+          ]
+        },
+        "creator": "kthare10",
+        "created": "2026-06-26T15:53:14.625208535Z",
+        "expires": "2026-07-03T15:53:14.625226962Z",
+        "embedVersion": "v1.7.21"
+      },
+      "diagnostics": {}
+    }
+  ]
+}

@@ -226,6 +226,24 @@ function buildStylesheet(dark: boolean): any[] {
       'color': vmText,
       'font-family': 'Montserrat, sans-serif',
     }},
+    // SPHERE (MergeTB) realization nodes — sized + labelled like FABRIC/Chameleon
+    // VMs, with the SPHERE navy brand palette.
+    { selector: '.sphere-instance', style: {
+      'shape': 'round-rectangle',
+      'width': 180,
+      'height': 70,
+      'background-color': dark ? '#1a335f' : '#23467f',
+      'border-color': dark ? '#5b8fc7' : '#0a1f44',
+      'border-width': 2,
+      'label': 'data(label)',
+      'text-wrap': 'wrap',
+      'text-max-width': '170px',
+      'text-valign': 'center',
+      'text-halign': 'center',
+      'font-size': 13,
+      'color': '#ffffff',
+      'font-family': 'Montserrat, sans-serif',
+    }},
     { selector: '.edge-cross-testbed', style: {
       'line-color': '#ff8542',
       'target-arrow-color': '#ff8542',
@@ -373,7 +391,7 @@ const LAYOUTS: Record<string, any> = {
 };
 
 export interface ContextMenuAction {
-  type: 'terminal' | 'delete' | 'delete-slice' | 'delete-component' | 'delete-facility-port' | 'save-vm-template' | 'apply-recipe' | 'open-client' | 'open-boot-log' | 'run-boot-config' | 'run-boot-config-node' | 'chi-ssh' | 'chi-reboot' | 'chi-stop' | 'chi-start' | 'chi-delete' | 'chi-apply-recipe' | 'chi-assign-fip' | 'chi-run-boot-config' | 'chi-open-web' | 'chi-save-template';
+  type: 'terminal' | 'delete' | 'delete-slice' | 'delete-component' | 'delete-facility-port' | 'save-vm-template' | 'apply-recipe' | 'open-client' | 'open-boot-log' | 'run-boot-config' | 'run-boot-config-node' | 'chi-ssh' | 'chi-reboot' | 'chi-stop' | 'chi-start' | 'chi-delete' | 'chi-apply-recipe' | 'chi-assign-fip' | 'chi-run-boot-config' | 'chi-open-web' | 'chi-save-template' | 'sphere-ssh';
   elements: Record<string, string>[];
   sliceNames?: string[];
   nodeName?: string;
@@ -1142,6 +1160,17 @@ export default React.memo(function CytoscapeGraph({
   );
   const singleChi = chameleonInstances.length === 1 ? chameleonInstances[0] : null;
 
+  // SPHERE node detection — reached via XDC, so there's no management_ip; the
+  // host (SphereView) resolves the SSH path from the node name.
+  const sphereNodes = (menu?.selected || []).filter(
+    (el: any) => el.element_type === 'node' && String(el.testbed || '').toUpperCase() === 'SPHERE'
+  );
+  const singleSphere = sphereNodes.length === 1 ? sphereNodes[0] : null;
+  const handleSphereSsh = () => {
+    if (singleSphere) onContextAction({ type: 'sphere-ssh', elements: [singleSphere], nodeName: singleSphere.name });
+    setMenu(null);
+  };
+
   const handleTerminal = () => {
     const terminalTargets = menu?.sliceName ? sliceVmsWithIp : terminalTargetsForMenu;
     if (terminalTargets.length > 0) {
@@ -1251,6 +1280,11 @@ export default React.memo(function CytoscapeGraph({
           {terminalTargetsForMenu.length > 0 && (
             <button className="graph-context-menu-item" data-testid="topology-context-open-terminal" onClick={handleTerminal}>
               ▸ Open Terminal{terminalTargetsForMenu.length > 1 ? ` (${terminalTargetsForMenu.length})` : ''}
+            </button>
+          )}
+          {singleSphere && (
+            <button className="graph-context-menu-item" data-testid="topology-context-sphere-ssh" onClick={handleSphereSsh}>
+              ▸ Open Terminal
             </button>
           )}
           {vmsWithIp.length === 1 && (

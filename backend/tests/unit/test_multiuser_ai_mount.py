@@ -23,6 +23,7 @@ def test_handle_token_write_noop_in_k8s(tmp_path, monkeypatch):
 def test_ensure_user_symlinks_mounts_ai_home(tmp_path, monkeypatch):
     monkeypatch.setenv("FABRIC_STORAGE_DIR", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("LOOMAI_MANAGE_HOME_AI", "1")   # container-only behavior
     (tmp_path / "home").mkdir()
     from app import user_registry
     from app.routes import config
@@ -53,6 +54,7 @@ def test_ensure_user_symlinks_mounts_ai_home(tmp_path, monkeypatch):
 def test_switching_users_swaps_ai_home(tmp_path, monkeypatch):
     monkeypatch.setenv("FABRIC_STORAGE_DIR", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("LOOMAI_MANAGE_HOME_AI", "1")   # container-only behavior
     (tmp_path / "home").mkdir()
     from app import user_registry
     from app.routes import config
@@ -72,3 +74,55 @@ def test_switching_users_swaps_ai_home(tmp_path, monkeypatch):
     assert (home / ".claude" / "creds").read_text() == "A-CRED"
     config._ensure_user_symlinks(b)
     assert (home / ".claude" / "creds").read_text() == "B-CRED"   # swapped
+
+
+def test_home_ai_paths_untouched_outside_container(tmp_path, monkeypatch):
+    """Regression: outside the container (no LOOMAI_COMBINED_IMAGE marker),
+    _ensure_user_symlinks must NOT move/symlink home AI dotfiles. It once
+    moved a developer's real ~/.claude into pytest tmp storage and left a
+    dangling symlink after the tmp dir was pruned."""
+    monkeypatch.setenv("FABRIC_STORAGE_DIR", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("LOOMAI_MANAGE_HOME_AI", raising=False)
+    monkeypatch.delenv("LOOMAI_COMBINED_IMAGE", raising=False)
+    from app import user_registry
+    from app.routes import config
+
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    (home / ".claude" / "skills").mkdir()
+    (home / ".claude" / "skills" / "SKILL.md").write_text("precious")
+    (home / ".claude.json").write_text("{}")
+
+    uuid = "aaaaaaaa-1111-1111-1111-111111111111"
+    user_registry.add_user(uuid, "A", "a@x")
+    config._ensure_user_symlinks(uuid)
+
+    # Home dotfiles are still real (not symlinks) with content intact.
+    assert not (home / ".claude").is_symlink()
+    assert (home / ".claude" / "skills" / "SKILL.md").read_text() == "precious"
+    assert not (home / ".claude.json").is_symlink()
+    # And nothing was mounted into the per-user folder.
+    assert not (tmp_path / ".loomai" / "users" / uuid / ".claude" / "skills").exists()
+
+
+def test_restore_ai_tool_configs_noop_outside_container(tmp_path, monkeypatch):
+    """Regression: restore_ai_tool_configs rmtree's ~/.claude and ~/.codex —
+    it must be a no-op outside the container."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("LOOMAI_MANAGE_HOME_AI", raising=False)
+    monkeypatch.delenv("LOOMAI_COMBINED_IMAGE", raising=False)
+    from app.routes import ai_terminal
+
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".claude").mkdir()
+    (home / ".claude" / "settings.json").write_text("{}")
+    (home / ".codex").mkdir()
+    (home / ".codex" / "auth.json").write_text("{}")
+
+    ai_terminal.restore_ai_tool_configs()
+
+    assert (home / ".claude" / "settings.json").exists()
+    assert (home / ".codex" / "auth.json").exists()

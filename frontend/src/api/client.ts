@@ -84,6 +84,18 @@ export function createChameleonTerminal(instanceId: string, site: string): Promi
   });
 }
 
+export function createSphereTerminal(
+  experiment: string, realization: string, node: string, xdc: string, project?: string, label?: string,
+): Promise<TerminalSessionMeta> {
+  return fetchJson('/terminals', {
+    method: 'POST',
+    body: JSON.stringify({
+      type: 'sphere', sphereExperiment: experiment, sphereRealization: realization,
+      sphereNode: node, sphereXdc: xdc, sphereProject: project || null, label: label || node,
+    }),
+  });
+}
+
 export function listTerminals(): Promise<TerminalSessionMeta[]> {
   return fetchJson('/terminals');
 }
@@ -502,6 +514,7 @@ export interface TemplateSummary {
   source_slice: string;
   created: string;
   dir_name: string;
+  format?: string;
   has_template?: boolean;
   has_cleanup_script?: boolean;
   is_experiment?: boolean;
@@ -840,6 +853,320 @@ function chameleonSlicesOnly<T extends ChameleonDraft | ChameleonSlice>(items: T
 
 export function getChameleonStatus(): Promise<ChameleonStatus> {
   return fetchJson('/chameleon/status');
+}
+
+// --- SPHERE / MergeTB ---
+export function getSphereStatus(): Promise<import('../types/sphere').SphereStatus> {
+  return fetchJson('/sphere/status');
+}
+
+export function listSphereProjects(): Promise<string[]> {
+  return fetchJson('/sphere/projects');
+}
+
+export function listSphereRealizations(params?: { project?: string; all?: boolean; summary?: boolean; state?: boolean }): Promise<import('../types/sphere').SphereRealization[]> {
+  const q = new URLSearchParams();
+  if (params?.project) q.set('project', params.project);
+  if (params?.all) q.set('all', 'true');
+  if (params?.summary) q.set('summary', 'true');
+  if (params?.state) q.set('state', 'true');
+  const qs = q.toString();
+  return fetchJson(`/sphere/realizations${qs ? `?${qs}` : ''}`);
+}
+
+export function getSphereRealizationGraph(experiment: string, realization: string, project?: string): Promise<import('../types/sphere').SphereGraph> {
+  const qs = project ? `?project=${encodeURIComponent(project)}` : '';
+  return fetchJson(`/sphere/realizations/${encodeURIComponent(experiment)}/${encodeURIComponent(realization)}/graph${qs}`);
+}
+
+export async function uploadSphereFile(
+  file: File, experiment: string, realization: string, node: string, xdc: string, project?: string, dest?: string,
+): Promise<{ ok: boolean; node: string; path: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('experiment', experiment);
+  form.append('realization', realization);
+  form.append('node', node);
+  form.append('xdc', xdc);
+  if (project) form.append('project', project);
+  if (dest) form.append('dest', dest);
+  const res = await fetch(`${BASE}/sphere/upload`, { method: 'POST', body: form });
+  if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+export interface SphereFileEntry { name: string; size: number; dir: boolean; symlink: boolean }
+
+function sphereFileQuery(experiment: string, realization: string, node: string, xdc: string, path: string, project?: string): string {
+  const q = new URLSearchParams({ experiment, realization, node, xdc, path });
+  if (project) q.set('project', project);
+  return q.toString();
+}
+
+export function listSphereFiles(
+  experiment: string, realization: string, node: string, xdc: string, path: string, project?: string,
+): Promise<{ path: string; entries: SphereFileEntry[] }> {
+  return fetchJson(`/sphere/files?${sphereFileQuery(experiment, realization, node, xdc, path, project)}`);
+}
+
+export function sphereFileDownloadUrl(
+  experiment: string, realization: string, node: string, xdc: string, path: string, project?: string,
+): string {
+  return `${BASE}/sphere/files/download?${sphereFileQuery(experiment, realization, node, xdc, path, project)}`;
+}
+
+export function deleteSphereFile(
+  experiment: string, realization: string, node: string, xdc: string, path: string, project?: string,
+): Promise<any> {
+  return fetchJson('/sphere/files/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ experiment, realization, node, xdc, path, project: project || null }),
+  });
+}
+
+// --- SPHERE node file ops (FileEntry-shaped, for the dual-panel FileTransferView) ---
+export interface SphereNodeRef { experiment: string; realization: string; node: string; xdc: string; project?: string }
+const sphereBody = (r: SphereNodeRef, extra: Record<string, any>) =>
+  JSON.stringify({ experiment: r.experiment, realization: r.realization, node: r.node, xdc: r.xdc, project: r.project || null, ...extra });
+
+export async function listSphereNodeFiles(r: SphereNodeRef, path: string): Promise<FileEntry[]> {
+  const res = await listSphereFiles(r.experiment, r.realization, r.node, r.xdc, path || '.', r.project);
+  return res.entries.map(e => ({ name: e.name, type: e.dir ? 'dir' : 'file', size: e.size, modified: '' }));
+}
+
+export function sphereNodeMkdir(r: SphereNodeRef, path: string): Promise<{ created: string }> {
+  return fetchJson('/sphere/files/mkdir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: sphereBody(r, { path }) });
+}
+
+export function sphereNodeDelete(r: SphereNodeRef, path: string): Promise<{ deleted: string }> {
+  return deleteSphereFile(r.experiment, r.realization, r.node, r.xdc, path, r.project).then(() => ({ deleted: path }));
+}
+
+export function readSphereNodeFile(r: SphereNodeRef, path: string): Promise<{ path: string; content: string }> {
+  return fetchJson('/sphere/files/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: sphereBody(r, { path }) });
+}
+
+export function writeSphereNodeFile(r: SphereNodeRef, path: string, content: string): Promise<{ path: string; status: string }> {
+  return fetchJson('/sphere/files/write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: sphereBody(r, { path, content }) });
+}
+
+/** Upload files to a node dir by looping the single-file upload endpoint. */
+export async function uploadDirectToSphere(r: SphereNodeRef, destPath: string, files: FileList | File[]): Promise<{ uploaded: string[] }> {
+  const uploaded: string[] = [];
+  for (const f of Array.from(files)) {
+    await uploadSphereFile(f, r.experiment, r.realization, r.node, r.xdc, r.project, destPath);
+    uploaded.push(f.name);
+  }
+  return { uploaded };
+}
+
+/** Upload files preserving relative paths (folder drag-drop): mkdir then upload. */
+export async function uploadDirectToSphereWithPaths(r: SphereNodeRef, destPath: string, entries: Array<{ file: File; relativePath: string }>): Promise<{ uploaded: string[] }> {
+  const uploaded: string[] = [];
+  const madeDirs = new Set<string>();
+  for (const { file, relativePath } of entries) {
+    const rel = relativePath.replace(/\\/g, '/');
+    const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+    const targetDir = dir ? `${destPath}/${dir}` : destPath;
+    if (dir && !madeDirs.has(targetDir)) { await sphereNodeMkdir(r, targetDir); madeDirs.add(targetDir); }
+    await uploadSphereFile(file, r.experiment, r.realization, r.node, r.xdc, r.project, targetDir);
+    uploaded.push(rel);
+  }
+  return { uploaded };
+}
+
+async function blobSave(url: string, filename: string): Promise<void> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
+export function downloadDirectFromSphere(r: SphereNodeRef, remotePath: string): Promise<void> {
+  return blobSave(sphereFileDownloadUrl(r.experiment, r.realization, r.node, r.xdc, remotePath, r.project), remotePath.split('/').pop() || 'download');
+}
+
+export function downloadFolderFromSphere(r: SphereNodeRef, remotePath: string): Promise<void> {
+  const q = sphereFileQuery(r.experiment, r.realization, r.node, r.xdc, remotePath, r.project);
+  return blobSave(`${BASE}/sphere/files/download-folder?${q}`, `${remotePath.split('/').pop() || 'folder'}.tgz`);
+}
+
+/** Fetch a container file as a File object (for cross-panel transfer). */
+export async function fetchContainerFile(path: string): Promise<File> {
+  const res = await fetch(`${BASE}/files/download?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error(`fetch failed ${res.status}`);
+  return new File([await res.blob()], path.split('/').pop() || 'file');
+}
+
+/** Fetch a SPHERE node file as a File object (for cross-panel transfer). */
+export async function fetchSphereNodeFile(r: SphereNodeRef, path: string): Promise<File> {
+  const res = await fetch(sphereFileDownloadUrl(r.experiment, r.realization, r.node, r.xdc, path, r.project));
+  if (!res.ok) throw new Error(`fetch failed ${res.status}`);
+  return new File([await res.blob()], path.split('/').pop() || 'file');
+}
+
+export function getSphereInventory(project?: string): Promise<{ facilities: any[]; resources: any[]; pools: any[] }> {
+  const qs = project ? `?project=${encodeURIComponent(project)}` : '';
+  return fetchJson(`/sphere/inventory${qs}`);
+}
+
+export function listSphereExperiments(project?: string): Promise<any[]> {
+  const qs = project ? `?project=${encodeURIComponent(project)}` : '';
+  return fetchJson(`/sphere/experiments${qs}`);
+}
+
+export function createSphereExperiment(experiment: string, description?: string, project?: string): Promise<any> {
+  return fetchJson('/sphere/experiments', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ experiment, description: description || '', project: project || null }),
+  });
+}
+
+export function deleteSphereExperiment(experiment: string, project?: string): Promise<any> {
+  const qs = project ? `?project=${encodeURIComponent(project)}` : '';
+  return fetchJson(`/sphere/experiments/${encodeURIComponent(experiment)}${qs}`, { method: 'DELETE' });
+}
+
+export function getSphereExperimentModel(experiment: string, project?: string): Promise<{
+  found: boolean; revision?: string;
+  nodes: Array<{ name: string; facility?: string }>;
+  links: Array<{ members: string[]; addrs: Record<string, string> }>;
+}> {
+  const qs = project ? `?project=${encodeURIComponent(project)}` : '';
+  return fetchJson(`/sphere/experiments/${encodeURIComponent(experiment)}/model${qs}`);
+}
+
+export function packageSphereExperiment(
+  experiment: string,
+  body: {
+    name: string;
+    description?: string;
+    realization?: string;
+    scripts?: Array<{ name: string; content: string; target?: string }>;
+    include_notebook?: boolean;
+    tags?: string[];
+    project?: string;
+  },
+): Promise<{ dir_name: string; path: string; files: string[]; format: string }> {
+  return fetchJson(`/sphere/experiments/${encodeURIComponent(experiment)}/package`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: body.name,
+      description: body.description || '',
+      realization: body.realization || 'r0',
+      scripts: body.scripts || [],
+      include_notebook: body.include_notebook !== false,
+      tags: body.tags || null,
+      project: body.project || null,
+    }),
+  });
+}
+
+// Sentinel "node" value that targets the XDC container itself (its own
+// filesystem / JupyterLab home) rather than an experiment node. Recognized by
+// the SPHERE file-manager routes.
+export const SPHERE_XDC_TARGET = '__xdc__';
+
+export function seedSphereWeaveToXdc(
+  xdc: string, weave: string, project?: string, dest?: string,
+): Promise<{ ok: boolean; xdc: string; dest: string; files: number }> {
+  return fetchJson(`/sphere/xdcs/${encodeURIComponent(xdc)}/seed-weave`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ weave, dest: dest || null, project: project || null }),
+  });
+}
+
+export function compileSphereModel(model: string, project?: string): Promise<{ success: boolean; errors?: string[]; network?: string }> {
+  return fetchJson('/sphere/models/compile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, project: project || null }),
+  });
+}
+
+export function pushSphereModel(model: string, experiment: string, tag?: string, project?: string): Promise<any> {
+  return fetchJson('/sphere/models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, experiment, tag: tag || null, project: project || null }),
+  });
+}
+
+export function realizeSphere(experiment: string, realization: string, opts?: { tag?: string; branch?: string; revision?: string; duration?: string }, project?: string): Promise<any> {
+  return fetchJson('/sphere/realizations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ experiment, realization, ...(opts || {}), project: project || null }),
+  });
+}
+
+export function relinquishSphere(experiment: string, realization: string, project?: string): Promise<any> {
+  const qs = project ? `?project=${encodeURIComponent(project)}` : '';
+  return fetchJson(`/sphere/realizations/${encodeURIComponent(experiment)}/${encodeURIComponent(realization)}${qs}`, { method: 'DELETE' });
+}
+
+export function materializeSphere(experiment: string, realization: string, project?: string): Promise<any> {
+  return fetchJson('/sphere/materializations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ experiment, realization, project: project || null }),
+  });
+}
+
+export function dematerializeSphere(experiment: string, realization: string, project?: string): Promise<any> {
+  const qs = project ? `?project=${encodeURIComponent(project)}` : '';
+  return fetchJson(`/sphere/materializations/${encodeURIComponent(experiment)}/${encodeURIComponent(realization)}${qs}`, { method: 'DELETE' });
+}
+
+export function getSphereMaterialization(experiment: string, realization: string, project?: string): Promise<any> {
+  const qs = project ? `?project=${encodeURIComponent(project)}` : '';
+  return fetchJson(`/sphere/materializations/${encodeURIComponent(experiment)}/${encodeURIComponent(realization)}${qs}`);
+}
+
+// --- SPHERE XDCs (Experiment Data Conduits — jump containers for node access) ---
+export function listSphereXdcs(project?: string, withStatus = false): Promise<import('../types/sphere').SphereXdc[]> {
+  const q = new URLSearchParams();
+  if (project) q.set('project', project);
+  if (withStatus) q.set('status', 'true');
+  const qs = q.toString();
+  return fetchJson(`/sphere/xdcs${qs ? `?${qs}` : ''}`);
+}
+
+export function createSphereXdc(xdc: string, type: 'shared' | 'personal' = 'shared', project?: string): Promise<any> {
+  return fetchJson('/sphere/xdcs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ xdc, type, project: project || null }),
+  });
+}
+
+export function deleteSphereXdc(xdc: string, project?: string): Promise<any> {
+  const qs = project ? `?project=${encodeURIComponent(project)}` : '';
+  return fetchJson(`/sphere/xdcs/${encodeURIComponent(xdc)}${qs}`, { method: 'DELETE' });
+}
+
+export function attachSphereXdc(xdc: string, experiment: string, realization: string, project?: string): Promise<any> {
+  return fetchJson(`/sphere/xdcs/${encodeURIComponent(xdc)}/attach`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ experiment, realization, project: project || null }),
+  });
+}
+
+export function detachSphereXdc(xdc: string, experiment: string, realization: string, project?: string): Promise<any> {
+  return fetchJson(`/sphere/xdcs/${encodeURIComponent(xdc)}/detach`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ experiment, realization, project: project || null }),
+  });
 }
 
 export function getChameleonSites(): Promise<ChameleonSite[]> {

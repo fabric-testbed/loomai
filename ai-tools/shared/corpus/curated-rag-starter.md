@@ -10,6 +10,8 @@ domains:
   - weave
   - chameleon
   - openstack
+  - sphere
+  - mergetb
   - federated
   - troubleshooting
   - loomai
@@ -28,6 +30,10 @@ triggers:
   - fablib example
   - example weave
   - chameleon openstack
+  - sphere experiment
+  - mergexp model
+  - realize materialize
+  - xdc node access
   - federated workflow
   - troubleshooting runbook
   - loomai development
@@ -36,9 +42,11 @@ source_paths:
   - backend/default_artifacts/Hello_FABRIC/weave.json
   - backend/default_artifacts/Prometheus_Grafana_Monitor/weave.json
   - backend/default_artifacts/Chameleon_SSH_Slice/weave.json
+  - backend/default_artifacts/edgeids-weave/weave.json
   - ai-tools/shared/skills/debug.md
   - ai-tools/shared/skills/manage-federated-slice.md
   - ai-tools/shared/skills/manage-chameleon-slice.md
+  - ai-tools/shared/skills/create-sphere-experiment.md
   - ai-tools/shared/skills/develop-loomai-feature.md
 generated_outputs:
   - rag:curated
@@ -108,6 +116,24 @@ Use these sources first for Chameleon-specific answers:
 The main retrieval intents are Blazar leases, Nova instances, Neutron networks,
 security groups, floating IPs, FABNetv4 route metrics, and LoomAI Chameleon
 slice membership actions.
+
+## SPHERE And MergeTB Patterns
+
+Use these sources first for SPHERE-specific answers:
+
+- `ai-tools/shared/skills/query-sphere.md`
+- `ai-tools/shared/skills/create-sphere-experiment.md`
+- `ai-tools/shared/skills/manage-sphere-xdc.md`
+- `ai-tools/shared/skills/package-sphere-weave.md`
+- `ai-tools/shared/agents/sphere-manager.md`
+- `backend/default_artifacts/edgeids-weave/weave.json`
+- `backend/default_artifacts/edgeids-weave/model.py`
+- `backend/default_artifacts/edgeids-weave/experiment.py`
+
+The main retrieval intents are mergexp model authoring, the create → push →
+realize → materialize lifecycle, materialization status polling, XDC creation
+and node SSH access, and packaging experiments as `sphere-experiment-v1` weaves.
+The `edgeids-weave` default artifact is the canonical complete SPHERE lab.
 
 ## Federated Workflows
 

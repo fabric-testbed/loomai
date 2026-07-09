@@ -127,7 +127,13 @@ def _ensure_user_symlinks(uuid: str) -> None:
         os.symlink(target, link_path)
         logger.info("Symlinked %s → users/%s/%s", name, uuid, name)
 
-    # AI-tool config in the home dir → the active user's folder.
+    # AI-tool config in the home dir → the active user's folder. Guarded:
+    # outside the container this would move the developer's REAL ~/.claude,
+    # ~/.codex, ... into per-user storage and leave dangling symlinks behind
+    # once that storage is cleaned up (e.g. a pytest tmp_path).
+    if not settings_manager.manage_home_ai_paths():
+        logger.debug("Skipping home AI-tool symlinks (not in the LoomAI container)")
+        return
     home = os.path.expanduser("~")
     for name, is_dir in _USER_AI_HOME_PATHS:
         try:
@@ -1835,6 +1841,10 @@ def _walk_secret_fields(settings: dict):
             for k in ("app_credential_secret", "password"):
                 if k in site:
                     yield site, k
+    sph = settings.get("sphere") or {}
+    for k in ("password", "token"):
+        if k in sph:
+            yield sph, k
 
 
 def _mask_secrets(settings: dict) -> dict:
@@ -1872,6 +1882,12 @@ def _restore_masked_secrets(new: dict, old: dict) -> dict:
             for k in ("app_credential_secret", "password"):
                 if site.get(k) == _SECRET_MASK:
                     site[k] = old_site.get(k, "")
+    old_sph = (old.get("sphere") or {})
+    new_sph = (new.get("sphere") or {})
+    if isinstance(new_sph, dict):
+        for k in ("password", "token"):
+            if new_sph.get(k) == _SECRET_MASK:
+                new_sph[k] = old_sph.get(k, "")
     return new
 
 
@@ -1906,7 +1922,9 @@ def put_settings(body: dict, background_tasks: BackgroundTasks):
     from app.routes.ai_terminal import propagate_ai_configs
     background_tasks.add_task(propagate_ai_configs)
 
-    return settings_manager.load_settings()
+    # Mask secrets in the response, matching GET /api/settings — never echo real
+    # API keys/passwords back over the wire.
+    return _mask_secrets(settings_manager.load_settings())
 
 
 # ---------------------------------------------------------------------------
@@ -2511,6 +2529,17 @@ async def test_custom_provider(request: Request):
 
     if not base_url:
         return {"ok": False, "message": "No base URL provided"}
+
+    # The reloaded UI only ever holds the secret mask (GET /api/settings masks
+    # api keys), so a Test after save+reopen would send "********" and get a 401.
+    # Fall back to the stored provider's real key, matched by base URL.
+    if api_key == _SECRET_MASK or not api_key:
+        from app import settings_manager
+        stored = (settings_manager.load_settings().get("ai") or {}).get("custom_providers") or []
+        for cp in stored:
+            if isinstance(cp, dict) and (cp.get("base_url") or "").rstrip("/") == base_url and cp.get("api_key"):
+                api_key = cp["api_key"]
+                break
 
     headers = {}
     if api_key:

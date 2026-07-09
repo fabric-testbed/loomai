@@ -248,6 +248,11 @@ _RAW_PATTERNS: list[tuple[str, str, Optional[Callable], str]] = [
      }, "low"),
     (r"create\s+(?:a\s+)?(?:new\s+)?weave",
      "create_weave", lambda m: {"include_notebooks": True}, "low"),
+    # SPHERE experiment creation — LOW, but must outrank the generic
+    # "build an experiment" → create_weave pattern below (SPHERE experiments
+    # are a multi-step lifecycle, not a weave).
+    (r"(?:create|build|make|design|deploy)\s+(?:a\s+|an\s+)?(?:new\s+)?sphere\s+experiment",
+     "", None, "low"),
     (r"(?:build|make|design)\s+(?:a\s+|an\s+)?(?:experiment|weave|topology)",
      "create_weave", lambda m: {"include_notebooks": True}, "low"),
 
@@ -267,6 +272,14 @@ _RAW_PATTERNS: list[tuple[str, str, Optional[Callable], str]] = [
     (r"chameleon\s+sites?", "list_chameleon_sites", None, "high"),
     (r"(?:reserve|create)\s+.+(?:on|at)\s+CHI@", "create_chameleon_lease", None, "medium"),
     (r"chameleon\s+images?\s+(?:on|at)\s+(\S+)", "chameleon_site_images", lambda m: {"site": m.group(1)}, "high"),
+
+    # --- SPHERE / MergeTB ---
+    (r"(?:list|show|my)\s+sphere\s+experiments?", "list_sphere_experiments", None, "high"),
+    (r"sphere\s+experiments?", "list_sphere_experiments", None, "high"),
+    (r"(?:list|show|my)\s+sphere\s+realizations?", "list_sphere_realizations", None, "high"),
+    (r"sphere\s+realizations?", "list_sphere_realizations", None, "high"),
+    (r"sphere\s+status", "sphere_status", None, "high"),
+    (r"(?:list|show|my)\s+(?:sphere\s+)?xdcs?\b", "list_sphere_xdcs", None, "high"),
 
     # Help / greeting — LOW (let LLM handle)
     (r"^(?:hi|hello|hey|help)[\s!?.]*$", "", None, "low"),

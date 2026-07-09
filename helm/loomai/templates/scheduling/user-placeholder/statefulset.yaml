@@ -45,14 +45,24 @@ spec:
       {{- end }}
       affinity:
         nodeAffinity:
+        {{- if eq .Values.scheduling.userPods.nodeAffinity.matchNodePurpose "require" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: hub.loomai.net/node-purpose
+                    operator: In
+                    values:
+                      - user
+        {{- else }}
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               preference:
                 matchExpressions:
-                  - key: hub.jupyter.org/node-purpose
+                  - key: hub.loomai.net/node-purpose
                     operator: In
                     values:
                       - user
+        {{- end }}
       securityContext:
         runAsUser: 65534
         runAsGroup: 65534

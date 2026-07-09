@@ -163,6 +163,23 @@ inside backend-owned code. Chameleon maps to OpenStack services: Blazar
 `network` for networks/ports/floating IPs/security groups, and Glance `image`
 for images.
 
+**SPHERE / MergeTB (Security Testbed):**
+- `sphere_status` — Integration status (enabled/configured, default project)
+- `list_sphere_experiments` — Experiments in the project
+- `create_sphere_experiment(experiment, description?)` — Name must be lowercase letters+digits only
+- `push_sphere_model(experiment, model, tag)` — Push mergexp Python source; always tag (e.g. `v1`)
+- `list_sphere_realizations` — Realizations with derived state (complete/failed/pending)
+- `sphere_realize(experiment, realization, tag)` — Reserve resources for a tagged model
+- `sphere_materialize(experiment, realization)` — Power on, image, wire the network
+- `get_sphere_materialization(experiment, realization)` — Poll status; ready when `taskSummary.HighestStatus == "Success"`
+- `sphere_dematerialize(experiment, realization)` — Power off (confirm with user!)
+- `sphere_relinquish(experiment, realization)` — Release reservation (confirm with user!)
+- `list_sphere_xdcs` — XDC jump containers and attachments
+- `attach_sphere_xdc(xdc, experiment, realization)` — Attach an XDC for node access
+
+For SPHERE workflows, activate the `sphere-manager` agent or the
+`create-sphere-experiment` / `manage-sphere-xdc` / `package-sphere-weave` skills.
+
 **Federated Slices (Cross-Facility):**
 - `list_composite_slices` — Compatibility tool for listing Federated Slices
 - `get_composite_slice(slice_id)` — Compatibility tool for Federated Slice details with member slices
@@ -273,6 +290,46 @@ and add connections as soon as provider drafts/slices exist. The legacy
 backend-assisted path `POST /api/slices/{slice_name}/submit-composite`
 automatically materializes a Federated Slice entry when running a FABRIC draft
 that has attached Chameleon nodes.
+
+## SPHERE / MergeTB
+
+SPHERE is a security-research testbed on the Merge (MergeTB) control stack.
+Key differences from FABRIC/Chameleon:
+- **Topologies are `mergexp` Python models** pushed to an experiment, not slices/leases
+- **Two-step deploy**: `realize` (reserve resources) then `materialize` (power on, image, wire)
+- **XDC-only node access**: nodes have no public IPs; SSH goes jump host → XDC → node
+- **Naming**: dotted, right-anchored to project — experiment `<exp>.<proj>`,
+  realization `<rname>.<exp>.<proj>`; API calls take bare lowercase-alnum names
+- **Model tags**: revisions are content-hash keyed with no ordering — always push
+  with a tag and realize by that tag
+- **Facility entitlement**: projects can only realize on entitled facilities
+  (e.g. `fabricsphere` → `moddeter` only)
+
+### SPHERE Workflow
+```
+mergexp model → create experiment → push model (tag) → realize → materialize
+  → poll get_sphere_materialization until HighestStatus == "Success"
+  → attach shared XDC → SSH to nodes (loomai sphere ssh)
+```
+
+Teardown: dematerialize → relinquish (both destructive — confirm first).
+
+mergexp minimal model (node names must be Python identifiers):
+```python
+from mergexp import *
+net = Network('myexp')
+a = net.node('a', facility == 'moddeter')
+b = net.node('b', facility == 'moddeter')
+link0 = net.connect([a, b])
+link0[a].socket.addrs = ip4('10.0.0.1/24')
+link0[b].socket.addrs = ip4('10.0.0.2/24')
+experiment(net)
+```
+
+Package a live experiment as a reproducible `sphere-experiment-v1` weave via
+`POST /api/sphere/experiments/{exp}/package`; the `edgeids-weave` default
+artifact (4-node IDS/IPS lab) is the reference example. For details activate
+the `sphere-manager` agent.
 
 ## Slice Lifecycle
 
@@ -478,6 +535,18 @@ Then report:
 - **"list my Chameleon slices"** → `list_chameleon_slices`
 - **"deploy my Chameleon draft"** → `deploy_chameleon_slice(draft_id, hours)`
 
+### SPHERE / MergeTB
+- **"is SPHERE configured" / "sphere status"** → `sphere_status`
+- **"list my SPHERE experiments"** → `list_sphere_experiments`
+- **"list sphere realizations" / "is my realization ready"** → `list_sphere_realizations`
+- **"create a SPHERE experiment"** → `create_sphere_experiment(experiment)` →
+  `push_sphere_model(experiment, model, tag="v1")` → `sphere_realize(experiment, "r0", tag="v1")` →
+  `sphere_materialize(experiment, "r0")` → poll `get_sphere_materialization`
+- **"is my SPHERE experiment up"** → `get_sphere_materialization(experiment, realization)` — ready when HighestStatus is Success
+- **"tear down my SPHERE experiment"** → confirm, then `sphere_dematerialize` → `sphere_relinquish`
+- **"list XDCs" / "how do I reach my SPHERE nodes"** → `list_sphere_xdcs`, `attach_sphere_xdc`, then `loomai sphere ssh <exp> <rname> <node> --xdc <xdc>`
+- **"package my SPHERE experiment as a weave"** → `POST /api/sphere/experiments/{exp}/package` (see `package-sphere-weave` skill)
+
 ### Federated Slices (Cross-Facility)
 - **"list federated slices"** → `list_composite_slices`
 - **"create a cross-testbed experiment"** → `create_composite_slice(name)`, then add members via WebUI or `/api/federated/slices/{id}/members`
@@ -490,7 +559,8 @@ Then report:
 
 The `loomai` CLI manages FABRIC from the terminal. Key: `loomai slices list`,
 `loomai ssh <slice> <node>`, `loomai exec <slice> "cmd" --all`, `loomai weaves list`,
-`loomai sites list`, `loomai chameleon sites`. Run `loomai --help` for details.
+`loomai sites list`, `loomai chameleon sites`, `loomai sphere realizations`.
+Run `loomai --help` for details.
 
 ## Backend REST API
 

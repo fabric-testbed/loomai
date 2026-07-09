@@ -2279,7 +2279,7 @@ function NetworkForm({
   const [selectedIfaces, setSelectedIfaces] = useState<string[]>([]);
   const [subnet, setSubnet] = useState('');
   const [gateway, setGateway] = useState('');
-  const [ipMode, setIpMode] = useState<'none' | 'auto' | 'config'>('none');
+  const [ipMode, setIpMode] = useState<'none' | 'auto' | 'config'>('auto');
   const [interfaceIps, setInterfaceIps] = useState<Record<string, string>>({});
   const [vlan, setVlan] = useState('');
 
@@ -2342,7 +2342,7 @@ function NetworkForm({
             setIpMode('auto');
           } else {
             setSubnet('');
-            setIpMode('none');
+            setIpMode('auto');
           }
         }} data-testid="network-type-select">
           {types.map((t) => <option key={t} value={t}>{typeLabels[t] || t}</option>)}
@@ -2383,15 +2383,21 @@ function NetworkForm({
             <input type="text" value={vlan} onChange={(e) => setVlan(e.target.value)} placeholder="Auto" data-testid="network-vlan-input" />
           </div>
           <div className="form-group" data-help-id="editor.net.subnet">
-            <label><Tooltip text={netType === 'L2PTP' ? 'Subnet for the point-to-point link' : 'Optional CIDR subnet'}>Subnet{netType !== 'L2PTP' ? ' (optional)' : ''}</Tooltip></label>
-            <input type="text" value={subnet} onChange={(e) => setSubnet(e.target.value)} placeholder="192.168.1.0/24" data-testid="network-subnet-input" />
+            <label>
+              <Tooltip text={netType === 'L2PTP' ? 'Subnet for the point-to-point link, e.g. 192.168.1.0/24' : 'Optional CIDR subnet, e.g. 192.168.1.0/24'}>Subnet{netType !== 'L2PTP' ? ' (optional)' : ''}</Tooltip>
+              {' '}<span style={{ fontWeight: 400, color: 'var(--fabric-text-muted)', fontSize: 11 }}>e.g. 192.168.1.0/24</span>
+            </label>
+            <input type="text" value={subnet} onChange={(e) => setSubnet(e.target.value)} data-testid="network-subnet-input" />
           </div>
           {subnet && (
             <>
               {netType !== 'L2PTP' && (
                 <div className="form-group" data-help-id="editor.net.gateway">
-                  <label><Tooltip text="Gateway IP within the subnet">Gateway (optional)</Tooltip></label>
-                  <input type="text" value={gateway} onChange={(e) => setGateway(e.target.value)} placeholder="192.168.1.1" />
+                  <label>
+                    <Tooltip text="Gateway IP within the subnet, e.g. 192.168.1.1">Gateway (optional)</Tooltip>
+                    {' '}<span style={{ fontWeight: 400, color: 'var(--fabric-text-muted)', fontSize: 11 }}>e.g. 192.168.1.1</span>
+                  </label>
+                  <input type="text" value={gateway} onChange={(e) => setGateway(e.target.value)} />
                 </div>
               )}
               <div className="form-group" data-help-id="editor.net.ip-mode">
@@ -2404,7 +2410,10 @@ function NetworkForm({
               </div>
               {ipMode === 'config' && selectedIfaces.length > 0 && (
                 <div className="form-group" data-help-id="editor.net.interface-ips">
-                  <label><Tooltip text="Assign IP to each interface">Interface IPs</Tooltip></label>
+                  <label>
+                    <Tooltip text="Assign an IP within the subnet to each interface, e.g. 192.168.1.10">Interface IPs</Tooltip>
+                    {' '}<span style={{ fontWeight: 400, color: 'var(--fabric-text-muted)', fontSize: 11 }}>e.g. 192.168.1.10</span>
+                  </label>
                   {selectedIfaces.map((ifName) => (
                     <div key={ifName} style={{ display: 'flex', gap: 4, marginBottom: 4, alignItems: 'center' }}>
                       <span style={{ fontSize: 11, minWidth: 80 }}>{ifName}</span>
@@ -2412,7 +2421,6 @@ function NetworkForm({
                         type="text"
                         value={interfaceIps[ifName] || ''}
                         onChange={(e) => setInterfaceIps((prev) => ({ ...prev, [ifName]: e.target.value }))}
-                        placeholder="10.0.0.1"
                         style={{ flex: 1 }}
                       />
                     </div>
@@ -3490,19 +3498,28 @@ function NetworkReadOnlyView({
           {(ipMode === 'auto' || ipMode === 'config') && (
             <>
               <div className="form-group">
-                <label><Tooltip text="CIDR subnet for the network">Subnet</Tooltip></label>
-                <input type="text" value={subnet} onChange={(e) => setSubnet(e.target.value)} placeholder="e.g. 192.168.1.0/24" />
+                <label>
+                  <Tooltip text="CIDR subnet for the network, e.g. 192.168.1.0/24">Subnet</Tooltip>
+                  {' '}<span style={{ fontWeight: 400, color: 'var(--fabric-text-muted)', fontSize: 11 }}>e.g. 192.168.1.0/24</span>
+                </label>
+                <input type="text" value={subnet} onChange={(e) => setSubnet(e.target.value)} />
               </div>
               <div className="form-group">
-                <label><Tooltip text="Optional gateway address">Gateway</Tooltip></label>
-                <input type="text" value={gateway} onChange={(e) => setGateway(e.target.value)} placeholder="optional" />
+                <label>
+                  <Tooltip text="Optional gateway address, e.g. 192.168.1.1">Gateway (optional)</Tooltip>
+                  {' '}<span style={{ fontWeight: 400, color: 'var(--fabric-text-muted)', fontSize: 11 }}>e.g. 192.168.1.1</span>
+                </label>
+                <input type="text" value={gateway} onChange={(e) => setGateway(e.target.value)} />
               </div>
             </>
           )}
 
           {ipMode === 'config' && network.interfaces.length > 0 && (
             <div className="form-group" data-help-id="editor.net.interface-ips">
-              <label><Tooltip text="Assign IP to each interface">Interface IPs</Tooltip></label>
+              <label>
+                <Tooltip text="Assign an IP within the subnet to each interface, e.g. 192.168.1.10">Interface IPs</Tooltip>
+                {' '}<span style={{ fontWeight: 400, color: 'var(--fabric-text-muted)', fontSize: 11 }}>e.g. 192.168.1.10</span>
+              </label>
               {network.interfaces.map((iface) => (
                 <div key={iface.name} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                   <span style={{ fontSize: '0.82em', minWidth: 100 }}>{iface.name}</span>
@@ -3510,7 +3527,6 @@ function NetworkReadOnlyView({
                     type="text"
                     value={interfaceIps[iface.name] || ''}
                     onChange={(e) => setInterfaceIps(prev => ({ ...prev, [iface.name]: e.target.value }))}
-                    placeholder="e.g. 192.168.1.1"
                     style={{ flex: 1 }}
                   />
                 </div>

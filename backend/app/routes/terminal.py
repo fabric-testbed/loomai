@@ -7,9 +7,11 @@ import json
 import logging
 import os
 import pty
+import re
 import shlex
 import struct
 import subprocess
+import tempfile
 import termios
 from typing import Optional
 
@@ -60,6 +62,12 @@ class CreateTerminalBody(BaseModel):
     # For type == "chameleon":
     chameleonInstanceId: Optional[str] = None
     chameleonSite: Optional[str] = None
+    # For type == "sphere":
+    sphereExperiment: Optional[str] = None
+    sphereRealization: Optional[str] = None
+    sphereNode: Optional[str] = None
+    sphereXdc: Optional[str] = None
+    sphereProject: Optional[str] = None
 
 
 def _default_terminal_cwd() -> str:
@@ -222,6 +230,154 @@ def _build_chameleon_ssh_argv(site: str, ip: str, key_name: str = "") -> list[st
     return argv
 
 
+def _sphere_error_argv(message: str) -> list[str]:
+    return ["/bin/bash", "-lc", f"printf %s {shlex.quote(message)}; exit 255"]
+
+
+def write_sphere_ssh_config(details: dict) -> tuple[Optional[str], str]:
+    """Write the key/cert/ssh-config for a SPHERE node and return (cfg_path, err).
+
+    Generates an ssh config whose ``Host *`` block applies relaxed host-key
+    checking to EVERY hop and chains jump host(s) → XDC pod → node management DNS
+    (``<node>.infra.<rname>.<exp>.<proj>``) via ProxyJump aliases. The node is
+    reachable as the ``sphere-node`` alias. Shared by the interactive terminal
+    (ssh) and file upload (scp). Returns ``(None, message)`` if SSH material is
+    missing.
+
+    Note: the XDC fqdn (e.g. ``x0-fabricsphere.xdc.sphere-testbed.net``) is the
+    Jupyter ingress; the SSH-reachable XDC host via the jump is the fqdn's
+    leftmost label (``x0-fabricsphere``).
+    """
+    user = (details.get("username") or "").strip()
+    priv = details.get("private_key") or ""
+    cert = details.get("cert") or ""
+    node_dns = details.get("node_dns") or ""
+    xdc_fqdn = details.get("xdc_fqdn") or ""
+    jumps = details.get("jump_hosts") or []
+
+    if not user:
+        return None, ("SPHERE has no username configured. Set "
+                      "settings.sphere.username (your Merge portal user).")
+    if not priv:
+        return None, ("Could not resolve SPHERE SSH material. Ensure the "
+                      "realization is materialized and an XDC is attached.")
+    # A node target needs node_dns; an XDC target (node_dns empty) only needs the
+    # XDC fqdn. Require at least one reachable endpoint.
+    if not node_dns and not xdc_fqdn:
+        return None, ("Could not resolve a SPHERE SSH target (no node DNS or XDC "
+                      "fqdn). Ensure the realization is materialized and an XDC "
+                      "is attached.")
+
+    # Defense-in-depth: every value below is written into an ssh *config file*
+    # that ssh interprets line-by-line. A newline (or other config-breaking char)
+    # in a hostname/user/port would inject arbitrary ssh directives (e.g. a local
+    # ProxyCommand). Reject anything outside a safe hostname/user charset so a
+    # crafted node/experiment/realization/username/fqdn can't escape its line.
+    _SAFE = re.compile(r"^[A-Za-z0-9._:@-]+$")
+
+    def _san(value: str) -> Optional[str]:
+        v = (value or "").strip()
+        return v if _SAFE.match(v) else None
+
+    safe_user = _san(user)
+    safe_node = _san(node_dns) if node_dns else ""
+    if not safe_user or (node_dns and not safe_node):
+        return None, "SPHERE SSH parameters contain invalid characters."
+
+    workdir = tempfile.mkdtemp(prefix="sphere-ssh-")
+    key_path = os.path.join(workdir, "id_sphere")
+    with open(key_path, "w") as fh:
+        fh.write(priv if priv.endswith("\n") else priv + "\n")
+    os.chmod(key_path, 0o600)
+
+    cert_path = ""
+    if cert:
+        cert_path = key_path + "-cert.pub"
+        with open(cert_path, "w") as fh:
+            fh.write(cert if cert.endswith("\n") else cert + "\n")
+        os.chmod(cert_path, 0o600)
+
+    lines: list[str] = [
+        "Host *",
+        "  StrictHostKeyChecking no",
+        "  UserKnownHostsFile /dev/null",
+        "  LogLevel ERROR",
+        "  ConnectTimeout 20",
+        "  IdentitiesOnly yes",
+        # Multiplex connections so repeated ops (file manager, scp) reuse one
+        # already-authenticated jump→XDC→node chain instead of re-handshaking.
+        "  ControlMaster auto",
+        "  ControlPath /tmp/.sphere-mux-%C",
+        "  ControlPersist 30s",
+        f"  IdentityFile {key_path}",
+        f"  User {safe_user}",
+        "  ServerAliveInterval 30",
+        "  ServerAliveCountMax 3",
+    ]
+    if cert_path:
+        lines.append(f"  CertificateFile {cert_path}")
+    lines.append("")
+
+    prev_alias = ""
+    for hop_idx, j in enumerate(jumps):
+        fqdn = _san(j.get("fqdn") or "")
+        if not fqdn:
+            continue
+        alias = f"sphere-jump{hop_idx}"
+        lines += [f"Host {alias}", f"  HostName {fqdn}"]
+        port = j.get("port")
+        if isinstance(port, int) and 0 < port < 65536:
+            lines.append(f"  Port {port}")
+        if prev_alias:
+            lines.append(f"  ProxyJump {prev_alias}")
+        lines.append("")
+        prev_alias = alias
+
+    if xdc_fqdn:
+        xdc_host = _san(xdc_fqdn.split(".", 1)[0])
+        if not xdc_host:
+            return None, "SPHERE XDC hostname contains invalid characters."
+        lines += ["Host sphere-xdc", f"  HostName {xdc_host}"]
+        if prev_alias:
+            lines.append(f"  ProxyJump {prev_alias}")
+        lines.append("")
+        prev_alias = "sphere-xdc"
+
+    if safe_node:
+        lines += ["Host sphere-node", f"  HostName {safe_node}"]
+        if prev_alias:
+            lines.append(f"  ProxyJump {prev_alias}")
+        lines.append("")
+
+    cfg_path = os.path.join(workdir, "ssh_config")
+    with open(cfg_path, "w") as fh:
+        fh.write("\n".join(lines))
+    os.chmod(cfg_path, 0o600)
+    return cfg_path, ""
+
+
+def _build_sphere_ssh_argv(details: dict) -> list[str]:
+    """Build an argv that opens an interactive shell on a SPHERE node, reaching
+    it through its XDC jump chain (see :func:`write_sphere_ssh_config`). Held in
+    a server-side PTY so the remote shell persists across browser reloads."""
+    cfg_path, err = write_sphere_ssh_config(details)
+    if not cfg_path:
+        return _sphere_error_argv(f"[terminal] {err}\n")
+    jumps = details.get("jump_hosts") or []
+    jump_desc = ", ".join(
+        f"{(j.get('fqdn') or '?')}:{j.get('port') or 22}" for j in jumps) or "(none)"
+    plan = (
+        f"[sphere] user={details.get('username')}\n"
+        f"[sphere] jump hosts: {jump_desc}\n"
+        f"[sphere] xdc: {details.get('xdc_fqdn') or '(none)'}\n"
+        f"[sphere] node: {details.get('node_dns')}\n"
+        f"[sphere] cert: {'yes' if details.get('cert') else 'no'}\n"
+        "[sphere] connecting …\n"
+    )
+    return ["/bin/bash", "-lc",
+            f"printf %s {shlex.quote(plan)}; exec ssh -F {shlex.quote(cfg_path)} -tt sphere-node"]
+
+
 @router.post("/api/terminals")
 async def create_terminal(body: CreateTerminalBody):
     """Create a server-held terminal session and return its id + attach ticket.
@@ -265,6 +421,26 @@ async def create_terminal(body: CreateTerminalBody):
             raise HTTPException(status_code=502, detail="Instance has no floating IP; associate a floating IP first")
         argv = _build_chameleon_ssh_argv(body.chameleonSite, ip, key_name)
         session = ts.create(type="chameleon", command=argv, label=body.label or name)
+    elif body.type == "sphere":
+        from app import settings_manager, sphere_manager
+        if not body.sphereExperiment or not body.sphereRealization or not body.sphereNode:
+            raise HTTPException(status_code=400,
+                                detail="sphereExperiment, sphereRealization and sphereNode are required")
+        if not body.sphereXdc:
+            raise HTTPException(status_code=400,
+                                detail="sphereXdc is required; create/attach an XDC first")
+        proj = (body.sphereProject or settings_manager.get_sphere_default_project() or "").strip()
+        if not proj:
+            raise HTTPException(status_code=400, detail="No SPHERE project specified")
+        try:
+            details = await asyncio.to_thread(
+                sphere_manager.resolve_node_ssh, body.sphereNode,
+                body.sphereRealization, body.sphereExperiment, proj, body.sphereXdc,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Could not resolve SPHERE node: {e}")
+        argv = _build_sphere_ssh_argv(details)
+        session = ts.create(type="sphere", command=argv, label=body.label or body.sphereNode)
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported terminal type: {body.type!r}")
     m = ts.meta(session)

@@ -84,9 +84,9 @@ PROFILE_TIERS = {
         "summarize_at": 0.70,
         # Keep the full CORE_TOOLS set available for standard-tier models.
         # The assistant quality evals cover this so roadmap-critical tools
-        # (create_weave, search_examples, Chameleon, Federated) do not silently
-        # fall out of the filtered schema as the tool list grows.
-        "max_tools": 39,
+        # (create_weave, search_examples, Chameleon, SPHERE, Federated) do not
+        # silently fall out of the filtered schema as the tool list grows.
+        "max_tools": 45,
         "temperature": 0.5,
         "supports_tools": True,
     },
@@ -99,7 +99,7 @@ PROFILE_TIERS = {
         "system_prompt": "full",
         "tool_result_max": 2000,
         "summarize_at": 0.85,
-        "max_tools": 43,
+        "max_tools": 49,
         "temperature": 0.5,
         "supports_tools": True,
     },
@@ -599,6 +599,9 @@ CORE_TOOLS = {
     # Chameleon core
     "list_chameleon_leases", "list_chameleon_sites", "create_chameleon_lease",
     "list_chameleon_slices", "deploy_chameleon_slice",
+    # SPHERE core (experiment creation lifecycle)
+    "list_sphere_realizations", "create_sphere_experiment", "push_sphere_model",
+    "sphere_realize", "sphere_materialize", "get_sphere_materialization",
     # Federated/composite core
     "list_composite_slices", "get_composite_slice",
 }

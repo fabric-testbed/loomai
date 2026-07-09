@@ -2550,6 +2550,12 @@ def restore_ai_tool_configs() -> None:
     the home dirs first so the previous user's auth/config never leaks; if the
     new user has no saved config the tools start fresh (and re-seed on launch).
     Call AFTER changing the active user."""
+    from app.settings_manager import manage_home_ai_paths
+    if not manage_home_ai_paths():
+        # Outside the container this would rmtree the developer's REAL
+        # ~/.claude and ~/.codex.
+        logger.debug("Skipping home AI-tool restore (not in the LoomAI container)")
+        return
     home = os.path.expanduser("~")
     # Clear current state so nothing carries over from the previous user.
     shutil.rmtree(os.path.join(home, ".claude"), ignore_errors=True)

@@ -27,3 +27,7 @@ pytest-asyncio
 fastembed>=0.4.0
 rank-bm25>=0.2.2
 bcrypt>=4.0.0
+# SPHERE / MergeTB portal gRPC client (vendored stubs in app/sphere_grpc/).
+# grpcio is the runtime dep; grpcio-tools is only needed to regenerate the
+# stubs via scripts/gen_sphere_grpc.sh.
+grpcio>=1.60.0

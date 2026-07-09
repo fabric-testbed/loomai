@@ -1,0 +1,1114 @@
+{
+  "taskSummary": {
+    "HighestStatus": "Success",
+    "FirstUpdated": "2026-06-26T15:53:15.335879938Z",
+    "LastUpdated": "2026-06-26T15:57:48.990002301Z"
+  },
+  "summary": {
+    "rid": "world",
+    "eid": "hello",
+    "pid": "fabricsphere",
+    "numVirtual": 2,
+    "numLinks": 2
+  },
+  "taskStatus": {
+    "HighestStatus": "Success",
+    "LastUpdated": "2026-06-26T15:57:48.990002301Z",
+    "NumChildTasks": "43",
+    "Task": {
+      "Id": "root",
+      "Name": "world.hello.fabricsphere",
+      "Message": {
+        "Level": "Info",
+        "Message": "Materialization Management: world.hello.fabricsphere"
+      },
+      "StatusValue": "Success",
+      "FirstUpdated": "2026-06-26T15:53:15.335879938Z",
+      "LastUpdated": "2026-06-26T15:57:48.990002301Z"
+    },
+    "Subtasks": [
+      {
+        "HighestStatus": "Success",
+        "LastUpdated": "2026-06-26T15:53:18.619537391Z",
+        "NumChildTasks": "2",
+        "Task": {
+          "Id": "0-portal-/materializations/fabricsphere/hello/world",
+          "Name": "Portal Operations",
+          "Message": {
+            "Level": "Info",
+            "Message": "All portal operations for world.hello.fabricsphere"
+          },
+          "StatusValue": "Success",
+          "FirstUpdated": "2026-06-26T15:53:15.335879938Z",
+          "LastUpdated": "2026-06-26T15:53:18.619537391Z"
+        },
+        "Subtasks": [
+          {
+            "HighestStatus": "Success",
+            "LastUpdated": "2026-06-26T15:53:18.619537391Z",
+            "NumChildTasks": "2",
+            "Task": {
+              "Id": "0-portal-/materializations/fabricsphere/hello/world",
+              "Name": "Materialization: world.hello.fabricsphere",
+              "Message": {
+                "Level": "Info",
+                "Message": "Manage materialization: world.hello.fabricsphere"
+              },
+              "StatusValue": "Success",
+              "FirstUpdated": "2026-06-26T15:53:15.335879938Z",
+              "LastUpdated": "2026-06-26T15:53:18.619537391Z"
+            },
+            "Subtasks": [
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:53:16.853137819Z",
+                "Task": {
+                  "Id": "0-portal-/mtz/mtzs",
+                  "Name": "/mtz/mtzs",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Manage materializations"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-06-26T15:53:15.336150325Z",
+                  "LastUpdated": "2026-06-26T15:53:16.853137819Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:16.853137819Z",
+                    "Task": {
+                      "Id": "0-portal-/materializations/fabricsphere/hello/world",
+                      "Name": "/materializations/fabricsphere/hello/world",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:15.336150325Z",
+                      "LastUpdated": "2026-06-26T15:53:16.853137819Z"
+                    }
+                  }
+                ]
+              },
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:53:18.619537391Z",
+                "Task": {
+                  "Id": "0-portal-/wgsvc/WgEnclave",
+                  "Name": "/wgsvc/WgEnclave",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Manage wg enclave data"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-06-26T15:53:15.335879938Z",
+                  "LastUpdated": "2026-06-26T15:53:18.619537391Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:18.619537391Z",
+                    "Task": {
+                      "Id": "0-portal-/materializations/fabricsphere/hello/world",
+                      "Name": "/materializations/fabricsphere/hello/world",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:15.335879938Z",
+                      "LastUpdated": "2026-06-26T15:53:18.619537391Z"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "HighestStatus": "Success",
+        "LastUpdated": "2026-06-26T15:57:48.990002301Z",
+        "NumChildTasks": "39",
+        "Task": {
+          "Id": "1-moddeter-world.hello.fabricsphere",
+          "Name": "moddeter: world.hello.fabricsphere",
+          "Message": {
+            "Level": "Info",
+            "Message": "Create materialization world.hello.fabricsphere"
+          },
+          "StatusValue": "Success",
+          "FirstUpdated": "2026-06-26T15:53:16.643229474Z",
+          "LastUpdated": "2026-06-26T15:57:48.990002301Z"
+        },
+        "Subtasks": [
+          {
+            "HighestStatus": "Success",
+            "LastUpdated": "2026-01-28T03:42:11.586083832Z",
+            "NumChildTasks": "4",
+            "Task": {
+              "Id": "1-moddeter-world.hello.fabricsphere/metalCreateOps",
+              "Name": "metalCreateOps",
+              "Message": {
+                "Level": "Info",
+                "Message": "Image the baremetal resources"
+              },
+              "StatusValue": "Success",
+              "FirstUpdated": "2026-06-26T15:53:16.638763491Z",
+              "LastUpdated": "2026-01-28T03:42:11.586083832Z"
+            },
+            "Subtasks": [
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-01-28T03:42:11.586083832Z",
+                "Task": {
+                  "Id": "1-moddeter-/metal/power.ifr0",
+                  "Name": "/metal/power.ifr0",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Metal service watching /metal/ on hostname: ifr0"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2025-12-19T22:07:26.453985682Z",
+                  "LastUpdated": "2026-01-28T03:42:11.586083832Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2025-12-29T14:35:19.392010918Z",
+                    "Task": {
+                      "Id": "1-moddeter-/metal/md02",
+                      "Name": "/metal/md02",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2025-12-19T22:07:26.453985682Z",
+                      "LastUpdated": "2025-12-29T14:35:19.392010918Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-01-28T03:42:11.586083832Z",
+                    "Task": {
+                      "Id": "1-moddeter-/metal/md25",
+                      "Name": "/metal/md25",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2025-12-19T22:09:28.283565086Z",
+                      "LastUpdated": "2026-01-28T03:42:11.586083832Z"
+                    }
+                  }
+                ]
+              },
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-01-28T03:42:11.583831061Z",
+                "Task": {
+                  "Id": "1-moddeter-/sled/harbor.system.marstb",
+                  "Name": "/sled/harbor.system.marstb",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Sled service watching /metal/ on hostname: harbor.system.marstb"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2025-12-19T22:01:27.281712517Z",
+                  "LastUpdated": "2026-01-28T03:42:11.583831061Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2025-12-29T14:35:19.391584481Z",
+                    "Task": {
+                      "Id": "1-moddeter-/metal/md02",
+                      "Name": "/metal/md02",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "node rebooted"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2025-12-19T22:01:27.282147325Z",
+                      "LastUpdated": "2025-12-29T14:35:19.391584481Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-01-28T03:42:11.583831061Z",
+                    "Task": {
+                      "Id": "1-moddeter-/metal/md25",
+                      "Name": "/metal/md25",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "node reimaged with: hypervisor"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2025-12-19T22:01:27.281712517Z",
+                      "LastUpdated": "2026-01-28T03:42:11.583831061Z"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "HighestStatus": "Success",
+            "LastUpdated": "2026-06-26T15:53:19.910686279Z",
+            "NumChildTasks": "2",
+            "Task": {
+              "Id": "1-moddeter-world.hello.fabricsphere/vmCreateOps",
+              "Name": "vmCreateOps",
+              "Message": {
+                "Level": "Info",
+                "Message": "Create virtual machines"
+              },
+              "StatusValue": "Success",
+              "FirstUpdated": "2026-06-26T15:53:16.638882963Z",
+              "LastUpdated": "2026-06-26T15:53:19.910686279Z"
+            },
+            "Subtasks": [
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:53:19.910686279Z",
+                "Task": {
+                  "Id": "1-moddeter-/mariner/md02",
+                  "Name": "/mariner/md02",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Mariner service on hostname: md02"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-06-26T15:53:16.638882963Z",
+                  "LastUpdated": "2026-06-26T15:53:19.910686279Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:19.910686279Z",
+                    "Task": {
+                      "Id": "1-moddeter-/vm/md02/fabricsphere.hello.world.a",
+                      "Name": "/vm/md02/fabricsphere.hello.world.a",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "VM created"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:16.645512218Z",
+                      "LastUpdated": "2026-06-26T15:53:19.910686279Z"
+                    }
+                  }
+                ]
+              },
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:53:17.854651562Z",
+                "Task": {
+                  "Id": "1-moddeter-/mariner/md25",
+                  "Name": "/mariner/md25",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Mariner service on hostname: md25"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-06-26T15:53:16.638882963Z",
+                  "LastUpdated": "2026-06-26T15:53:17.854651562Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:17.854651562Z",
+                    "Task": {
+                      "Id": "1-moddeter-/vm/md25/fabricsphere.hello.world.b",
+                      "Name": "/vm/md25/fabricsphere.hello.world.b",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "VM created"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:16.644858047Z",
+                      "LastUpdated": "2026-06-26T15:53:17.854651562Z"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "HighestStatus": "Success",
+            "LastUpdated": "2026-06-26T15:57:48.990002301Z",
+            "NumChildTasks": "15",
+            "Task": {
+              "Id": "1-moddeter-world.hello.fabricsphere/linkCreateOps",
+              "Name": "linkCreateOps",
+              "Message": {
+                "Level": "Info",
+                "Message": "Configure networking links"
+              },
+              "StatusValue": "Success",
+              "FirstUpdated": "2026-06-26T15:53:16.642111994Z",
+              "LastUpdated": "2026-06-26T15:57:48.990002301Z"
+            },
+            "Subtasks": [
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:53:17.130224928Z",
+                "Task": {
+                  "Id": "1-moddeter-/canopy/ifr1",
+                  "Name": "/canopy/ifr1",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Canopy service watching /net/ifr1"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2025-12-24T09:19:57.420087263Z",
+                  "LastUpdated": "2026-06-26T15:53:17.130224928Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2025-12-24T09:19:57.686752270Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/ifr1/peer/enp33s0f1np1",
+                      "Name": "/net/ifr1/peer/enp33s0f1np1",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2025-12-24T09:19:57.420087263Z",
+                      "LastUpdated": "2025-12-24T09:19:57.686752270Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:17.130224928Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/ifr1/veth/vethax172",
+                      "Name": "/net/ifr1/veth/vethax172",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:16.743399083Z",
+                      "LastUpdated": "2026-06-26T15:53:17.130224928Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:17.130189378Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/ifr1/vtep/vtep172.4",
+                      "Name": "/net/ifr1/vtep/vtep172.4",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:16.643934543Z",
+                      "LastUpdated": "2026-06-26T15:53:17.130189378Z"
+                    }
+                  }
+                ]
+              },
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:57:48.990002301Z",
+                "Task": {
+                  "Id": "1-moddeter-/canopy/il252r207s10-ileaf",
+                  "Name": "/canopy/il252r207s10-ileaf",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Canopy service watching /net/il252r207s10-ileaf"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-06-26T15:53:16.642111994Z",
+                  "LastUpdated": "2026-06-26T15:57:48.990002301Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2024-03-20T21:18:03.586065322Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/il252r207s10-ileaf/peer/swp52",
+                      "Name": "/net/il252r207s10-ileaf/peer/swp52",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "LastUpdated": "2024-03-20T21:18:03.586065322Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:57:48.989996916Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/il252r207s10-ileaf/trunk/swp3.159",
+                      "Name": "/net/il252r207s10-ileaf/trunk/swp3.159",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:57:48.772974814Z",
+                      "LastUpdated": "2026-06-26T15:57:48.989996916Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:57:48.990002301Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/il252r207s10-ileaf/trunk/swp26.159",
+                      "Name": "/net/il252r207s10-ileaf/trunk/swp26.159",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:57:48.772966953Z",
+                      "LastUpdated": "2026-06-26T15:57:48.990002301Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:57:48.989983618Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/il252r207s10-ileaf/vtepw/vtep172",
+                      "Name": "/net/il252r207s10-ileaf/vtepw/vtep172",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:57:48.772814035Z",
+                      "LastUpdated": "2026-06-26T15:57:48.989983618Z"
+                    }
+                  }
+                ]
+              },
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:53:17.554227748Z",
+                "Task": {
+                  "Id": "1-moddeter-/canopy/md02",
+                  "Name": "/canopy/md02",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Canopy service watching /net/md02"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2025-12-29T14:39:35.290971294Z",
+                  "LastUpdated": "2026-06-26T15:53:17.554227748Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2025-12-29T14:39:37.663704300Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/md02/peer/enp33s0f0np0",
+                      "Name": "/net/md02/peer/enp33s0f0np0",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2025-12-29T14:39:35.290971294Z",
+                      "LastUpdated": "2025-12-29T14:39:37.663704300Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:17.554227748Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/md02/vlan/vlan159",
+                      "Name": "/net/md02/vlan/vlan159",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:16.987940692Z",
+                      "LastUpdated": "2026-06-26T15:53:17.554227748Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:17.185432126Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/md02/vtep/vtep259",
+                      "Name": "/net/md02/vtep/vtep259",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:16.645705902Z",
+                      "LastUpdated": "2026-06-26T15:53:17.185432126Z"
+                    }
+                  }
+                ]
+              },
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:53:17.287881013Z",
+                "Task": {
+                  "Id": "1-moddeter-/canopy/md25",
+                  "Name": "/canopy/md25",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Canopy service watching /net/md25"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-03-20T15:25:18.935296185Z",
+                  "LastUpdated": "2026-06-26T15:53:17.287881013Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-03-20T15:25:21.541963324Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/md25/peer/enp33s0f0np0",
+                      "Name": "/net/md25/peer/enp33s0f0np0",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-03-20T15:25:18.935296185Z",
+                      "LastUpdated": "2026-03-20T15:25:21.541963324Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:17.287881013Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/md25/vlan/vlan159",
+                      "Name": "/net/md25/vlan/vlan159",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:16.859975817Z",
+                      "LastUpdated": "2026-06-26T15:53:17.287881013Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:17.062088401Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/md25/vtep/vtep259",
+                      "Name": "/net/md25/vtep/vtep259",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:16.645218589Z",
+                      "LastUpdated": "2026-06-26T15:53:17.062088401Z"
+                    }
+                  }
+                ]
+              },
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-03-20T15:30:07.435908867Z",
+                "Task": {
+                  "Id": "1-moddeter-/canopy/xl252r207s8-xleaf",
+                  "Name": "/canopy/xl252r207s8-xleaf",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Canopy service watching /net/xl252r207s8-xleaf"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2025-12-24T00:09:58.352705027Z",
+                  "LastUpdated": "2026-03-20T15:30:07.435908867Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2025-12-24T00:09:58.778545564Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/xl252r207s8-xleaf/peer/swp3",
+                      "Name": "/net/xl252r207s8-xleaf/peer/swp3",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2025-12-24T00:09:58.352705027Z",
+                      "LastUpdated": "2025-12-24T00:09:58.778545564Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-03-20T15:30:07.435908867Z",
+                    "Task": {
+                      "Id": "1-moddeter-/net/xl252r207s8-xleaf/peer/swp26",
+                      "Name": "/net/xl252r207s8-xleaf/peer/swp26",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-03-20T15:30:06.974474922Z",
+                      "LastUpdated": "2026-03-20T15:30:07.435908867Z"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "HighestStatus": "Success",
+            "LastUpdated": "2026-06-26T15:53:23.881239208Z",
+            "NumChildTasks": "14",
+            "Task": {
+              "Id": "1-moddeter-world.hello.fabricsphere/danceCreateOps",
+              "Name": "danceCreateOps",
+              "Message": {
+                "Level": "Info",
+                "Message": "Allocate ip addresses to materialization resources"
+              },
+              "StatusValue": "Success",
+              "FirstUpdated": "2026-06-26T15:53:16.643163953Z",
+              "LastUpdated": "2026-06-26T15:53:23.881239208Z"
+            },
+            "Subtasks": [
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:53:23.881239208Z",
+                "Task": {
+                  "Id": "1-moddeter-/dance.entries/dance.dns4",
+                  "Name": "/dance.entries/dance.dns4",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Dance service watching /dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-06-26T15:53:16.643163953Z",
+                  "LastUpdated": "2026-06-26T15:53:23.881239208Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.881116215Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/a-10-0-0-1.exp.world.hello.fabricsphere",
+                      "Name": "/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/a-10-0-0-1.exp.world.hello.fabricsphere",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.877858672Z",
+                      "LastUpdated": "2026-06-26T15:53:23.881116215Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.881150717Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/a.exp.world.hello.fabricsphere",
+                      "Name": "/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/a.exp.world.hello.fabricsphere",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.878331927Z",
+                      "LastUpdated": "2026-06-26T15:53:23.881150717Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.881142196Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/a.infra.world.hello.fabricsphere",
+                      "Name": "/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/a.infra.world.hello.fabricsphere",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.878158228Z",
+                      "LastUpdated": "2026-06-26T15:53:23.881142196Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.881165873Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/b-10-0-0-2.exp.world.hello.fabricsphere",
+                      "Name": "/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/b-10-0-0-2.exp.world.hello.fabricsphere",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.878530141Z",
+                      "LastUpdated": "2026-06-26T15:53:23.881165873Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.881172508Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/b.exp.world.hello.fabricsphere",
+                      "Name": "/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/b.exp.world.hello.fabricsphere",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.878658792Z",
+                      "LastUpdated": "2026-06-26T15:53:23.881172508Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.881197093Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/b.infra.world.hello.fabricsphere",
+                      "Name": "/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/b.infra.world.hello.fabricsphere",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.879087418Z",
+                      "LastUpdated": "2026-06-26T15:53:23.881197093Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.881190458Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/foundry.world.hello.fabricsphere",
+                      "Name": "/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/foundry.world.hello.fabricsphere",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.878781785Z",
+                      "LastUpdated": "2026-06-26T15:53:23.881190458Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.881202331Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/images.system.marstb",
+                      "Name": "/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/images.system.marstb",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.879179192Z",
+                      "LastUpdated": "2026-06-26T15:53:23.881202331Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.881217487Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/moactl.infra.world.hello.fabricsphere",
+                      "Name": "/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/moactl.infra.world.hello.fabricsphere",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.879418613Z",
+                      "LastUpdated": "2026-06-26T15:53:23.881217487Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.881239208Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/podetcd.world.hello.fabricsphere",
+                      "Name": "/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/podetcd.world.hello.fabricsphere",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.879546356Z",
+                      "LastUpdated": "2026-06-26T15:53:23.881239208Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.881207010Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/sled.system.marstb",
+                      "Name": "/dance/world.hello.fabricsphere/dns4/world.hello.fabricsphere/sled.system.marstb",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.879285632Z",
+                      "LastUpdated": "2026-06-26T15:53:23.881207010Z"
+                    }
+                  }
+                ]
+              },
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:53:23.877470764Z",
+                "Task": {
+                  "Id": "1-moddeter-/dance.entries/dance.entry",
+                  "Name": "/dance.entries/dance.entry",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Dance service watching /dance/world.hello.fabricsphere/entry/world.hello.fabricsphere"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-06-26T15:53:16.643163953Z",
+                  "LastUpdated": "2026-06-26T15:53:23.877470764Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.877428649Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/entry/world.hello.fabricsphere/82:bd:71:db:39:3f",
+                      "Name": "/dance/world.hello.fabricsphere/entry/world.hello.fabricsphere/82:bd:71:db:39:3f",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.875134868Z",
+                      "LastUpdated": "2026-06-26T15:53:23.877428649Z"
+                    }
+                  },
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.877470764Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/entry/world.hello.fabricsphere/f6:db:fc:85:83:54",
+                      "Name": "/dance/world.hello.fabricsphere/entry/world.hello.fabricsphere/f6:db:fc:85:83:54",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.875319463Z",
+                      "LastUpdated": "2026-06-26T15:53:23.877470764Z"
+                    }
+                  }
+                ]
+              },
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:53:23.875895248Z",
+                "Task": {
+                  "Id": "1-moddeter-/dance.network/dance.network",
+                  "Name": "/dance.network/dance.network",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Dance service watching /dance/world.hello.fabricsphere/network/world.hello.fabricsphere"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-06-26T15:53:16.643163953Z",
+                  "LastUpdated": "2026-06-26T15:53:23.875895248Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:23.875895248Z",
+                    "Task": {
+                      "Id": "1-moddeter-/dance/world.hello.fabricsphere/network/world.hello.fabricsphere",
+                      "Name": "/dance/world.hello.fabricsphere/network/world.hello.fabricsphere",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:23.874257711Z",
+                      "LastUpdated": "2026-06-26T15:53:23.875895248Z"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "HighestStatus": "Success",
+            "LastUpdated": "2026-06-26T15:53:24.136255495Z",
+            "NumChildTasks": "1",
+            "Task": {
+              "Id": "1-moddeter-world.hello.fabricsphere/createInfrapod",
+              "Name": "createInfrapod",
+              "Message": {
+                "Level": "Info",
+                "Message": "Create mtz infrapod"
+              },
+              "StatusValue": "Success",
+              "FirstUpdated": "2026-06-26T15:53:16.643223284Z",
+              "LastUpdated": "2026-06-26T15:53:24.136255495Z"
+            },
+            "Subtasks": [
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:53:24.136255495Z",
+                "Task": {
+                  "Id": "1-moddeter-/infrapod/ifr1",
+                  "Name": "/infrapod/ifr1",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Manage infrapods on ifr1"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-06-26T15:53:16.643223284Z",
+                  "LastUpdated": "2026-06-26T15:53:24.136255495Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:24.136255495Z",
+                    "Task": {
+                      "Id": "1-moddeter-/infrapod/world.hello.fabricsphere/ifr1",
+                      "Name": "/infrapod/world.hello.fabricsphere/ifr1",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task ensured"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:16.643839836Z",
+                      "LastUpdated": "2026-06-26T15:53:24.136255495Z"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "HighestStatus": "Success",
+            "LastUpdated": "2026-06-26T15:55:15.107480636Z",
+            "NumChildTasks": "3",
+            "Task": {
+              "Id": "1-moddeter-world.hello.fabricsphere/wireguardOps",
+              "Name": "wireguardOps",
+              "Message": {
+                "Level": "Info",
+                "Message": "Facility-side wireguard operations"
+              },
+              "StatusValue": "Success",
+              "FirstUpdated": "2026-06-26T15:53:16.643229074Z",
+              "LastUpdated": "2026-06-26T15:55:15.107480636Z"
+            },
+            "Subtasks": [
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:55:15.107480636Z",
+                "Task": {
+                  "Id": "1-moddeter-/wireguard/wireguardSync.ifr1",
+                  "Name": "/wireguard/wireguardSync.ifr1",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Synchronize site wireguard state with portal"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-06-26T15:53:16.643229074Z",
+                  "LastUpdated": "2026-06-26T15:55:15.107480636Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:55:15.107480636Z",
+                    "Task": {
+                      "Id": "1-moddeter-/wg/if/world.hello.fabricsphere/ifr1",
+                      "Name": "/wg/if/world.hello.fabricsphere/ifr1",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:24.893718576Z",
+                      "LastUpdated": "2026-06-26T15:55:15.107480636Z"
+                    }
+                  }
+                ]
+              },
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:53:25.097442372Z",
+                "Task": {
+                  "Id": "1-moddeter-/wireguard/wireguardIF.ifr1",
+                  "Name": "/wireguard/wireguardIF.ifr1",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Manage wireguard interfaces"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-06-26T15:53:16.643229074Z",
+                  "LastUpdated": "2026-06-26T15:53:25.097442372Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:53:25.097442372Z",
+                    "Task": {
+                      "Id": "1-moddeter-/wg/ifreq/world.hello.fabricsphere/ifr1",
+                      "Name": "/wg/ifreq/world.hello.fabricsphere/ifr1",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:53:18.409834485Z",
+                      "LastUpdated": "2026-06-26T15:53:25.097442372Z"
+                    }
+                  }
+                ]
+              },
+              {
+                "HighestStatus": "Success",
+                "LastUpdated": "2026-06-26T15:55:15.107453677Z",
+                "Task": {
+                  "Id": "1-moddeter-/wireguard/wireguardPeer.ifr1",
+                  "Name": "/wireguard/wireguardPeer.ifr1",
+                  "Message": {
+                    "Level": "Info",
+                    "Message": "Manage wireguard peers"
+                  },
+                  "StatusValue": "Success",
+                  "FirstUpdated": "2026-06-26T15:53:16.643229074Z",
+                  "LastUpdated": "2026-06-26T15:55:15.107453677Z"
+                },
+                "Subtasks": [
+                  {
+                    "HighestStatus": "Success",
+                    "LastUpdated": "2026-06-26T15:55:15.107453677Z",
+                    "Task": {
+                      "Id": "1-moddeter-/wg/peer/world.hello.fabricsphere/ifr1/DAZP1sZL+7WcJw2f4uI/UjnDnKEuaT2QcJk8x0Qm50o=",
+                      "Name": "/wg/peer/world.hello.fabricsphere/ifr1/DAZP1sZL+7WcJw2f4uI/UjnDnKEuaT2QcJk8x0Qm50o=",
+                      "Message": {
+                        "Level": "Info",
+                        "Message": "task complete"
+                      },
+                      "StatusValue": "Success",
+                      "FirstUpdated": "2026-06-26T15:55:14.881312543Z",
+                      "LastUpdated": "2026-06-26T15:55:15.107453677Z"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

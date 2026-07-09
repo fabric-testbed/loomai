@@ -9,7 +9,7 @@ import { confirmDialog } from './AppDialogProvider';
 import '../styles/configure.css';
 
 /* ---------- Section definitions ---------- */
-type SectionId = 'profile' | 'ssh' | 'fablib' | 'projects' | 'llms' | 'ai-tools' | 'agents' | 'chameleon' | 'appearance' | 'storage';
+type SectionId = 'profile' | 'ssh' | 'fablib' | 'projects' | 'llms' | 'ai-tools' | 'agents' | 'chameleon' | 'sphere' | 'appearance' | 'storage';
 
 interface SectionDef {
   id: SectionId;
@@ -53,6 +53,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'ai-tools',   label: 'AI Tools',       icon: '\u2692' },   // ⚒
   { id: 'agents',     label: 'Agents & Skills', icon: '\u25C7' },   // ◇
   { id: 'chameleon',  label: 'Chameleon',       icon: '\u2766' },   // ❦
+  { id: 'sphere',     label: 'SPHERE',          icon: '\u25C9' },   // SPHERE
   { id: 'appearance', label: 'Appearance',      icon: '\u263C' },   // ☼
   { id: 'storage',    label: 'Storage',         icon: '\u25A8' },   // ▨
 ];
@@ -70,6 +71,19 @@ function serializeChameleonSitesForDirty(sites?: Record<string, ChameleonSiteSet
       }),
   );
   return JSON.stringify(normalized);
+}
+
+function serializeCustomProvidersForDirty(
+  providers?: Array<{ name?: string; base_url?: string; api_key?: string; codex_provider?: boolean }>,
+): string {
+  return JSON.stringify(
+    (providers || []).map((cp) => ({
+      name: cp.name || '',
+      base_url: cp.base_url || '',
+      api_key: cp.api_key || '',
+      codex_provider: !!cp.codex_provider,
+    })),
+  );
 }
 
 /* ---------- Component ---------- */
@@ -176,6 +190,12 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
 
   // Chameleon Cloud
   const [chameleonEnabled, setChameleonEnabled] = useState(false);
+  // SPHERE / MergeTB
+  const [sphereEnabled, setSphereEnabled] = useState(false);
+  const [sphereGrpcEndpoint, setSphereGrpcEndpoint] = useState('grpc.sphere-testbed.net');
+  const [sphereDefaultProject, setSphereDefaultProject] = useState('');
+  const [sphereUsername, setSphereUsername] = useState('');
+  const [spherePassword, setSpherePassword] = useState('');
   const [chameleonSites, setChameleonSites] = useState<Record<string, ChameleonSiteSettings>>({});
   const [chameleonPasswordUsername, setChameleonPasswordUsername] = useState('');
   const [chameleonPassword, setChameleonPassword] = useState('');
@@ -255,6 +275,14 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
       // Views
       if (s.views) {
         setFederatedViewEnabled(s.views.federated_enabled ?? s.views.composite_enabled ?? false);
+      }
+      // SPHERE
+      if (s.sphere) {
+        setSphereEnabled(s.sphere.enabled || false);
+        setSphereGrpcEndpoint(s.sphere.grpc_endpoint || 'grpc.sphere-testbed.net');
+        setSphereDefaultProject(s.sphere.default_project || '');
+        setSphereUsername(s.sphere.username || '');
+        setSpherePassword(s.sphere.password || '');
       }
       // Chameleon
       if (s.chameleon) {
@@ -612,6 +640,16 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           },
           sites: chameleonSitesForSave,
         },
+        sphere: {
+          enabled: sphereEnabled,
+          grpc_endpoint: sphereGrpcEndpoint || 'grpc.sphere-testbed.net',
+          grpc_port: settings?.sphere?.grpc_port ?? 443,
+          api_endpoint: settings?.sphere?.api_endpoint || 'https://api.sphere-testbed.net',
+          default_project: sphereDefaultProject,
+          token: '',
+          username: sphereUsername,
+          password: spherePassword,
+        },
         services: {
           jupyter_port: jupyterPort,
           model_proxy_port: modelProxyPort,
@@ -747,11 +785,21 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     if (chameleonPasswordUsername !== (settings.chameleon?.password_auth?.username || '')) return true;
     if (chameleonPassword !== (settings.chameleon?.password_auth?.password || '')) return true;
     if (serializeChameleonSitesForDirty(chameleonSites) !== serializeChameleonSitesForDirty(settings.chameleon?.sites)) return true;
+    if (sphereEnabled !== !!settings.sphere?.enabled) return true;
+    if (sphereGrpcEndpoint !== (settings.sphere?.grpc_endpoint || 'grpc.sphere-testbed.net')) return true;
+    if (sphereDefaultProject !== (settings.sphere?.default_project || '')) return true;
+    if (sphereUsername !== (settings.sphere?.username || '')) return true;
+    if (spherePassword !== (settings.sphere?.password || '')) return true;
     const baselineAvoid = new Set(settings.fabric.avoid_sites || []);
     if (baselineAvoid.size !== avoidSet.size) return true;
     for (const s of avoidSet) if (!baselineAvoid.has(s)) return true;
     if (litellmApiKey) return true;  // any new key input means pending change
     if (nrpApiKey) return true;
+    // Custom LLM providers — compare against the loaded baseline so adding,
+    // editing, or removing a provider (or toggling its Codex flag) marks the
+    // form dirty. Without this, the Save button stays disabled ("Saved").
+    if (serializeCustomProvidersForDirty(customProviders) !==
+        serializeCustomProvidersForDirty(settings.ai.custom_providers)) return true;
     return false;
   }, [
     settings, selectedProject, bastionLogin,
@@ -759,7 +807,8 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     logLevel, sshCommandLine, aiServerUrl, nrpServerUrl,
     federatedViewEnabled, chameleonEnabled, chameleonSshKey, chameleonPasswordUsername,
     chameleonPassword, chameleonSites, avoidSet,
-    litellmApiKey, nrpApiKey,
+    sphereEnabled, sphereGrpcEndpoint, sphereDefaultProject, sphereUsername, spherePassword,
+    litellmApiKey, nrpApiKey, customProviders,
   ]);
 
   const requestClose = useCallback(async () => {
@@ -1812,6 +1861,78 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     </>
   );
 
+  const renderSphere = () => (
+    <div className="configure-section">
+      <h3>SPHERE (MergeTB)</h3>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+        <label style={{ fontSize: 12, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={sphereEnabled}
+            onChange={e => setSphereEnabled(e.target.checked)}
+            style={{ marginRight: 4 }}
+          />
+          Enable SPHERE Integration
+        </label>
+      </div>
+      {sphereEnabled && (
+        <div style={{ marginTop: 8 }}>
+          <p style={{ fontSize: 12 }}>
+            SPHERE runs on the MergeTB control stack. Authenticate with a portal
+            token (from <code>mrg whoami -t</code>) — preferred — or a username and
+            password (the portal identity password; used for <code>Identity.Login</code>).
+            Leave the default project blank to be prompted per command.
+          </p>
+          <div style={{ marginTop: 8, padding: 8, border: '1px solid var(--fabric-border)', borderRadius: 6 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              <label style={{ fontSize: 11 }}>
+                gRPC endpoint
+                <input
+                  type="text"
+                  value={sphereGrpcEndpoint}
+                  onChange={e => setSphereGrpcEndpoint(e.target.value)}
+                  placeholder="grpc.sphere-testbed.net"
+                  style={{ fontSize: 11, width: '100%' }}
+                />
+              </label>
+              <label style={{ fontSize: 11 }}>
+                Default project <span style={{ opacity: 0.6 }}>(optional)</span>
+                <input
+                  type="text"
+                  value={sphereDefaultProject}
+                  onChange={e => setSphereDefaultProject(e.target.value)}
+                  placeholder="e.g. fabricsphere — leave blank to be prompted"
+                  style={{ fontSize: 11, width: '100%' }}
+                />
+              </label>
+            </div>
+            <p style={{ fontSize: 11, opacity: 0.7, margin: '8px 0 4px' }}>SPHERE portal credentials (CILogon username / password)</p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              <input
+                type="text"
+                value={sphereUsername}
+                onChange={e => setSphereUsername(e.target.value)}
+                placeholder="SPHERE portal username"
+                style={{ fontSize: 11 }}
+              />
+              <input
+                type="password"
+                value={spherePassword}
+                onChange={e => setSpherePassword(e.target.value)}
+                placeholder="SPHERE portal password"
+                style={{ fontSize: 11 }}
+              />
+            </div>
+          </div>
+          <p style={{ fontSize: 11, opacity: 0.7, marginTop: 8 }}>
+            Once enabled and saved, a <strong>SPHERE</strong> entry appears in the VIEW
+            menu showing your realizations and their topology.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+
   const renderChameleon = () => (
     <div className="configure-section">
       <h3>Chameleon Cloud</h3>
@@ -2350,6 +2471,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
       case 'ai-tools':   return renderAITools();
       case 'agents':     return renderAgentsAndSkills();
       case 'chameleon':  return renderChameleon();
+      case 'sphere':     return renderSphere();
       case 'appearance': return renderAppearance();
       case 'storage':    return renderStorage();
       default:           return renderProfile();
@@ -2392,7 +2514,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           <button
             className="btn primary"
             onClick={handleSave}
-            disabled={saving || !status?.has_token || !selectedProject || !bastionLogin || !hasUnsavedChanges}
+            disabled={saving || !hasUnsavedChanges}
             title={!hasUnsavedChanges ? 'No changes to save' : 'Save settings'}
             data-testid="configure-save"
           >

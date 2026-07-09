@@ -46,6 +46,9 @@ RUN mkdir -p /home/fabric/work/fabric_config && chown -R fabric:fabric /home/fab
 ENV FABRIC_CONFIG_DIR=/home/fabric/work/fabric_config
 ENV FABRIC_STORAGE_DIR=/home/fabric/work
 ENV HOME=/home/fabric
+# Home AI-tool dotfiles (~/.claude, ~/.codex, ...) may be managed here — this
+# is a container home. Outside a container the app refuses to touch them.
+ENV LOOMAI_MANAGE_HOME_AI=1
 
 EXPOSE 8000
 

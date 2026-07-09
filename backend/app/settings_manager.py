@@ -100,6 +100,28 @@ def get_root_storage_dir() -> str:
     return os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
 
 
+def manage_home_ai_paths() -> bool:
+    """Whether LoomAI may create/replace/remove AI-tool config paths in the
+    HOME directory (~/.claude, ~/.claude.json, ~/.codex, ~/.crush, ...).
+
+    This is only safe inside the LoomAI container, where HOME is the
+    container user's home on the work volume. Anywhere else — a developer
+    machine running the backend or the test suite — the same code would
+    hijack the developer's REAL dotfiles: ``_ensure_user_symlinks`` moves
+    ``~/.claude`` into per-user storage and leaves a symlink, and
+    ``restore_ai_tool_configs`` rmtree's ``~/.claude`` outright.
+
+    Defaults to the container marker (LOOMAI_COMBINED_IMAGE, set in the
+    Dockerfile); LOOMAI_MANAGE_HOME_AI=1/0 overrides in either direction.
+    """
+    v = os.environ.get("LOOMAI_MANAGE_HOME_AI", "").strip().lower()
+    if v in ("1", "true", "yes"):
+        return True
+    if v in ("0", "false", "no"):
+        return False
+    return bool(os.environ.get("LOOMAI_COMBINED_IMAGE", "").strip())
+
+
 def get_settings_dir() -> str:
     """Return the ``.loomai/`` directory, creating it if necessary."""
     d = os.path.join(get_storage_dir(), _SETTINGS_SUBDIR)
@@ -242,6 +264,16 @@ def get_default_settings() -> dict:
                 },
             },
         },
+        "sphere": {
+            "enabled": False,
+            "grpc_endpoint": "grpc.sphere-testbed.net",
+            "grpc_port": 443,
+            "api_endpoint": "https://api.sphere-testbed.net",
+            "username": "",
+            "password": "",  # optional; enables Identity.Login + token refresh
+            "token": "",  # bearer from `mrg whoami -t`; preferred when present
+            "default_project": "",  # e.g. "fabricsphere"
+        },
         "services": {
             "jupyter_port": 8889,
             "model_proxy_port": 9199,
@@ -276,8 +308,39 @@ def load_settings() -> dict:
     else:
         settings = defaults
 
+    _seed_sphere_from_env(settings)
+
     _cached_settings = settings
     return settings
+
+
+def _seed_sphere_from_env(settings: dict) -> None:
+    """Overlay SPHERE config from environment variables when provided.
+
+    Lets a deployment inject SPHERE credentials/config (e.g. in docker-compose)
+    so they survive a fresh container/volume — environment wins over on-disk for
+    any field that is set. Recognised vars: ``SPHERE_ENABLED``,
+    ``SPHERE_USERNAME``, ``SPHERE_PASSWORD``, ``SPHERE_TOKEN``,
+    ``SPHERE_DEFAULT_PROJECT``, ``SPHERE_GRPC_ENDPOINT``, ``SPHERE_GRPC_PORT``.
+    """
+    sphere = settings.setdefault("sphere", {})
+    env = os.environ
+    if env.get("SPHERE_ENABLED") is not None:
+        sphere["enabled"] = env["SPHERE_ENABLED"].strip().lower() in ("1", "true", "yes", "on")
+    for var, key in (
+        ("SPHERE_USERNAME", "username"),
+        ("SPHERE_PASSWORD", "password"),
+        ("SPHERE_TOKEN", "token"),
+        ("SPHERE_DEFAULT_PROJECT", "default_project"),
+        ("SPHERE_GRPC_ENDPOINT", "grpc_endpoint"),
+    ):
+        if env.get(var):
+            sphere[key] = env[var]
+    if env.get("SPHERE_GRPC_PORT"):
+        try:
+            sphere["grpc_port"] = int(env["SPHERE_GRPC_PORT"])
+        except ValueError:
+            pass
 
 
 def save_settings(settings: dict) -> None:
@@ -286,7 +349,18 @@ def save_settings(settings: dict) -> None:
 
     path = get_settings_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    _atomic_write_json(path, settings)
+    # Don't persist SPHERE secrets that were injected via environment — they are
+    # the deployment's source of truth and shouldn't be written to disk (where
+    # they'd survive past the env and widen exposure). Strip them from the
+    # on-disk copy while keeping them in the in-memory cache for this process.
+    to_write = settings
+    env_secret_fields = [v for v, k in (("SPHERE_PASSWORD", "password"), ("SPHERE_TOKEN", "token")) if os.environ.get(v)]
+    if env_secret_fields and isinstance(settings.get("sphere"), dict):
+        to_write = copy.deepcopy(settings)
+        for var, key in (("SPHERE_PASSWORD", "password"), ("SPHERE_TOKEN", "token")):
+            if os.environ.get(var):
+                to_write["sphere"][key] = ""
+    _atomic_write_json(path, to_write)
 
     _cached_settings = settings
 
@@ -610,6 +684,34 @@ def is_chameleon_site_configured(site: str) -> bool:
             and cfg.get("client_id")
         )
     return bool(cfg.get("app_credential_id") and cfg.get("app_credential_secret"))
+
+
+# ---------------------------------------------------------------------------
+# SPHERE / MergeTB accessors
+# ---------------------------------------------------------------------------
+
+
+def get_sphere_settings() -> dict:
+    """Return the ``sphere`` settings block."""
+    return _get_settings().get("sphere", {})
+
+
+def is_sphere_enabled() -> bool:
+    """Return ``sphere.enabled``."""
+    return bool(get_sphere_settings().get("enabled", False))
+
+
+def get_sphere_default_project() -> str:
+    """Return ``sphere.default_project`` (may be empty)."""
+    return str(get_sphere_settings().get("default_project", "") or "").strip()
+
+
+def is_sphere_configured() -> bool:
+    """True when SPHERE is enabled and has a token or username+password."""
+    cfg = get_sphere_settings()
+    if not cfg.get("enabled"):
+        return False
+    return bool(cfg.get("token")) or bool(cfg.get("username") and cfg.get("password"))
 
 
 # ---------------------------------------------------------------------------

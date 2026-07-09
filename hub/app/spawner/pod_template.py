@@ -171,32 +171,38 @@ def build_pod_manifest(
     # Tolerate the user-pool taint so pods can land on dedicated user nodes
     tolerations = [
         V1Toleration(
-            key="hub.jupyter.org/dedicated",
+            key="hub.loomai.net/dedicated",
             operator="Equal",
             value="user",
             effect="NoSchedule",
         ),
     ]
 
-    # Prefer (soft) scheduling on nodes labeled for user workloads
-    affinity = V1Affinity(
-        node_affinity=V1NodeAffinity(
-            preferred_during_scheduling_ignored_during_execution=[
-                V1PreferredSchedulingTerm(
-                    weight=100,
-                    preference=V1NodeSelectorTerm(
-                        match_expressions=[
-                            V1NodeSelectorRequirement(
-                                key="hub.jupyter.org/node-purpose",
-                                operator="In",
-                                values=["user"],
-                            ),
-                        ],
-                    ),
-                ),
-            ],
-        ),
+    # Schedule on nodes labeled for user workloads. "require" (hard) keeps user
+    # pods only on the dedicated loomai-pool and triggers its autoscaler; "prefer"
+    # (soft) allows spillover to other untainted nodes when no such node exists.
+    node_purpose_term = V1NodeSelectorTerm(
+        match_expressions=[
+            V1NodeSelectorRequirement(
+                key="hub.loomai.net/node-purpose",
+                operator="In",
+                values=["user"],
+            ),
+        ],
     )
+    if settings.LOOMAI_NODE_PURPOSE_MATCH == "require":
+        node_affinity = V1NodeAffinity(
+            required_during_scheduling_ignored_during_execution=V1NodeSelector(
+                node_selector_terms=[node_purpose_term],
+            ),
+        )
+    else:
+        node_affinity = V1NodeAffinity(
+            preferred_during_scheduling_ignored_during_execution=[
+                V1PreferredSchedulingTerm(weight=100, preference=node_purpose_term),
+            ],
+        )
+    affinity = V1Affinity(node_affinity=node_affinity)
 
     pod = V1Pod(
         api_version="v1",

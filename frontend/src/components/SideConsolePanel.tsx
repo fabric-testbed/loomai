@@ -367,7 +367,7 @@ export default React.memo(function SideConsolePanel({
         }
         const term = terminals.find(t => t.id === tabId);
         if (term) {
-          const type = term.chameleonInstanceId ? 'chameleon' : 'ssh';
+          const type = term.sphereXdc ? 'sphere' : term.chameleonInstanceId ? 'chameleon' : 'ssh';
           return (
             <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
               <React.Suspense fallback={null}>
@@ -380,6 +380,11 @@ export default React.memo(function SideConsolePanel({
                   chameleonInstanceId={term.chameleonInstanceId}
                   chameleonSite={term.chameleonSite}
                   chameleonName={term.label}
+                  sphereExperiment={term.sphereExperiment}
+                  sphereRealization={term.sphereRealization}
+                  sphereNode={term.sphereNode}
+                  sphereXdc={term.sphereXdc}
+                  sphereProject={term.sphereProject}
                 />
               </React.Suspense>
             </div>

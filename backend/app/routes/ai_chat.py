@@ -1098,6 +1098,183 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
+    # --- SPHERE / MergeTB tools ---
+    {
+        "type": "function",
+        "function": {
+            "name": "sphere_status",
+            "description": "SPHERE/MergeTB integration status: enabled, configured, and the default project.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_sphere_experiments",
+            "description": "List SPHERE experiments in the project with name, description, and creator.",
+            "parameters": {
+                "type": "object",
+                "properties": {"project": {"type": "string", "description": "SPHERE project. Omit for the configured default."}},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_sphere_experiment",
+            "description": "Create a SPHERE experiment. Name must be lowercase letters and digits only (no hyphens/underscores/uppercase), max 63 chars.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "experiment": {"type": "string", "description": "Experiment name (lowercase alnum, e.g. 'myexp')"},
+                    "description": {"type": "string", "description": "Human-readable description"},
+                    "project": {"type": "string", "description": "SPHERE project. Omit for default."},
+                },
+                "required": ["experiment"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "push_sphere_model",
+            "description": "Push a mergexp Python topology model to a SPHERE experiment. Always tag the push (e.g. 'v1') — model revisions have no ordering, so tags are the only reliable reference for realize.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "experiment": {"type": "string", "description": "Experiment name"},
+                    "model": {"type": "string", "description": "mergexp Python source (from mergexp import *; net = Network(...); ...; experiment(net))"},
+                    "tag": {"type": "string", "description": "Tag for this revision (e.g. 'v1')"},
+                    "project": {"type": "string", "description": "SPHERE project. Omit for default."},
+                },
+                "required": ["experiment", "model", "tag"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_sphere_realizations",
+            "description": "List SPHERE realizations with derived state (complete/failed/pending), error, node/link counts, and expiry.",
+            "parameters": {
+                "type": "object",
+                "properties": {"project": {"type": "string", "description": "SPHERE project. Omit for default."}},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sphere_realize",
+            "description": "Realize a SPHERE experiment — reserve testbed resources for a tagged model revision. Follow with sphere_materialize once the realization state is 'complete'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "experiment": {"type": "string", "description": "Experiment name"},
+                    "realization": {"type": "string", "description": "Realization name (e.g. 'r0')"},
+                    "tag": {"type": "string", "description": "Model tag to realize (matches push_sphere_model tag)"},
+                    "duration": {"type": "string", "description": "Reservation duration (e.g. '24h'). Omit for default."},
+                    "project": {"type": "string", "description": "SPHERE project. Omit for default."},
+                },
+                "required": ["experiment", "realization", "tag"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sphere_materialize",
+            "description": "Materialize a realized SPHERE experiment — power on, image, and wire the nodes. Poll get_sphere_materialization until HighestStatus is 'Success'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "experiment": {"type": "string", "description": "Experiment name"},
+                    "realization": {"type": "string", "description": "Realization name"},
+                    "project": {"type": "string", "description": "SPHERE project. Omit for default."},
+                },
+                "required": ["experiment", "realization"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_sphere_materialization",
+            "description": "Get SPHERE materialization status. Ready when taskSummary.HighestStatus == 'Success' (typically a few minutes after materialize).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "experiment": {"type": "string", "description": "Experiment name"},
+                    "realization": {"type": "string", "description": "Realization name"},
+                    "project": {"type": "string", "description": "SPHERE project. Omit for default."},
+                },
+                "required": ["experiment", "realization"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sphere_dematerialize",
+            "description": "Dematerialize a SPHERE experiment — power off its nodes (always confirm with user!). The realization stays reserved.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "experiment": {"type": "string", "description": "Experiment name"},
+                    "realization": {"type": "string", "description": "Realization name"},
+                    "project": {"type": "string", "description": "SPHERE project. Omit for default."},
+                },
+                "required": ["experiment", "realization"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sphere_relinquish",
+            "description": "Relinquish a SPHERE realization — release the resource reservation (always confirm with user!). Dematerialize first if materialized.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "experiment": {"type": "string", "description": "Experiment name"},
+                    "realization": {"type": "string", "description": "Realization name"},
+                    "project": {"type": "string", "description": "SPHERE project. Omit for default."},
+                },
+                "required": ["experiment", "realization"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_sphere_xdcs",
+            "description": "List SPHERE XDCs (jump containers used to reach experiment nodes) with readiness and attachments.",
+            "parameters": {
+                "type": "object",
+                "properties": {"project": {"type": "string", "description": "SPHERE project. Omit for default."}},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "attach_sphere_xdc",
+            "description": "Attach a SPHERE XDC to a realization so its nodes become reachable (SSH goes jump host -> XDC -> node). XDC name is bare (no .project suffix).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "xdc": {"type": "string", "description": "XDC name (bare, lowercase alnum)"},
+                    "experiment": {"type": "string", "description": "Experiment name"},
+                    "realization": {"type": "string", "description": "Realization name"},
+                    "project": {"type": "string", "description": "SPHERE project. Omit for default."},
+                },
+                "required": ["xdc", "experiment", "realization"],
+            },
+        },
+    },
     # --- FABlib examples RAG ---
     {
         "type": "function",
@@ -1661,6 +1838,44 @@ def _tool_summary(name: str, args: dict, result: str) -> str:
         leases = len(data.get("leases", []))
         return f"Deployed draft — {leases} lease{'s' if leases != 1 else ''} created"
 
+    if name == "sphere_status" and isinstance(data, dict):
+        if not data.get("enabled"):
+            return "SPHERE integration is disabled"
+        state = "configured" if data.get("configured") else "not configured"
+        return f"SPHERE enabled, {state} — project {data.get('default_project', '?')}"
+
+    if name == "list_sphere_experiments" and isinstance(data, list):
+        return f"Found {len(data)} SPHERE experiments"
+
+    if name == "create_sphere_experiment" and isinstance(data, dict):
+        return f"Created SPHERE experiment '{data.get('name', '?')}'"
+
+    if name == "push_sphere_model" and isinstance(data, dict):
+        return f"Pushed model to '{data.get('experiment', '?')}' (tag {data.get('tag') or 'none'})"
+
+    if name == "list_sphere_realizations" and isinstance(data, list):
+        complete = sum(1 for r in data if r.get("state") == "complete")
+        return f"Found {len(data)} SPHERE realizations ({complete} complete)"
+
+    if name == "sphere_realize" and isinstance(data, dict):
+        return "Realization requested — check list_sphere_realizations for state"
+
+    if name == "sphere_materialize" and isinstance(data, dict):
+        return "Materialization started — poll get_sphere_materialization"
+
+    if name == "get_sphere_materialization" and isinstance(data, dict):
+        highest = (data.get("taskSummary") or {}).get("HighestStatus", "?")
+        return f"Materialization status: {highest}"
+
+    if name in ("sphere_dematerialize", "sphere_relinquish"):
+        return "Done"
+
+    if name == "list_sphere_xdcs" and isinstance(data, list):
+        return f"Found {len(data)} XDCs"
+
+    if name == "attach_sphere_xdc" and isinstance(data, dict):
+        return "XDC attached — nodes reachable via loomai sphere ssh"
+
     if name == "list_composite_slices" and isinstance(data, list):
         return f"Found {len(data)} federated slices"
 
@@ -2198,6 +2413,123 @@ async def execute_tool(name: str, arguments: dict, request: Request | None = Non
             from app.routes.chameleon import deploy_draft
             body = {"duration_hours": arguments.get("hours", 4)}
             result = await deploy_draft(arguments["draft_id"], body)
+            return json.dumps(result, default=str)
+
+        # --- SPHERE / MergeTB tools ---
+        # NOTE: the sphere route functions use Body()/Query() defaults, which are
+        # FieldInfo sentinels when called directly — every parameter must be
+        # passed explicitly.
+
+        elif name == "sphere_status":
+            from app.routes.sphere import sphere_status
+            result = await sphere_status()
+            return json.dumps(result, default=str)
+
+        elif name == "list_sphere_experiments":
+            from app.routes.sphere import sphere_list_experiments
+            result = await sphere_list_experiments(project=arguments.get("project"))
+            return json.dumps(result, default=str)
+
+        elif name == "create_sphere_experiment":
+            from app.routes.sphere import sphere_create_experiment
+            result = await sphere_create_experiment(
+                experiment=arguments["experiment"],
+                description=arguments.get("description", ""),
+                project=arguments.get("project"),
+            )
+            return json.dumps(result, default=str)
+
+        elif name == "push_sphere_model":
+            from app.routes.sphere import sphere_push_model
+            result = await sphere_push_model(
+                model=arguments["model"],
+                experiment=arguments["experiment"],
+                tag=arguments.get("tag"),
+                branch=None,
+                project=arguments.get("project"),
+            )
+            return json.dumps(result, default=str)
+
+        elif name == "list_sphere_realizations":
+            from app.routes.sphere import sphere_list_realizations
+            result = await sphere_list_realizations(
+                project=arguments.get("project"), all=False, summary=False, state=True,
+            )
+            # Full realizations are verbose (per-socket topology) — compact for chat.
+            compact = [{
+                "realization": r.get("id"), "experiment": r.get("eid"),
+                "project": r.get("pid"), "state": r.get("state"),
+                "error": r.get("error"), "expires": r.get("expires"),
+                "nodes": len(r.get("nodes") or {}), "links": len(r.get("links") or {}),
+            } for r in result] if isinstance(result, list) else result
+            return json.dumps(compact, default=str)
+
+        elif name == "sphere_realize":
+            from app.routes.sphere import sphere_realize
+            result = await sphere_realize(
+                experiment=arguments["experiment"],
+                realization=arguments["realization"],
+                tag=arguments.get("tag"),
+                branch=None,
+                revision=None,
+                duration=arguments.get("duration"),
+                project=arguments.get("project"),
+            )
+            return json.dumps(result, default=str)
+
+        elif name == "sphere_relinquish":
+            from app.routes.sphere import sphere_relinquish
+            result = await sphere_relinquish(
+                experiment=arguments["experiment"],
+                realization=arguments["realization"],
+                project=arguments.get("project"),
+            )
+            return json.dumps(result, default=str)
+
+        elif name == "sphere_materialize":
+            from app.routes.sphere import sphere_materialize
+            result = await sphere_materialize(
+                experiment=arguments["experiment"],
+                realization=arguments["realization"],
+                project=arguments.get("project"),
+            )
+            return json.dumps(result, default=str)
+
+        elif name == "get_sphere_materialization":
+            from app.routes.sphere import sphere_get_materialization
+            result = await sphere_get_materialization(
+                experiment=arguments["experiment"],
+                realization=arguments["realization"],
+                project=arguments.get("project"),
+                status=True,
+            )
+            # Drop the ~43-task status tree; taskSummary + summary carry the signal.
+            if isinstance(result, dict):
+                result = {k: v for k, v in result.items() if k != "taskStatus"}
+            return json.dumps(result, default=str)
+
+        elif name == "sphere_dematerialize":
+            from app.routes.sphere import sphere_dematerialize
+            result = await sphere_dematerialize(
+                experiment=arguments["experiment"],
+                realization=arguments["realization"],
+                project=arguments.get("project"),
+            )
+            return json.dumps(result, default=str)
+
+        elif name == "list_sphere_xdcs":
+            from app.routes.sphere import sphere_list_xdcs
+            result = await sphere_list_xdcs(project=arguments.get("project"), status=True)
+            return json.dumps(result, default=str)
+
+        elif name == "attach_sphere_xdc":
+            from app.routes.sphere import sphere_attach_xdc
+            result = await sphere_attach_xdc(
+                arguments["xdc"],
+                experiment=arguments["experiment"],
+                realization=arguments["realization"],
+                project=arguments.get("project"),
+            )
             return json.dumps(result, default=str)
 
         elif name == "list_composite_slices":

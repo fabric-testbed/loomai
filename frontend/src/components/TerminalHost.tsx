@@ -14,13 +14,18 @@ import type { TerminalSession } from '../utils/terminalStore';
 
 interface TerminalHostProps {
   sessionId: string;
-  type: 'ssh' | 'local' | 'chameleon';
+  type: 'ssh' | 'local' | 'chameleon' | 'sphere';
   sliceName?: string;
   nodeName?: string;
   managementIp?: string;
   chameleonInstanceId?: string;
   chameleonSite?: string;
   chameleonName?: string;
+  sphereExperiment?: string;
+  sphereRealization?: string;
+  sphereNode?: string;
+  sphereXdc?: string;
+  sphereProject?: string;
 }
 
 function refitSession(session: TerminalSession) {
@@ -46,6 +51,11 @@ export default React.memo(function TerminalHost({
   chameleonInstanceId,
   chameleonSite,
   chameleonName,
+  sphereExperiment,
+  sphereRealization,
+  sphereNode,
+  sphereXdc,
+  sphereProject,
 }: TerminalHostProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<TerminalSession | null>(null);
@@ -63,7 +73,13 @@ export default React.memo(function TerminalHost({
         ? { instanceId: chameleonInstanceId, site: chameleonSite, name: chameleonName || chameleonInstanceId }
         : undefined;
 
-    const session = createTerminalSession(sessionId, type, sshInfo, chameleonInfo);
+    const sphereInfo =
+      type === 'sphere' && sphereExperiment && sphereRealization && sphereNode && sphereXdc
+        ? { experiment: sphereExperiment, realization: sphereRealization, node: sphereNode,
+            xdc: sphereXdc, project: sphereProject, name: sphereNode }
+        : undefined;
+
+    const session = createTerminalSession(sessionId, type, sshInfo, chameleonInfo, sphereInfo);
     sessionRef.current = session;
     const host = hostRef.current;
 

@@ -23,6 +23,12 @@ export interface TerminalTab {
   managementIp: string;
   chameleonInstanceId?: string;
   chameleonSite?: string;
+  // SPHERE node terminal (SSH through an XDC jump chain)
+  sphereExperiment?: string;
+  sphereRealization?: string;
+  sphereNode?: string;
+  sphereXdc?: string;
+  sphereProject?: string;
 }
 
 export interface BootConfigError {
@@ -795,7 +801,7 @@ export default React.memo(function BottomPanel({ terminals, onCloseTerminal, val
         if (term) {
           return (
             <div style={{ display: isActive ? 'flex' : 'none', flex: 1, overflow: 'hidden' }}>
-              <React.Suspense fallback={null}><TerminalHost sessionId={tabId} type={term.chameleonInstanceId ? 'chameleon' : 'ssh'} sliceName={term.sliceName} nodeName={term.nodeName} managementIp={term.managementIp} chameleonInstanceId={term.chameleonInstanceId} chameleonSite={term.chameleonSite} chameleonName={term.label} /></React.Suspense>
+              <React.Suspense fallback={null}><TerminalHost sessionId={tabId} type={term.sphereXdc ? 'sphere' : term.chameleonInstanceId ? 'chameleon' : 'ssh'} sliceName={term.sliceName} nodeName={term.nodeName} managementIp={term.managementIp} chameleonInstanceId={term.chameleonInstanceId} chameleonSite={term.chameleonSite} chameleonName={term.label} sphereExperiment={term.sphereExperiment} sphereRealization={term.sphereRealization} sphereNode={term.sphereNode} sphereXdc={term.sphereXdc} sphereProject={term.sphereProject} /></React.Suspense>
             </div>
           );
         }

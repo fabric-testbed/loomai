@@ -68,6 +68,18 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
+    # Long-running synchronous slice operations — these SSH into every node and
+    # can far exceed the default 120s (FABlib post_boot_config, network auto-config,
+    # site re-resolution). Without this they hit nginx's 504 gateway timeout.
+    location ~ ^/api/slices/.+/(post-boot-config|auto-configure-networks|resolve-sites)$ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1800s;
+    }
+
     location /api/ {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;

@@ -1,0 +1,102 @@
+{
+  "name": "SPHERE Edge IDS/IPS Lab",
+  "title": "SPHERE Edge IDS/IPS Lab",
+  "description": "SPHERE edge-security lab: a compromised edge device runs a multi-stage attack (recon, web exploits, SSH brute-force, DNS exfiltration) against a gateway that mirrors traffic to a Suricata IDS. Includes a benign baseline and a closed-loop IPS auto-block.",
+  "description_short": "SPHERE edge-security lab: a compromised edge device runs a multi-stage attack (recon, web exploits, SSH brute-force, DNS exfiltration) against a gateway that mirrors traffic to a Suricata IDS. Includes a benign baseline and a closed-loop IPS auto-block.",
+  "description_long": "<p>A reproducible <b>edge intrusion-detection / prevention</b> lab on the <b>SPHERE</b> (MergeTB) testbed.</p><p><b>Topology (4 nodes):</b> a compromised edge device and a benign edge device share an edge LAN with a gateway; the gateway mirrors edge-LAN traffic to a Suricata sensor.</p><ul><li><b>edge</b> &mdash; runs a multi-stage attack: reconnaissance (SYN/FIN/XMAS scans) &rarr; web exploitation (path traversal, SQL injection, malicious user-agent) &rarr; SSH brute force &rarr; DNS-tunnel exfiltration.</li><li><b>edge2</b> &mdash; benign baseline (normal web + ping).</li><li><b>gw</b> &mdash; gateway hosting a victim web service and a software traffic mirror (tc) to the sensor.</li><li><b>mon</b> &mdash; Suricata IDS with categorized rules logging to eve.json.</li></ul><p><b>What you get:</b> Run the weave to recreate the experiment (push model &rarr; realize &rarr; materialize). A bundled Jupyter notebook deploys the tooling, then analyzes and visualizes the alerts (topology graph, alerts by signature/category, severity, top talkers, attack graph, timeline) and runs a <b>closed-loop IPS</b> that auto-blocks the attacker on the gateway while the benign device keeps working.</p><p><i>Requires a SPHERE project with moddeter access.</i></p>",
+  "run_script": "weave.sh",
+  "log_file": "weave.log",
+  "format": "sphere-experiment-v1",
+  "created": "2026-06-28T23:36:15.173821+00:00",
+  "tags": [
+    "loomai:weave",
+    "experiment pattern",
+    "sphere"
+  ],
+  "args": [
+    {
+      "name": "EXPERIMENT_NAME",
+      "label": "Experiment Name",
+      "type": "string",
+      "required": true,
+      "default": "edgeids",
+      "description": "SPHERE experiment name to (re)create"
+    },
+    {
+      "name": "REALIZATION_ID",
+      "label": "Realization ID",
+      "type": "string",
+      "required": true,
+      "default": "ids",
+      "description": "Realization id to embed and materialize"
+    }
+  ],
+  "sphere": {
+    "experiment": "edgeids",
+    "realization": "ids",
+    "project": "fabricsphere",
+    "network": "edgeids",
+    "model": "model.py",
+    "nodes": [
+      {
+        "name": "gw",
+        "facility": "moddeter"
+      },
+      {
+        "name": "edge",
+        "facility": "moddeter"
+      },
+      {
+        "name": "edge2",
+        "facility": "moddeter"
+      },
+      {
+        "name": "mon",
+        "facility": "moddeter"
+      }
+    ],
+    "links": [
+      {
+        "members": [
+          "edge",
+          "edge2",
+          "gw"
+        ],
+        "addrs": {
+          "edge": "10.0.1.10/24",
+          "edge2": "10.0.1.11/24",
+          "gw": "10.0.1.1/24"
+        }
+      },
+      {
+        "members": [
+          "gw",
+          "mon"
+        ],
+        "addrs": {
+          "gw": "10.0.2.1/24",
+          "mon": "10.0.2.10/24"
+        }
+      }
+    ],
+    "scripts": [
+      {
+        "name": "gw-setup.sh",
+        "target": "gw"
+      },
+      {
+        "name": "mon-setup.sh",
+        "target": "mon"
+      },
+      {
+        "name": "edge-setup.sh",
+        "target": "edge"
+      },
+      {
+        "name": "edge2-setup.sh",
+        "target": "edge2"
+      }
+    ],
+    "notebook": "analysis.ipynb"
+  }
+}

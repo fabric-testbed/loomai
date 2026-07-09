@@ -589,6 +589,16 @@ export interface LoomAISettings {
       openid_scope?: string;
     }>;
   };
+  sphere?: {
+    enabled: boolean;
+    grpc_endpoint?: string;
+    grpc_port?: number;
+    api_endpoint?: string;
+    username?: string;
+    password?: string;
+    token?: string;
+    default_project?: string;
+  };
   services: {
     jupyter_port: number;
     model_proxy_port: number;

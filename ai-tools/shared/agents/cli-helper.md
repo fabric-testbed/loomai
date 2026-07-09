@@ -68,6 +68,23 @@ loomai chameleon ips allocate --site CHI@TACC
 loomai chameleon slices list
 ```
 
+## SPHERE / MergeTB
+```bash
+loomai sphere status                                   # Integration status
+loomai sphere experiments                              # List experiments
+loomai sphere create-experiment myexp                  # Name: lowercase letters+digits only
+loomai sphere push-model myexp model.py --tag v1       # Push mergexp model (always tag)
+loomai sphere realize myexp r0 --tag v1                # Reserve resources
+loomai sphere materialize myexp r0                     # Power on / image / wire
+loomai sphere materialization myexp r0                 # Poll: ready when HighestStatus=Success
+loomai sphere realizations                             # List with state
+loomai sphere xdc list                                 # XDC jump containers
+loomai sphere xdc attach x0 myexp r0                   # Attach XDC for node access
+loomai sphere ssh myexp r0 <node> --xdc x0             # SSH via jump -> XDC -> node
+loomai sphere dematerialize myexp r0                   # Power off (destructive)
+loomai sphere relinquish myexp r0                      # Release reservation (destructive)
+```
+
 ## AI Assistant
 ```bash
 loomai ai chat "create a 2-node slice at RENC"        # One-shot

@@ -16,6 +16,22 @@ from tests.fixtures.fablib_mocks import MockFablibManager, MockSlice
 from tests.fixtures.site_data import default_sites
 
 
+@pytest.fixture(autouse=True)
+def _isolate_home(tmp_path_factory, monkeypatch):
+    """No test may see the real HOME directory.
+
+    The app manages AI-tool dotfiles in the home dir (~/.claude, ~/.codex,
+    ~/.crush, ...): ``config._ensure_user_symlinks`` MOVES them into per-user
+    storage and ``ai_terminal.restore_ai_tool_configs`` rmtree's them. A test
+    that reaches those paths with the real HOME destroys the developer's
+    dotfiles — this happened: a relocation test moved a real ~/.claude into
+    pytest's tmp_path, which was later pruned. Tests that need a specific
+    home layout can still monkeypatch HOME themselves (it overrides this).
+    """
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+
+
 @pytest.fixture()
 def storage_dir(tmp_path):
     """Create an isolated storage directory with minimal FABRIC config.

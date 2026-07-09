@@ -72,22 +72,23 @@ LoomAI has been deployed to namespace {{ .Release.Namespace }}.
 
 {{- if or .Values.scheduling.userScheduler.enabled .Values.scheduling.placeholders.enabled }}
 
-  LoomAI uses its own labels and taints (hub.jupyter.org/*) for
-  scheduling user pods to dedicated nodes. Create a user node pool:
+  LoomAI uses its own labels and taints (hub.loomai.net/*) for
+  scheduling user pods to dedicated nodes, isolated from JupyterHub
+  (which uses hub.jupyter.org/*). Create a loomai node pool:
 
-    gcloud container node-pools create user-pool \
+    gcloud container node-pools create loomai-pool \
       --cluster=<CLUSTER> --zone=<ZONE> \
       --machine-type=n1-standard-4 \
       --num-nodes=0 --enable-autoscaling --min-nodes=0 --max-nodes=10 \
-      --node-labels=hub.jupyter.org/node-purpose=user \
-      --node-taints=hub.jupyter.org/dedicated=user:NoSchedule
+      --node-labels=hub.loomai.net/node-purpose=user \
+      --node-taints=hub.loomai.net/dedicated=user:NoSchedule
 
   Existing node pools can be updated:
 
-    gcloud container node-pools update user-pool \
+    gcloud container node-pools update loomai-pool \
       --cluster=<CLUSTER> --zone=<ZONE> \
-      --node-labels=hub.jupyter.org/node-purpose=user \
-      --node-taints=hub.jupyter.org/dedicated=user:NoSchedule
+      --node-labels=hub.loomai.net/node-purpose=user \
+      --node-taints=hub.loomai.net/dedicated=user:NoSchedule
 {{- end }}
 
 ==========================================================

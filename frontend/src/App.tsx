@@ -9,6 +9,7 @@ import type { ContextMenuAction } from './components/CytoscapeGraph';
 import SliverView from './components/SliverView';
 import AllSliversView from './components/AllSliversView';
 import EditorPanel from './components/EditorPanel';
+import SphereEditorPanel from './components/SphereEditorPanel';
 import LibrariesPanel from './components/LibrariesPanel';
 import LibrariesView from './components/LibrariesView';
 import './styles/infrastructure-view.css';
@@ -38,6 +39,7 @@ const ChameleonView = dynamic(() => import('./components/ChameleonView'), { ssr:
 const ChameleonSlicesView = dynamic(() => import('./components/ChameleonSlicesView'), { ssr: false });
 const ChameleonEditor = dynamic(() => import('./components/ChameleonEditor'), { ssr: false });
 const ChameleonOpenStackView = dynamic(() => import('./components/ChameleonOpenStackView'), { ssr: false });
+const SphereView = dynamic(() => import('./components/SphereView'), { ssr: false });
 const CompositeEditorPanel = dynamic(() => import('./components/CompositeEditorPanel'), { ssr: false });
 import type { ClientTarget } from './components/ClientView';
 import HelpContextMenu from './components/HelpContextMenu';
@@ -359,13 +361,14 @@ export default function App() {
   const [sliceBootLogs, setSliceBootLogs] = useState<Record<string, BootConsoleLine[]>>({});
   const [sliceBootRunning, setSliceBootRunning] = useState<Record<string, boolean>>({});
   const [sliceBootNodeStatus, setSliceBootNodeStatus] = useState<Record<string, Record<string, 'pending' | 'running' | 'done' | 'error'>>>({});
-  type TopView = 'landing' | 'slices' | 'artifacts' | 'infrastructure' | 'jupyter' | 'ai' | 'chameleon';
+  type TopView = 'landing' | 'slices' | 'artifacts' | 'infrastructure' | 'jupyter' | 'ai' | 'chameleon' | 'sphere';
   type SlicesSubView = CompositeSubView;
   type InfraSubView = 'topology' | 'table' | 'storage' | 'map' | 'apps' | 'resources' | 'calendar';
   type ChameleonSubView = 'topology' | 'slices' | 'storage' | 'map' | 'calendar' | 'openstack';
+  type SphereSubView = 'realizations' | 'topology' | 'storage' | 'inventory' | 'map' | 'notebook';
   // View state is restored across browser reloads.
   const [currentView, setCurrentView] = useState<TopView>(() => {
-    const valid: TopView[] = ['landing', 'slices', 'artifacts', 'infrastructure', 'jupyter', 'ai', 'chameleon'];
+    const valid: TopView[] = ['landing', 'slices', 'artifacts', 'infrastructure', 'jupyter', 'ai', 'chameleon', 'sphere'];
     const s = localStorage.getItem('fabric-current-view') as TopView | null;
     return s && valid.includes(s) ? s : 'landing';
   });
@@ -457,6 +460,18 @@ export default function App() {
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
   const [configStatus, setConfigStatus] = useState<import('./types/fabric').ConfigStatus | null>(null);
   const [chameleonEnabled, setChameleonEnabled] = useState(false);
+  const [sphereEnabled, setSphereEnabled] = useState(false);
+  const [sphereDefaultProject, setSphereDefaultProject] = useState('');
+  const [sphereSubView, setSphereSubView] = useState<SphereSubView>('realizations');
+  const [sphereSelectedRealization, setSphereSelectedRealization] = useState<{ experiment: string; realization: string } | null>(null);
+  const [sphereRefreshNonce, setSphereRefreshNonce] = useState(0);
+  const [sphereSelectedElement, setSphereSelectedElement] = useState<Record<string, any> | null>(null);
+  const [sphereMatStatus, setSphereMatStatus] = useState('');
+  // XDC state is owned here so the editor manages XDCs while the topology/
+  // realizations views consume the selected one for Connect.
+  const [sphereXdcs, setSphereXdcs] = useState<import('./types/sphere').SphereXdc[]>([]);
+  const [sphereSelectedXdc, setSphereSelectedXdc] = useState('');
+  const [sphereRealizations, setSphereRealizations] = useState<import('./types/sphere').SphereRealization[]>([]);
   const [chameleonSites, setChameleonSites] = useState<ChameleonSite[]>([]);
   const [chameleonInstances, setChameleonInstances] = useState<ChameleonInstance[]>([]);
   const [userUuid, setUserUuid] = useState<string>('');
@@ -1014,6 +1029,12 @@ export default function App() {
         api.listAllChameleonSlices().then(setChameleonSlices).catch(() => {});
         api.listChameleonLeases().then(setChameleonLeases).catch(() => {});
       }
+    }).catch(() => {});
+
+    // Check SPHERE status
+    api.getSphereStatus().then(status => {
+      setSphereEnabled(status.enabled);
+      setSphereDefaultProject(status.default_project || '');
     }).catch(() => {});
 
     // Check view status and load federated slices
@@ -3620,6 +3641,74 @@ export default function App() {
     setConsoleExpanded(true);
   }, []);
 
+  // Open SSH terminal for a SPHERE node (through its XDC jump chain).
+  const handleOpenSphereTerminal = useCallback((n: {
+    experiment: string; realization: string; node: string; xdc: string; project?: string;
+  }) => {
+    const newId = `sphere-term-${Date.now()}`;
+    setTerminalTabs(prev => [...prev, {
+      id: newId,
+      label: `${n.node} (${n.realization})`,
+      sliceName: '',
+      nodeName: '',
+      managementIp: '',
+      sphereExperiment: n.experiment,
+      sphereRealization: n.realization,
+      sphereNode: n.node,
+      sphereXdc: n.xdc,
+      sphereProject: n.project,
+    }]);
+    setConsoleExpanded(true);
+  }, []);
+
+  // Fetch SPHERE XDCs (with readiness) for the editor's XDC manager + Connect.
+  const refreshSphereXdcs = useCallback(() => {
+    if (!sphereEnabled) return;
+    api.listSphereXdcs(sphereDefaultProject || undefined, true)
+      .then(setSphereXdcs)
+      .catch((e: any) => setErrors(prev => [...prev, `SPHERE: failed to list XDCs — ${e?.message || e}`]));
+  }, [sphereEnabled, sphereDefaultProject]);
+
+  useEffect(() => { refreshSphereXdcs(); }, [refreshSphereXdcs, sphereRefreshNonce]);
+
+  // Realizations for the ribbon selector (FABRIC "Select Slice" analog).
+  const refreshSphereRealizations = useCallback(() => {
+    if (!sphereEnabled) return;
+    api.listSphereRealizations({ summary: false, project: sphereDefaultProject || undefined })
+      .then(setSphereRealizations)
+      .catch(() => {});
+  }, [sphereEnabled, sphereDefaultProject]);
+
+  useEffect(() => { refreshSphereRealizations(); }, [refreshSphereRealizations, sphereRefreshNonce]);
+
+  // Default the selected XDC to one attached to the active realization, else any.
+  useEffect(() => {
+    const bare = (n: string) => (n || '').split('.', 1)[0];
+    const ref = sphereSelectedRealization
+      ? `${sphereSelectedRealization.realization}.${sphereSelectedRealization.experiment}.${sphereDefaultProject}`
+      : '';
+    const attached = sphereXdcs.filter(x => (x.materialization || '') === ref);
+    if (attached.length) setSphereSelectedXdc(bare(attached[0].name));
+    else if (sphereXdcs.length) setSphereSelectedXdc(prev => prev || bare(sphereXdcs[0].name));
+  }, [sphereXdcs, sphereSelectedRealization, sphereDefaultProject]);
+
+  // Clear a selected realization once it no longer exists (e.g. after a weave
+  // Stop relinquishes it) so the editor/XDC stop showing a phantom attachment.
+  useEffect(() => {
+    if (!sphereSelectedRealization) return;
+    const exists = sphereRealizations.some(
+      r => r.eid === sphereSelectedRealization.experiment && r.id === sphereSelectedRealization.realization);
+    if (!exists) setSphereSelectedRealization(null);
+  }, [sphereRealizations, sphereSelectedRealization]);
+
+  // Auto-refresh realizations + XDCs while viewing SPHERE, so relinquish/attach
+  // changes (incl. from a background weave Run/Stop) surface without a manual ↻.
+  useEffect(() => {
+    if (!sphereEnabled || currentView !== 'sphere') return;
+    const t = setInterval(() => { refreshSphereRealizations(); refreshSphereXdcs(); }, 12000);
+    return () => clearInterval(t);
+  }, [sphereEnabled, currentView, refreshSphereRealizations, refreshSphereXdcs]);
+
   const hasUsableAddress = useCallback((value: unknown) => {
     const text = String(value ?? '').trim();
     return !!text && !['none', 'null', 'undefined', '-', '—'].includes(text.toLowerCase());
@@ -5015,8 +5104,31 @@ export default function App() {
       refreshFederatedSlices({ silent: true });
     } else if (v === 'chameleon') {
       handleRefreshChameleonSlices({ silent: true, refreshSelected: true });
+    } else if (v === 'sphere') {
+      setSphereRefreshNonce(n => n + 1);
     }
   }, [handleRefreshChameleonSlices, refreshFederatedSlices, refreshSliceList]);
+
+  const handleCreateSphereExperiment = useCallback(async () => {
+    const name = (typeof window !== 'undefined'
+      ? window.prompt('New SPHERE experiment name (lowercase letter first, then lowercase letters/digits — no hyphens, spaces, or uppercase):')
+      : '')?.trim();
+    if (!name) return;
+    // SPHERE/MergeTB enforces Experiment.Name ^[a-z][a-z0-9]{0,62}$ — validate
+    // client-side so the user gets an actionable message instead of a 502.
+    if (!/^[a-z][a-z0-9]{0,62}$/.test(name)) {
+      setErrors(prev => [...prev,
+        `SPHERE: invalid experiment name "${name}". Names must start with a lowercase letter and contain only lowercase letters and digits (no hyphens, underscores, spaces, or uppercase), max 63 chars.`]);
+      return;
+    }
+    try {
+      await api.createSphereExperiment(name, '', sphereDefaultProject || undefined);
+      setSphereRefreshNonce(n => n + 1);
+      setErrors(prev => [...prev, `SPHERE: experiment "${name}" created. Push a model and realize it via the loomai sphere CLI to allocate resources.`]);
+    } catch (e: any) {
+      setErrors(prev => [...prev, `SPHERE: create experiment failed — ${e?.message || e}`]);
+    }
+  }, [sphereDefaultProject]);
 
   const handleRecipesChanged = useCallback(() => {
     api.listRecipes().then(setRecipes).catch(() => {});
@@ -5052,7 +5164,7 @@ export default function App() {
   }, []);
 
   // --- Panel rendering helpers (shared between left/right panel groups) ---
-  const showSidePanels = currentView === 'slices' || currentView === 'artifacts' || currentView === 'infrastructure' || currentView === 'chameleon';
+  const showSidePanels = currentView === 'slices' || currentView === 'artifacts' || currentView === 'infrastructure' || currentView === 'chameleon' || currentView === 'sphere';
   // In artifacts view, only show chat and console panels (not editor/template)
   // In chameleon view, show all panels (editor panel shows Chameleon infrastructure editing)
   // Details panel only visible in infrastructure view
@@ -5193,6 +5305,27 @@ export default function App() {
                 />
               </div>
             </div>
+          );
+        }
+        if (currentView === 'sphere') {
+          return (
+            <SphereEditorPanel
+              key="sphere-editor"
+              selected={sphereSelectedRealization}
+              project={sphereDefaultProject}
+              matStatus={sphereMatStatus}
+              selectedElement={sphereSelectedElement}
+              onCollapse={handleCollapseEditor}
+              dragHandleProps={dragProps}
+              panelIcon={icon}
+              onChanged={() => setSphereRefreshNonce(n => n + 1)}
+              onSelectRealization={(sel) => { setSphereSelectedRealization(sel); setSphereSelectedElement(null); }}
+              onError={(msg) => setErrors(prev => [...prev, msg])}
+              xdcs={sphereXdcs}
+              selectedXdc={sphereSelectedXdc}
+              onSelectXdc={setSphereSelectedXdc}
+              onXdcsChanged={refreshSphereXdcs}
+            />
           );
         }
         return (
@@ -5495,6 +5628,7 @@ export default function App() {
         selectedAiTool={selectedAiTool}
         onLaunchAiTool={handleLaunchAiTool}
         chameleonEnabled={chameleonEnabled}
+        sphereEnabled={sphereEnabled}
         federatedEnabled={federatedEnabled}
         hasToken={configStatus?.has_token ?? undefined}
         tokenExpired={configStatus?.has_token && configStatus?.token_info?.exp ? configStatus.token_info.exp * 1000 < Date.now() : false}
@@ -5750,6 +5884,70 @@ export default function App() {
             }}
             title="Auto-refresh interval for Chameleon slices"
           />
+        </div>
+      )}
+
+      {/* SPHERE bar — mirrors the Chameleon bar with SPHERE teal */}
+      {currentView === 'sphere' && !(settingsOpen || helpOpen) && sphereEnabled && (
+        <div className="sphere-bar" data-testid="sphere-bar">
+          <span className="sphere-bar-logo" aria-hidden>
+            {/* SPHERE brand mark: halftone dotted globe */}
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <defs>
+                <pattern id="sphere-halftone" width="2.25" height="2.25" patternUnits="userSpaceOnUse">
+                  <circle cx="0.7" cy="0.7" r="0.68" fill="#fff" />
+                </pattern>
+                <radialGradient id="sphere-fade" cx="40%" cy="36%" r="68%">
+                  <stop offset="0%" stopColor="#fff" />
+                  <stop offset="62%" stopColor="#fff" />
+                  <stop offset="100%" stopColor="#000" />
+                </radialGradient>
+                <mask id="sphere-mask">
+                  <circle cx="12" cy="12" r="10" fill="url(#sphere-fade)" />
+                </mask>
+              </defs>
+              <rect width="24" height="24" fill="url(#sphere-halftone)" mask="url(#sphere-mask)" />
+            </svg>
+          </span>
+          <span className="sphere-bar-title">SPHERE</span>
+          <div className="sphere-bar-tabs" data-testid="sphere-bar-tabs">
+            {([
+              { key: 'realizations' as SphereSubView, label: 'Realizations' },
+              { key: 'topology' as SphereSubView, label: 'Topology' },
+              { key: 'storage' as SphereSubView, label: 'Storage' },
+              { key: 'inventory' as SphereSubView, label: 'Project Inventory' },
+              { key: 'map' as SphereSubView, label: 'Map' },
+              { key: 'notebook' as SphereSubView, label: 'Notebook' },
+            ]).map(t => (
+              <button key={t.key} className={`sphere-bar-tab${sphereSubView === t.key ? ' active' : ''}`}
+                data-testid="sphere-bar-tab" data-sphere-bar-tab={t.key}
+                onClick={() => setSphereSubView(t.key)}>{t.label}</button>
+            ))}
+          </div>
+          <span className="sphere-bar-project">project: {sphereDefaultProject || '—'}</span>
+          <select
+            className="sphere-bar-select"
+            data-testid="sphere-bar-realization-select"
+            value={sphereSelectedRealization ? `${sphereSelectedRealization.realization}.${sphereSelectedRealization.experiment}` : ''}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) { setSphereSelectedRealization(null); return; }
+              const r = sphereRealizations.find(x => `${x.id}.${x.eid}` === v);
+              if (r) { setSphereSelectedRealization({ experiment: r.eid, realization: r.id }); setSphereSelectedElement(null); setSphereSubView('topology'); }
+            }}
+            title="Select a realization"
+          >
+            <option value="">— Select Realization —</option>
+            {sphereRealizations.map(r => (
+              <option key={`${r.id}.${r.eid}.${r.pid}`} value={`${r.id}.${r.eid}`}>
+                {r.id}.{r.eid}{r.complete ? '' : ' (pending)'}
+              </option>
+            ))}
+          </select>
+          <button className="sphere-bar-btn" data-testid="sphere-bar-new-experiment"
+            onClick={handleCreateSphereExperiment} title="Create a new SPHERE experiment">+ New Experiment</button>
+          <button className="sphere-bar-btn" data-testid="sphere-bar-refresh"
+            onClick={() => setSphereRefreshNonce(n => n + 1)} title="Refresh realizations">{'↻'} Refresh</button>
         </div>
       )}
 
@@ -6142,6 +6340,23 @@ export default function App() {
                 onOpenTerminal={handleOpenChameleonTerminal}
               />
             )
+          ) : currentView === 'sphere' ? (
+            <SphereView
+              dark={dark}
+              defaultProject={sphereDefaultProject}
+              subView={sphereSubView}
+              refreshNonce={sphereRefreshNonce}
+              selected={sphereSelectedRealization}
+              onSelect={(sel) => { setSphereSelectedRealization(sel); setSphereSelectedElement(null); }}
+              onOpenRealization={(sel) => { setSphereSelectedRealization(sel); setSphereSelectedElement(null); setSphereSubView('topology'); }}
+              onChanged={() => setSphereRefreshNonce(n => n + 1)}
+              onError={(msg) => setErrors(prev => [...prev, msg])}
+              onOpenTerminal={handleOpenSphereTerminal}
+              onElementSelect={setSphereSelectedElement}
+              onMatStatus={setSphereMatStatus}
+              xdcs={sphereXdcs}
+              selectedXdc={sphereSelectedXdc}
+            />
           ) : currentView === 'slices' ? (
             slicesSubView === 'topology' ? (
               compositeGraph && (compositeGraph.nodes.length > 0 || compositeGraph.edges.length > 0) ? (
