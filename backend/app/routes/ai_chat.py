@@ -909,7 +909,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "create_weave",
-            "description": "Create a new weave experiment. YOU MUST provide script_content with a complete Python script that uses FABlib to create, provision, and configure the slice. The script must have start(slice_name), stop(slice_name), and monitor(slice_name) functions. Include exactly as many VMs, networks, components (GPUs, SmartNICs, etc.), and software installs as the experiment requires. Use node.execute() to install software and run experiments after provisioning. If you omit script_content, a basic template is generated.",
+            "description": "Create a new FABRIC weave experiment. YOU MUST provide script_content with a complete Python script that uses FABlib to create, provision, and configure the slice. The script must have start(slice_name), stop(slice_name), and monitor(slice_name) functions. Include exactly as many VMs, networks, components (GPUs, SmartNICs, etc.), and software installs as the experiment requires. Use node.execute() to install software and run experiments after provisioning. If you omit script_content, a basic template is generated. NOTE: This is for FABRIC only. To package a SPHERE experiment as a weave, use package_sphere_experiment instead — create_weave produces a generic FABRIC weave that cannot be sent to a SPHERE XDC.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1272,6 +1272,59 @@ TOOL_SCHEMAS: list[dict] = [
                     "project": {"type": "string", "description": "SPHERE project. Omit for default."},
                 },
                 "required": ["xdc", "experiment", "realization"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "package_sphere_experiment",
+            "description": (
+                "Package a SPHERE experiment + realization into a reproducible "
+                "'sphere-experiment-v1' weave in My Artifacts (regenerated mergexp "
+                "model + starter analysis notebook + per-node setup scripts + weave.json). "
+                "This is the ONLY correct way to make a SPHERE weave — NEVER use create_weave "
+                "for SPHERE (that produces a generic FABRIC weave that cannot be sent to an XDC). "
+                "Requires the experiment to already have a realization (preferred) or a pushed "
+                "model. After packaging, the weave shows up in Libraries and can be sent to an "
+                "XDC (Notebook tab) or published."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "experiment": {"type": "string", "description": "Experiment name"},
+                    "name": {"type": "string", "description": "Weave name (e.g. 'netsec1-detector')"},
+                    "realization": {"type": "string", "description": "Realization to package (default 'r0'); its materialized topology is preferred over the raw model."},
+                    "description": {"type": "string", "description": "Short description of what the experiment does"},
+                    "scripts": {
+                        "type": "array",
+                        "description": "Per-node setup scripts bundled into the weave; the notebook pushes/runs them on nodes.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "Script filename (e.g. 'detector.py')"},
+                                "target": {"type": "string", "description": "Node name to run on, or 'all'"},
+                                "content": {"type": "string", "description": "Script source code"},
+                            },
+                            "required": ["name", "target", "content"],
+                        },
+                    },
+                    "include_notebook": {"type": "boolean", "description": "Include the auto-generated starter analysis notebook (default true). Ignored if 'notebook' is provided."},
+                    "notebook": {
+                        "type": "array",
+                        "description": "OPTIONAL: your own notebook as an ordered list of cells; replaces the auto-generated starter. It MUST run the experiment end-to-end, not just analyze — a freshly materialized realization has NO data yet, so an analysis-only notebook finds nothing. Order the cells: (1) connect to nodes via the XDC, (2) deploy & start the setup scripts (e.g. launch detector.py on the gateway) and verify they run, (3) generate/trigger the traffic or workload under study, (4) collect the produced output (e.g. alerts.jsonl) back to the XDC, (5) load/summarize/plot. Never assume the output file already exists.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "cell_type": {"type": "string", "enum": ["code", "markdown"], "description": "Cell type"},
+                                "source": {"type": "string", "description": "Cell contents (Python for code cells, Markdown for markdown cells)"},
+                            },
+                            "required": ["cell_type", "source"],
+                        },
+                    },
+                    "project": {"type": "string", "description": "SPHERE project. Omit for default."},
+                },
+                "required": ["experiment", "name"],
             },
         },
     },
@@ -2528,6 +2581,26 @@ async def execute_tool(name: str, arguments: dict, request: Request | None = Non
                 arguments["xdc"],
                 experiment=arguments["experiment"],
                 realization=arguments["realization"],
+                project=arguments.get("project"),
+            )
+            return json.dumps(result, default=str)
+
+        elif name == "package_sphere_experiment":
+            from app.routes.sphere import sphere_package_experiment
+            # Pass every param explicitly — calling a FastAPI route fn directly does
+            # not resolve Body(...) defaults, so unpassed args would leak FieldInfo.
+            result = await sphere_package_experiment(
+                experiment=arguments["experiment"],
+                name=arguments["name"],
+                description=arguments.get("description", ""),
+                description_short="",
+                description_long="",
+                dir_name=arguments.get("dir_name"),
+                realization=arguments.get("realization", "r0"),
+                scripts=arguments.get("scripts") or [],
+                include_notebook=arguments.get("include_notebook", True),
+                notebook=arguments.get("notebook"),
+                tags=arguments.get("tags"),
                 project=arguments.get("project"),
             )
             return json.dumps(result, default=str)

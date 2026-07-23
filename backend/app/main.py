@@ -248,28 +248,6 @@ def _startup_storage():
         pass
 
 
-def _seed_default_artifacts():
-    """Copy default artifacts (e.g. Hello_FABRIC) into my_artifacts/ if missing."""
-    import shutil
-    import logging
-    logger = logging.getLogger("startup")
-
-    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
-    artifacts_dir = os.path.join(storage, "my_artifacts")
-    os.makedirs(artifacts_dir, exist_ok=True)
-
-    # default_artifacts/ lives next to the app/ package
-    defaults_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "default_artifacts")
-    if not os.path.isdir(defaults_dir):
-        return
-    for entry in os.listdir(defaults_dir):
-        src = os.path.join(defaults_dir, entry)
-        dst = os.path.join(artifacts_dir, entry)
-        if os.path.isdir(src) and not os.path.exists(dst):
-            shutil.copytree(src, dst)
-            logger.info("Seeded default artifact: %s", entry)
-
-
 def _startup_ai_tools():
     """Seed AI tool configs into default locations (best-effort)."""
     import logging
@@ -340,7 +318,6 @@ def _startup_settings():
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle: periodic tunnel cleanup + shutdown."""
     _startup_storage()
-    _seed_default_artifacts()
     _startup_settings()
     _startup_ai_tools()
 
@@ -499,7 +476,7 @@ async def lifespan(app: FastAPI):
 _enable_docs = os.environ.get("LOOMAI_ENABLE_DOCS", "").strip() == "1"
 _docs_kwargs = {} if _enable_docs else {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
-app = FastAPI(title="LoomAI API", version="0.7.3", lifespan=lifespan, **_docs_kwargs)
+app = FastAPI(title="LoomAI API", version="0.8.1", lifespan=lifespan, **_docs_kwargs)
 
 from app.error_handler import install_error_handlers
 install_error_handlers(app)

@@ -326,10 +326,20 @@ link0[b].socket.addrs = ip4('10.0.0.2/24')
 experiment(net)
 ```
 
-Package a live experiment as a reproducible `sphere-experiment-v1` weave via
-`POST /api/sphere/experiments/{exp}/package`; the `edgeids-weave` default
-artifact (4-node IDS/IPS lab) is the reference example. For details activate
-the `sphere-manager` agent.
+Package a live experiment as a reproducible `sphere-experiment-v1` weave with the
+`package_sphere_experiment` tool (LoomAI tool-calling) or `POST
+/api/sphere/experiments/{exp}/package` / `loomai sphere package`; the
+`edgeids-weave` default artifact (4-node IDS/IPS lab) is the reference example.
+For details activate the `sphere-manager` agent.
+
+**CRITICAL — packaging a SPHERE experiment:** ALWAYS use `package_sphere_experiment`
+(or the SPHERE Editor → Package tab). NEVER use `create_weave` for a SPHERE
+experiment — `create_weave` builds a generic FABRIC weave with no
+`sphere-experiment-v1` format, so "Send weave → XDC" cannot find it. Packaging
+requires the experiment to already have a realization (preferred) or a pushed
+model — if it has neither, tell the user to realize/push first rather than
+falling back to `create_weave`. Do not claim an experiment was packaged unless
+`package_sphere_experiment` actually ran.
 
 ## Slice Lifecycle
 
@@ -445,7 +455,7 @@ When the user asks for something, map their intent to the correct tool calls:
 
 ### Deploying & Running
 - **"submit X" / "deploy X" / "provision X"** → `submit_slice(slice_name="X", wait=true)` for small slices
-- **"run the Hello FABRIC weave"** → `load_template(template_name="Hello_FABRIC", slice_name="hello-exp")` → `submit_slice(wait=true)`
+- **"run the <name> weave"** → `list_templates` to confirm it's in local artifacts → `load_template(template_name="<name>", slice_name="<name>-exp")` → `submit_slice(wait=true)`
 - **"run weave X"** → `list_templates` to find it → `start_background_run(template_name, script="weave.sh", args={...})`
 - **"check if X is ready"** → `get_slice(slice_name="X")` → report state + per-node reservation_state
 - **"validate before submitting"** → `validate_slice(slice_name="X")`
@@ -545,7 +555,7 @@ Then report:
 - **"is my SPHERE experiment up"** → `get_sphere_materialization(experiment, realization)` — ready when HighestStatus is Success
 - **"tear down my SPHERE experiment"** → confirm, then `sphere_dematerialize` → `sphere_relinquish`
 - **"list XDCs" / "how do I reach my SPHERE nodes"** → `list_sphere_xdcs`, `attach_sphere_xdc`, then `loomai sphere ssh <exp> <rname> <node> --xdc <xdc>`
-- **"package my SPHERE experiment as a weave"** → `POST /api/sphere/experiments/{exp}/package` (see `package-sphere-weave` skill)
+- **"package my SPHERE experiment as a weave"** → `package_sphere_experiment(experiment, name, realization="r0", scripts=[...], notebook=[...])` (NOT `create_weave`); needs a realization/pushed model first. You author both the per-node `scripts` and the `notebook`. The notebook MUST run the experiment end-to-end — connect → deploy & start the scripts → generate/trigger traffic → collect output → then analyze/plot — never analysis-only (a fresh materialization has no data). Omit `notebook` to get an auto-generated starter. See the `package-sphere-weave` skill.
 
 ### Federated Slices (Cross-Facility)
 - **"list federated slices"** → `list_composite_slices`
@@ -668,9 +678,9 @@ curl -s -X POST http://localhost:8000/api/recipes/install_docker/execute/my-slic
 # List templates
 curl -s http://localhost:8000/api/templates
 
-# Load template as new draft
-curl -s -X POST http://localhost:8000/api/templates/Hello_FABRIC/load \
-  -d '{"slice_name": "my-hello"}'
+# Load template as new draft (the weave must already be in my_artifacts/)
+curl -s -X POST http://localhost:8000/api/templates/my-weave/load \
+  -d '{"slice_name": "my-slice"}'
 
 # Run a weave script with args
 curl -s -X POST http://localhost:8000/api/templates/my-weave/run-script/weave.sh \
@@ -874,9 +884,11 @@ Common services to tunnel: Grafana, Prometheus, Jupyter, Node-RED, custom web ap
 
 Complete workflow from template to running experiment:
 
-1. **Create or load a weave**:
-   - `load_template("Hello_FABRIC", "my-exp")` or
-   - `curl -X POST localhost:8000/api/templates/Hello_FABRIC/load -d '{"slice_name":"my-exp"}'`
+1. **Create or load a weave** — `load_template` loads a weave from your local artifacts
+   (`my_artifacts/`), which starts empty. Author one with the create-weave skill (or add
+   one from the Marketplace), then load it by its directory name:
+   - `load_template("<weave_dir>", "my-exp")` or
+   - `curl -X POST localhost:8000/api/templates/<weave_dir>/load -d '{"slice_name":"my-exp"}'`
 
 2. **Validate** before submitting:
    - `curl -s localhost:8000/api/slices/my-exp/validate`
@@ -969,7 +981,7 @@ ssh_execute("my-slice", "node1", "ping -c 3 8.8.8.8")
 - **Boot configs**: `/home/fabric/work/.boot_info/`
 - **Skills**: `/home/fabric/work/.opencode/skills/`
 - **Agents**: `/home/fabric/work/.opencode/agents/`
-- **Reference templates**: `/home/fabric/work/my_artifacts/` (study the Hello FABRIC weave for patterns)
+- **Reference weaves**: `/app/default_artifacts/` — bundled read-only examples (`Hello_FABRIC`, `Chameleon_SSH_Slice`, `edgeids-weave`) that ship in the image; study them for patterns with no download or seeding. The user's own artifacts live in `/home/fabric/work/my_artifacts/` (starts empty)
 - **Python**: Python 3.11 with FABlib, pandas, numpy, matplotlib, requests
 - **Shell**: bash with standard Linux tools, git, ssh
 
@@ -1699,7 +1711,7 @@ Artifact type is determined by the presence of a marker file:
 - **Notebook**: directory contains any `.ipynb` file
 
 All artifacts are user-created and live in `$ARTIFACTS_DIR/` — create, edit, or delete freely.
-Study the Hello FABRIC weave in my_artifacts/ for patterns.
+For patterns, study the bundled read-only reference weaves in `/app/default_artifacts/` (e.g. `Hello_FABRIC`) — they ship in the image, so no download or seeding is needed.
 
 ---
 

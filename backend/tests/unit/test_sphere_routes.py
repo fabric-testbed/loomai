@@ -279,6 +279,27 @@ def test_package_experiment_route(client, storage_dir):
     assert nb["nbformat"] == 4 and nb["cells"]
 
 
+def test_package_experiment_custom_notebook(client, storage_dir):
+    """A caller-supplied notebook (list of cells) overrides the auto-generated one."""
+    from app.user_context import get_artifacts_dir
+    r = client.post("/api/sphere/experiments/hello/package", json={
+        "name": "hello-nb",
+        "realization": "world",
+        "notebook": [
+            {"cell_type": "markdown", "source": "# My custom analysis"},
+            {"cell_type": "code", "source": "import json  # load alerts.jsonl"},
+        ],
+    })
+    assert r.status_code == 200, r.text
+    d = Path(get_artifacts_dir()) / "hello-nb"
+    nb = json.loads((d / "analysis.ipynb").read_text())
+    assert nb["nbformat"] == 4
+    assert nb["cells"][0]["cell_type"] == "markdown"
+    assert nb["cells"][0]["source"] == "# My custom analysis"
+    assert nb["cells"][1]["cell_type"] == "code"
+    assert nb["cells"][1]["outputs"] == []  # code cells get the nbformat scaffold
+
+
 def test_package_rejects_bad_script_name(client, storage_dir):
     r = client.post("/api/sphere/experiments/hello/package", json={
         "name": "x", "realization": "world",

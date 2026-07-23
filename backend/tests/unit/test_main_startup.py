@@ -1,12 +1,11 @@
 """Unit tests for app.main startup functions.
 
-Covers: _startup_storage migration paths, _seed_default_artifacts,
-_startup_ai_tools, and the app object itself.
+Covers: _startup_storage migration paths, startup no longer seeds default
+artifacts, _startup_ai_tools, and the app object itself.
 """
 
 import json
 import os
-import shutil
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -268,55 +267,27 @@ class TestStartupStorage:
 
 
 # ---------------------------------------------------------------------------
-# _seed_default_artifacts
+# Default artifacts are no longer seeded on startup
 # ---------------------------------------------------------------------------
 
-class TestSeedDefaultArtifacts:
-    def test_seeds_when_defaults_exist(self, tmp_path):
-        """Should copy default artifacts if they exist."""
-        storage = tmp_path / "fabric_work"
-        storage.mkdir()
-        (storage / "my_artifacts").mkdir()
+class TestNoDefaultArtifactSeeding:
+    def test_seed_helper_removed(self):
+        """Startup must not ship a default-artifact seeding helper.
 
-        # Create a fake defaults dir
-        defaults = tmp_path / "default_artifacts"
-        defaults.mkdir()
-        hello = defaults / "Hello_FABRIC"
-        hello.mkdir()
-        (hello / "weave.json").write_text('{"name": "Hello FABRIC"}')
+        Artifacts are downloaded from the Marketplace on demand and persist
+        until the user deletes them — nothing is injected into my_artifacts/
+        on startup.
+        """
+        import app.main as main_mod
+        assert not hasattr(main_mod, "_seed_default_artifacts")
+        assert not hasattr(main_mod, "_SEED_ARTIFACTS")
 
-        with patch.dict(os.environ, {"FABRIC_STORAGE_DIR": str(storage)}):
-            with patch("app.main.os.path.dirname", side_effect=[
-                str(tmp_path),  # first call: dirname(__file__)
-                str(tmp_path),  # this is what we return for the next dirname
-            ]):
-                # Directly call with the defaults path patched
-                import app.main as main_mod
-                # Override the defaults_dir calculation
-                orig = main_mod._seed_default_artifacts
-                def _patched():
-                    artifacts_dir = os.path.join(str(storage), "my_artifacts")
-                    os.makedirs(artifacts_dir, exist_ok=True)
-                    defaults_dir = str(defaults)
-                    for entry in os.listdir(defaults_dir):
-                        src = os.path.join(defaults_dir, entry)
-                        dst = os.path.join(artifacts_dir, entry)
-                        if os.path.isdir(src) and not os.path.exists(dst):
-                            shutil.copytree(src, dst)
-                _patched()
-        assert (storage / "my_artifacts" / "Hello_FABRIC" / "weave.json").exists()
-
-    def test_seed_does_not_overwrite_existing(self, tmp_path):
-        storage = tmp_path / "fabric_work"
-        storage.mkdir()
-        existing = storage / "my_artifacts" / "Hello_FABRIC"
-        existing.mkdir(parents=True)
-        (existing / "custom.txt").write_text("keep me")
-
-        with patch.dict(os.environ, {"FABRIC_STORAGE_DIR": str(storage)}):
-            from app.main import _seed_default_artifacts
-            _seed_default_artifacts()
-        assert (existing / "custom.txt").read_text() == "keep me"
+    def test_lifespan_does_not_seed(self):
+        """The lifespan source must not reference artifact seeding."""
+        import inspect
+        import app.main as main_mod
+        src = inspect.getsource(main_mod.lifespan)
+        assert "_seed_default_artifacts" not in src
 
 
 # ---------------------------------------------------------------------------

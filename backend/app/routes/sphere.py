@@ -137,6 +137,7 @@ async def sphere_package_experiment(
     realization: str = Body("r0", embed=True),
     scripts: list[dict] = Body(default=[], embed=True),
     include_notebook: bool = Body(True, embed=True),
+    notebook: list | dict | None = Body(None, embed=True),
     tags: list[str] | None = Body(None, embed=True),
     project: str | None = Body(None, embed=True),
 ):
@@ -172,7 +173,7 @@ async def sphere_package_experiment(
             description_short=description_short, description_long=description_long,
             dir_name=dir_name, experiment=experiment, realization=realization,
             project=proj, topology=topology, scripts=scripts,
-            include_notebook=include_notebook, tags=tags,
+            include_notebook=include_notebook, notebook=notebook, tags=tags,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

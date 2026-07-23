@@ -223,7 +223,8 @@ Artifacts have two description fields:
 
 ## Reference
 
-Study the Hello FABRIC weave in my_artifacts/ for patterns.
+Study the bundled read-only reference weaves in `/app/default_artifacts/` (e.g. `Hello_FABRIC`)
+for patterns — they ship in the image, so no download or seeding is needed.
 See AGENTS.md for complete field schemas, network types, and component models.
 
 ## Background Runs

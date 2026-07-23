@@ -34,6 +34,31 @@ publishable to the FABRIC Artifact Manager.
 
 ## How to package
 
+> Always package through one of these paths — NEVER `create_weave`/`loomai
+> weaves` for a SPHERE experiment. `create_weave` builds a generic FABRIC weave
+> with no `sphere-experiment-v1` format, so "Send weave → XDC" cannot find it.
+> Packaging needs a realization (preferred) or a pushed model first.
+
+### Via the LoomAI assistant (tool-calling)
+`package_sphere_experiment(experiment, name, realization="r0",
+scripts=[{name, target, content}], notebook=[{cell_type, source}], project?)`.
+Author both the per-node `scripts` and the `notebook`. Omit `notebook` (keep
+`include_notebook=true`) to get the generic auto-generated starter instead.
+
+**The notebook must RUN the experiment before analyzing it** — a fresh
+materialization has no data, so an analysis-only notebook finds nothing. Author
+it as a runnable top-to-bottom pipeline: (1) connect to nodes via the XDC,
+(2) deploy & start the setup scripts (e.g. launch `detector.py` on the gateway)
+and verify they run, (3) generate/trigger the traffic or workload under study,
+(4) collect the produced output (e.g. `alerts.jsonl`) back to the XDC, then
+(5) load, summarize, and visualize. Never assume the output already exists.
+
+### Via CLI
+```bash
+loomai sphere package myexp --name my-ids-lab --realization r0 \
+  --script gw:gw-setup.sh --script all:all-setup.sh
+```
+
 ### Via WebUI
 Editor → **Package** tab: fill title/description, add per-node scripts, package.
 

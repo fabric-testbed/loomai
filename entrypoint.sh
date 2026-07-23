@@ -41,6 +41,12 @@ server {
     index index.html;
 
     client_max_body_size 500m;
+    # nginx runs non-root (fabric) here too, so buffer request bodies under the
+    # writable user-storage mount instead of the default /var/lib/nginx/body —
+    # otherwise large uploads / Jupyter saves fail with permission errors. Must
+    # match scripts/ensure-nginx-upload-temp.sh (run at startup).
+    client_body_temp_path /home/fabric/work/.nginx-client-body 1 2;
+    client_body_timeout 300s;
 
     # --- Auth subrequest: validates session cookie via hub ---
     location = /_auth_check {
@@ -76,7 +82,8 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 120s;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
     }
 
     location ${LOOMAI_BASE_PATH}/jupyter/ {
@@ -390,6 +397,12 @@ fi
 cat > /usr/local/bin/start-jupyterlab.sh <<JLAUNCH
 #!/bin/bash
 set -e
+# Put lazily-installed AI-tool binaries (codex, claude, aider, opencode, …) on
+# PATH so JupyterLab terminals and notebook shell-outs (!codex) find them by
+# name — matches the PATH LoomAI's own terminal injects via get_tool_env().
+# Non-existent dirs are harmless (tools install on first use).
+JL_STORAGE="\${FABRIC_STORAGE_DIR:-/home/fabric/work}"
+export PATH="\$JL_STORAGE/.ai-tools/venv/bin:\$JL_STORAGE/.ai-tools/npm/bin:\$HOME/.local/bin:\$PATH"
 exec jupyter lab \\
     --no-browser \\
     --ip=${JUPYTER_IP} \\
@@ -420,5 +433,12 @@ stdout_logfile_maxbytes=0
 stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 JLAB
+
+# Ensure nginx has a writable client-body temp dir under the storage mount
+# before it starts (non-root nginx can't use the default /var/lib/nginx/body,
+# which breaks large uploads and Jupyter saves).
+if [ -x /app/scripts/ensure-nginx-upload-temp.sh ]; then
+    /app/scripts/ensure-nginx-upload-temp.sh || true
+fi
 
 exec supervisord -c /etc/supervisor/supervisord.conf

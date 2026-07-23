@@ -63,6 +63,13 @@ server {
     index index.html;
 
     client_max_body_size 500m;
+    # nginx runs non-root (fabric) here and cannot write the default
+    # /var/lib/nginx/body temp dir, which breaks large uploads and Jupyter
+    # saves with "open() ... failed (13: Permission denied)". Buffer request
+    # bodies under the writable user-storage mount instead. See
+    # scripts/ensure-nginx-upload-temp.sh (run at startup) which creates it.
+    client_body_temp_path /home/fabric/work/.nginx-client-body 1 2;
+    client_body_timeout 300s;
 
     location / {
         try_files $uri $uri/ /index.html;
@@ -86,7 +93,8 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 120s;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
     }
 
     # Internal auth gate for the embedded-tool proxies below (nginx auth_request).

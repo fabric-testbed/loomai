@@ -702,7 +702,26 @@ export default React.memo(function BottomPanel({ terminals, onCloseTerminal, val
       default: {
         if (tabId.startsWith('boot:')) return `Boot config output for ${tabId.slice(5)}`;
         if (tabId.startsWith('local-term-')) return 'Shell terminal on the backend container';
-        if (terminals.find(t => t.id === tabId)) return 'SSH terminal to this VM';
+        const term = terminals.find(t => t.id === tabId);
+        if (term) {
+          // SPHERE node terminal (SSH through an XDC jump chain).
+          if (term.sphereNode) {
+            const ctx = [`realization ${term.sphereRealization}`, `experiment ${term.sphereExperiment}`]
+              .filter(p => !p.endsWith('undefined'));
+            return `SSH terminal — SPHERE node "${term.sphereNode}"${ctx.length ? ` (${ctx.join(', ')})` : ''}`;
+          }
+          // Chameleon instance terminal.
+          if (term.chameleonInstanceId) {
+            return `SSH terminal — Chameleon instance "${term.label}"${term.chameleonSite ? ` at ${term.chameleonSite}` : ''}`;
+          }
+          // FABRIC node terminal — include the slice so identically-named nodes
+          // across slices are distinguishable (fabric-testbed/loomai#9).
+          const node = term.nodeName || term.label;
+          let title = `SSH terminal — node "${node}"`;
+          if (term.sliceName) title += ` on slice "${term.sliceName}"`;
+          if (term.managementIp) title += ` (${term.managementIp})`;
+          return title;
+        }
         return '';
       }
     }

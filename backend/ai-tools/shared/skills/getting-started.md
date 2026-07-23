@@ -14,8 +14,12 @@ Guide a new user through their first FABRIC experience.
 - Explain: FABRIC has 30+ sites across US, Europe, and Asia
 
 ## Step 3: Create First Slice
-- Use the **Hello FABRIC** template: `load_template("Hello_FABRIC", "my-first-slice")`
-- Or create manually: `create_slice("my-first-slice", nodes=[{name: "node1", site: "auto", cores: 2, ram: 8, disk: 10, image: "default_ubuntu_22"}])`
+- Quickest path — create one directly:
+  `create_slice("my-first-slice", nodes=[{name: "node1", site: "auto", cores: 2, ram: 8, disk: 10, image: "default_ubuntu_22"}])`
+- Prefer a prebuilt weave? `load_template(<name>, "my-first-slice")` loads from your local artifacts
+  (`my_artifacts/`), which starts empty — author one (see the create-weave skill) or add one from
+  the Marketplace first. The bundled read-only examples in `/app/default_artifacts/` (e.g.
+  `Hello_FABRIC`) are good references to study — no download or seeding needed to read them.
 - Explain what a "slice" is: an allocated set of VMs and networks — like a virtual lab
 
 ## Step 4: Deploy

@@ -618,6 +618,43 @@ def gen_notebook(name: str, description: str, experiment: str, realization: str,
     }
 
 
+def _notebook_from_spec(spec: Any) -> dict:
+    """Build an nbformat notebook from a caller-supplied (e.g. AI-authored) spec.
+
+    Accepts either a complete nbformat notebook dict (has ``cells`` and
+    ``nbformat``), used as-is, or a list of ``{cell_type, source}`` cells wrapped
+    with a standard python3 scaffold. ``source`` may be a string or a list of
+    lines. This lets the assistant author a bespoke analysis notebook instead of
+    the auto-generated starter.
+    """
+    if isinstance(spec, dict) and "cells" in spec and spec.get("nbformat"):
+        return spec  # already a complete notebook
+    cells_in = spec.get("cells") if isinstance(spec, dict) else spec
+    if not isinstance(cells_in, list):
+        raise ValueError("notebook must be a list of cells or a full nbformat dict")
+    cells: list[dict] = []
+    for c in cells_in:
+        if not isinstance(c, dict):
+            raise ValueError("each notebook cell must be an object")
+        src = c.get("source", "")
+        if isinstance(src, list):
+            src = "".join(src)
+        if c.get("cell_type") == "markdown":
+            cells.append({"cell_type": "markdown", "metadata": {}, "source": src})
+        else:
+            cells.append({"cell_type": "code", "execution_count": None,
+                          "metadata": {}, "outputs": [], "source": src})
+    return {
+        "cells": cells,
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python"},
+        },
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+
+
 def gen_readme(name: str, description: str, experiment: str, realization: str,
                nodes: list[dict], links: list[dict], scripts: list[dict]) -> str:
     topo = "\n".join(
@@ -665,6 +702,7 @@ def package_experiment(
     topology: dict,
     scripts: list[dict] | None = None,
     include_notebook: bool = True,
+    notebook: Any = None,
     tags: list[str] | None = None,
     dir_name: str | None = None,
     description_short: str = "",
@@ -723,7 +761,11 @@ def package_experiment(
                                    nodes, links, clean_scripts))
     for s in clean_scripts:
         _write(os.path.join("scripts", s["name"]), s["content"])
-    if include_notebook:
+    # A caller-supplied (AI-authored) notebook overrides the auto-generated
+    # starter; otherwise fall back to the topology-aware default when enabled.
+    if notebook is not None:
+        _write("analysis.ipynb", json.dumps(_notebook_from_spec(notebook), indent=1))
+    elif include_notebook:
         _write("analysis.ipynb",
                json.dumps(gen_notebook(name, description, experiment, realization,
                                        project or "", nodes, links, clean_scripts),

@@ -177,8 +177,18 @@ def get(session_id: str) -> TerminalSession | None:
     return _sessions.get(session_id)
 
 
+def _is_live(session: TerminalSession) -> bool:
+    """True only while the session's child process is still running.
+
+    Reattach flows (HTTP list + ticket minting) must ignore sessions whose
+    shell/ssh child has exited or which we've marked closed, so the UI doesn't
+    offer a dead terminal to reconnect to."""
+    return not session.closed and session.proc.poll() is None
+
+
 def exists(session_id: str) -> bool:
-    return session_id in _sessions
+    session = _sessions.get(session_id)
+    return bool(session and _is_live(session))
 
 
 def meta(session: TerminalSession) -> dict:
@@ -192,7 +202,7 @@ def meta(session: TerminalSession) -> dict:
 
 
 def list_sessions() -> list[dict]:
-    return [meta(s) for s in _sessions.values()]
+    return [meta(s) for s in _sessions.values() if _is_live(s)]
 
 
 def kill(session_id: str) -> bool:

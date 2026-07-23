@@ -86,7 +86,8 @@ PROFILE_TIERS = {
         # The assistant quality evals cover this so roadmap-critical tools
         # (create_weave, search_examples, Chameleon, SPHERE, Federated) do not
         # silently fall out of the filtered schema as the tool list grows.
-        "max_tools": 45,
+        # Keep this == len(CORE_TOOLS); bump both together when core tools grow.
+        "max_tools": 46,
         "temperature": 0.5,
         "supports_tools": True,
     },
@@ -99,7 +100,7 @@ PROFILE_TIERS = {
         "system_prompt": "full",
         "tool_result_max": 2000,
         "summarize_at": 0.85,
-        "max_tools": 49,
+        "max_tools": 50,
         "temperature": 0.5,
         "supports_tools": True,
     },
@@ -602,6 +603,7 @@ CORE_TOOLS = {
     # SPHERE core (experiment creation lifecycle)
     "list_sphere_realizations", "create_sphere_experiment", "push_sphere_model",
     "sphere_realize", "sphere_materialize", "get_sphere_materialization",
+    "package_sphere_experiment",
     # Federated/composite core
     "list_composite_slices", "get_composite_slice",
 }

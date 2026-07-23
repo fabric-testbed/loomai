@@ -13,6 +13,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { buildWsUrl } from './wsUrl';
+import { wireClipboard } from './xtermClipboard';
 import {
   createTerminal,
   createSshTerminal,
@@ -354,6 +355,7 @@ export function createTerminalSession(
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
   term.open(containerEl);
+  wireClipboard(term);
 
   const session: TerminalSession = {
     term,

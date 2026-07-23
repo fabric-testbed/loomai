@@ -30,19 +30,6 @@ TEMPLATES: list[dict[str, Any]] = [
         "confirm": True,
     },
     {
-        "name": "deploy_hello_fabric",
-        "pattern": re.compile(
-            r"(?:run|deploy|load)\s+(?:the\s+)?hello[_ ]?fabric",
-            re.IGNORECASE,
-        ),
-        "description": "Deploy the Hello FABRIC weave",
-        "build_steps": lambda m: [
-            ("load_template", {"template_name": "Hello_FABRIC", "slice_name": "hello-fabric"}),
-            ("submit_slice", {"slice_name": "hello-fabric", "wait": True}),
-        ],
-        "confirm": True,
-    },
-    {
         "name": "delete_dead_slices",
         "pattern": re.compile(
             r"(?:delete|remove|clean\s*up)\s+(?:all\s+)?(?:my\s+)?dead\s+slices?",

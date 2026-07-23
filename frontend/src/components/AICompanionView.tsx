@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { wireClipboard } from '../utils/xtermClipboard';
 import { buildWsUrl } from '../utils/wsUrl';
 import { getConfig, getAiTools, getToolInstallStatus, createAiTerminal, mintTerminalTicket, type ToolInstallInfo } from '../api/client';
 import ContainerFileBrowser from './ContainerFileBrowser';
@@ -350,6 +351,7 @@ function AITerminalPane({ toolId, tabId }: { toolId: string; tabId: string }) {
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(containerRef.current);
+    wireClipboard(term);
     fitAddon.fit();
     termRef.current = term;
     fitRef.current = fitAddon;

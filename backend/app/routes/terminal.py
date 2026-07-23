@@ -15,7 +15,7 @@ import tempfile
 import termios
 from typing import Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
 from pydantic import BaseModel
 from app.tool_installer import AI_TOOLS_DIR, get_tool_env
 import paramiko
@@ -378,8 +378,27 @@ def _build_sphere_ssh_argv(details: dict) -> list[str]:
             f"printf %s {shlex.quote(plan)}; exec ssh -F {shlex.quote(cfg_path)} -tt sphere-node"]
 
 
+def _local_terminal_env(request: Request) -> dict[str, str]:
+    """Return environment values for browser-created local terminals.
+
+    Local terminals run in the same container as the LoomAI CLI. In standalone
+    auth mode the browser is authenticated with the ``loomai_session`` cookie,
+    but subprocesses don't inherit browser cookies. Propagate only the signed
+    session value into the child process as ``LOOMAI_SESSION_COOKIE`` so the
+    ``loomai`` CLI can call the local backend API (which requires the cookie)
+    without prompting or storing credentials. CR/LF values are rejected to
+    avoid header injection; when auth is disabled nothing is propagated.
+    """
+    env = {"PATH": get_tool_env().get("PATH", os.environ.get("PATH", ""))}
+    if _auth.is_auth_enabled():
+        session_cookie = request.cookies.get(_auth._COOKIE_NAME, "")
+        if session_cookie and "\n" not in session_cookie and "\r" not in session_cookie:
+            env["LOOMAI_SESSION_COOKIE"] = session_cookie
+    return env
+
+
 @router.post("/api/terminals")
-async def create_terminal(body: CreateTerminalBody):
+async def create_terminal(body: CreateTerminalBody, request: Request):
     """Create a server-held terminal session and return its id + attach ticket.
 
     type="local": a shell in the container. type="ssh": a shell running `ssh`
@@ -390,9 +409,10 @@ async def create_terminal(body: CreateTerminalBody):
         cwd = body.cwd if (body.cwd and os.path.isdir(body.cwd)) else _default_terminal_cwd()
         # Put the lazy-installed AI tools (claude, codex, aider, …) on PATH so
         # they're runnable from the local shell, like the old container terminal.
-        local_env = {"PATH": get_tool_env().get("PATH", os.environ.get("PATH", ""))}
+        # _local_terminal_env also forwards the signed session cookie so the
+        # loomai CLI can authenticate against the local backend API.
         session = ts.create(type="local", command=_LOCAL_COMMAND,
-                            label=body.label or "Local", cwd=cwd, env=local_env)
+                            label=body.label or "Local", cwd=cwd, env=_local_terminal_env(request))
     elif body.type == "ssh":
         if not body.sliceName or not body.nodeName:
             raise HTTPException(status_code=400, detail="sliceName and nodeName are required for ssh terminals")

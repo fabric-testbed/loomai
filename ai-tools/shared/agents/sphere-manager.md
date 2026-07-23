@@ -116,10 +116,34 @@ home for staging notebook files).
   creates an egress path and must respect the experiment's containment policy
 
 ## Packaging & reproducibility
-Package a live experiment as a `sphere-experiment-v1` weave
-(`POST /api/sphere/experiments/{exp}/package`) — see the `package-sphere-weave`
-skill. The shipped `edgeids-weave` default artifact (4-node IDS/IPS lab) is the
+Package a live experiment as a `sphere-experiment-v1` weave with the
+`package_sphere_experiment(experiment, name, realization="r0", scripts=[{name,
+target, content}], notebook=[{cell_type, source}])` tool — or `POST
+/api/sphere/experiments/{exp}/package` / `loomai sphere package`. You author the
+per-node `scripts` AND should author the `notebook`. Omit `notebook` only to
+accept the generic auto-generated starter. See the `package-sphere-weave` skill.
+The shipped `edgeids-weave` default artifact (4-node IDS/IPS lab) is the
 reference implementation for models, per-node scripts, and analysis notebooks.
+
+**The notebook MUST run the experiment end-to-end, not just analyze.** A fresh
+materialization has no data yet — a notebook that only reads/plots `alerts.jsonl`
+will find nothing. Author it as an ordered, runnable pipeline:
+1. **Connect** — SSH parameters to each node via the XDC jump host.
+2. **Deploy & start** — push and launch the per-node setup scripts (e.g. start
+   `detector.py` on the gateway); verify they are running.
+3. **Exercise** — generate/trigger the traffic or workload the experiment
+   studies (benign + anomalous), so the scripts actually produce output.
+4. **Collect** — pull the produced output (e.g. `alerts.jsonl`) back to the XDC.
+5. **Analyze & visualize** — only now load, summarize, and plot.
+Never assume the output already exists; the notebook should be runnable
+top-to-bottom on a freshly materialized realization.
+
+**Never use `create_weave` for a SPHERE experiment.** `create_weave` builds a
+generic FABRIC weave with no `sphere-experiment-v1` format, so "Send weave → XDC"
+will not find it. Packaging needs a realization (preferred) or a pushed model
+first — if the experiment has neither, realize/push before packaging rather than
+falling back to `create_weave`. Never report an experiment as "packaged" unless
+`package_sphere_experiment` actually succeeded.
 
 ## Your Approach
 1. Check `sphere_status` first — bail with setup guidance if not configured

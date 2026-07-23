@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 import click
 import httpx
@@ -17,12 +19,49 @@ class CliError(click.ClickException):
         self.status_code = status_code
 
 
+# The session cookie is a credential for the *local* backend only, so it is
+# never attached to a non-loopback target (e.g. an externally-set LOOMAI_URL).
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _session_cookie_header(base_url: str) -> dict[str, str]:
+    """Return an auth cookie header sourced from the LoomAI terminal env.
+
+    The standalone backend authenticates /api/* requests with the
+    ``loomai_session`` cookie. Browser-launched local terminals receive the
+    raw signed cookie value in ``LOOMAI_SESSION_COOKIE`` so the CLI can call the
+    same local API without storing credentials or prompting separately.
+
+    The cookie is only attached when *base_url* targets a loopback host — it is
+    a local-backend credential and must never be forwarded to a remote or
+    attacker-controlled URL. CR/LF values are rejected to avoid header
+    injection; an absent cookie is a no-op.
+    """
+    session_cookie = os.environ.get("LOOMAI_SESSION_COOKIE", "")
+    if not session_cookie or "\n" in session_cookie or "\r" in session_cookie:
+        return {}
+    host = (urlsplit(base_url).hostname or "").lower()
+    if host not in _LOOPBACK_HOSTS:
+        return {}
+    return {"Cookie": f"loomai_session={session_cookie}"}
+
+
 class Client:
     """Thin wrapper around httpx for calling the LoomAI backend."""
 
     def __init__(self, base_url: str, timeout: float = 30.0):
         self.base_url = base_url.rstrip("/")
-        self._http = httpx.Client(base_url=f"{self.base_url}/api", timeout=timeout)
+        cookie_header = _session_cookie_header(self.base_url)
+        # follow_redirects stays off (httpx default) so the session cookie in
+        # the default headers can't be replayed to a redirect Location on
+        # another origin. When the cookie is attached (loopback target) we also
+        # disable trust_env so an HTTP(S)_PROXY environment variable can't route
+        # the credential-bearing request through a proxy — httpx defaults to
+        # trust_env=True, which would honor a proxy even for localhost.
+        self._http = httpx.Client(base_url=f"{self.base_url}/api", timeout=timeout,
+                                  follow_redirects=False,
+                                  trust_env=not cookie_header,
+                                  headers=cookie_header)
 
     def get(self, path: str, params: Optional[dict] = None) -> Any:
         return self._request("GET", path, params=params)

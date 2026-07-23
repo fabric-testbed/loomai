@@ -478,6 +478,13 @@ export default function App() {
   const [layout, setLayout] = useState('dagre');
   const [selectedElement, setSelectedElement] = useState<Record<string, string> | null>(null);
   const [selectedResourceKey, setSelectedResourceKey] = useState<string>('');
+  // Clear the Details panel whenever the active slice changes, so details from
+  // a previously selected slice don't linger and get mistaken for the new
+  // slice's. Element selection (graph click) never changes selectedSliceId, so
+  // in-slice selections are preserved. (fabric-testbed/loomai#8)
+  useEffect(() => {
+    setSelectedElement(null);
+  }, [selectedSliceId]);
   const [listLoaded, setListLoaded] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark');
   const [pollInterval, setPollInterval] = useState(() => parseInt(localStorage.getItem('poll-interval') || '300000', 10));
@@ -684,6 +691,10 @@ export default function App() {
   const [activeRuns, setActiveRuns] = useState<api.BackgroundRun[]>([]);
   // Track which weave dir_names have a deploy in progress (for button state in LibrariesPanel)
   const [deployingWeaves, setDeployingWeaves] = useState<Set<string>>(new Set());
+  // Map an in-flight deploy's slice name -> weave dir_name so the deploy badge is
+  // cleared when the slice's boot finishes via the polling path (multi-node
+  // weaves that don't hit StableOK synchronously in handleDeployWeave).
+  const deployingSliceToWeave = useRef<Map<string, string>>(new Map());
   // Side console panel state (tabs tracked here, layout managed by panel system)
   const [sideConsoleTabs, setSideConsoleTabs] = useState<string[]>(() => {
     try {
@@ -4760,6 +4771,7 @@ export default function App() {
 
     // Mark this weave as deploying (for LibrariesPanel button state)
     setDeployingWeaves(prev => new Set(prev).add(templateDirName));
+    deployingSliceToWeave.current.set(sliceNameForDeploy, templateDirName);
     // Mark as GUI-submitted so polling auto-runs boot config
     guiSubmittedRef.current.add(sliceNameForDeploy);
 
@@ -4978,6 +4990,25 @@ export default function App() {
       }
     }
   }, [sliceBootRunning, sliceBootLogs, handleRunWeaveScript, appendBuildLog]);
+
+  // Clear the "deploying" badge once a deployed weave's slice finishes booting.
+  // handleDeployWeave clears it directly only when the slice is StableOK
+  // synchronously; multi-node weaves submit as "Configuring" and reach StableOK
+  // via the polling path (which sets sliceBootRunning=false but doesn't know the
+  // weave dir_name), so without this they stay "deploying" forever.
+  useEffect(() => {
+    for (const [sliceName, dirName] of deployingSliceToWeave.current.entries()) {
+      if (sliceBootRunning[sliceName] === false) {
+        deployingSliceToWeave.current.delete(sliceName);
+        setDeployingWeaves(prev => {
+          if (!prev.has(dirName)) return prev;
+          const next = new Set(prev);
+          next.delete(dirName);
+          return next;
+        });
+      }
+    }
+  }, [sliceBootRunning]);
 
   // On mount, check for active background runs and resume polling
   useEffect(() => {

@@ -141,10 +141,12 @@ class TestMatchTemplate:
         assert result is not None
         assert len([s for s in result["steps"] if s[0] == "add_node"]) == 3
 
-    def test_deploy_hello_fabric(self):
+    def test_run_hello_fabric_not_hardcoded(self):
+        # There is no auto-seeded Hello_FABRIC weave in a fresh my_artifacts/,
+        # so "run hello fabric" must NOT match a hardcoded load_template shortcut
+        # (which would 404). It falls through to normal assistant handling.
         result = match_template("run hello fabric")
-        assert result is not None
-        assert result["name"] == "deploy_hello_fabric"
+        assert result is None
 
     def test_delete_dead_slices(self):
         result = match_template("delete all dead slices")

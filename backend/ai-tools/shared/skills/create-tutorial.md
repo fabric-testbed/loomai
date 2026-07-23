@@ -136,8 +136,10 @@ for node in my_slice.get_nodes():
 
 ## Reference
 
-Study the canonical example at:
-`/home/fabric/work/my_artifacts/Hello_FABRIC/hello_fabric.ipynb`
+There is no pre-shipped example notebook — you are creating one. Base the tutorial on the
+target weave's own files. A canonical weave ships read-only in the image at
+`/app/default_artifacts/Hello_FABRIC/` — read its `weave.json` and `hello_fabric.py` to see
+how a weave is structured (no download or seeding needed).
 
 ## Verification
 

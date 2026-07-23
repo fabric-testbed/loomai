@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { wireClipboard } from '../utils/xtermClipboard';
 import { buildWsUrl } from '../utils/wsUrl';
 import { getAiModels, getClaudeConfigFiles, updateClaudeConfigFile, triggerClaudeBackup, resetToolConfig, browseAiFolders, createAiTerminal, mintTerminalTicket, deleteTerminal, type ClaudeConfigFile, type FolderBrowseResult } from '../api/client';
 import { confirmDialog } from './AppDialogProvider';
@@ -270,6 +271,7 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(containerRef.current);
+    wireClipboard(term);
     fitAddon.fit();
     termRef.current = term;
     fitRef.current = fitAddon;

@@ -276,7 +276,7 @@ curl -X DELETE http://localhost:8000/api/templates/runs/{run_id}
 
 - Never hardcode site names — use `@group` tags or `"auto"`
 - Test with the WebUI: load the weave from Artifacts → Local tab
-- Study the Hello FABRIC weave in my_artifacts/ for patterns
+- Study the bundled reference weaves in `/app/default_artifacts/` (e.g. Hello FABRIC) for patterns — they ship read-only in the image, no download needed
 - For long experiments, use `weave.sh` — it runs in the background and survives disconnects
 - If a weave spans FABRIC, Chameleon, or another facility, it must create or
   update a Federated Slice entry when it runs. Prefer the explicit
