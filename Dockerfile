@@ -237,6 +237,10 @@ RUN mkdir -p /home/fabric/work/fabric_config && chown -R fabric:fabric /home/fab
 ENV FABRIC_CONFIG_DIR=/home/fabric/work/fabric_config
 ENV FABRIC_STORAGE_DIR=/home/fabric/work
 ENV HOME=/home/fabric
+# Keep the matplotlib cache on the storage mount: always writable (the
+# entrypoint chowns /home/fabric/work on every start) and persistent across
+# pod restarts, unlike the default ~/.cache which can end up root-owned.
+ENV MPLCONFIGDIR=/home/fabric/work/.cache/matplotlib
 # Marker: this combined image runs nginx in the same container as JupyterLab,
 # so the entrypoint binds JupyterLab to loopback (only the in-container nginx,
 # which enforces the loomai_session gate, can reach it). The split source build

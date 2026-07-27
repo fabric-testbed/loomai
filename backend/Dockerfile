@@ -46,6 +46,10 @@ RUN mkdir -p /home/fabric/work/fabric_config && chown -R fabric:fabric /home/fab
 ENV FABRIC_CONFIG_DIR=/home/fabric/work/fabric_config
 ENV FABRIC_STORAGE_DIR=/home/fabric/work
 ENV HOME=/home/fabric
+# Keep the matplotlib cache on the storage mount so it's always writable and
+# persists across container restarts (avoids "Permission denied:
+# /home/fabric/.cache/matplotlib" when ~/.cache ownership drifts).
+ENV MPLCONFIGDIR=/home/fabric/work/.cache/matplotlib
 # Home AI-tool dotfiles (~/.claude, ~/.codex, ...) may be managed here — this
 # is a container home. Outside a container the app refuses to touch them.
 ENV LOOMAI_MANAGE_HOME_AI=1

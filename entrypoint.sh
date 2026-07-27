@@ -4,6 +4,14 @@
 # launches backend and nginx as the fabric user.
 chown -R fabric:fabric /home/fabric/work 2>/dev/null || true
 
+# Root-run steps in this script inherit HOME=/home/fabric, so anything that
+# touches ~/.cache leaves it root-owned and user processes (matplotlib, pip)
+# then fail with "Permission denied: /home/fabric/.cache/...". Keep it
+# fabric-owned. MPLCONFIGDIR is also pointed under the storage mount (see
+# Dockerfile) so the matplotlib cache survives pod restarts.
+mkdir -p /home/fabric/.cache
+chown -R fabric:fabric /home/fabric/.cache 2>/dev/null || true
+
 # If LOOMAI_BASE_PATH is set (K8s sub-path deployment), rewrite all asset
 # references in HTML and JS files to use the sub-path prefix, and generate
 # an nginx config that serves under the base path.
