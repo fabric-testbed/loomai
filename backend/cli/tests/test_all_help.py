@@ -82,6 +82,8 @@ HELP_CASES = [
     (["keys", "--help"], ["list", "generate"]),
     # AI
     (["ai", "--help"], ["chat", "models", "agents"]),
+    (["tools", "--help"], ["sync", "status", "install"]),
+    (["tools", "sync", "--help"], ["Regenerate"]),
     (["ai", "chat", "--help"], ["--model"]),
     # Completions
     (["completions", "--help"], ["bash", "zsh", "fish"]),

@@ -205,6 +205,15 @@ def list_sessions() -> list[dict]:
     return [meta(s) for s in _sessions.values() if _is_live(s)]
 
 
+def has_live_type(type: str) -> bool:
+    return any(
+        session.type == type
+        and not session.closed
+        and session.proc.poll() is None
+        for session in _sessions.values()
+    )
+
+
 def kill(session_id: str) -> bool:
     session = _sessions.pop(session_id, None)
     if not session:

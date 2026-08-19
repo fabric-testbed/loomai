@@ -6,6 +6,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { wireClipboard } from '../utils/xtermClipboard';
 import { buildWsUrl } from '../utils/wsUrl';
+import { installTerminalClipboard, TERMINAL_CLIPBOARD_OPTIONS } from '../utils/terminalClipboard';
 import { getAiModels, getClaudeConfigFiles, updateClaudeConfigFile, triggerClaudeBackup, resetToolConfig, browseAiFolders, createAiTerminal, mintTerminalTicket, deleteTerminal, type ClaudeConfigFile, type FolderBrowseResult } from '../api/client';
 import { confirmDialog } from './AppDialogProvider';
 import '../styles/terminal-companion.css';
@@ -72,6 +73,16 @@ const TOOL_INFO: Record<string, ToolMeta> = {
     tagline: 'Terminal-based AI coding assistant',
     desc: 'Interactive AI assistant with FABRIC tools. Powered by FABRIC-hosted LLMs — free with a FABRIC API key.',
     tips: 'Type your request at the prompt. Use Ctrl+C to cancel.',
+    badge: 'Free \u2022 API Key Required',
+    badgeClass: 'free',
+  },
+  pi: {
+    name: 'Pi',
+    icon: 'Pi',
+    iconClass: 'pi',
+    tagline: 'Minimal terminal coding agent',
+    desc: 'Pi runs with LoomAI-generated providers, shared skills, isolated sessions, and restricted FABRIC rails. Powered by FABRIC-hosted LLMs.',
+    tips: 'Use LoomAI CLI or REST for FABRIC operations. Type /help for available commands.',
     badge: 'Free \u2022 API Key Required',
     badgeClass: 'free',
   },
@@ -262,11 +273,13 @@ export default function TerminalCompanionView({ toolId, visible = true }: Props)
     if (!containerRef.current) return;
 
     const term = new Terminal({
+      ...TERMINAL_CLIPBOARD_OPTIONS,
       cursorBlink: true,
       fontSize: 13,
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
       theme: { ...TERM_THEME },
     });
+    installTerminalClipboard(term);
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);

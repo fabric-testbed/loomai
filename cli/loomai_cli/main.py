@@ -93,7 +93,7 @@ from loomai_cli.commands.monitor import monitor  # noqa: E402
 
 # Phase 8: Config, projects, keys, AI
 from loomai_cli.commands.config import config, projects, keys, settings  # noqa: E402
-from loomai_cli.commands.ai import ai  # noqa: E402
+from loomai_cli.commands.ai import ai, tools as ai_tools  # noqa: E402
 from loomai_cli.commands.chameleon import chameleon  # noqa: E402
 from loomai_cli.commands.sphere import sphere  # noqa: E402
 from loomai_cli.commands.composite import composite  # noqa: E402
@@ -131,6 +131,7 @@ cli.add_command(settings)
 cli.add_command(projects)
 cli.add_command(keys)
 cli.add_command(ai)
+cli.add_command(ai_tools, name="tools")
 cli.add_command(chameleon)
 cli.add_command(sphere)
 composite.hidden = True

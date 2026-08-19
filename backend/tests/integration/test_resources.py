@@ -27,6 +27,58 @@ class TestListSites:
         site = resp.json()[0]
         assert "location" in site or "lat" in site
 
+    def test_derives_component_availability_from_capacity_allocated(self, client):
+        """ResourcesV2 components may omit or lie about available counts."""
+        fake_resources = MagicMock()
+        fake_resources.get_site_names.return_value = ["DALL"]
+        fake_resources.get_site.return_value = {
+            "name": "DALL",
+            "state": "Active",
+            "hosts_count": 1,
+            "components": {
+                # Site-level ResourcesV2 can carry a defaulted/lying zero.
+                "GPU-Tesla T4": {"capacity": 2, "allocated": 0, "available": 0},
+            },
+        }
+        fake_resources._hosts_data = [{
+            "name": "dall-w1.fabric-testbed.net",
+            "site": "DALL",
+            "cores_available": 32,
+            "cores_capacity": 64,
+            "ram_available": 128,
+            "ram_capacity": 256,
+            "disk_available": 500,
+            "disk_capacity": 1000,
+            "components": {
+                # Host-level ResourcesV2 omits available entirely.
+                "GPU-RTX6000": {"capacity": 3, "allocated": 2},
+            },
+        }]
+        fake_fablib = MagicMock()
+        fake_fablib.get_resources.return_value = fake_resources
+
+        with patch("app.routes.resources.get_fablib", return_value=fake_fablib):
+            resp = client.get("/api/sites?max_age=0")
+
+        assert resp.status_code == 200
+        site = resp.json()[0]
+        assert site["name"] == "DALL"
+        assert site["components"]["GPU-RTX6000"] == {
+            "capacity": 3,
+            "allocated": 2,
+            "available": 1,
+        }
+        assert site["components"]["GPU-Tesla T4"] == {
+            "capacity": 2,
+            "allocated": 0,
+            "available": 2,
+        }
+        assert site["hosts_detail"][0]["components"]["GPU-RTX6000"] == {
+            "capacity": 3,
+            "allocated": 2,
+            "available": 1,
+        }
+
 
 class TestListImages:
     def test_returns_list(self, client):
@@ -188,6 +240,40 @@ class TestSiteDetails:
                 assert isinstance(site["lat"], (int, float))
                 assert isinstance(site["lon"], (int, float))
 
+    def test_site_detail_derives_component_availability(self, client):
+        """GET /api/sites/{site} should derive component availability too."""
+        fake_resources = MagicMock()
+        fake_resources.get_site.return_value = {
+            "name": "DALL",
+            "state": "Active",
+            "components": {
+                "GPU-Tesla T4": {"capacity": 2, "allocated": 0, "available": 0},
+            },
+        }
+        fake_resources._hosts_data = [{
+            "name": "dall-w1.fabric-testbed.net",
+            "site": "DALL",
+            "components": {"GPU-RTX6000": {"capacity": 3, "allocated": 2}},
+        }]
+        fake_fablib = MagicMock()
+        fake_fablib.get_resources.return_value = fake_resources
+
+        with patch("app.routes.resources.get_fablib", return_value=fake_fablib):
+            resp = client.get("/api/sites/DALL")
+
+        assert resp.status_code == 200
+        components = resp.json()["components"]
+        assert components["GPU-RTX6000"] == {
+            "capacity": 3,
+            "allocated": 2,
+            "available": 1,
+        }
+        assert components["GPU-Tesla T4"] == {
+            "capacity": 2,
+            "allocated": 0,
+            "available": 2,
+        }
+
 
 # ---------------------------------------------------------------------------
 # Resource helper functions (unit level)
@@ -271,6 +357,26 @@ class TestResourceHelpers:
         assert result[0]["name"] == "renc-w1.fabric-testbed.net"
         assert result[0]["cores_available"] == 32
         assert "GPU-Tesla T4" in result[0]["components"]
+        assert result[0]["components"]["GPU-Tesla T4"]["available"] == 1
+
+    def test_fetch_host_details_v2_derives_missing_available(self):
+        """Host component availability should come from capacity - allocated."""
+        from app.routes.resources import _fetch_host_details_v2
+        mock_resources = MagicMock()
+        mock_resources.get_hosts_by_site.return_value = {
+            "host1": {
+                "name": "dall-w1.fabric-testbed.net",
+                "components": {
+                    "GPU-RTX6000": {"capacity": 3, "allocated": 2},
+                },
+            }
+        }
+        result = _fetch_host_details_v2(mock_resources, "DALL")
+        assert result[0]["components"]["GPU-RTX6000"] == {
+            "capacity": 3,
+            "allocated": 2,
+            "available": 1,
+        }
 
     def test_fetch_host_details_v2_exception(self):
         """_fetch_host_details_v2 should handle exceptions gracefully."""

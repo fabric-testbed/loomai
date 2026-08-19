@@ -527,10 +527,10 @@ export default React.memo(function CompositeEditorPanel({
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }} data-testid="federated-editor-panel" data-federated-slice-id={compositeSliceId}>
       {/* Tab bar */}
       <div className="editor-top-tabs" data-testid="federated-editor-tabs">
-        <button className={tab === 'composite' ? 'active' : ''} onClick={() => setTab('composite')} data-testid="federated-editor-tab" data-federated-tab="composite">
+        <button className={tab === 'composite' ? 'active' : ''} onClick={() => setTab('composite')} data-testid="federated-editor-tab" data-federated-tab="composite" data-help-id="federated-view.members">
           Federated
         </button>
-        <button className={tab === 'fabric' ? 'active' : ''} onClick={() => setTab('fabric')} data-testid="federated-editor-tab" data-federated-tab="fabric">
+        <button className={tab === 'fabric' ? 'active' : ''} onClick={() => setTab('fabric')} data-testid="federated-editor-tab" data-federated-tab="fabric" data-help-id="federated-view.fabric-tab">
           FABRIC
         </button>
         {chameleonEnabled && (
@@ -539,6 +539,7 @@ export default React.memo(function CompositeEditorPanel({
             onClick={() => setTab('chameleon')}
             data-testid="federated-editor-tab"
             data-federated-tab="chameleon"
+            data-help-id="federated-view.chameleon-tab"
           >
             Chameleon
           </button>
@@ -558,7 +559,7 @@ export default React.memo(function CompositeEditorPanel({
               </div>
             </div>
 
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 16 }} data-help-id="federated-view.members">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#27aae1' }}>
                   Subslices
@@ -629,7 +630,7 @@ export default React.memo(function CompositeEditorPanel({
             </div>
 
             {/* Cross-testbed connections */}
-            <div style={{ marginTop: 8, padding: '8px 4px', borderTop: '1px solid var(--fabric-border)' }}>
+            <div style={{ marginTop: 8, padding: '8px 4px', borderTop: '1px solid var(--fabric-border)' }} data-help-id="federated-view.connections">
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#27aae1', marginBottom: 6 }}>
                 Connections
               </div>

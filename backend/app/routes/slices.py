@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.fablib_manager import get_fablib
 from app.fablib_executor import run_in_fablib_pool
@@ -24,6 +24,7 @@ from app.slice_serializer import slice_to_dict, check_has_errors, get_slice_faci
 from app.graph_builder import build_graph, STATE_COLORS, DEFAULT_STATE, STATE_COLORS_DARK, DEFAULT_STATE_DARK
 from app.site_resolver import resolve_sites
 from app.routes.resources import get_cached_sites, get_fresh_sites
+from app.slice_validation import append_network_placement_issues
 from app.slice_registry import (
     register_slice, update_slice_state, get_slice_uuid,
     resolve_slice_id,
@@ -122,6 +123,468 @@ _draft_ip_hints: dict[str, dict[str, dict[str, dict]]] = {}
 _draft_l3_config: dict[str, dict[str, dict]] = {}
 # Track which project a draft belongs to
 _draft_project_id: dict[str, str] = {}
+# Track an explicit requested lease duration for a draft until submit.
+_draft_lease_hours: dict[str, int] = {}
+
+
+def _coerce_lease_hours(value: Any) -> int | None:
+    """Return a positive lease-hour value or None for absent/invalid input."""
+    if value is None or value == "":
+        return None
+    try:
+        hours = int(value)
+    except (TypeError, ValueError):
+        return None
+    if hours <= 0:
+        return None
+    return hours
+
+
+def _max_lease_hours_policy() -> int | None:
+    """Return configured max lease hours, or None when policy is disabled."""
+    try:
+        from app.settings_manager import get_max_slice_lease_hours
+        return get_max_slice_lease_hours()
+    except Exception:
+        logger.debug("Could not read max slice lease policy", exc_info=True)
+        return None
+
+
+def _effective_lease_hours(value: Any, *, apply_policy_default: bool = False) -> int | None:
+    """Return requested lease hours capped by backend policy when configured."""
+    hours = _coerce_lease_hours(value)
+    max_hours = _max_lease_hours_policy()
+    if hours is not None and max_hours is not None:
+        return min(hours, max_hours)
+    if hours is not None:
+        return hours
+    if apply_policy_default:
+        return max_hours
+    return None
+
+
+def _lease_clamp_warning(
+    requested_hours: int | None,
+    effective_hours: int | None,
+) -> dict[str, Any] | None:
+    """Return a warning payload when lease policy clamps a request."""
+    max_hours = _max_lease_hours_policy()
+    if not requested_hours or not effective_hours or not max_hours:
+        return None
+    if requested_hours <= effective_hours:
+        return None
+    return {
+        "code": "LEASE_CLAMPED_TO_POLICY",
+        "message": (
+            f"Requested lease_hours={requested_hours} exceeds the configured "
+            f"maximum of {max_hours}; submitted with lease_hours={effective_hours}."
+        ),
+        "requested_lease_hours": requested_hours,
+        "effective_lease_hours": effective_hours,
+        "max_lease_hours": max_hours,
+    }
+
+
+def _lease_policy_default_warning(
+    effective_hours: int | None,
+    *,
+    requested_hours: int | None,
+    stored_hours: int | None,
+    requested_lease_end: datetime | None,
+) -> dict[str, Any] | None:
+    """Return a warning when submit applies the policy cap to an absent lease."""
+    max_hours = _max_lease_hours_policy()
+    if (
+        not max_hours
+        or not effective_hours
+        or requested_hours
+        or stored_hours
+        or requested_lease_end is not None
+    ):
+        return None
+    return {
+        "code": "LEASE_CLAMPED_TO_POLICY",
+        "message": (
+            "No lease_hours was provided; FABRIC's default lease may exceed "
+            f"the configured maximum of {max_hours}, so the backend submitted "
+            f"with lease_hours={effective_hours}."
+        ),
+        "requested_lease_hours": None,
+        "effective_lease_hours": effective_hours,
+        "max_lease_hours": max_hours,
+        "source": "policy_default",
+    }
+
+
+def _with_warnings(
+    payload: dict[str, Any],
+    *warnings: dict[str, Any] | None,
+) -> dict[str, Any]:
+    active = [warning for warning in warnings if warning]
+    if not active:
+        return payload
+    existing = payload.get("warnings")
+    payload["warnings"] = [*(existing if isinstance(existing, list) else []), *active]
+    return payload
+
+
+_SECRET_VALUE_RE = re.compile(
+    r"(?i)\b(token|secret|password|api[_-]?key|bearer)\b\s*[:=]\s*['\"]?[^\s'\";,]+"
+)
+_PATH_RE = re.compile(r"(?<!\w)/(?:home|tmp|var|app|workspace)[^\s,;)]*")
+
+
+def _sanitize_fabric_submit_error(exc: Exception) -> str:
+    """Return an operator/useful FABRIC error without local paths or secrets."""
+    raw = str(exc).strip()
+    if not raw:
+        return "FABRIC submit failed without an error message."
+    lines: list[str] = []
+    for line in raw.splitlines():
+        item = line.strip()
+        if not item:
+            continue
+        if item.startswith(("Traceback ", "File ", "raise ")):
+            continue
+        lines.append(item)
+    message = " ".join(lines or [raw])
+    message = _SECRET_VALUE_RE.sub(lambda match: f"{match.group(1)}=[redacted]", message)
+    message = _PATH_RE.sub("[path]", message)
+    if len(message) > 1000:
+        message = f"{message[:997]}..."
+    return message
+
+
+def _fabric_submit_error_status(message: str) -> int:
+    lower = message.lower()
+    if any(token in lower for token in ("unauthorized", "unauthenticated", "token expired")):
+        return 401
+    if any(token in lower for token in ("forbidden", "permission denied", "not allowed")):
+        return 403
+    if "not found" in lower:
+        return 404
+    if any(token in lower for token in ("already exists", "duplicate", "conflict")):
+        return 409
+    if any(token in lower for token in ("not yet stable", "not stable", "try again later")):
+        return 409
+    if any(token in lower for token in (
+        "invalid",
+        "constraint",
+        "quota",
+        "insufficient",
+        "not available",
+        "unsupported",
+        "exceeds",
+        "cannot",
+        "rejected",
+    )):
+        return 422
+    return 502
+
+
+def _fabric_submit_failure(exc: Exception) -> HTTPException:
+    message = _sanitize_fabric_submit_error(exc)
+    return HTTPException(
+        status_code=_fabric_submit_error_status(message),
+        detail={
+            "code": "FABRIC_SUBMIT_FAILED",
+            "message": message,
+        },
+    )
+
+
+def _end_date_from_hours(hours: int) -> datetime:
+    """Return a UTC datetime *hours* from now."""
+    return datetime.now(timezone.utc) + timedelta(hours=hours)
+
+
+def _cap_lease_end_datetime(end_dt: datetime) -> datetime:
+    """Apply max lease policy to an explicit end datetime."""
+    max_hours = _max_lease_hours_policy()
+    if not max_hours:
+        return end_dt
+    max_end = _end_date_from_hours(max_hours)
+    if end_dt > max_end:
+        return max_end
+    return end_dt
+
+
+def _format_fablib_end_date(end_dt: datetime) -> str:
+    """Format a datetime for FABlib renew()."""
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
+    return end_dt.strftime("%Y-%m-%d %H:%M:%S %z")
+
+
+def _as_utc_datetime(end_dt: datetime) -> datetime:
+    if end_dt.tzinfo is None:
+        return end_dt.replace(tzinfo=timezone.utc)
+    return end_dt.astimezone(timezone.utc)
+
+
+def _parse_lease_datetime(value: str | datetime | None) -> datetime | None:
+    """Parse an ISO-like lease timestamp into a timezone-aware datetime."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return _as_utc_datetime(value)
+    raw = str(value).strip()
+    if not raw:
+        return None
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        return _as_utc_datetime(datetime.fromisoformat(normalized))
+    except ValueError:
+        pass
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S %z",
+        "%Y-%m-%d %H:%M:%S.%f %z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+    ):
+        try:
+            return _as_utc_datetime(datetime.strptime(raw, fmt))
+        except ValueError:
+            continue
+    raise ValueError(f"Invalid lease timestamp: {value}")
+
+
+def _lease_datetime_iso(end_dt: datetime) -> str:
+    return _as_utc_datetime(end_dt).isoformat().replace("+00:00", "Z")
+
+
+def _lease_policy_warning(lease_end: Any) -> dict[str, Any] | None:
+    """Return a warning when an existing lease exceeds the configured cap."""
+    max_hours = _max_lease_hours_policy()
+    if not max_hours:
+        return None
+    try:
+        end_dt = _parse_lease_datetime(lease_end)
+    except Exception:
+        logger.debug("Could not parse lease_end for policy warning: %r", lease_end, exc_info=True)
+        return None
+    if end_dt is None:
+        return None
+    max_allowed = _end_date_from_hours(max_hours)
+    if end_dt <= max_allowed + timedelta(minutes=5):
+        return None
+    return {
+        "code": "LEASE_EXCEEDS_POLICY",
+        "message": (
+            f"Slice lease_end exceeds the configured max_lease_hours={max_hours}. "
+            "FABRIC leases cannot be shortened by renew; delete and recreate "
+            "the slice for a compliant lease."
+        ),
+        "lease_end": _lease_datetime_iso(end_dt),
+        "max_lease_hours": max_hours,
+        "max_allowed_lease_end": _lease_datetime_iso(max_allowed),
+    }
+
+
+def _with_lease_policy_warning(payload: dict[str, Any]) -> dict[str, Any]:
+    warning = _lease_policy_warning(payload.get("lease_end"))
+    if not warning:
+        return payload
+    payload["lease_policy_violation"] = True
+    return _with_warnings(payload, warning)
+
+
+def _safe_slice_attr(slice_obj: Any, method_name: str) -> str:
+    method = getattr(slice_obj, method_name, None)
+    if not callable(method):
+        return ""
+    value = method()
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _slice_resolution_issue(
+    slice_obj: Any,
+    *,
+    expected_name: str,
+    expected_uuid: str = "",
+    lookup: str,
+) -> str | None:
+    """Return a reason when a FABlib slice lookup produced a stale object."""
+    if slice_obj is None:
+        return f"{lookup} lookup returned no slice object"
+    fields: dict[str, str] = {}
+    field_errors: list[str] = []
+    for label, method_name in (
+        ("name", "get_name"),
+        ("id", "get_slice_id"),
+        ("state", "get_state"),
+    ):
+        try:
+            fields[label] = _safe_slice_attr(slice_obj, method_name)
+        except Exception as exc:
+            field_errors.append(f"{method_name}: {_sanitize_fabric_submit_error(exc)}")
+            fields[label] = ""
+    if not any(fields.values()):
+        reason = f"{lookup} lookup returned an incomplete slice object"
+        if field_errors:
+            reason += f" ({'; '.join(field_errors)})"
+        return reason
+    resolved_name = fields.get("name") or ""
+    if expected_name and resolved_name and resolved_name != expected_name:
+        return (
+            f"{lookup} lookup returned slice name {resolved_name!r}, "
+            f"expected {expected_name!r}"
+        )
+    resolved_uuid = fields.get("id") or ""
+    if expected_uuid and resolved_uuid and resolved_uuid != expected_uuid:
+        return (
+            f"{lookup} lookup returned slice id {resolved_uuid!r}, "
+            f"expected registry id {expected_uuid!r}"
+        )
+    return None
+
+
+def _update_registry_from_slice_obj(slice_name: str, slice_obj: Any) -> None:
+    try:
+        sid = _safe_slice_attr(slice_obj, "get_slice_id")
+        state = _safe_slice_attr(slice_obj, "get_state")
+        has_errors = check_has_errors(slice_obj)
+        if sid or state:
+            update_slice_state(slice_name, state, uuid=sid, has_errors=has_errors)
+    except Exception:
+        logger.warning("Failed to update registry after resolving '%s'", slice_name, exc_info=True)
+
+
+def _slice_resolution_http_exception(
+    slice_name: str,
+    *,
+    uuid: str = "",
+    uuid_error: str = "",
+    name_error: str = "",
+) -> HTTPException:
+    parts = []
+    if uuid:
+        parts.append(f"registry uuid {uuid!r}: {uuid_error or 'not attempted'}")
+    parts.append(f"name {slice_name!r}: {name_error or 'not attempted'}")
+    status = 404 if _slice_lookup_error_is_not_found(name_error) else 502
+    return HTTPException(
+        status_code=status,
+        detail={
+            "code": "SLICE_RESOLUTION_FAILED",
+            "message": "Could not resolve FABRIC slice from registry UUID or name.",
+            "slice_name": slice_name,
+            "registry_uuid": uuid,
+            "uuid_lookup_error": uuid_error,
+            "name_lookup_error": name_error,
+        },
+    )
+
+
+def _slice_lookup_error_is_not_found(message: str) -> bool:
+    text = str(message or "").lower()
+    if not text:
+        return False
+    if "incomplete" in text or "mismatch" in text:
+        return False
+    return any(token in text for token in (
+        "unable to find",
+        "not found",
+        "does not exist",
+        "no slice",
+        "unknown slice",
+        "404",
+    ))
+
+
+def _resolve_fabric_slice_obj(slice_name: str, *, uuid: str | None = None):
+    """Resolve a submitted FABRIC slice, falling back by name on stale registry data."""
+    fablib = get_fablib()
+    _ensure_project_id(fablib)
+    registry_uuid = uuid if uuid is not None else get_slice_uuid(slice_name)
+    uuid_error = ""
+    if registry_uuid and not registry_uuid.startswith("draft-"):
+        try:
+            slice_obj = fablib.get_slice(slice_id=registry_uuid)
+            issue = _slice_resolution_issue(
+                slice_obj,
+                expected_name=slice_name,
+                expected_uuid=registry_uuid,
+                lookup="UUID",
+            )
+            if not issue:
+                return slice_obj
+            uuid_error = issue
+            logger.warning(
+                "Registry UUID lookup for '%s' returned a stale/incomplete object: %s",
+                slice_name,
+                issue,
+            )
+        except Exception as exc:
+            uuid_error = _sanitize_fabric_submit_error(exc)
+            logger.debug(
+                "UUID lookup failed for '%s' (uuid=%s), falling back to name: %s",
+                slice_name,
+                registry_uuid,
+                uuid_error,
+            )
+
+    name_error = ""
+    try:
+        slice_obj = fablib.get_slice(name=slice_name)
+        issue = _slice_resolution_issue(
+            slice_obj,
+            expected_name=slice_name,
+            lookup="name",
+        )
+        if not issue:
+            _update_registry_from_slice_obj(slice_name, slice_obj)
+            return slice_obj
+        name_error = issue
+    except Exception as exc:
+        name_error = _sanitize_fabric_submit_error(exc)
+
+    raise _slice_resolution_http_exception(
+        slice_name,
+        uuid=registry_uuid or "",
+        uuid_error=uuid_error,
+        name_error=name_error,
+    )
+
+
+def _current_lease_end(slice_obj: Any) -> datetime | None:
+    try:
+        raw = slice_obj.get_lease_end()
+    except Exception:
+        logger.debug("Could not read current lease end", exc_info=True)
+        return None
+    try:
+        return _parse_lease_datetime(raw)
+    except Exception:
+        logger.debug("Could not parse current lease end %r", raw, exc_info=True)
+        return None
+
+
+def _raise_if_renew_down(
+    slice_name: str,
+    current_end: datetime | None,
+    requested_end: datetime | None,
+) -> None:
+    if current_end is None or requested_end is None:
+        return
+    if requested_end + timedelta(minutes=1) >= current_end:
+        return
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "code": "LEASE_CANNOT_BE_SHORTENED",
+            "message": (
+                "FABRIC leases cannot be shortened by renew. Delete and "
+                "recreate the slice for a shorter or policy-compliant lease."
+            ),
+            "slice_name": slice_name,
+            "current_lease_end": _lease_datetime_iso(current_end),
+            "requested_lease_end": _lease_datetime_iso(requested_end),
+        },
+    )
 
 
 def _drafts_dir() -> str:
@@ -158,6 +621,9 @@ def _persist_draft(name: str, slice_obj: Any) -> None:
         pid = _draft_project_id.get(name, os.environ.get("FABRIC_PROJECT_ID", ""))
         if pid:
             meta["project_id"] = pid
+        lease_hours = _draft_lease_hours.get(name)
+        if lease_hours:
+            meta["lease_hours"] = lease_hours
         meta_path = os.path.join(d, "meta.json")
         with open(meta_path, "w") as f:
             json.dump(meta, f)
@@ -204,6 +670,7 @@ def _load_persistent_drafts() -> None:
         ip_hints: dict[str, dict[str, dict]] = {}
         l3_config: dict[str, dict] = {}
         draft_pid = ""
+        lease_hours: int | None = None
         if os.path.isfile(meta_path):
             try:
                 with open(meta_path) as f:
@@ -213,6 +680,7 @@ def _load_persistent_drafts() -> None:
                 ip_hints = meta.get("ip_hints", {})
                 l3_config = meta.get("l3_config", {})
                 draft_pid = meta.get("project_id", "")
+                lease_hours = _coerce_lease_hours(meta.get("lease_hours"))
             except Exception:
                 pass
         # Skip if already in memory
@@ -242,6 +710,8 @@ def _load_persistent_drafts() -> None:
                     _draft_l3_config[name] = l3_config
                 if draft_pid:
                     _draft_project_id[name] = draft_pid
+                if lease_hours:
+                    _draft_lease_hours[name] = lease_hours
             # Reuse existing draft UUID if present, otherwise generate one
             draft_uuid = existing_uuid if existing_uuid and existing_uuid.startswith("draft-") else f"draft-{_uuid_mod.uuid4()}"
             register_slice(name, uuid=draft_uuid, state="Draft", project_id=draft_pid)
@@ -269,12 +739,28 @@ def _pop_draft(name: str) -> tuple[Any | None, bool]:
         _draft_ip_hints.pop(name, None)
         _draft_l3_config.pop(name, None)
         _draft_project_id.pop(name, None)
+        _draft_lease_hours.pop(name, None)
         return obj, is_new
 
 
 def _get_draft(name: str) -> Any | None:
     with _draft_lock:
         return _draft_slices.get(name)
+
+
+def _get_draft_lease_hours(name: str) -> int | None:
+    with _draft_lock:
+        return _draft_lease_hours.get(name)
+
+
+def _store_draft_lease_hours(name: str, lease_hours: int | None) -> None:
+    if not lease_hours:
+        return
+    with _draft_lock:
+        _draft_lease_hours[name] = lease_hours
+        slice_obj = _draft_slices.get(name)
+    if slice_obj is not None:
+        _persist_draft(name, slice_obj)
 
 
 def _is_draft(name: str) -> bool:
@@ -349,15 +835,7 @@ def _get_slice_obj(name: str):
     draft = _get_draft(name)
     if draft is not None:
         return draft
-    fablib = get_fablib()
-    _ensure_project_id(fablib)
-    uuid = get_slice_uuid(name)
-    if uuid:
-        try:
-            return fablib.get_slice(slice_id=uuid)
-        except Exception:
-            logger.debug("UUID lookup failed for '%s' (uuid=%s), falling back to name", name, uuid)
-    return fablib.get_slice(name=name)
+    return _resolve_fabric_slice_obj(name)
 
 
 def _invalidate_slice_read_caches(name: str) -> None:
@@ -501,6 +979,25 @@ class ResolveSitesRequest(BaseModel):
     resolve_all: bool = False  # When True, re-resolve ALL nodes (not just grouped ones)
 
 
+class CreateSliceRequest(BaseModel):
+    name: Optional[str] = None
+    lease_hours: Optional[int] = Field(None, ge=1)
+
+
+class SubmitSliceRequest(BaseModel):
+    lease_hours: Optional[int] = None
+    lease_end: Optional[str] = None
+    end_date: Optional[str] = None
+    wait: bool = False
+    wait_for_stableok: Optional[bool] = None
+    background: bool = False
+
+
+def _submit_wait_requested(body: Optional[SubmitSliceRequest]) -> bool:
+    """Return whether submit should block until FABlib reports StableOK."""
+    return bool(body and (body.wait or body.wait_for_stableok))
+
+
 # --- Routes ---
 # Heavy FABlib calls use async + asyncio.to_thread() so they don't block
 # the event loop or exhaust the default threadpool for other requests.
@@ -560,12 +1057,12 @@ def _list_slices_sync() -> list[dict[str, Any]]:
         dtos = [d for d in dtos if (d.project_id or '') == current_pid]
     # Build summaries directly from DTOs (no topology/sliver fetches)
     fabric_results = [
-        {
+        _with_lease_policy_warning({
             "name": d.name or "",
             "id": d.slice_id or "",
             "state": d.state or "",
             "lease_end": d.lease_end_time or "",
-        }
+        })
         for d in dtos
     ]
 
@@ -670,6 +1167,7 @@ def _list_slices_sync() -> list[dict[str, Any]]:
                     _draft_slices.pop(name, None)
                     _draft_is_new.pop(name, None)
                     _draft_project_id.pop(name, None)
+                    _draft_lease_hours.pop(name, None)
                     _delete_persistent_draft(name)
                     continue
                 # Use draft UUID from registry, or generate one if missing
@@ -775,7 +1273,7 @@ async def get_slice(slice_name: str, max_age: float = Query(0, ge=0)) -> dict[st
     slice_name = _resolve_slice_name(slice_name)
     def _do():
         registry_uuid = get_slice_uuid(slice_name)
-        if registry_uuid.startswith("draft-"):
+        if registry_uuid and registry_uuid.startswith("draft-"):
             if not _is_draft(slice_name):
                 _load_persistent_drafts()
             draft = _get_draft(slice_name)
@@ -797,18 +1295,9 @@ async def get_slice(slice_name: str, max_age: float = Query(0, ge=0)) -> dict[st
                 _pop_draft(slice_name)
                 _delete_persistent_draft(slice_name)
 
-        # Submitted slices — always pull fresh from FABRIC by UUID
-        fablib = get_fablib()
-        _ensure_project_id(fablib)
-        uuid = registry_uuid
-        slice_obj = None
-        if uuid:
-            try:
-                slice_obj = fablib.get_slice(slice_id=uuid)
-            except Exception:
-                logger.debug("UUID lookup failed for '%s' (uuid=%s), falling back to name", slice_name, uuid)
-        if slice_obj is None:
-            slice_obj = fablib.get_slice(name=slice_name)
+        # Submitted slices — always pull fresh from FABRIC by UUID, with
+        # name fallback when the registry UUID is stale or incomplete.
+        slice_obj = _resolve_fabric_slice_obj(slice_name, uuid=registry_uuid)
 
         # Determine state before deciding whether to store as draft
         state = str(slice_obj.get_state()) if slice_obj.get_state() else ""
@@ -820,7 +1309,7 @@ async def get_slice(slice_name: str, max_age: float = Query(0, ge=0)) -> dict[st
             # Terminal slice — remove any stale draft
             _pop_draft(slice_name)
 
-        data = _serialize(slice_obj)
+        data = _with_lease_policy_warning(_serialize(slice_obj))
         # Ensure a working directory exists for this slice
         from app.routes.jupyter import ensure_slice_workdir
         ensure_slice_workdir(slice_name)
@@ -836,14 +1325,32 @@ async def get_slice(slice_name: str, max_age: float = Query(0, ge=0)) -> dict[st
         return data
     try:
         return await run_in_fablib_pool(_do)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Slice not found: {e}")
 
 
 @router.post("/slices")
-async def create_slice(name: str) -> dict[str, Any]:
+async def create_slice(
+    body: Optional[CreateSliceRequest] = None,
+    name: Optional[str] = Query(None),
+    lease_hours: Optional[int] = Query(None, ge=1),
+) -> dict[str, Any]:
     """Create a new empty draft slice."""
+    name = body.name if body and body.name is not None else name
+    lease_hours = body.lease_hours if body and body.lease_hours is not None else lease_hours
+    if name is None:
+        raise HTTPException(
+            status_code=422,
+            detail=[{
+                "type": "missing",
+                "loc": ["body", "name"],
+                "msg": "Field required",
+            }],
+        )
     get_call_manager().invalidate("slices:list")
+    requested_lease_hours = _effective_lease_hours(lease_hours)
     def _do():
         import uuid as _uuid_mod
         fablib = get_fablib()
@@ -852,6 +1359,7 @@ async def create_slice(name: str) -> dict[str, Any]:
         # Generate a local draft UUID so the frontend can identify this slice
         draft_id = f"draft-{_uuid_mod.uuid4()}"
         _store_draft(name, slice_obj, is_new=True)
+        _store_draft_lease_hours(name, requested_lease_hours)
         register_slice(name, uuid=draft_id, state="Draft")
         # Create an empty working directory for this slice
         from app.routes.jupyter import ensure_slice_workdir
@@ -863,17 +1371,130 @@ async def create_slice(name: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _resolve_new_draft_sites_for_submit(slice_name: str, draft: Any, site_groups: dict[str, str]) -> None:
+    """Apply submit-time site resolution to a new draft before validation/submit."""
+    logger.info("Submit: refreshing resource availability for slice '%s'", slice_name)
+    fresh_sites = get_fresh_sites()
+
+    data = slice_to_dict(draft)
+    node_defs = []
+    for node in data.get("nodes", []):
+        grp = site_groups.get(node["name"])
+        current_site = node.get("site", "")
+
+        if current_site and not current_site.startswith("@") and current_site != "auto":
+            site = current_site
+        elif grp:
+            site = grp
+        else:
+            site = "auto"
+        node_defs.append({
+            "name": node["name"],
+            "site": site,
+            "cores": node.get("cores", 2),
+            "ram": node.get("ram", 8),
+            "disk": node.get("disk", 10),
+            "components": node.get("components", []),
+        })
+
+    resolved_defs, _ = resolve_sites(node_defs, fresh_sites)
+
+    for nd in resolved_defs:
+        try:
+            fab_node = draft.get_node(name=nd["name"])
+            old_site = str(fab_node.get_site()) if fab_node.get_site() else ""
+            if nd["site"] and nd["site"] != old_site:
+                fab_node.set_site(nd["site"])
+                logger.info("Submit: node '%s' -> site '%s'", nd["name"], nd["site"])
+        except Exception as ex:
+            logger.warning("Submit re-resolve: could not set site for %s: %s", nd["name"], ex)
+
+
 @router.post("/slices/{slice_name}/submit")
-async def submit_slice(slice_name: str) -> dict[str, Any]:
+async def submit_slice(
+    slice_name: str,
+    body: Optional[SubmitSliceRequest] = None,
+) -> dict[str, Any]:
     """Submit a slice — creates new slice or modifies existing one."""
     mgr = get_call_manager()
     mgr.invalidate("slices:list")
     slice_name = _resolve_slice_name(slice_name)
     mgr.invalidate_prefix(f"slice:{slice_name}")
-    # Capture site groups before popping draft (pop clears them)
+    body_requested_lease_hours = _coerce_lease_hours(body.lease_hours if body else None)
+    requested_lease_hours = _effective_lease_hours(body.lease_hours if body else None)
+    lease_warning = _lease_clamp_warning(body_requested_lease_hours, requested_lease_hours)
+    requested_lease_end: datetime | None = None
+    lease_end_value = (body.lease_end or body.end_date) if body else None
+    if lease_end_value:
+        try:
+            requested_lease_end = _cap_lease_end_datetime(_parse_lease_datetime(lease_end_value))
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid date format: {lease_end_value}")
+    # Capture draft metadata before background queuing or popping; pop clears it.
     site_groups = _get_site_groups(slice_name)
+    stored_lease_hours = _get_draft_lease_hours(slice_name)
+    effective_submit_lease_hours = _effective_lease_hours(
+        requested_lease_hours or stored_lease_hours,
+        apply_policy_default=requested_lease_end is None,
+    )
+    if not lease_warning:
+        lease_warning = _lease_policy_default_warning(
+            effective_submit_lease_hours,
+            requested_hours=body_requested_lease_hours,
+            stored_hours=stored_lease_hours,
+            requested_lease_end=requested_lease_end,
+        )
+    if body and body.background:
+        from app.assistant_jobs import start_job
+
+        draft_for_preflight = _get_draft(slice_name)
+        if draft_for_preflight is not None:
+            is_new_for_preflight = _is_new_draft(slice_name)
+
+            def _preflight_background_submit() -> None:
+                if is_new_for_preflight:
+                    _resolve_new_draft_sites_for_submit(slice_name, draft_for_preflight, site_groups)
+                _raise_submit_validation_errors(slice_name, draft_for_preflight)
+
+            await run_in_fablib_pool(_preflight_background_submit)
+
+        foreground_body = (
+            body.model_copy(update={"background": False})
+            if hasattr(body, "model_copy")
+            else body.copy(update={"background": False})
+        )
+        job_id = await start_job(
+            "submit_slice",
+            lambda: submit_slice(slice_name, foreground_body),
+            metadata={
+                "slice_name": slice_name,
+                "lease_hours": effective_submit_lease_hours,
+                "wait_for_stableok": _submit_wait_requested(body),
+                "warnings": [lease_warning] if lease_warning else [],
+            },
+        )
+        return _with_warnings({
+            "status": "queued",
+            "state": "queued",
+            "job_id": job_id,
+            "kind": "submit_slice",
+            "slice_name": slice_name,
+            "name": slice_name,
+            "lease_hours": effective_submit_lease_hours,
+            "wait": _submit_wait_requested(body),
+            "wait_for_stableok": _submit_wait_requested(body),
+            "background": True,
+            "ready": False,
+            "done": False,
+            "message": (
+                "Submit started in the background. Poll "
+                f"get_job_status(job_id=\"{job_id}\") until ready before "
+                "claiming the slice is provisioned."
+            ),
+        }, lease_warning)
     draft, is_new = _pop_draft(slice_name)
     if draft is not None:
+        lease_hours = effective_submit_lease_hours
         # Track whether submit() actually succeeded so we know whether
         # to restore the draft on error or not.
         submit_succeeded = False
@@ -883,66 +1504,21 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
         def _do():
             nonlocal submit_succeeded, submitted_uuid, submitted_state
             if is_new:
-                # Force-refresh resource availability (including host-level)
-                # and re-resolve all node site assignments before submitting.
-                logger.info("Submit: refreshing resource availability for slice '%s'", slice_name)
-                fresh_sites = get_fresh_sites()
+                _resolve_new_draft_sites_for_submit(slice_name, draft, site_groups)
 
-                data = slice_to_dict(draft)
-                # Build node defs — restore @group tags for grouped nodes,
-                # keep explicit sites, mark ungrouped nodes as "auto" so
-                # the resolver assigns them to sites with real capacity.
-                node_defs = []
-                for node in data.get("nodes", []):
-                    grp = site_groups.get(node["name"])
-                    current_site = node.get("site", "")
+            _raise_submit_validation_errors(slice_name, draft)
 
-                    if current_site and not current_site.startswith("@") and current_site != "auto":
-                        # User explicitly set this site (or it was resolved
-                        # earlier and the user kept it) — honour it as-is.
-                        site = current_site
-                    elif grp:
-                        # Still in a group with no concrete site — pass @group for resolution
-                        site = grp
-                    else:
-                        # No site set — auto-resolve
-                        site = "auto"
-                    node_defs.append({
-                        "name": node["name"],
-                        "site": site,
-                        "cores": node.get("cores", 2),
-                        "ram": node.get("ram", 8),
-                        "disk": node.get("disk", 10),
-                        "components": node.get("components", []),
-                    })
-
-                resolved_defs, _ = resolve_sites(node_defs, fresh_sites)
-
-                # Apply resolved sites to draft nodes — only if the site
-                # actually changed (skip user-defined mappings).
-                for nd in resolved_defs:
-                    try:
-                        fab_node = draft.get_node(name=nd["name"])
-                        old_site = str(fab_node.get_site()) if fab_node.get_site() else ""
-                        if nd["site"] and nd["site"] != old_site:
-                            fab_node.set_site(nd["site"])
-                            logger.info("Submit: node '%s' -> site '%s'", nd["name"], nd["site"])
-                    except Exception as ex:
-                        logger.warning("Submit re-resolve: could not set site for %s: %s", nd["name"], ex)
-
-                submit_error = None
-                try:
-                    draft.submit(wait=False)
-                except Exception as e:
-                    submit_error = e
-                    logger.warning("Submit: draft.submit() threw for '%s': %s", slice_name, e)
-            else:
-                submit_error = None
-                try:
-                    draft.submit(wait=False)
-                except Exception as e:
-                    submit_error = e
-                    logger.warning("Submit: draft.submit() threw for '%s': %s", slice_name, e)
+            submit_error = None
+            try:
+                submit_kwargs: dict[str, Any] = {"wait": _submit_wait_requested(body)}
+                if lease_hours:
+                    submit_kwargs["lease_in_hours"] = lease_hours
+                elif requested_lease_end is not None:
+                    submit_kwargs["lease_end_time"] = requested_lease_end
+                draft.submit(**submit_kwargs)
+            except Exception as e:
+                submit_error = e
+                logger.warning("Submit: draft.submit() threw for '%s': %s", slice_name, e)
 
             # Once submit() has been called (even if it threw), the slice
             # may exist on FABRIC. Try to capture the UUID, retrying a few
@@ -954,8 +1530,8 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
                 if submit_error:
                     # submit() threw but the slice exists on FABRIC (we got UUID).
                     # Return what we have — the slice will show as terminal.
-                    return _serialize(draft)
-                return _serialize(draft)
+                    return _with_warnings(_serialize(draft), lease_warning)
+                return _with_warnings(_serialize(draft), lease_warning)
 
             # If we still don't have a UUID, re-raise the original error
             # so the draft gets restored.
@@ -964,7 +1540,7 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
 
             # submit() returned normally but we couldn't get a UUID (unlikely)
             submit_succeeded = True
-            return _serialize(draft)
+            return _with_warnings(_serialize(draft), lease_warning)
 
         def _capture_uuid_with_retry(d, name):
             """Try to capture UUID from the draft object, retrying with delays.
@@ -997,13 +1573,21 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
             logger.warning("Submit: could not capture UUID for '%s' after retries", name)
         try:
             return await run_in_fablib_pool(_do)
+        except HTTPException:
+            # Validation failed before FABRIC submit; restore the draft and
+            # preserve the explicit 422 payload for callers/agents.
+            _store_draft(slice_name, draft, is_new=is_new)
+            _store_draft_lease_hours(slice_name, lease_hours)
+            if site_groups:
+                _store_site_groups(slice_name, site_groups)
+            raise
         except Exception as e:
             if submit_succeeded:
                 # Submit worked but post-submit serialization failed.
                 # Do NOT restore the draft — the slice is on FABRIC now.
                 logger.warning("Submit succeeded for '%s' but post-submit failed: %s", slice_name, e)
                 # Return minimal data so frontend knows it worked
-                return {
+                return _with_warnings({
                     "name": slice_name,
                     "id": submitted_uuid,
                     "state": submitted_state or "Configuring",
@@ -1015,12 +1599,13 @@ async def submit_slice(slice_name: str) -> dict[str, Any]:
                     "networks": [],
                     "facility_ports": [],
                     "graph": {"nodes": [], "edges": []},
-                }
+                }, lease_warning)
             # Submit itself failed — restore draft so user can retry
             _store_draft(slice_name, draft, is_new=is_new)
+            _store_draft_lease_hours(slice_name, lease_hours)
             if site_groups:
                 _store_site_groups(slice_name, site_groups)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise _fabric_submit_failure(e)
     # Not a draft — nothing to submit
     raise HTTPException(status_code=400, detail="No pending changes to submit")
 
@@ -1595,17 +2180,7 @@ async def refresh_slice(slice_name: str) -> dict[str, Any]:
     site_groups_backup = _get_site_groups(slice_name)
 
     def _do():
-        fablib = get_fablib()
-        _ensure_project_id(fablib)
-        # Use UUID if available for reliable lookup
-        uuid = get_slice_uuid(slice_name)
-        if uuid:
-            try:
-                slice_obj = fablib.get_slice(slice_id=uuid)
-            except Exception:
-                slice_obj = fablib.get_slice(name=slice_name)
-        else:
-            slice_obj = fablib.get_slice(name=slice_name)
+        slice_obj = _resolve_fabric_slice_obj(slice_name)
         slice_obj.update()
         # Update registry with current state (including has_errors)
         try:
@@ -1625,13 +2200,26 @@ async def refresh_slice(slice_name: str) -> dict[str, Any]:
         # Invalidate sliver cache so next poll gets fresh data
         get_call_manager().invalidate_prefix(f"slice:{slice_name}")
         return result
+    except HTTPException:
+        if draft_backup is not None:
+            _store_draft(slice_name, draft_backup, is_new=is_new_backup)
+            if site_groups_backup:
+                _store_site_groups(slice_name, site_groups_backup)
+        raise
     except Exception as e:
         # Restore draft so user doesn't lose their work
         if draft_backup is not None:
             _store_draft(slice_name, draft_backup, is_new=is_new_backup)
             if site_groups_backup:
                 _store_site_groups(slice_name, site_groups_backup)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "FABRIC_REFRESH_FAILED",
+                "message": _sanitize_fabric_submit_error(e),
+                "slice_name": slice_name,
+            },
+        )
 
 
 @router.get("/slices/{slice_name}/state")
@@ -1796,7 +2384,14 @@ async def resolve_sites_endpoint(slice_name: str, body: ResolveSitesRequest = Re
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "FABRIC_DELETE_FAILED",
+                "message": _sanitize_fabric_submit_error(e),
+                "slice_name": slice_name,
+            },
+        )
 
 
 @router.post("/slices/{slice_name}/check-availability")
@@ -1903,64 +2498,70 @@ async def delete_slice(slice_name: str) -> dict[str, str]:
         return {"status": "deleted", "name": slice_name}
     # Delete the actual slice from FABRIC
     def _do():
-        fablib = get_fablib()
-        _ensure_project_id(fablib)
-        # Use UUID if available for reliable lookup
-        uuid = get_slice_uuid(slice_name)
-        if uuid:
-            try:
-                slice_obj = fablib.get_slice(slice_id=uuid)
-            except Exception:
-                slice_obj = fablib.get_slice(name=slice_name)
-        else:
-            slice_obj = fablib.get_slice(name=slice_name)
+        slice_obj = _resolve_fabric_slice_obj(slice_name)
         slice_obj.delete()
         update_slice_state(slice_name, "Dead")
         return {"status": "deleted", "name": slice_name}
     try:
         return await run_in_fablib_pool(_do)
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        message = _sanitize_fabric_submit_error(e)
+        raise HTTPException(
+            status_code=_fabric_submit_error_status(message),
+            detail={
+                "code": "FABRIC_DELETE_FAILED",
+                "message": message,
+                "slice_name": slice_name,
+            },
+        )
 
 
 class RenewRequest(BaseModel):
-    end_date: str
+    end_date: Optional[str] = None
+    lease_end: Optional[str] = None
+    hours: Optional[int] = None
+    lease_hours: Optional[int] = None
+    days: Optional[int] = None
 
 
 @router.post("/slices/{slice_name}/renew")
 async def renew_slice(slice_name: str, body: RenewRequest) -> dict[str, Any]:
     """Renew a slice lease to a new end date."""
     slice_name = _resolve_slice_name(slice_name)
-    from datetime import datetime
-
-    from datetime import timezone
-
-    try:
-        end_dt = datetime.fromisoformat(body.end_date.replace("Z", "+00:00"))
-    except Exception:
-        raise HTTPException(status_code=400, detail=f"Invalid date format: {body.end_date}")
-
-    # FABlib's slice.renew() expects a string in "%Y-%m-%d %H:%M:%S %z" form
-    # and calls strptime on it internally — passing a datetime triggers
-    # "strptime() argument 1 must be str, not datetime.datetime".
-    if end_dt.tzinfo is None:
-        end_dt = end_dt.replace(tzinfo=timezone.utc)
-    end_date_str = end_dt.strftime("%Y-%m-%d %H:%M:%S %z")
+    end_date_value = body.end_date or body.lease_end
+    renew_days = body.days
+    renew_hours = _effective_lease_hours(body.lease_hours or body.hours)
+    max_lease_hours = _max_lease_hours_policy()
+    end_date_str: str | None = None
+    requested_end_dt: datetime | None = None
+    if renew_hours:
+        requested_end_dt = _end_date_from_hours(renew_hours)
+        end_date_str = _format_fablib_end_date(requested_end_dt)
+    elif end_date_value:
+        try:
+            requested_end_dt = _cap_lease_end_datetime(_parse_lease_datetime(end_date_value))
+            end_date_str = _format_fablib_end_date(requested_end_dt)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid date format: {end_date_value}")
+    elif renew_days is None:
+        raise HTTPException(status_code=400, detail="Renew requires end_date, lease_end, hours, lease_hours, or days")
+    elif max_lease_hours and renew_days * 24 > max_lease_hours:
+        requested_end_dt = _end_date_from_hours(max_lease_hours)
+        end_date_str = _format_fablib_end_date(requested_end_dt)
+    elif renew_days is not None:
+        requested_end_dt = _end_date_from_hours(renew_days * 24)
 
     def _do():
-        fablib = get_fablib()
-        _ensure_project_id(fablib)
-        uuid = get_slice_uuid(slice_name)
-        if uuid:
-            try:
-                slice_obj = fablib.get_slice(slice_id=uuid)
-            except Exception:
-                slice_obj = fablib.get_slice(name=slice_name)
+        slice_obj = _resolve_fabric_slice_obj(slice_name)
+        _raise_if_renew_down(slice_name, _current_lease_end(slice_obj), requested_end_dt)
+        if end_date_str is not None:
+            slice_obj.renew(end_date=end_date_str)
         else:
-            slice_obj = fablib.get_slice(name=slice_name)
-        slice_obj.renew(end_date_str)
+            slice_obj.renew(days=renew_days)
         slice_obj.update()
-        return _serialize(slice_obj)
+        return _with_lease_policy_warning(_serialize(slice_obj))
 
     try:
         return await run_in_fablib_pool(_do)
@@ -1998,15 +2599,8 @@ async def archive_slice_endpoint(slice_name: str) -> dict[str, str]:
     return {"status": "archived", "name": slice_name}
 
 
-@router.get("/slices/{slice_name}/validate")
-def validate_slice(slice_name: str) -> dict[str, Any]:
-    """Validate a slice and return any issues."""
-    slice_name = _resolve_slice_name(slice_name)
-    try:
-        slice_obj = _get_slice_obj(slice_name)
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Slice not found: {e}")
-
+def _validate_slice_obj(slice_name: str, slice_obj: Any) -> dict[str, Any]:
+    """Validate a resolved slice object and return any issues."""
     issues: list[dict[str, str]] = []
     data = slice_to_dict(slice_obj)
     nodes = data.get("nodes", [])
@@ -2082,6 +2676,8 @@ def validate_slice(slice_name: str) -> dict[str, Any]:
                     "message": f"Network '{net_name}' ({net_type}) has {iface_count} interface(s), needs at least 2.",
                     "remedy": f"Connect at least 2 interfaces to '{net_name}'.",
                 })
+
+    append_network_placement_issues(issues, nodes, networks)
 
     # Check for nodes with NICs that aren't connected to any network
     for node in nodes:
@@ -2161,6 +2757,34 @@ def validate_slice(slice_name: str) -> dict[str, Any]:
         "valid": len([i for i in issues if i["severity"] == "error"]) == 0,
         "issues": issues,
     }
+
+
+def _raise_submit_validation_errors(slice_name: str, slice_obj: Any) -> None:
+    result = _validate_slice_obj(slice_name, slice_obj)
+    errors = [issue for issue in result["issues"] if issue.get("severity") == "error"]
+    if not errors:
+        return
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "code": "SLICE_VALIDATION_FAILED",
+            "message": "Slice validation failed; fix reported issues before submit.",
+            "slice_name": slice_name,
+            "valid": False,
+            "issues": result["issues"],
+        },
+    )
+
+
+@router.get("/slices/{slice_name}/validate")
+def validate_slice(slice_name: str) -> dict[str, Any]:
+    """Validate a slice and return any issues."""
+    slice_name = _resolve_slice_name(slice_name)
+    try:
+        slice_obj = _get_slice_obj(slice_name)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Slice not found: {e}")
+    return _validate_slice_obj(slice_name, slice_obj)
 
 
 # --- Node operations ---
@@ -3145,6 +3769,16 @@ class L3ConfigRequest(BaseModel):
     default_fabnet_subnet: str = "10.128.0.0/10"
 
 
+class ConfigureNetworkingRequest(BaseModel):
+    run_post_boot: bool = True
+    configure_l2: bool = True
+    configure_fabnet: bool = True
+    verify: bool = True
+    l2_subnet_base: str = "192.168.100.0/24"
+    ping_count: int = 3
+    timeout: int = 120
+
+
 @router.get("/slices/{slice_name}/networks/{net_name}/l3-config")
 def get_l3_config_endpoint(slice_name: str, net_name: str) -> dict[str, Any]:
     """Get L3 config for a FABNet network."""
@@ -3169,6 +3803,431 @@ def set_l3_config_endpoint(slice_name: str, net_name: str, req: L3ConfigRequest)
         if draft:
             _persist_draft(slice_name, draft)
     return {"network": net_name, "l3_config": config, "status": "ok"}
+
+
+_FABNET_V4_TYPES = {"FABNetv4", "FABNetv4Ext", "IPv4", "IPv4Ext"}
+_FABNET_V6_TYPES = {"FABNetv6", "FABNetv6Ext", "IPv6", "IPv6Ext"}
+_L2_NETWORK_TYPES = {"L2Bridge", "L2STS", "L2PTP"}
+
+
+def _obj_call(obj: Any, method: str, default: Any = "") -> Any:
+    try:
+        func = getattr(obj, method, None)
+        if callable(func):
+            value = func()
+            return default if value is None else value
+    except Exception:
+        pass
+    return default
+
+
+def _slice_networks(slice_obj: Any) -> list[Any]:
+    for method in ("get_networks", "get_network_services"):
+        try:
+            networks = getattr(slice_obj, method)()
+            return list(networks or [])
+        except Exception:
+            continue
+    return []
+
+
+def _iface_fablib_data(iface: Any) -> dict[str, Any]:
+    try:
+        data = iface.get_fablib_data()
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _iface_name_for_runtime(iface: Any) -> str:
+    return str(_obj_call(iface, "get_name", "") or "")
+
+
+def _iface_ip_for_runtime(iface: Any) -> str:
+    data = _iface_fablib_data(iface)
+    for key in ("addr", "ip_addr", "ip", "ipv4"):
+        value = data.get(key)
+        if value:
+            return str(value).split("/", 1)[0]
+    for method in ("get_ip_addr", "get_addr"):
+        value = _obj_call(iface, method, "")
+        if value:
+            return str(value).split("/", 1)[0]
+    return ""
+
+
+def _iface_os_dev(iface: Any) -> str:
+    for method in ("get_os_interface", "get_device_name"):
+        value = _obj_call(iface, method, "")
+        if value:
+            return str(value)
+    data = _iface_fablib_data(iface)
+    for key in ("os_interface", "dev", "device", "device_name"):
+        value = data.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _node_name_for_runtime(node: Any) -> str:
+    return str(_obj_call(node, "get_name", "") or "")
+
+
+def _network_name_for_runtime(net: Any) -> str:
+    return str(_obj_call(net, "get_name", "") or "")
+
+
+def _network_type_for_runtime(net: Any) -> str:
+    return str(_obj_call(net, "get_type", "") or "")
+
+
+def _is_l2_network_for_runtime(net: Any) -> bool:
+    net_type = _network_type_for_runtime(net)
+    return net_type in _L2_NETWORK_TYPES or net_type.startswith("L2")
+
+
+def _is_fabnet_v4_network_for_runtime(net: Any) -> bool:
+    net_type = _network_type_for_runtime(net)
+    net_name = _network_name_for_runtime(net).lower()
+    return net_type in _FABNET_V4_TYPES or "fabnetv4" in net_name
+
+
+def _default_fabnet_v4_subnet() -> str:
+    try:
+        return str(get_fablib().FABNETV4_SUBNET)
+    except Exception:
+        return "10.128.0.0/10"
+
+
+def _network_subnet_for_runtime(net: Any) -> str:
+    return str(_obj_call(net, "get_subnet", "") or "")
+
+
+def _network_gateway_for_runtime(net: Any) -> str:
+    return str(_obj_call(net, "get_gateway", "") or "")
+
+
+def _network_interfaces_for_runtime(net: Any) -> list[Any]:
+    try:
+        return list(net.get_interfaces() or [])
+    except Exception:
+        return []
+
+
+def _runtime_command(node: Any, command: str, *, timeout: int) -> dict[str, Any]:
+    try:
+        try:
+            stdout, stderr = node.execute(command, timeout=timeout, quiet=True)
+        except TypeError:
+            stdout, stderr = node.execute(command)
+        return {"ok": True, "stdout": stdout or "", "stderr": stderr or ""}
+    except Exception as exc:
+        return {"ok": False, "stdout": "", "stderr": str(exc)}
+
+
+def _offset_ipv4_network(base: Any, offset: int):
+    import ipaddress
+
+    network_size = base.num_addresses
+    network_int = int(base.network_address) + (network_size * offset)
+    return ipaddress.ip_network((network_int, base.prefixlen))
+
+
+def _runtime_ping(
+    source_node: Any,
+    *,
+    source_name: str,
+    target_name: str,
+    target_ip: str,
+    network_name: str,
+    count: int,
+    timeout: int,
+) -> dict[str, Any]:
+    import shlex
+
+    safe_count = max(1, min(10, int(count or 3)))
+    cmd = (
+        f"ping -c {safe_count} -W 2 {shlex.quote(target_ip)}; "
+        "rc=$?; echo __loomai_ping_rc=$rc; exit 0"
+    )
+    result = _runtime_command(source_node, cmd, timeout=timeout)
+    combined = f"{result.get('stdout', '')}\n{result.get('stderr', '')}"
+    marker_ok = "__loomai_ping_rc=0" in combined
+    return {
+        "network": network_name,
+        "source_node": source_name,
+        "target_node": target_name,
+        "target_ip": target_ip,
+        "command": f"ping -c {safe_count} -W 2 {target_ip}",
+        "ok": bool(result.get("ok")) and marker_ok,
+        "stdout": result.get("stdout", ""),
+        "stderr": result.get("stderr", ""),
+    }
+
+
+def _configure_runtime_networking(
+    slice_name: str,
+    *,
+    run_post_boot: bool = True,
+    configure_l2: bool = True,
+    configure_fabnet: bool = True,
+    verify: bool = True,
+    l2_subnet_base: str = "192.168.100.0/24",
+    ping_count: int = 3,
+    timeout: int = 120,
+) -> dict[str, Any]:
+    """Configure VM data-plane interfaces after a slice reaches StableOK."""
+    import ipaddress
+    import shlex
+
+    slice_obj = _get_slice_obj(slice_name)
+    state = str(_obj_call(slice_obj, "get_state", "") or "")
+    if state and state not in {"StableOK", "Active"}:
+        return {
+            "status": "not_ready",
+            "slice": slice_name,
+            "state": state,
+            "message": "Runtime networking is only configured after the slice reaches StableOK/Active.",
+        }
+
+    safe_timeout = max(10, min(1800, int(timeout or 120)))
+    result: dict[str, Any] = {
+        "status": "ok",
+        "slice": slice_name,
+        "state": state,
+        "post_boot_config": {"requested": bool(run_post_boot), "ran": False},
+        "l2_assignments": [],
+        "fabnet_assignments": [],
+        "routes": [],
+        "pings": [],
+        "skipped": [],
+    }
+
+    if run_post_boot and hasattr(slice_obj, "post_boot_config"):
+        try:
+            slice_obj.post_boot_config()
+            result["post_boot_config"] = {"requested": True, "ran": True, "ok": True}
+        except Exception as exc:
+            result["post_boot_config"] = {
+                "requested": True,
+                "ran": True,
+                "ok": False,
+                "error": str(exc),
+            }
+
+    networks = _slice_networks(slice_obj)
+
+    try:
+        base_l2 = ipaddress.ip_network(l2_subnet_base, strict=False)
+        if base_l2.version != 4:
+            raise ValueError("L2 subnet base must be IPv4")
+    except Exception as exc:
+        result["status"] = "error"
+        result["message"] = f"Invalid l2_subnet_base: {exc}"
+        return result
+
+    l2_groups: dict[str, list[dict[str, Any]]] = {}
+    l2_index = 0
+    for net in networks:
+        if not configure_l2 or not _is_l2_network_for_runtime(net):
+            continue
+        net_name = _network_name_for_runtime(net)
+        subnet_raw = _network_subnet_for_runtime(net)
+        try:
+            l2_network = ipaddress.ip_network(subnet_raw, strict=False) if subnet_raw else _offset_ipv4_network(base_l2, l2_index)
+        except Exception:
+            l2_network = _offset_ipv4_network(base_l2, l2_index)
+        l2_index += 1
+        if l2_network.version != 4:
+            result["skipped"].append({"network": net_name, "reason": "non-ipv4-l2-subnet", "subnet": str(l2_network)})
+            continue
+        hosts = iter(l2_network.hosts())
+        used_nodes: set[str] = set()
+        for iface in _network_interfaces_for_runtime(net):
+            node = _obj_call(iface, "get_node", None)
+            node_name = _node_name_for_runtime(node)
+            iface_name = _iface_name_for_runtime(iface)
+            if not node or not node_name or node_name in used_nodes:
+                continue
+            used_nodes.add(node_name)
+            dev = _iface_os_dev(iface)
+            if not dev:
+                result["skipped"].append({
+                    "network": net_name,
+                    "interface": iface_name,
+                    "node": node_name,
+                    "reason": "missing-os-interface",
+                })
+                continue
+            existing_ip = _iface_ip_for_runtime(iface)
+            ip_addr = existing_ip or str(next(hosts))
+            cidr = f"{ip_addr}/{l2_network.prefixlen}"
+            command = (
+                f"sudo ip link set dev {shlex.quote(dev)} up && "
+                f"sudo ip addr replace {shlex.quote(cidr)} dev {shlex.quote(dev)}"
+            )
+            cmd_result = _runtime_command(node, command, timeout=safe_timeout)
+            row = {
+                "network": net_name,
+                "node": node_name,
+                "interface": iface_name,
+                "os_interface": dev,
+                "ip": ip_addr,
+                "cidr": cidr,
+                "command": command,
+                "ok": bool(cmd_result.get("ok")),
+                "stdout": cmd_result.get("stdout", ""),
+                "stderr": cmd_result.get("stderr", ""),
+            }
+            result["l2_assignments"].append(row)
+            l2_groups.setdefault(net_name, []).append({"node_obj": node, **row})
+
+    fabnet_nodes: dict[str, dict[str, Any]] = {}
+    route_subnet = _default_fabnet_v4_subnet()
+    for net in networks:
+        if not configure_fabnet or not _is_fabnet_v4_network_for_runtime(net):
+            continue
+        net_name = _network_name_for_runtime(net)
+        subnet_raw = _network_subnet_for_runtime(net)
+        gateway = _network_gateway_for_runtime(net)
+        prefix_len = ""
+        if subnet_raw:
+            try:
+                prefix_len = str(ipaddress.ip_network(subnet_raw, strict=False).prefixlen)
+            except Exception:
+                prefix_len = ""
+        for iface in _network_interfaces_for_runtime(net):
+            node = _obj_call(iface, "get_node", None)
+            node_name = _node_name_for_runtime(node)
+            iface_name = _iface_name_for_runtime(iface)
+            if not node or not node_name:
+                continue
+            dev = _iface_os_dev(iface)
+            ip_addr = _iface_ip_for_runtime(iface)
+            if not dev:
+                result["skipped"].append({
+                    "network": net_name,
+                    "interface": iface_name,
+                    "node": node_name,
+                    "reason": "missing-os-interface",
+                })
+                continue
+            if ip_addr and prefix_len:
+                cidr = f"{ip_addr}/{prefix_len}"
+                assign_command = (
+                    f"sudo ip link set dev {shlex.quote(dev)} up && "
+                    f"sudo ip addr replace {shlex.quote(cidr)} dev {shlex.quote(dev)}"
+                )
+                assign_result = _runtime_command(node, assign_command, timeout=safe_timeout)
+                assignment = {
+                    "network": net_name,
+                    "node": node_name,
+                    "interface": iface_name,
+                    "os_interface": dev,
+                    "ip": ip_addr,
+                    "cidr": cidr,
+                    "command": assign_command,
+                    "ok": bool(assign_result.get("ok")),
+                    "stdout": assign_result.get("stdout", ""),
+                    "stderr": assign_result.get("stderr", ""),
+                }
+                result["fabnet_assignments"].append(assignment)
+                fabnet_nodes[node_name] = {"node_obj": node, **assignment}
+            elif not ip_addr:
+                result["skipped"].append({
+                    "network": net_name,
+                    "interface": iface_name,
+                    "node": node_name,
+                    "reason": "missing-fabnet-ip",
+                })
+
+            if gateway:
+                route_command = (
+                    f"sudo ip route replace {shlex.quote(route_subnet)} "
+                    f"via {shlex.quote(gateway)} dev {shlex.quote(dev)}"
+                )
+                route_result = _runtime_command(node, route_command, timeout=safe_timeout)
+                result["routes"].append({
+                    "network": net_name,
+                    "node": node_name,
+                    "interface": iface_name,
+                    "os_interface": dev,
+                    "route": route_subnet,
+                    "gateway": gateway,
+                    "command": route_command,
+                    "ok": bool(route_result.get("ok")),
+                    "stdout": route_result.get("stdout", ""),
+                    "stderr": route_result.get("stderr", ""),
+                })
+            else:
+                result["skipped"].append({
+                    "network": net_name,
+                    "interface": iface_name,
+                    "node": node_name,
+                    "reason": "missing-fabnet-gateway",
+                })
+
+    if verify:
+        for net_name, rows in l2_groups.items():
+            if len(rows) < 2:
+                continue
+            source = rows[0]
+            for target in rows[1:]:
+                result["pings"].append(_runtime_ping(
+                    source["node_obj"],
+                    source_name=source["node"],
+                    target_name=target["node"],
+                    target_ip=target["ip"],
+                    network_name=net_name,
+                    count=ping_count,
+                    timeout=safe_timeout,
+                ))
+
+        fabnet_rows = list(fabnet_nodes.values())
+        if len(fabnet_rows) >= 2:
+            source = fabnet_rows[0]
+            for target in fabnet_rows[1:]:
+                result["pings"].append(_runtime_ping(
+                    source["node_obj"],
+                    source_name=source["node"],
+                    target_name=target["node"],
+                    target_ip=target["ip"],
+                    network_name="FABNetv4",
+                    count=ping_count,
+                    timeout=safe_timeout,
+                ))
+
+    if any(not row.get("ok", False) for row in result["l2_assignments"] + result["fabnet_assignments"] + result["routes"]):
+        result["status"] = "partial"
+    if verify and result["pings"] and any(not row.get("ok", False) for row in result["pings"]):
+        result["status"] = "partial"
+    return result
+
+
+@router.post("/slices/{slice_name}/configure-networking")
+async def configure_networking(slice_name: str, req: ConfigureNetworkingRequest | None = None) -> dict[str, Any]:
+    """Configure post-StableOK private L2 and FABNetv4 VM networking."""
+    slice_name = _resolve_slice_name(slice_name)
+    req = req or ConfigureNetworkingRequest()
+    try:
+        return await run_in_fablib_pool(
+            lambda: _configure_runtime_networking(
+                slice_name,
+                run_post_boot=req.run_post_boot,
+                configure_l2=req.configure_l2,
+                configure_fabnet=req.configure_fabnet,
+                verify=req.verify,
+                l2_subnet_base=req.l2_subnet_base,
+                ping_count=req.ping_count,
+                timeout=req.timeout,
+            )
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"configure_networking failed: {e}")
 
 
 # --- Post-boot config ---

@@ -12,6 +12,7 @@
  */
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { installTerminalClipboard, TERMINAL_CLIPBOARD_OPTIONS } from './terminalClipboard';
 import { buildWsUrl } from './wsUrl';
 import { wireClipboard } from './xtermClipboard';
 import {
@@ -346,11 +347,13 @@ export function createTerminalSession(
   containerEl.style.height = '100%';
 
   const term = new Terminal({
+    ...TERMINAL_CLIPBOARD_OPTIONS,
     cursorBlink: true,
     fontSize: 13,
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
     theme: { ...TERM_THEME },
   });
+  installTerminalClipboard(term);
 
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);

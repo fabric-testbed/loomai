@@ -2,6 +2,13 @@
 
 Project status and planned work for fabric-webgui.
 
+## Documentation Target
+
+The in-app Help menu is the canonical user documentation surface. User-facing
+GUI guidance, API examples, CLI examples, and screenshot-backed walkthroughs
+should be added to `frontend/src/data/helpData.ts` rather than split into
+separate markdown docs.
+
 ## Done
 
 Major features completed (see `docs/TEAM_STATUS.md` for details):
@@ -11,7 +18,7 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
 - **Template system**: Weaves (orchestrated topologies), VM templates, recipes
 - **Weave workflow**: Python lifecycle scripts (`start`/`stop`/`monitor`), `weave.sh` orchestrator, background runs with log streaming, failure monitoring, graceful shutdown (SIGTERM trap)
 - **Artifact marketplace**: Browse, publish, download artifacts from FABRIC Artifact Manager
-- **AI tools**: 8 launchable tools — LoomAI (chat), Antigravity (CLI), Codex (CLI), Aider (web IDE), OpenCode (terminal/web), Crush (TUI), Deep Agents (LangChain), Claude Code (CLI); Jupyter AI is integrated into JupyterLab
+- **AI tools**: 9 launchable tools — LoomAI (chat), Antigravity (CLI), Codex (CLI), Aider (web IDE), OpenCode (terminal/web), Crush (TUI), Pi (CLI), Deep Agents (LangChain), Claude Code (CLI); Jupyter AI is integrated into JupyterLab
 - **AI agents & skills**: 22 shared agent prompts + 41 skills for in-container AI tools, user-customizable via Settings UI with CRUD API
 - **Site resolution**: `@group` co-location tags, host-level feasibility checks, auto-assign
 - **File management**: Dual-panel browser (container storage + VM SFTP), file editor
@@ -65,7 +72,7 @@ Major features completed (see `docs/TEAM_STATUS.md` for details):
   - PVC: 5Gi recommended for AI tools (~900MB for JupyterLab alone)
   - Image builds: `docker buildx --platform linux/amd64` with versioned tags
 
-- **HTTPS deployment + hub-disabled AI tools (2026-05-01)**: Production HTTPS support via CHP TLS termination with manual certificates (InCommon/Sectigo). LoadBalancer exposes only port 443 when HTTPS enabled. Full cert chain support (leaf + intermediate). K8s TLS secret created manually or via Helm values. CILogon callback URL updated for HTTPS. Secure cookies enforced. Installable AI tools (Antigravity, Codex, Aider, OpenCode, Crush, Deep Agents, Claude Code) greyed out in hub mode with "Local Install Only" badge — detected via `window.__LOOMAI_BASE_PATH`. LoomAI (built-in) remains fully available. Docs updated: KUBERNETES.md (cert prep, HTTPS config, renewal, troubleshooting), NOTES.txt (HTTPS-aware), values.yaml (annotated HTTPS options).
+- **HTTPS deployment + hub-disabled AI tools (2026-05-01)**: Production HTTPS support via CHP TLS termination with manual certificates (InCommon/Sectigo). LoadBalancer exposes only port 443 when HTTPS enabled. Full cert chain support (leaf + intermediate). K8s TLS secret created manually or via Helm values. CILogon callback URL updated for HTTPS. Secure cookies enforced. Installable AI tools (Antigravity, Codex, Aider, OpenCode, Crush, Pi, Deep Agents, Claude Code) greyed out in hub mode with "Local Install Only" badge — detected via `window.__LOOMAI_BASE_PATH`. LoomAI (built-in) remains fully available. Docs updated: KUBERNETES.md (cert prep, HTTPS config, renewal, troubleshooting), NOTES.txt (HTTPS-aware), values.yaml (annotated HTTPS options).
 
 - **Testing hardening increment (2026-06-08)**: Backend-contract E2E is now wired into CI and runs a real FastAPI backend in fake-provider mode. Contract coverage includes FABRIC lifecycle, facility ports, port mirrors, Chameleon draft lifecycle, floating IPs, security groups, federated members/connections, and Facility Port L2 connection plans. The Chameleon contract session now persists floating-IP/security-group mutations. Federated editor component coverage now exercises scalable subslice selection, embedded FABRIC/Chameleon editor tabs, FABNetv4 and Facility Port L2 connection controls, and connection removal. Follow-up coverage adds Chameleon editor component tests, deterministic provider fake unit tests, deeper mocked Chameleon/Federated workflows, federated submit regression checks, and forced federated topology refresh on view activation. Live E2E has a gated `.live.spec.ts` preflight skeleton skipped unless `E2E_FULL=1`, with mutation checks further gated by `E2E_LIVE_MUTATIONS=1`.
 

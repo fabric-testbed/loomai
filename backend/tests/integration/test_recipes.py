@@ -60,6 +60,38 @@ class TestGetRecipe:
     def test_get_missing_recipe_returns_404(self, client):
         resp = client.get("/api/recipes/nonexistent")
         assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "RECIPE_NOT_FOUND"
+        assert "not found" in detail["detail"]
+        assert detail["recipe"] == "nonexistent"
+
+
+class TestErrorEnvelopes:
+    def test_recipe_not_found_envelope(self, client):
+        resp = client.patch("/api/recipes/does_not_exist", json={"starred": True})
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "RECIPE_NOT_FOUND"
+        assert "not found" in detail["detail"]
+        assert detail["recipe"] == "does_not_exist"
+
+    def test_invalid_recipe_name_envelope(self):
+        import pytest
+        from fastapi import HTTPException
+        from app.routes.recipes import _sanitize_name, _validate_path
+
+        with pytest.raises(HTTPException) as exc_info:
+            _sanitize_name("   ")
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "RECIPE_NAME_INVALID"
+        assert "valid characters" in exc_info.value.detail["detail"]
+
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_path("/tmp/artifacts", "../escape")
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "RECIPE_NAME_INVALID"
+        assert "artifacts directory" in exc_info.value.detail["detail"]
+        assert exc_info.value.detail["recipe"] == "../escape"
 
 
 class TestUpdateRecipe:

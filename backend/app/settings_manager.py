@@ -18,6 +18,7 @@ import copy
 import json
 import logging
 import os
+import re
 import shutil
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -31,12 +32,42 @@ _SETTINGS_SUBDIR = ".loomai"
 _SETTINGS_FILE = "settings.json"
 _TOOLS_SUBDIR = "tools"
 _DOCKER_AI_TOOLS_DIR = "/app/ai-tools"
+_MIGRATION_SLICE_POLICY_DEFAULT = "slice_policy_default_seeded"
+_AI_RENCI_CUSTOM_API_ENV = "LOOMAI_CUSTOM_PROVIDER_AI_RENCI_API_KEY"
 
 # ---------------------------------------------------------------------------
 # Module-level cache
 # ---------------------------------------------------------------------------
 
 _cached_settings: Optional[dict] = None
+_capability_profile_cache: dict[str, Any] = {
+    "path": None,
+    "mtime": None,
+    "profiles": {},
+}
+
+
+def custom_provider_env_key(name: str) -> str:
+    """Return the environment variable used for a custom provider API key."""
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", str(name or "custom").strip()).strip("_").upper()
+    return f"LOOMAI_CUSTOM_PROVIDER_{slug or 'CUSTOM'}_API_KEY"
+
+
+def custom_provider_base_url_env_key(name: str) -> str:
+    """Return the environment variable used for a custom provider base URL."""
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", str(name or "custom").strip()).strip("_").upper()
+    return f"LOOMAI_CUSTOM_PROVIDER_{slug or 'CUSTOM'}_BASE_URL"
+
+
+def _resolve_ai_renci_api_key(ai: dict) -> str:
+    """Return the canonical ai-renci key, falling back to legacy FABRIC key."""
+    for provider in ai.get("custom_providers") or []:
+        if not isinstance(provider, dict):
+            continue
+        name = str(provider.get("name") or "").strip()
+        if custom_provider_env_key(name) == _AI_RENCI_CUSTOM_API_ENV and provider.get("api_key"):
+            return str(provider.get("api_key") or "")
+    return os.environ.get(_AI_RENCI_CUSTOM_API_ENV, "") or str(ai.get("fabric_api_key", "") or "")
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -76,6 +107,128 @@ def _atomic_write_text(path: str, text: str) -> None:
     os.replace(tmp_path, path)
 
 
+def _read_settings_json(path: str) -> dict | None:
+    """Best-effort read of a settings JSON object from *path*."""
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        logger.warning("Failed to read %s", path, exc_info=True)
+        return None
+
+
+def _has_value(value: Any) -> bool:
+    """Return True when a persisted setting carries non-empty user data."""
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict, tuple, set)):
+        return bool(value)
+    return value is not None
+
+
+def _settings_has_more_config(candidate: dict, current: dict | None) -> bool:
+    """Return True if *candidate* has important config missing from *current*."""
+    current = current or {}
+    checks = [
+        ("fabric", "bastion_username"),
+        ("fabric", "project_id"),
+        ("ai", "fabric_api_key"),
+        ("ai", "nrp_api_key"),
+        ("ai", "custom_providers"),
+        ("ai", "discovered_models"),
+    ]
+    for section, key in checks:
+        candidate_value = (candidate.get(section) or {}).get(key)
+        current_value = (current.get(section) or {}).get(key)
+        if _has_value(candidate_value) and not _has_value(current_value):
+            return True
+    return False
+
+
+def _portable_config_overlay(settings: dict) -> dict:
+    """Return settings sections safe to copy across root/per-user fallbacks."""
+    overlay: dict[str, Any] = {}
+    for section in ("fabric", "ai"):
+        value = settings.get(section)
+        if isinstance(value, dict):
+            overlay[section] = copy.deepcopy(value)
+    return overlay
+
+
+def _iter_user_settings_paths() -> list[str]:
+    """Return candidate per-user settings paths, active user first when known."""
+    try:
+        from app import user_registry
+    except Exception:
+        return []
+
+    uuids: list[str] = []
+    try:
+        active = user_registry.get_active_user_uuid()
+        if active:
+            uuids.append(active)
+    except Exception:
+        pass
+    try:
+        for user in user_registry.list_users():
+            uuid = user.get("uuid") if isinstance(user, dict) else None
+            if uuid and uuid not in uuids:
+                uuids.append(uuid)
+    except Exception:
+        pass
+    try:
+        base = user_registry.users_base_dir()
+        if os.path.isdir(base):
+            for name in sorted(os.listdir(base)):
+                if name not in uuids and os.path.isdir(os.path.join(base, name)):
+                    uuids.append(name)
+    except Exception:
+        return []
+
+    paths: list[str] = []
+    try:
+        base = user_registry.users_base_dir()
+    except Exception:
+        return []
+    for uuid in uuids:
+        paths.append(os.path.join(base, uuid, _SETTINGS_SUBDIR, _SETTINGS_FILE))
+    return paths
+
+
+def _is_root_settings_path(path: str) -> bool:
+    root_path = os.path.join(get_root_storage_dir(), _SETTINGS_SUBDIR, _SETTINGS_FILE)
+    return os.path.abspath(path) == os.path.abspath(root_path)
+
+
+def _heal_root_settings_from_user(path: str, on_disk: dict | None) -> dict | None:
+    """Heal an empty root fallback settings file from per-user settings.
+
+    If active-user resolution briefly fails, callers can fall back to the root
+    settings.json. That file may be stale or empty while a real per-user
+    settings file has manually entered FABRIC/AI config. Copy only portable
+    config sections so root fallback does not serve empty credentials.
+    """
+    if not _is_root_settings_path(path):
+        return on_disk
+
+    for user_path in _iter_user_settings_paths():
+        user_settings = _read_settings_json(user_path)
+        if not user_settings or not _settings_has_more_config(user_settings, on_disk):
+            continue
+        healed = _deep_merge(on_disk or {}, _portable_config_overlay(user_settings))
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            _atomic_write_json(path, healed)
+            logger.warning("Healed stale root settings fallback from %s", user_path)
+        except Exception:
+            logger.warning("Failed to heal stale root settings fallback", exc_info=True)
+        return healed
+    return on_disk
+
+
 # ---------------------------------------------------------------------------
 # Core directory / path helpers
 # ---------------------------------------------------------------------------
@@ -85,19 +238,20 @@ def get_storage_dir() -> str:
     """Return the effective storage directory.
 
     When a user registry exists and an active user is set, returns the
-    per-user directory ``users/{uuid}/``. Otherwise returns the flat
+    per-user directory ``.loomai/users/{uuid}/``. Otherwise returns the flat
     ``FABRIC_STORAGE_DIR`` root (legacy single-user mode).
     """
     from app.user_registry import get_user_storage_dir
     user_dir = get_user_storage_dir()
     if user_dir is not None:
         return user_dir
-    return os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    return get_root_storage_dir()
 
 
 def get_root_storage_dir() -> str:
     """Return the raw FABRIC_STORAGE_DIR (never user-scoped)."""
-    return os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    from app.user_registry import get_storage_root_dir
+    return get_storage_root_dir()
 
 
 def manage_home_ai_paths() -> bool:
@@ -161,6 +315,13 @@ def get_default_settings() -> dict:
         "fabric": {
             "project_id": "",
             "bastion_username": "",
+            "slice_policy": {
+                # Container-default resource rail: cap live FABRIC leases at
+                # six hours unless an operator explicitly changes settings.
+                # After the one-time legacy seeding migration, set this to 0
+                # to intentionally disable the backend cap.
+                "max_lease_hours": 6,
+            },
             "hosts": {
                 "credmgr": "cm.fabric-testbed.net",
                 "orchestrator": "orchestrator.fabric-testbed.net",
@@ -181,16 +342,68 @@ def get_default_settings() -> dict:
             "nrp_api_key": "",
             "ai_server_url": "https://ai.fabric-testbed.net",
             "nrp_server_url": "https://ellm.nrp-nautilus.io",
-            "custom_providers": [],  # List of {"name": str, "base_url": str, "api_key": str}
+            # List of {"name": str, "base_url": str, "api_key": str,
+            # "endpoint_style": "auto"|"chat"|"responses"|"non-chat"}.
+            "custom_providers": [],
             "default_model": "",        # Auto-discovered or user-set default LLM
             "default_model_source": "", # "fabric", "nrp", "custom:<name>", or ""
             "discovered_models": {},    # Persisted model list from last discovery
             "tools": {
                 "aider": True,
                 "opencode": True,
+                "goose": True,
                 "crush": True,
+                "pi": True,
                 "claude": True,
                 "deepagents": True,
+            },
+            "harnesses": {
+                # Supported opt-in for local MCP API self-description tools.
+                # When false, the loomai-harness MCP tool surface must remain
+                # identical to the normal operational surface.
+                "mcp_metatools": False,
+            },
+            "assistant": {
+                # Deployment-plan feature flags. These are now default-on for
+                # the assistant parity build; explicit saved False overrides
+                # remain authoritative.
+                "strict_fabric_query_contract": True,
+                "final_answer_retry": True,
+                "final_answer_retry_scope": "all",  # "all" or "useful_tier"
+                "compact_fabric_resource_tools": True,
+                "resource_query_generation_defaults": True,
+                # Default-off A/B gate for weak-model state injection and
+                # active context compaction. Capability profiles decide which
+                # models are weak enough to use it.
+                "weak_model_context_management": False,
+                "resource_query_generation": {
+                    # Optional D3 defaults applied only when
+                    # resource_query_generation_defaults is enabled.
+                    "default": {},
+                    "models": {},
+                },
+                "capability_profiles_enabled": True,
+                "capability_profile_path": (
+                    "/home/fabric/work/Projects/LoomAI_LLM_Benchmark/"
+                    "runs/model-capabilities/current/model_capabilities.json"
+                ),
+                "tool_loop": {
+                    # Last-resort emergency cap. Normal stopping should come
+                    # from no-progress detection or budget guards.
+                    "no_progress_limit": 3,
+                },
+                "turn_budget": {
+                    # 0 disables a limit. Cost budgets require a non-zero
+                    # cost_per_1k_tokens_usd estimate at default/provider/model
+                    # scope because providers expose no uniform live pricing API.
+                    "default": {
+                        "max_tokens": 0,
+                        "max_cost_usd": 0,
+                        "cost_per_1k_tokens_usd": 0,
+                    },
+                    "providers": {},
+                    "models": {},
+                },
             },
         },
         "chameleon": {
@@ -297,21 +510,74 @@ def load_settings() -> dict:
     defaults = get_default_settings()
     path = get_settings_path()
 
+    on_disk: dict | None = None
     if os.path.isfile(path):
-        try:
-            with open(path) as f:
-                on_disk = json.load(f)
+        on_disk = _read_settings_json(path)
+        if on_disk is not None:
+            on_disk = _heal_root_settings_from_user(path, on_disk)
             settings = _deep_merge(defaults, on_disk)
-        except Exception:
-            logger.warning("Failed to read %s — using defaults", path, exc_info=True)
+        else:
             settings = defaults
     else:
+        on_disk = _heal_root_settings_from_user(path, None)
+        if on_disk is not None:
+            settings = _deep_merge(defaults, on_disk)
+        else:
+            settings = defaults
+
+    if on_disk is None:
         settings = defaults
+
+    should_persist = False
+    if _seed_slice_policy_default(settings, on_disk, defaults):
+        should_persist = True
+    if _seed_custom_providers_from_env(settings):
+        should_persist = True
+    if should_persist:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            _atomic_write_json(path, settings)
+        except Exception:
+            logger.warning("Failed to persist settings migration/env seeding", exc_info=True)
 
     _seed_sphere_from_env(settings)
 
     _cached_settings = settings
     return settings
+
+
+def _seed_slice_policy_default(settings: dict, on_disk: dict | None, defaults: dict) -> bool:
+    """Seed legacy zero/missing lease caps to the default once.
+
+    `max_lease_hours=0` remains the persisted way to disable the cap after
+    this migration marker has been written.
+    """
+    if not isinstance(on_disk, dict):
+        return False
+    migrations = on_disk.get("migrations", {})
+    if isinstance(migrations, dict) and migrations.get(_MIGRATION_SLICE_POLICY_DEFAULT):
+        return False
+
+    default_max = (
+        defaults.get("fabric", {})
+        .get("slice_policy", {})
+        .get("max_lease_hours", 6)
+    )
+    raw_value = (
+        on_disk.get("fabric", {})
+        .get("slice_policy", {})
+        .get("max_lease_hours")
+    )
+    try:
+        persisted_hours = int(raw_value or 0)
+    except (TypeError, ValueError):
+        persisted_hours = 0
+
+    policy = settings.setdefault("fabric", {}).setdefault("slice_policy", {})
+    if persisted_hours <= 0:
+        policy["max_lease_hours"] = default_max
+    settings.setdefault("migrations", {})[_MIGRATION_SLICE_POLICY_DEFAULT] = True
+    return True
 
 
 def _seed_sphere_from_env(settings: dict) -> None:
@@ -343,12 +609,85 @@ def _seed_sphere_from_env(settings: dict) -> None:
             pass
 
 
+def _custom_provider_name_from_env_slug(slug: str) -> str:
+    """Return a stable provider name from a LOOMAI_CUSTOM_PROVIDER slug."""
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "_", str(slug or "custom")).strip("_")
+    return cleaned.lower().replace("_", "-") or "custom"
+
+
+def _seed_custom_providers_from_env(settings: dict) -> bool:
+    """Seed custom providers from LOOMAI_CUSTOM_PROVIDER_* env vars.
+
+    Deployment secrets are the source of truth for fresh/migrated containers.
+    Only seed when the persisted provider list is empty so user-configured
+    providers remain authoritative.
+    """
+    ai = settings.setdefault("ai", {})
+    providers = ai.get("custom_providers")
+    if isinstance(providers, list) and providers:
+        return False
+
+    prefix = "LOOMAI_CUSTOM_PROVIDER_"
+    suffix = "_BASE_URL"
+    seeded: list[dict[str, Any]] = []
+    for key, base_url in sorted(os.environ.items()):
+        if not key.startswith(prefix) or not key.endswith(suffix) or not base_url:
+            continue
+        slug = key[len(prefix):-len(suffix)]
+        api_key = os.environ.get(f"{prefix}{slug}_API_KEY", "")
+        endpoint_style = normalize_ai_endpoint_style(
+            os.environ.get(f"{prefix}{slug}_ENDPOINT_STYLE", "auto")
+        )
+        seeded.append({
+            "name": _custom_provider_name_from_env_slug(slug),
+            "base_url": str(base_url).rstrip("/"),
+            "api_key": api_key,
+            "endpoint_style": endpoint_style,
+        })
+
+    if not seeded:
+        return False
+    ai["custom_providers"] = seeded
+    return True
+
+
+def merge_settings_update(existing: dict, update: dict) -> dict:
+    """Return *update* merged over a full existing settings dict."""
+    base = existing if isinstance(existing, dict) else get_default_settings()
+    overlay = update if isinstance(update, dict) else {}
+    return _deep_merge(base, overlay)
+
+
+def _preserve_non_empty_fabric_identity(settings: dict, existing: dict | None) -> dict:
+    """Refuse empty overwrites of manually entered FABRIC identity fields."""
+    if not existing:
+        return settings
+    fabric = settings.setdefault("fabric", {})
+    old_fabric = existing.get("fabric") or {}
+    for key in ("bastion_username", "project_id"):
+        old_value = old_fabric.get(key, "")
+        new_value = fabric.get(key, "")
+        if _has_value(old_value) and not _has_value(new_value):
+            fabric[key] = old_value
+            logger.warning("Preserved non-empty fabric.%s during empty settings overwrite", key)
+    return settings
+
+
 def save_settings(settings: dict) -> None:
     """Persist *settings* to disk (atomic write), regenerate derived files, and invalidate cache."""
     global _cached_settings
 
     path = get_settings_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    existing_on_disk = _read_settings_json(path)
+    existing_settings = (
+        _deep_merge(get_default_settings(), existing_on_disk)
+        if isinstance(existing_on_disk, dict)
+        else None
+    )
+    base = existing_settings or get_default_settings()
+    settings = _deep_merge(base, settings or {})
+    settings = _preserve_non_empty_fabric_identity(settings, existing_settings)
     # Don't persist SPHERE secrets that were injected via environment — they are
     # the deployment's source of truth and shouldn't be written to disk (where
     # they'd survive past the env and widen exposure). Strip them from the
@@ -522,9 +861,34 @@ def get_log_level() -> str:
     return _get_settings()["fabric"]["logging"]["level"]
 
 
+def get_max_slice_lease_hours() -> int | None:
+    """Return backend-enforced max slice lease hours, or None when disabled."""
+    value = (
+        _get_settings()
+        .get("fabric", {})
+        .get("slice_policy", {})
+        .get("max_lease_hours", 0)
+    )
+    try:
+        hours = int(value or 0)
+    except (TypeError, ValueError):
+        return None
+    return hours if hours > 0 else None
+
+
 def get_ai_tools() -> Dict[str, bool]:
     """Return ``ai.tools`` (dict of tool name to enabled bool)."""
     return _get_settings()["ai"]["tools"]
+
+
+def get_mcp_metatools_enabled() -> bool:
+    """Return whether loomai-harness exposes OpenAPI metatools."""
+    return bool(
+        _get_settings()
+        .get("ai", {})
+        .get("harnesses", {})
+        .get("mcp_metatools", False)
+    )
 
 
 def set_ai_tools(tools: dict) -> None:
@@ -552,6 +916,11 @@ def get_custom_providers() -> list:
     return _get_settings()["ai"].get("custom_providers", [])
 
 
+def get_ai_renci_api_key() -> str:
+    """Return the canonical ai-renci API key for generated harness envs."""
+    return _resolve_ai_renci_api_key(_get_settings().get("ai", {}))
+
+
 def get_default_model() -> str:
     """Return ``ai.default_model``."""
     return _get_settings()["ai"].get("default_model", "")
@@ -560,6 +929,569 @@ def get_default_model() -> str:
 def get_default_model_source() -> str:
     """Return ``ai.default_model_source``."""
     return _get_settings()["ai"].get("default_model_source", "")
+
+
+def get_assistant_settings() -> dict:
+    """Return ``ai.assistant`` feature flags/settings."""
+    return _get_settings().get("ai", {}).get("assistant", {})
+
+
+def normalize_ai_endpoint_style(value: Any) -> str:
+    """Normalize OpenAI-compatible endpoint style labels."""
+    if isinstance(value, dict):
+        value = value.get("value", value.get("default", value.get("style")))
+    lowered = str(value or "auto").strip().lower().replace("_", "-")
+    aliases = {
+        "": "auto",
+        "default": "auto",
+        "detect": "auto",
+        "chat-completions": "chat",
+        "chat-completion": "chat",
+        "chat_completion": "chat",
+        "responses-api": "responses",
+        "response": "responses",
+        "nonchat": "non-chat",
+        "none": "non-chat",
+    }
+    lowered = aliases.get(lowered, lowered)
+    if lowered in {"auto", "chat", "responses", "non-chat"}:
+        return lowered
+    return "auto"
+
+
+def get_assistant_tool_loop_settings() -> dict:
+    """Return normalized assistant tool-loop controls."""
+    raw = get_assistant_settings().get("tool_loop", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    no_progress_limit = _coerce_int(
+        raw.get("no_progress_limit"),
+        minimum=2,
+        maximum=20,
+    )
+    return {
+        "no_progress_limit": no_progress_limit or 3,
+    }
+
+
+def _clean_turn_budget(config: Any) -> dict:
+    """Normalize per-turn budget config fields."""
+    if not isinstance(config, dict):
+        return {}
+    max_tokens = _coerce_int(
+        _first_present(
+            config.get("max_tokens"),
+            config.get("token_budget"),
+            config.get("turn_token_budget"),
+        ),
+        minimum=0,
+        maximum=10_000_000,
+    )
+    max_cost = _coerce_float(
+        _first_present(
+            config.get("max_cost_usd"),
+            config.get("cost_budget_usd"),
+            config.get("turn_cost_budget_usd"),
+        ),
+        minimum=0.0,
+        maximum=1_000_000.0,
+    )
+    cost_rate = _coerce_float(
+        _first_present(
+            config.get("cost_per_1k_tokens_usd"),
+            config.get("estimated_cost_per_1k_tokens_usd"),
+        ),
+        minimum=0.0,
+        maximum=1_000.0,
+    )
+    cleaned: dict[str, Any] = {}
+    if max_tokens is not None:
+        cleaned["max_tokens"] = max_tokens
+    if max_cost is not None:
+        cleaned["max_cost_usd"] = max_cost
+    if cost_rate is not None:
+        cleaned["cost_per_1k_tokens_usd"] = cost_rate
+    return cleaned
+
+
+def _assistant_provider_from_model_key(model_key: str) -> str:
+    """Infer the assistant provider key from a full model key."""
+    key = str(model_key or "").strip()
+    if ":" in key:
+        return key.split(":", 1)[0].strip().lower()
+    return "fabric"
+
+
+def get_assistant_turn_budget(model_key: str = "", provider: str = "") -> dict:
+    """Resolve per-turn token/cost budget for a provider/model.
+
+    Configuration lives under ``ai.assistant.turn_budget``:
+
+    - ``default`` applies to every model.
+    - ``providers`` may override by provider key (``fabric``, ``nrp``, custom).
+    - ``models`` may override by full key (``fabric:qwen3-coder-30b``) or bare
+      model id. Matching is case-insensitive.
+    """
+    raw = get_assistant_settings().get("turn_budget", {})
+    if not isinstance(raw, dict):
+        return {}
+
+    merged = _clean_turn_budget(raw)
+    merged.update(_clean_turn_budget(raw.get("default")))
+
+    provider_key = str(provider or _assistant_provider_from_model_key(model_key)).strip()
+    providers = raw.get("providers", {})
+    if isinstance(providers, dict):
+        for key in (provider_key, provider_key.lower()):
+            if key and key in providers:
+                merged.update(_clean_turn_budget(providers[key]))
+                break
+
+    models = raw.get("models", {})
+    if isinstance(models, dict):
+        full_key = str(model_key or "").strip()
+        bare_key = full_key.split(":", 1)[-1] if ":" in full_key else full_key
+        lookup_keys = [
+            full_key,
+            bare_key,
+            full_key.lower(),
+            bare_key.lower(),
+        ]
+        for key in lookup_keys:
+            if key and key in models:
+                merged.update(_clean_turn_budget(models[key]))
+                break
+    return merged
+
+
+def is_strict_fabric_query_contract_enabled() -> bool:
+    """Return whether FABRIC information queries auto-use the strict contract."""
+    return bool(get_assistant_settings().get("strict_fabric_query_contract", True))
+
+
+def is_final_answer_retry_enabled() -> bool:
+    """Return whether incomplete FABRIC query final answers retry once."""
+    return bool(get_assistant_settings().get("final_answer_retry", True))
+
+
+def get_final_answer_retry_scope() -> str:
+    """Return the configured final-answer retry scope."""
+    scope = str(get_assistant_settings().get("final_answer_retry_scope", "all") or "all")
+    return scope if scope in {"all", "useful_tier"} else "all"
+
+
+def is_compact_fabric_resource_tools_enabled() -> bool:
+    """Return whether assistant FABRIC resource tools use compact envelopes."""
+    return bool(get_assistant_settings().get("compact_fabric_resource_tools", True))
+
+
+def is_resource_query_generation_defaults_enabled() -> bool:
+    """Return whether FABRIC resource queries use configured generation defaults."""
+    return bool(get_assistant_settings().get("resource_query_generation_defaults", True))
+
+
+def is_weak_model_context_management_enabled() -> bool:
+    """Return whether weak-model state injection/compaction is enabled."""
+    return bool(get_assistant_settings().get("weak_model_context_management", False))
+
+
+def get_mcp_evidence_closure_hints_enabled(model_key: str = "") -> bool:
+    """Return whether MCP tool results should carry evidence-closure hints.
+
+    FC18-1 mirrors the assistant weak-model gating: the global
+    ``ai.assistant.weak_model_context_management`` flag must be on AND the
+    model-key capability profile must opt into weak-model context
+    management. Strong profiles and the flag-off state keep the MCP tool
+    result surface byte-identical.
+    """
+    if not is_weak_model_context_management_enabled():
+        return False
+    key = str(model_key or "").strip()
+    if not key:
+        return False
+    profile = get_model_capability_profile(key)
+    if bool(profile.get("weak_model_context_management")):
+        return True
+    # Compatibility fallback matching the assistant-path gating for stale
+    # profile files that predate the explicit field.
+    return "qwen3-coder-30b" in key.lower()
+
+
+def _clean_generation_defaults(config: Any) -> dict:
+    """Keep only supported D3 generation-default fields with non-empty values."""
+    if not isinstance(config, dict):
+        return {}
+    cleaned = {}
+    for key in ("temperature", "top_p", "max_output_tokens"):
+        value = config.get(key)
+        if value is not None and value != "":
+            cleaned[key] = value
+    reasoning_effort = _normalize_reasoning_effort(config.get("reasoning_effort"))
+    if reasoning_effort:
+        cleaned["reasoning_effort"] = reasoning_effort
+    return cleaned
+
+
+def get_resource_query_generation_defaults(model_key: str = "") -> dict:
+    """Return configured generation defaults for a FABRIC resource query.
+
+    Configuration lives under ``ai.assistant.resource_query_generation``:
+
+    - ``default`` applies to every model.
+    - ``models`` may override by full key (``fabric:qwen3-coder-30b``) or
+      bare model id (``qwen3-coder-30b``). Matching is case-insensitive.
+    """
+    assistant = get_assistant_settings()
+    raw = assistant.get("resource_query_generation", {})
+    if not isinstance(raw, dict):
+        return {}
+
+    merged = _clean_generation_defaults(raw.get("default"))
+    models = raw.get("models", {})
+    if not isinstance(models, dict):
+        return merged
+
+    full_key = str(model_key or "")
+    bare_key = full_key.split(":", 1)[-1] if ":" in full_key else full_key
+    lookup_keys = [
+        full_key,
+        bare_key,
+        full_key.lower(),
+        bare_key.lower(),
+    ]
+    for key in lookup_keys:
+        if key and key in models:
+            merged.update(_clean_generation_defaults(models[key]))
+            break
+    return merged
+
+
+def is_capability_profiles_enabled() -> bool:
+    """Return whether model capability profiles may tune assistant defaults."""
+    return bool(get_assistant_settings().get("capability_profiles_enabled", True))
+
+
+def get_capability_profile_path() -> str:
+    """Return the configured model capability profile JSON path."""
+    return str(get_assistant_settings().get("capability_profile_path", "") or "")
+
+
+def _coerce_int(value: Any, *, minimum: int = 1, maximum: int = 1_000_000) -> int | None:
+    """Return an int within bounds, or None for unavailable values."""
+    if isinstance(value, dict):
+        value = value.get("value", value.get("default"))
+    if value is None or value == "":
+        return None
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return None
+    if coerced < minimum:
+        return minimum
+    if coerced > maximum:
+        return maximum
+    return coerced
+
+
+def _coerce_float(value: Any, *, minimum: float, maximum: float) -> float | None:
+    """Return a float within bounds, or None for unavailable values."""
+    if isinstance(value, dict):
+        value = value.get("value", value.get("default"))
+    if value is None or value == "":
+        return None
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError):
+        return None
+    if coerced < minimum:
+        return minimum
+    if coerced > maximum:
+        return maximum
+    return coerced
+
+
+def _capability_bool(value: Any) -> bool | None:
+    """Normalize capability support fields that may be bool/string/dict."""
+    if isinstance(value, dict):
+        value = value.get("supported")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "yes", "supported"}:
+            return True
+        if lowered in {"false", "no", "unsupported"}:
+            return False
+    return None
+
+
+def _normalize_endpoint_style(value: Any) -> str | None:
+    """Map benchmark/provider endpoint labels to LoomAI internal values."""
+    if not value:
+        return None
+    lowered = str(value).strip().lower().replace("_", "-")
+    if "responses" in lowered:
+        return "responses"
+    if lowered in {"chat", "chat-completions", "chat-completion", "openai-chat"}:
+        return "chat"
+    if lowered in {"non-chat", "completion", "completions"}:
+        return "non-chat"
+    return None
+
+
+def _normalize_reasoning_effort(value: Any) -> str | None:
+    """Normalize OpenAI-compatible reasoning-effort labels."""
+    if isinstance(value, dict):
+        value = value.get("value", value.get("default", value.get("effort")))
+    if value is None or value == "":
+        return None
+    lowered = str(value).strip().lower().replace("_", "-")
+    aliases = {
+        "minimum": "minimal",
+        "maximum": "max",
+    }
+    lowered = aliases.get(lowered, lowered)
+    if lowered in {"minimal", "low", "medium", "high", "max"}:
+        return lowered
+    return None
+
+
+def _first_present(*values: Any) -> Any:
+    """Return the first value that is not None, preserving numeric zero."""
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _normalize_capability_profile(raw_profile: dict, source_path: str) -> dict:
+    """Extract the stable LoomAI-relevant subset from a benchmark profile."""
+    if not isinstance(raw_profile, dict):
+        return {}
+    capabilities = raw_profile.get("capabilities") or {}
+    recommended = raw_profile.get("recommended_configuration") or {}
+    evaluation = raw_profile.get("evaluation") or {}
+    model_info = raw_profile.get("model") or {}
+    generation = capabilities.get("generation_parameters") or {}
+    interaction = capabilities.get("interaction_features") or {}
+
+    context_window = _first_present(
+        _coerce_int(recommended.get("context_window_tokens")),
+        _coerce_int(capabilities.get("context_window_tokens")),
+        _coerce_int(capabilities.get("advertised_context_window_tokens")),
+        _coerce_int(model_info.get("context_length")),
+    )
+    max_output = _first_present(
+        _coerce_int(recommended.get("max_output_tokens"), maximum=32768),
+        _coerce_int(capabilities.get("max_output_tokens"), maximum=32768),
+        _coerce_int(capabilities.get("provider_output_cap_tokens"), maximum=32768),
+    )
+    max_input = _first_present(
+        _coerce_int(recommended.get("max_input_tokens")),
+        _coerce_int(capabilities.get("max_input_tokens")),
+        _coerce_int(capabilities.get("input_context_tokens")),
+    )
+    temperature = _first_present(
+        _coerce_float(recommended.get("temperature"), minimum=0.0, maximum=2.0),
+        _coerce_float(generation.get("temperature"), minimum=0.0, maximum=2.0),
+    )
+    top_p = _first_present(
+        _coerce_float(recommended.get("top_p"), minimum=0.0, maximum=1.0),
+        _coerce_float(generation.get("top_p"), minimum=0.0, maximum=1.0),
+    )
+    reasoning_effort = _first_present(
+        _normalize_reasoning_effort(recommended.get("reasoning_effort")),
+        _normalize_reasoning_effort(generation.get("reasoning_effort")),
+        _normalize_reasoning_effort(capabilities.get("reasoning_effort")),
+    )
+    endpoint_style = _normalize_endpoint_style(
+        recommended.get("endpoint_style")
+        or capabilities.get("endpoint_style")
+        or model_info.get("model_type")
+        or model_info.get("type")
+    )
+    supports_tools = _capability_bool(interaction.get("tool_calling"))
+    reasoning_model = _first_present(
+        _capability_bool(recommended.get("reasoning_model")),
+        _capability_bool(capabilities.get("reasoning_model")),
+        _capability_bool(interaction.get("reasoning")),
+        _capability_bool(capabilities.get("reasoning_tokens_count_against_output")),
+    )
+
+    normalized = {
+        "source_path": source_path,
+        "model_key": raw_profile.get("model_key") or model_info.get("id") or model_info.get("name"),
+        "provider": raw_profile.get("provider"),
+        "config_id": recommended.get("config_id"),
+        "evaluation_confidence": evaluation.get("confidence"),
+        "evaluation_status": evaluation.get("status"),
+        "context_truncation_policy": recommended.get("context_truncation_policy"),
+        "orchestration_tier": (
+            recommended.get("orchestration_tier")
+            or capabilities.get("orchestration_tier")
+            or capabilities.get("tier")
+        ),
+    }
+    optional_fields = {
+        "context_window_tokens": context_window,
+        "max_input_tokens": max_input,
+        "max_output_tokens": max_output,
+        "temperature": temperature,
+        "top_p": top_p,
+        "endpoint_style": endpoint_style,
+        "supports_tools": supports_tools,
+        "reasoning_model": reasoning_model,
+        "reasoning_effort": reasoning_effort,
+        "strip_temperature": bool(recommended.get("strip_temperature")),
+        "omit_tool_choice": bool(recommended.get("omit_tool_choice")),
+        "weak_model_context_management": _capability_bool(_first_present(
+            recommended.get("weak_model_context_management"),
+            capabilities.get("weak_model_context_management"),
+        )),
+        "context_compaction_enabled": _capability_bool(_first_present(
+            recommended.get("context_compaction_enabled"),
+            capabilities.get("context_compaction_enabled"),
+            recommended.get("compaction_enabled"),
+            capabilities.get("compaction_enabled"),
+        )),
+        "context_compaction_trigger_tokens": _coerce_int(_first_present(
+            recommended.get("context_compaction_trigger_tokens"),
+            capabilities.get("context_compaction_trigger_tokens"),
+            recommended.get("compaction_trigger_tokens"),
+            capabilities.get("compaction_trigger_tokens"),
+        ), minimum=0),
+        "context_compaction_trigger_messages": _coerce_int(_first_present(
+            recommended.get("context_compaction_trigger_messages"),
+            capabilities.get("context_compaction_trigger_messages"),
+            recommended.get("compaction_trigger_messages"),
+            capabilities.get("compaction_trigger_messages"),
+        ), minimum=0, maximum=1000),
+        "context_compaction_preserve_last_tool_outputs": _coerce_int(_first_present(
+            recommended.get("context_compaction_preserve_last_tool_outputs"),
+            capabilities.get("context_compaction_preserve_last_tool_outputs"),
+            recommended.get("compaction_preserve_last_tool_outputs"),
+            capabilities.get("compaction_preserve_last_tool_outputs"),
+        ), minimum=0, maximum=20),
+    }
+    for key, value in optional_fields.items():
+        if value is None:
+            continue
+        if key in {"strip_temperature", "omit_tool_choice"} and value is False:
+            continue
+        else:
+            normalized[key] = value
+    from app.model_capability_defaults import apply_known_model_ideal_overrides
+
+    normalized = {k: v for k, v in normalized.items() if v is not None and v != ""}
+    return apply_known_model_ideal_overrides(normalized)
+
+
+def _capability_profile_lookup_keys(model_key: str, provider: str | None = None) -> list[str]:
+    """Return case-insensitive lookup keys for full and bare model ids."""
+    full = str(model_key or "").strip()
+    bare = full.split(":", 1)[-1] if ":" in full else full
+    inferred_provider = provider or (full.split(":", 1)[0] if ":" in full else "")
+    keys = [full, bare]
+    if inferred_provider and bare:
+        keys.append(f"{inferred_provider}:{bare}")
+    if inferred_provider == "fabric" and bare:
+        keys.append(bare)
+    seen: set[str] = set()
+    normalized_keys: list[str] = []
+    for key in keys:
+        lowered = key.lower()
+        if lowered and lowered not in seen:
+            seen.add(lowered)
+            normalized_keys.append(lowered)
+    return normalized_keys
+
+
+def _builtin_capability_profiles_by_lookup_key() -> dict[str, dict]:
+    """Return bundled capability profiles indexed by settings lookup keys."""
+    from app.model_capability_defaults import clone_builtin_capability_profiles
+
+    profiles: dict[str, dict] = {}
+    for profile in clone_builtin_capability_profiles().values():
+        model_key = str(profile.get("model_key") or "").strip()
+        if not model_key:
+            continue
+        for key in _capability_profile_lookup_keys(model_key, profile.get("provider")):
+            profiles.setdefault(key, copy.deepcopy(profile))
+    return profiles
+
+
+def _load_capability_profiles(path: str) -> dict[str, dict]:
+    """Load and normalize capability profiles from *path* with mtime caching."""
+    builtin_profiles = _builtin_capability_profiles_by_lookup_key()
+    if not path:
+        return builtin_profiles
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return builtin_profiles
+
+    if (
+        _capability_profile_cache.get("path") == path
+        and _capability_profile_cache.get("mtime") == mtime
+    ):
+        return copy.deepcopy(_capability_profile_cache.get("profiles", {}))
+
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+    except Exception:
+        logger.warning("Failed to read model capability profiles from %s", path, exc_info=True)
+        return builtin_profiles
+
+    raw_profiles: Any
+    if isinstance(payload, dict):
+        raw_profiles = payload.get("profiles") or payload.get("models") or payload
+    else:
+        raw_profiles = payload
+
+    items: list[dict] = []
+    if isinstance(raw_profiles, list):
+        items = [item for item in raw_profiles if isinstance(item, dict)]
+    elif isinstance(raw_profiles, dict):
+        for key, value in raw_profiles.items():
+            if isinstance(value, dict):
+                item = dict(value)
+                item.setdefault("model_key", key)
+                items.append(item)
+
+    profiles: dict[str, dict] = builtin_profiles
+    for item in items:
+        if item.get("benchmarkable") is False:
+            continue
+        normalized = _normalize_capability_profile(item, path)
+        model_key = str(normalized.get("model_key") or "").strip()
+        if not model_key:
+            continue
+        provider = normalized.get("provider")
+        for key in _capability_profile_lookup_keys(model_key, provider):
+            profiles[key] = copy.deepcopy(normalized)
+
+    _capability_profile_cache.update({
+        "path": path,
+        "mtime": mtime,
+        "profiles": copy.deepcopy(profiles),
+    })
+    return copy.deepcopy(profiles)
+
+
+def get_model_capability_profile(model_key: str) -> dict:
+    """Return the normalized capability profile for *model_key* if enabled.
+
+    The parser tolerates the current benchmark profile shape and future added
+    fields. It returns only the stable subset the assistant consumes.
+    """
+    if not is_capability_profiles_enabled():
+        return {}
+    profiles = _load_capability_profiles(get_capability_profile_path())
+    for key in _capability_profile_lookup_keys(model_key):
+        if key in profiles:
+            return copy.deepcopy(profiles[key])
+    return {}
 
 
 def set_default_model(model_id: str, source: str = "") -> None:
@@ -744,6 +1676,8 @@ def generate_fabric_rc(settings: dict) -> None:
     # Resolve {config_dir} placeholder in ssh_command_line
     ssh_cmd = fabric.get("ssh_command_line", "").replace("{config_dir}", config_dir)
 
+    ai_renci_key = _resolve_ai_renci_api_key(ai)
+
     lines = [
         f"export FABRIC_CREDMGR_HOST={hosts.get('credmgr', 'cm.fabric-testbed.net')}",
         f"export FABRIC_ORCHESTRATOR_HOST={hosts.get('orchestrator', 'orchestrator.fabric-testbed.net')}",
@@ -762,8 +1696,17 @@ def generate_fabric_rc(settings: dict) -> None:
         f"export FABRIC_AVOID={avoid_str}",
         f'export FABRIC_SSH_COMMAND_LINE="{ssh_cmd}"',
         f"export FABRIC_AI_API_KEY={ai.get('fabric_api_key', '')}",
+        f"export AI_RENCI_API_KEY={ai_renci_key}",
         f"export NRP_API_KEY={ai.get('nrp_api_key', '')}",
     ]
+    for provider in ai.get("custom_providers") or []:
+        if not isinstance(provider, dict):
+            continue
+        name = str(provider.get("name") or "custom").strip()
+        if not name:
+            continue
+        lines.append(f"export {custom_provider_base_url_env_key(name)}={provider.get('base_url', '')}")
+        lines.append(f"export {custom_provider_env_key(name)}={provider.get('api_key', '')}")
 
     rc_content = "\n".join(lines) + "\n"
     rc_path = os.path.join(config_dir, "fabric_rc")
@@ -812,6 +1755,8 @@ def apply_env_vars(settings: dict) -> None:
     # settings.json — those go stale across user switches / storage relocation.
     live_config = _live_config_dir()
 
+    ai_renci_key = _resolve_ai_renci_api_key(ai)
+
     env_map = {
         # NOTE: FABRIC_STORAGE_DIR is deliberately NOT set here. It is the flat
         # root (set once by the container) and must never be overwritten with a
@@ -833,8 +1778,17 @@ def apply_env_vars(settings: dict) -> None:
         "FABRIC_LOG_FILE": paths.get("log_file", ""),
         "FABRIC_AVOID": ",".join(fabric.get("avoid_sites", [])),
         "FABRIC_AI_API_KEY": ai.get("fabric_api_key", ""),
+        "AI_RENCI_API_KEY": ai_renci_key,
         "NRP_API_KEY": ai.get("nrp_api_key", ""),
     }
+    for provider in ai.get("custom_providers") or []:
+        if not isinstance(provider, dict):
+            continue
+        name = str(provider.get("name") or "custom").strip()
+        if not name:
+            continue
+        env_map[custom_provider_base_url_env_key(name)] = provider.get("base_url", "")
+        env_map[custom_provider_env_key(name)] = provider.get("api_key", "")
 
     ssh_cmd = fabric.get("ssh_command_line", "")
     if ssh_cmd:

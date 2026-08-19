@@ -1900,7 +1900,7 @@ def get_settings():
 
 @router.put("/api/settings")
 def put_settings(body: dict, background_tasks: BackgroundTasks):
-    """Replace settings, regenerate derived files, reset FABlib.
+    """Merge settings updates, regenerate derived files, reset FABlib.
 
     Also triggers background propagation of AI config to all tool
     workspaces so changes to API keys and server URLs take effect
@@ -1908,9 +1908,44 @@ def put_settings(body: dict, background_tasks: BackgroundTasks):
     stored value (the client never received the real one).
     """
     from app import settings_manager
-    body = _restore_masked_secrets(body, settings_manager.load_settings())
-    settings_manager.save_settings(body)
-    settings_manager.apply_env_vars(body)
+    try:
+        old_settings = settings_manager.load_settings()
+    except Exception as exc:
+        logger.warning("Failed to load settings before update", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "SETTINGS_LOAD_FAILED",
+                "message": f"Could not load existing settings: {exc}",
+            },
+        )
+
+    body = _restore_masked_secrets(body, old_settings)
+    merged_settings = settings_manager.merge_settings_update(old_settings, body)
+    try:
+        settings_manager.save_settings(merged_settings)
+    except Exception as exc:
+        logger.warning("Failed to persist settings update", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "SETTINGS_PERSIST_FAILED",
+                "message": f"Could not write settings to disk: {exc}",
+            },
+        )
+
+    saved_settings = settings_manager.load_settings()
+    try:
+        settings_manager.apply_env_vars(saved_settings)
+    except Exception as exc:
+        logger.warning("Failed to apply settings update to environment", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "SETTINGS_APPLY_FAILED",
+                "message": f"Settings were saved, but could not be applied: {exc}",
+            },
+        )
     reset_fablib()
     try:
         from app.chameleon_manager import reset_sessions as reset_chameleon_sessions
@@ -2127,7 +2162,7 @@ def relocate_users_to_loomai() -> None:
     import shutil as _shutil
     from app import user_registry
 
-    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    storage = user_registry.get_storage_root_dir()
     old_base = os.path.join(storage, "users")
     new_base = user_registry.users_base_dir()
 
@@ -2181,7 +2216,7 @@ def _migrate_to_multi_user(first_uuid: str, first_name: str, first_email: str) -
     from app import user_registry
     import shutil as _shutil
 
-    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    storage = user_registry.get_storage_root_dir()
     user_dir = user_registry.get_user_storage_dir(first_uuid)
 
     if os.path.isdir(user_dir):
@@ -2520,12 +2555,72 @@ _SETTING_TESTS = {
 }
 
 
-@router.post("/api/settings/test-custom-provider")
-async def test_custom_provider(request: Request):
-    """Test a custom LLM provider by pinging its /v1/models endpoint."""
-    body = await request.json()
+async def _probe_custom_provider_model(
+    base_url: str,
+    headers: dict[str, str],
+    model_id: str,
+    endpoint_style: str,
+) -> tuple[bool, str, str]:
+    """Probe one model with the requested endpoint style."""
+    from app.settings_manager import normalize_ai_endpoint_style
+
+    style = normalize_ai_endpoint_style(endpoint_style)
+    if not model_id:
+        return True, "unknown", ""
+    if style in {"auto", "chat"}:
+        chat_resp = await fabric_client.post(
+            f"{base_url}/v1/chat/completions",
+            headers=headers,
+            json={
+                "model": model_id,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1,
+            },
+            timeout=10,
+        )
+        if chat_resp.status_code == 200:
+            return True, "chat", ""
+        err_text = chat_resp.text[:500]
+        if style == "chat":
+            return False, "down", f"chat/completions returned {chat_resp.status_code}: {err_text}"
+        if not (
+            "responses" in err_text.lower()
+            or "'input'" in err_text.lower()
+            or '"input"' in err_text.lower()
+        ):
+            if 400 <= chat_resp.status_code < 500:
+                return True, "non-chat", ""
+            return False, "down", f"chat/completions returned {chat_resp.status_code}: {err_text}"
+
+    if style in {"auto", "responses"}:
+        responses_resp = await fabric_client.post(
+            f"{base_url}/v1/responses",
+            headers=headers,
+            json={
+                "model": model_id,
+                "input": "hi",
+                "max_output_tokens": 1,
+            },
+            timeout=10,
+        )
+        if responses_resp.status_code == 200:
+            return True, "responses", ""
+        err_text = responses_resp.text[:500]
+        return False, "down", f"responses returned {responses_resp.status_code}: {err_text}"
+
+    if style == "non-chat":
+        return True, "non-chat", ""
+    return False, "down", "Unknown endpoint style"
+
+
+async def _test_custom_provider_payload(body: dict) -> dict:
+    """Test a custom LLM provider by pinging /v1/models and one model endpoint."""
+    from app.settings_manager import normalize_ai_endpoint_style
+
     base_url = (body.get("base_url") or "").rstrip("/")
     api_key = body.get("api_key", "")
+    endpoint_style = normalize_ai_endpoint_style(body.get("endpoint_style"))
+    requested_model = str(body.get("model") or "").strip()
 
     if not base_url:
         return {"ok": False, "message": "No base URL provided"}
@@ -2561,14 +2656,55 @@ async def test_custom_provider(request: Request):
         models = data.get("data", [])
         model_count = len(models)
         model_names = [m.get("id", "?") for m in models[:5]]
+        probe_model = requested_model or (model_names[0] if model_names else "")
+        model_ok, model_type, probe_error = await _probe_custom_provider_model(
+            base_url,
+            headers,
+            probe_model,
+            endpoint_style,
+        )
+        if not model_ok:
+            return {
+                "ok": False,
+                "message": f"Reachable, but {endpoint_style} probe failed for {probe_model}: {probe_error}",
+                "latency_ms": latency,
+                "model_count": model_count,
+                "models": model_names,
+                "endpoint_style": endpoint_style,
+                "model_type": model_type,
+            }
+        warnings = []
+        if not probe_model:
+            warnings.append("No model was available for endpoint probing.")
+        if endpoint_style == "auto":
+            warnings.append("Endpoint style was auto-detected; save an explicit style if chat calls fail.")
         return {
             "ok": True,
-            "message": f"Reachable ({model_count} models: {', '.join(model_names)})",
+            "message": (
+                f"Reachable ({model_count} models: {', '.join(model_names)}; "
+                f"{model_type} verified{f' with {probe_model}' if probe_model else ''})"
+            ),
             "latency_ms": latency,
             "model_count": model_count,
+            "models": model_names,
+            "endpoint_style": endpoint_style,
+            "model_type": model_type,
+            "warnings": warnings,
         }
     except Exception as e:
         return {"ok": False, "message": f"Connection failed: {e}"}
+
+
+@router.post("/api/config/provider/test")
+async def test_provider_endpoint(request: Request):
+    """Validate a custom OpenAI-compatible provider and endpoint style."""
+    return await _test_custom_provider_payload(await request.json())
+
+
+@router.post("/api/settings/test-custom-provider")
+async def test_custom_provider(request: Request):
+    """Compatibility route for custom provider validation."""
+    return await _test_custom_provider_payload(await request.json())
 
 
 @router.post("/api/settings/test/{setting_name}")

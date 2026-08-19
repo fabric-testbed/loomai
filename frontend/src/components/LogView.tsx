@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { buildWsUrl } from '../utils/wsUrl';
+import { installTerminalClipboard, TERMINAL_CLIPBOARD_OPTIONS } from '../utils/terminalClipboard';
 
 const TERM_THEME = {
   background: '#1a1a2e',
@@ -36,6 +37,7 @@ export default React.memo(function LogView() {
     if (!containerRef.current) return;
 
     const term = new Terminal({
+      ...TERMINAL_CLIPBOARD_OPTIONS,
       cursorBlink: false,
       disableStdin: true,
       fontSize: 12,
@@ -43,6 +45,7 @@ export default React.memo(function LogView() {
       theme: { ...TERM_THEME },
       convertEol: true,
     });
+    installTerminalClipboard(term);
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);

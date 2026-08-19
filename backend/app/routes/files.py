@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from app.error_envelope import error_detail, safe_error_detail
 from app.fablib_manager import get_fablib
 from app.slice_registry import resolve_slice_name
 from app.user_context import get_user_storage
@@ -106,11 +107,19 @@ def _safe_path(base: str, user_path: str) -> str:
 
     # Never expose internal secrets (session_secret, password_hash, settings.json).
     if _under(resolved, os.path.join(storage, ".loomai")):
-        raise HTTPException(status_code=400, detail="Path not allowed")
+        raise HTTPException(status_code=400, detail=error_detail(
+            "FILE_PATH_INVALID",
+            "Access to the internal LoomAI settings directory is not allowed.",
+            path=user_path,
+        ))
 
     allowed_roots = {os.path.realpath(base), storage, os.path.realpath(_APP_ROOT)}
     if not any(_under(resolved, r) for r in allowed_roots):
-        raise HTTPException(status_code=400, detail="Path traversal not allowed")
+        raise HTTPException(status_code=400, detail=error_detail(
+            "FILE_PATH_INVALID",
+            "Path resolves outside the allowed storage roots; use a path inside the storage directory.",
+            path=user_path,
+        ))
     return resolved
 
 
@@ -187,7 +196,12 @@ def _get_sftp(slice_name: str, node_name: str):
     username = node_obj.get_username()
 
     if not management_ip:
-        raise HTTPException(status_code=400, detail="Node has no management IP")
+        raise HTTPException(status_code=400, detail=error_detail(
+            "VM_NO_MANAGEMENT_IP",
+            f"Node '{node_name}' in slice '{slice_name}' has no management IP; wait for the slice to finish provisioning.",
+            slice_name=slice_name,
+            node_name=node_name,
+        ))
 
     ssh_config = _get_ssh_config(slice_name=slice_name)
     bastion = _connect_bastion(ssh_config)
@@ -216,7 +230,11 @@ async def list_files(path: str = ""):
     base = _browse_dir()
     target = _safe_path(base, path)
     if not os.path.isdir(target):
-        raise HTTPException(status_code=404, detail="Directory not found")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "FILE_NOT_FOUND",
+            f"Directory '{path}' not found in container storage.",
+            path=path,
+        ))
     def _do():
         entries = []
         for name in sorted(os.listdir(target)):
@@ -276,16 +294,28 @@ async def read_file_content(path: str = ""):
     base = _browse_dir()
     target = _safe_path(base, path)
     if not os.path.isfile(target):
-        raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "FILE_NOT_FOUND",
+            f"File '{path}' not found in container storage.",
+            path=path,
+        ))
     size = os.path.getsize(target)
     if size > MAX_TEXT_SIZE:
-        raise HTTPException(status_code=400, detail="File too large to edit (>5 MB)")
+        raise HTTPException(status_code=400, detail=error_detail(
+            "FILE_TOO_LARGE",
+            f"File '{path}' is too large to edit in the browser (>5 MB); download it instead.",
+            path=path,
+        ))
     def _do():
         try:
             with open(target, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Cannot read file: {e}")
+            raise HTTPException(status_code=400, detail=error_detail(
+                "FILE_READ_FAILED",
+                f"Cannot read file: {safe_error_detail(e)}",
+                path=path,
+            ))
         return {"path": path, "content": content}
     return await asyncio.to_thread(_do)
 
@@ -305,7 +335,11 @@ async def write_file_content(body: FileContentBody):
             with open(target, "w", encoding="utf-8") as f:
                 f.write(body.content)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Cannot write file: {e}")
+            raise HTTPException(status_code=400, detail=error_detail(
+                "FILE_WRITE_FAILED",
+                f"Cannot write file: {safe_error_detail(e)}",
+                path=body.path,
+            ))
         return {"path": body.path, "status": "ok"}
     return await asyncio.to_thread(_do)
 
@@ -315,7 +349,11 @@ async def download_file(path: str = ""):
     base = _browse_dir()
     target = _safe_path(base, path)
     if not os.path.isfile(target):
-        raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "FILE_NOT_FOUND",
+            f"File '{path}' not found in container storage.",
+            path=path,
+        ))
     return FileResponse(target, filename=os.path.basename(target))
 
 
@@ -324,7 +362,11 @@ async def download_folder(path: str = ""):
     base = _browse_dir()
     target = _safe_path(base, path)
     if not os.path.isdir(target):
-        raise HTTPException(status_code=404, detail="Directory not found")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "FILE_NOT_FOUND",
+            f"Directory '{path}' not found in container storage.",
+            path=path,
+        ))
     def _do():
         buf = io.BytesIO()
         folder_name = os.path.basename(target) or "storage"
@@ -349,10 +391,18 @@ async def download_folder(path: str = ""):
 async def delete_file(path: str = ""):
     base = _browse_dir()
     if not path or path.strip("/") == "":
-        raise HTTPException(status_code=400, detail="Cannot delete storage root")
+        raise HTTPException(status_code=400, detail=error_detail(
+            "FILE_PATH_INVALID",
+            "Cannot delete the storage root; specify a file or directory inside it.",
+            path=path,
+        ))
     target = _safe_path(base, path)
     if not os.path.exists(target):
-        raise HTTPException(status_code=404, detail="Path not found")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "FILE_NOT_FOUND",
+            f"Path '{path}' not found in container storage.",
+            path=path,
+        ))
     if os.path.isdir(target):
         shutil.rmtree(target)
     else:
@@ -404,7 +454,16 @@ async def download_vm_file(slice_name: str, node_name: str, body: VmDownloadRequ
         os.makedirs(dest, exist_ok=True)
         filename = os.path.basename(body.remote_path)
         local_path = os.path.join(dest, filename)
-        node_obj.download_file(local_path, body.remote_path)
+        try:
+            node_obj.download_file(local_path, body.remote_path)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=error_detail(
+                "VM_DOWNLOAD_FAILED",
+                f"Download from VM failed: {safe_error_detail(e)}",
+                slice_name=slice_name,
+                node_name=node_name,
+                path=body.remote_path,
+            ))
         return {"downloaded": filename, "local_path": os.path.join(body.dest_dir, filename)}
 
     return await asyncio.to_thread(_do)
@@ -422,13 +481,28 @@ async def upload_to_vm(slice_name: str, node_name: str, body: VmUploadRequest):
         base = _browse_dir()
         local_path = _safe_path(base, body.source)
         if not os.path.exists(local_path):
-            raise HTTPException(status_code=404, detail="Source not found in container storage")
+            raise HTTPException(status_code=404, detail=error_detail(
+                "FILE_NOT_FOUND",
+                f"Source '{body.source}' not found in container storage.",
+                path=body.source,
+                slice_name=slice_name,
+                node_name=node_name,
+            ))
 
         node_obj = _get_node(slice_name, node_name)
-        if os.path.isdir(local_path):
-            node_obj.upload_directory(local_path, body.dest)
-        else:
-            node_obj.upload_file(local_path, body.dest)
+        try:
+            if os.path.isdir(local_path):
+                node_obj.upload_directory(local_path, body.dest)
+            else:
+                node_obj.upload_file(local_path, body.dest)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=error_detail(
+                "VM_UPLOAD_FAILED",
+                f"Upload to VM failed: {safe_error_detail(e)}",
+                slice_name=slice_name,
+                node_name=node_name,
+                path=body.source,
+            ))
         return {"uploaded": body.source, "remote_path": body.dest}
 
     return await asyncio.to_thread(_do)
@@ -494,13 +568,32 @@ async def download_direct_from_vm(
 
     def _do():
         node_obj = _get_node(slice_name, node_name)
-        node_obj.download_file(local_path, remote_path)
+        try:
+            node_obj.download_file(local_path, remote_path)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=error_detail(
+                "VM_DOWNLOAD_FAILED",
+                f"Download from VM failed: {safe_error_detail(e)}",
+                slice_name=slice_name,
+                node_name=node_name,
+                path=remote_path,
+            ))
 
-    await asyncio.to_thread(_do)
+    try:
+        await asyncio.to_thread(_do)
+    except HTTPException:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
 
     if not os.path.isfile(local_path):
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise HTTPException(status_code=500, detail="Download from VM failed")
+        raise HTTPException(status_code=500, detail=error_detail(
+            "VM_DOWNLOAD_FAILED",
+            f"Download from VM produced no file; verify '{remote_path}' exists on node '{node_name}'.",
+            slice_name=slice_name,
+            node_name=node_name,
+            path=remote_path,
+        ))
 
     # Stream the file and clean up the temp dir afterward
     def iterfile():
@@ -605,7 +698,13 @@ async def write_vm_file_content(slice_name: str, node_name: str, body: VmWriteFi
         cmd = f"python3 -c \"import base64; open({body.path!r},'w').write(base64.b64decode('{encoded}').decode('utf-8'))\""
         stdout, stderr = node_obj.execute(cmd, quiet=True)
         if stderr and stderr.strip():
-            raise HTTPException(status_code=500, detail=stderr.strip())
+            raise HTTPException(status_code=500, detail=error_detail(
+                "VM_COMMAND_FAILED",
+                safe_error_detail(stderr.strip()),
+                slice_name=slice_name,
+                node_name=node_name,
+                path=body.path,
+            ))
         return {"path": body.path, "status": "ok"}
 
     return await asyncio.to_thread(_do)
@@ -623,7 +722,13 @@ async def vm_mkdir(slice_name: str, node_name: str, body: VmMkdirRequest):
         node_obj = _get_node(slice_name, node_name)
         stdout, stderr = node_obj.execute(f"mkdir -p {body.path!r}", quiet=True)
         if stderr and stderr.strip():
-            raise HTTPException(status_code=500, detail=stderr.strip())
+            raise HTTPException(status_code=500, detail=error_detail(
+                "VM_COMMAND_FAILED",
+                safe_error_detail(stderr.strip()),
+                slice_name=slice_name,
+                node_name=node_name,
+                path=body.path,
+            ))
         return {"created": body.path}
 
     return await asyncio.to_thread(_do)
@@ -641,7 +746,13 @@ async def vm_delete(slice_name: str, node_name: str, body: VmDeleteRequest):
         node_obj = _get_node(slice_name, node_name)
         stdout, stderr = node_obj.execute(f"rm -rf {body.path!r}", quiet=True)
         if stderr and stderr.strip():
-            raise HTTPException(status_code=500, detail=stderr.strip())
+            raise HTTPException(status_code=500, detail=error_detail(
+                "VM_COMMAND_FAILED",
+                safe_error_detail(stderr.strip()),
+                slice_name=slice_name,
+                node_name=node_name,
+                path=body.path,
+            ))
         return {"deleted": body.path}
 
     return await asyncio.to_thread(_do)
@@ -967,7 +1078,15 @@ async def execute_boot_config(slice_name: str, node_name: str):
     results = []
 
     def _do():
-        node_obj = _get_node(slice_name, node_name)
+        try:
+            node_obj = _get_node(slice_name, node_name)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=error_detail(
+                "BOOT_CONFIG_EXECUTE_FAILED",
+                f"Cannot reach node to run boot config: {safe_error_detail(e)}",
+                slice_name=slice_name,
+                node_name=node_name,
+            ))
         base = _storage_dir()
 
         # Resolve ~ to absolute path for SFTP uploads (SFTP doesn't expand ~)

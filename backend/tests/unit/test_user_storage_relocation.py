@@ -9,6 +9,37 @@ def test_user_storage_dir_is_under_loomai(tmp_path, monkeypatch):
     assert user_registry.get_user_storage_dir("abc") == str(tmp_path / ".loomai" / "users" / "abc")
 
 
+def test_user_scoped_storage_env_normalizes_to_root(tmp_path, monkeypatch):
+    """A polluted FABRIC_STORAGE_DIR must not recurse into users/{uuid}/users/{uuid}."""
+    root = tmp_path / "work"
+    uuid = "12345678-1111-2222-3333-444455556666"
+    user_dir = root / ".loomai" / "users" / uuid
+    user_dir.mkdir(parents=True)
+    (root / ".loomai" / "user_registry.json").write_text(
+        '{"schema_version": 1, "active_user": "%s", "users": []}' % uuid
+    )
+    polluted = root / "users" / uuid
+    polluted.mkdir(parents=True)
+    monkeypatch.setenv("FABRIC_STORAGE_DIR", str(polluted))
+
+    from app import settings_manager, user_registry
+    settings_manager.invalidate_settings_cache()
+
+    assert user_registry.get_storage_root_dir() == str(root)
+    assert user_registry.users_base_dir() == str(root / ".loomai" / "users")
+    assert user_registry.get_user_storage_dir(uuid) == str(user_dir)
+
+    settings = settings_manager.load_settings()
+    settings["fabric"]["bastion_username"] = "persisted-user"
+    settings_manager.save_settings(settings)
+
+    canonical = user_dir / ".loomai" / "settings.json"
+    nested = polluted / ".loomai" / "users" / uuid / ".loomai" / "settings.json"
+    assert canonical.is_file()
+    assert not nested.exists()
+    settings_manager.invalidate_settings_cache()
+
+
 def test_relocation_moves_data_and_repoints_symlinks(tmp_path, monkeypatch):
     monkeypatch.setenv("FABRIC_STORAGE_DIR", str(tmp_path))
     from app import user_registry

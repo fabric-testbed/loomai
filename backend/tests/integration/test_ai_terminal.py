@@ -14,6 +14,88 @@ class TestToolStatus:
         assert "opencode" in data or "aider" in data or len(data) >= 0
 
 
+class TestToolSync:
+    def test_sync_harness_defaults_endpoint(self, client, storage_dir):
+        resp = client.post("/api/ai/tools/sync")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["workspace"] == str(storage_dir)
+        assert data["managed_service"]["name"] == "loomai-harness"
+        assert data["managed_service"]["command"] == "python3 -m app.harness_mcp_server"
+        assert "fabric-reports" in data["mcp_servers"]
+        assert "loomai-harness" in data["mcp_servers"]
+        assert (storage_dir / "opencode.json").is_file()
+        assert (storage_dir / ".loomai" / "harness-defaults" / "MAPPING.md").is_file()
+        assert (storage_dir / ".pi" / "agent" / "models.json").is_file()
+        assert (storage_dir / ".local" / "bin" / "pi-fabric").is_file()
+        status_resp = client.get("/api/ai/tools/harnesses")
+        assert status_resp.status_code == 200
+        statuses = {h["name"]: h["status"] for h in status_resp.json()["harnesses"]}
+        for name in ["opencode", "goose", "pi", "aider", "crush", "codex", "claude"]:
+            assert statuses[name] == "configured"
+
+    def test_harness_status_and_per_harness_sync_endpoints(self, client, storage_dir):
+        status_resp = client.get("/api/ai/tools/harnesses")
+
+        assert status_resp.status_code == 200
+        status_data = status_resp.json()
+        names = {h["name"] for h in status_data["harnesses"]}
+        assert {"opencode", "goose", "pi", "aider", "crush", "codex", "claude"}.issubset(names)
+
+        sync_resp = client.post("/api/ai/tools/harnesses/pi/sync")
+
+        assert sync_resp.status_code == 200
+        sync_data = sync_resp.json()
+        assert sync_data["status"] == "ok"
+        assert sync_data["harness"]["name"] == "pi"
+        assert sync_data["harness"]["status"] == "configured"
+        assert (storage_dir / "pi" / "agent" / "models.json").is_file()
+        assert (storage_dir / "pi" / "pi-fabric").is_file()
+        assert (storage_dir / ".pi" / "agent" / "models.json").is_file()
+        assert (storage_dir / ".local" / "bin" / "pi-fabric").is_file()
+        pi_mcp = json.loads((storage_dir / ".pi" / "agent" / "mcp.json").read_text(encoding="utf-8"))
+        assert pi_mcp["mcpServers"]["loomai-harness"]["env"]["PYTHONPATH"] == "/app"
+        assert pi_mcp["mcpServers"]["loomai-harness"]["lifecycle"] == "eager"
+        assert pi_mcp["settings"]["directTools"] is True
+
+        docs_resp = client.get("/api/ai/tools/harnesses/pi/docs")
+        assert docs_resp.status_code == 200
+        assert "Pi LoomAI Harness Defaults" in docs_resp.text
+        assert "Settings Uninstall" in docs_resp.text
+        assert "verify_harness_lifecycle.py --execute" in docs_resp.text
+
+    def test_per_harness_reset_endpoint_overwrites_user_modified_config(self, client, storage_dir):
+        pi_settings = storage_dir / "pi" / "agent" / "settings.json"
+        pi_settings.parent.mkdir(parents=True)
+        pi_settings.write_text(json.dumps({"defaultProvider": "custom"}), encoding="utf-8")
+
+        resp = client.post("/api/ai/tools/harnesses/pi/reset")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["harness"]["name"] == "pi"
+        assert data["harness"]["status"] == "configured"
+        restored = json.loads(pi_settings.read_text(encoding="utf-8"))
+        assert restored["defaultProvider"] == "ai-renci"
+        assert restored["sessionDir"] == str(storage_dir / ".loomai" / "harness-defaults" / "pi" / "sessions")
+
+    def test_per_harness_sync_preserves_user_owned_goose_config(self, client, storage_dir):
+        goose_config = storage_dir / ".config" / "goose" / "config.yaml"
+        goose_config.parent.mkdir(parents=True)
+        goose_config.write_text("user-owned: true\n")
+
+        resp = client.post("/api/ai/tools/harnesses/goose/sync")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["harness"]["name"] == "goose"
+        assert data["harness"]["status"] == "user_modified"
+        assert goose_config.read_text() == "user-owned: true\n"
+
+
 class TestToolInstall:
     def test_install_unknown_tool_returns_error(self, client):
         resp = client.post("/api/ai/tools/nonexistent-tool/install")
@@ -24,11 +106,163 @@ class TestToolInstall:
 
     def test_install_already_installed_tool(self, client):
         with patch("app.routes.ai_terminal.is_tool_installed", return_value=True):
+            resp = client.post("/api/ai/tools/deepagents/install")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "already_installed"
+        assert data["tool"] == "deepagents"
+
+    def test_install_already_installed_opencode_refreshes_defaults(self, client):
+        async def fake_install(tool_id, progress_callback=None):
+            if progress_callback:
+                await progress_callback("OpenCode is already installed.\r\n")
+                await progress_callback("OpenCode LoomAI harness defaults synchronized.\r\n")
+            return True
+
+        with patch("app.routes.ai_terminal.is_tool_installed", return_value=True), \
+             patch("app.routes.ai_terminal.install_tool", side_effect=fake_install) as install:
             resp = client.post("/api/ai/tools/opencode/install")
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "already_installed"
         assert data["tool"] == "opencode"
+        assert "harness defaults synchronized" in data["output"]
+        install.assert_called_once()
+
+    def test_install_already_installed_pi_refreshes_defaults(self, client):
+        async def fake_install(tool_id, progress_callback=None):
+            if progress_callback:
+                await progress_callback("Pi is already installed.\r\n")
+                await progress_callback("Pi LoomAI harness defaults synchronized.\r\n")
+            return True
+
+        with patch("app.routes.ai_terminal.is_tool_installed", return_value=True), \
+             patch("app.routes.ai_terminal.tool_needs_upgrade", return_value=False), \
+             patch("app.routes.ai_terminal.install_tool", side_effect=fake_install) as install:
+            resp = client.post("/api/ai/tools/pi/install")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "already_installed"
+        assert data["tool"] == "pi"
+        assert "harness defaults synchronized" in data["output"]
+        install.assert_called_once()
+
+    def test_install_drifted_claude_returns_upgraded(self, client):
+        async def fake_install(tool_id, progress_callback=None):
+            if progress_callback:
+                await progress_callback(
+                    "Claude Code is installed but does not match the pinned version; upgrading.\r\n"
+                )
+                await progress_callback("Claude Code installed successfully.\r\n")
+            return True
+
+        with patch("app.routes.ai_terminal.is_tool_installed", return_value=True), \
+             patch("app.routes.ai_terminal.tool_needs_upgrade", return_value=True), \
+             patch("app.routes.ai_terminal.install_tool", side_effect=fake_install) as install:
+            resp = client.post("/api/ai/tools/claude/install")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "upgraded"
+        assert data["tool"] == "claude"
+        assert "does not match the pinned version" in data["output"]
+        install.assert_called_once()
+
+    def test_uninstall_refuses_active_terminal_session(self, client):
+        with patch("app.routes.ai_terminal._term_sessions.has_live_type", return_value=True), \
+             patch("app.routes.ai_terminal.uninstall_tool") as uninstall:
+            resp = client.post("/api/ai/tools/pi/uninstall")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "running"
+        assert "active terminal session" in data["error"]
+        uninstall.assert_not_called()
+
+    def test_uninstall_refuses_active_opencode_web_process(self, client):
+        import app.routes.ai_terminal as ai_term
+
+        old_proc = ai_term._opencode_web_proc
+        old_proxy = ai_term._opencode_web_proxy
+        proc = MagicMock()
+        proc.poll.return_value = None
+        ai_term._opencode_web_proc = proc
+        ai_term._opencode_web_proxy = None
+        try:
+            with patch("app.routes.ai_terminal._term_sessions.has_live_type", return_value=False), \
+                 patch("app.routes.ai_terminal.uninstall_tool") as uninstall:
+                resp = client.post("/api/ai/tools/opencode/uninstall")
+        finally:
+            ai_term._opencode_web_proc = old_proc
+            ai_term._opencode_web_proxy = old_proxy
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "running"
+        assert "OpenCode web is running" in data["error"]
+        uninstall.assert_not_called()
+
+    def test_uninstall_refuses_active_claude_process(self, client):
+        pgrep = MagicMock()
+        pgrep.returncode = 0
+        pgrep.stdout = "1234 claude\n"
+
+        with patch("app.routes.ai_terminal._term_sessions.has_live_type", return_value=False), \
+             patch("app.routes.ai_terminal.subprocess.run", return_value=pgrep), \
+             patch("app.routes.ai_terminal.uninstall_tool") as uninstall:
+            resp = client.post("/api/ai/tools/claude/uninstall")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "running"
+        assert "Claude Code is running" in data["error"]
+        uninstall.assert_not_called()
+
+    def test_uninstall_managed_harness_keeps_config_by_default(self, client, storage_dir):
+        client.post("/api/ai/tools/harnesses/pi/sync")
+        pi_settings = storage_dir / "pi" / "agent" / "settings.json"
+        runtime_file = storage_dir / ".loomai" / "harness-defaults" / "pi" / "sessions" / "session.json"
+        runtime_file.parent.mkdir(parents=True, exist_ok=True)
+        runtime_file.write_text("{}", encoding="utf-8")
+
+        async def fake_uninstall(tool_id, progress_callback=None):
+            if progress_callback:
+                await progress_callback("Pi uninstalled successfully.\r\n")
+            return True
+
+        with patch("app.routes.ai_terminal.is_tool_installed", return_value=True), \
+             patch("app.routes.ai_terminal.uninstall_tool", side_effect=fake_uninstall):
+            resp = client.post("/api/ai/tools/pi/uninstall")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "uninstalled"
+        assert data["removed_config_files"] == 0
+        assert not runtime_file.exists()
+        assert pi_settings.is_file()
+
+    def test_uninstall_managed_harness_removes_config_when_requested(self, client, storage_dir):
+        client.post("/api/ai/tools/harnesses/pi/sync")
+        pi_settings = storage_dir / "pi" / "agent" / "settings.json"
+        runtime_file = storage_dir / ".loomai" / "harness-defaults" / "pi" / "cache" / "cache.json"
+        runtime_file.parent.mkdir(parents=True, exist_ok=True)
+        runtime_file.write_text("{}", encoding="utf-8")
+
+        async def fake_uninstall(tool_id, progress_callback=None):
+            if progress_callback:
+                await progress_callback("Pi uninstalled successfully.\r\n")
+            return True
+
+        with patch("app.routes.ai_terminal.is_tool_installed", return_value=True), \
+             patch("app.routes.ai_terminal.uninstall_tool", side_effect=fake_uninstall):
+            resp = client.post("/api/ai/tools/pi/uninstall?remove_config=true")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "uninstalled"
+        assert data["removed_config_files"] > 0
+        assert not runtime_file.exists()
+        assert not pi_settings.exists()
 
 
 class TestToolInstallStream:
@@ -44,7 +278,7 @@ class TestToolInstallStream:
 
     def test_install_stream_already_installed(self, client):
         with patch("app.routes.ai_terminal.is_tool_installed", return_value=True):
-            resp = client.post("/api/ai/tools/aider/install-stream")
+            resp = client.post("/api/ai/tools/deepagents/install-stream")
         assert resp.status_code == 200
         lines = resp.text.strip().split("\n")
         data_lines = [l for l in lines if l.startswith("data: ")]

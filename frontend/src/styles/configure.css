@@ -739,6 +739,113 @@
   cursor: not-allowed;
 }
 
+/* --- AI harness config rows --- */
+.harness-config-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.harness-config-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid var(--fabric-border);
+  border-radius: 6px;
+  background: var(--fabric-bg-tint);
+}
+
+.harness-config-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.harness-config-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fabric-text);
+}
+
+.harness-config-desc {
+  font-size: 11px;
+  color: var(--fabric-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.harness-config-status {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  min-width: 98px;
+}
+
+.harness-status-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.harness-status-badge.configured {
+  background: rgba(0, 142, 122, 0.12);
+  color: #008e7a;
+}
+
+.harness-status-badge.user_modified {
+  background: rgba(87, 152, 188, 0.15);
+  color: #1f6a8c;
+}
+
+.harness-status-badge.stale,
+.harness-status-badge.loading {
+  background: rgba(255, 133, 66, 0.14);
+  color: #a6531f;
+}
+
+.harness-file-count {
+  font-size: 10px;
+  color: var(--fabric-text-muted);
+  white-space: nowrap;
+}
+
+.harness-config-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.harness-config-actions .btn-sm:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+@media (max-width: 720px) {
+  .harness-config-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .harness-config-status,
+  .harness-config-actions {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+}
+
 /* Codex provider toggle on custom provider row */
 .test-btn.codex-active {
   background: rgba(0, 142, 122, 0.15);

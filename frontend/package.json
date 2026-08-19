@@ -1,7 +1,7 @@
 {
   "name": "fabric-webgui",
   "private": true,
-  "version": "0.8.2",
+  "version": "0.8.3",
   "type": "module",
   "scripts": {
     "dev": "next dev -p 3000",
@@ -40,7 +40,7 @@
     "react-markdown": "^10.1.0"
   },
   "overrides": {
-    "postcss": "^8.5.10",
+    "postcss": "^8.5.23",
     "sharp": "^0.35.0"
   },
   "devDependencies": {
@@ -56,8 +56,8 @@
     "@vitejs/plugin-react": "^6.0.1",
     "eslint": "^10.4.1",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "jsdom": "^29.0.1",
-    "postcss": "^8.5.10",
+    "jsdom": "^30.0.1",
+    "postcss": "^8.5.23",
     "typescript": "~5.6.2",
     "typescript-eslint": "^8.60.1",
     "vitest": "^4.1.2"

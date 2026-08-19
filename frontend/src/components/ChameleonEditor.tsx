@@ -1554,11 +1554,11 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
         ) : (
           <>
             <div className="editor-top-tabs" data-testid="chameleon-editor-tabs">
-              <button className={chiEditorTab === 'leases' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('leases')} data-testid="chameleon-editor-tab" data-chameleon-tab="leases">Leases</button>
-              <button className={chiEditorTab === 'servers' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('servers')} data-testid="chameleon-editor-tab" data-chameleon-tab="servers">Servers</button>
-              <button className={chiEditorTab === 'networks' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('networks')} data-testid="chameleon-editor-tab" data-chameleon-tab="networks">Networks</button>
-              <button className={chiEditorTab === 'ips' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('ips')} data-testid="chameleon-editor-tab" data-chameleon-tab="ips">IPs</button>
-              <button className={chiEditorTab === 'resources' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('resources')} data-testid="chameleon-editor-tab" data-chameleon-tab="resources">Resources</button>
+              <button className={chiEditorTab === 'leases' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('leases')} data-testid="chameleon-editor-tab" data-chameleon-tab="leases" data-help-id="chameleon-view.leases">Leases</button>
+              <button className={chiEditorTab === 'servers' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('servers')} data-testid="chameleon-editor-tab" data-chameleon-tab="servers" data-help-id="chameleon-view.servers">Servers</button>
+              <button className={chiEditorTab === 'networks' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('networks')} data-testid="chameleon-editor-tab" data-chameleon-tab="networks" data-help-id="chameleon-view.networks">Networks</button>
+              <button className={chiEditorTab === 'ips' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('ips')} data-testid="chameleon-editor-tab" data-chameleon-tab="ips" data-help-id="chameleon-view.ips">IPs</button>
+              <button className={chiEditorTab === 'resources' ? 'active chameleon-tab-active' : ''} onClick={() => setChiEditorTab('resources')} data-testid="chameleon-editor-tab" data-chameleon-tab="resources" data-help-id="chameleon-view.resources">Resources</button>
             </div>
             <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
               {chiEditorTab === 'leases' && (

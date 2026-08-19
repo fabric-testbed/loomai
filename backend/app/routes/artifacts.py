@@ -17,8 +17,10 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from app.artifact_validation import read_artifact_files, validate_artifact_files
+from app.error_envelope import error_detail, safe_error_detail
 from app.http_pool import fabric_client, ai_client
 from app.user_context import get_user_storage, get_token_path, register_user_changed_callback
 
@@ -358,7 +360,11 @@ async def _fetch_artifact(uuid: str) -> dict[str, Any]:
         for artifact in _contract_remote_artifacts():
             if artifact["uuid"] == uuid:
                 return artifact
-        raise HTTPException(status_code=404, detail="Artifact not found")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "ARTIFACT_REMOTE_NOT_FOUND",
+            f"Remote artifact '{uuid}' was not found on the Artifact Manager.",
+            uuid=uuid,
+        ))
 
     headers = _get_auth_headers()
     r = await fabric_client.get(f"{ARTIFACT_API}/artifacts/{uuid}", params={"format": "json"}, headers=headers)
@@ -411,9 +417,86 @@ class RevertRequest(BaseModel):
     version_uuid: str | None = None  # specific version, or latest if None
 
 
+class ValidateArtifactRequest(BaseModel):
+    """Static artifact validation input.
+
+    Supply either ``dir_name`` for a local artifact, or inline content using
+    weave_json/vm_template_json/recipe_json plus scripts/files.
+    """
+
+    dir_name: str | None = None
+    weave_json: Any = None
+    vm_template_json: Any = None
+    recipe_json: Any = None
+    scripts: dict[str, str] = Field(default_factory=dict)
+    files: dict[str, str] = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@router.post("/validate")
+def validate_artifact(req: ValidateArtifactRequest) -> dict[str, Any]:
+    """Run static, read-only validation for a local or inline artifact."""
+    inline_files = _inline_validation_files(req)
+    if req.dir_name and inline_files:
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "ARTIFACT_REQUEST_INVALID",
+                "Provide either dir_name or inline weave_json/scripts, not both.",
+            ),
+        )
+
+    if req.dir_name:
+        adir = os.path.realpath(_artifacts_dir())
+        safe = _sanitize_name(req.dir_name)
+        artifact_dir = os.path.realpath(os.path.join(adir, safe))
+        if os.path.commonpath([adir, artifact_dir]) != adir:
+            raise HTTPException(status_code=400, detail=error_detail(
+                "ARTIFACT_NAME_INVALID",
+                f"Artifact directory name '{req.dir_name}' is invalid.",
+                dir_name=req.dir_name,
+            ))
+        if not os.path.isdir(artifact_dir):
+            raise HTTPException(status_code=404, detail=error_detail(
+                "ARTIFACT_NOT_FOUND",
+                f"Local artifact '{req.dir_name}' was not found.",
+                dir_name=req.dir_name,
+            ))
+        files = read_artifact_files(artifact_dir)
+        return validate_artifact_files(
+            files,
+            source={"type": "local", "dir_name": safe},
+        )
+
+    if not inline_files:
+        raise HTTPException(status_code=400, detail=error_detail(
+            "ARTIFACT_REQUEST_INVALID",
+            "Provide dir_name or inline artifact content.",
+        ))
+    return validate_artifact_files(inline_files, source={"type": "inline"})
+
+
+def _inline_validation_files(req: ValidateArtifactRequest) -> dict[str, str]:
+    files: dict[str, str] = {}
+    files.update({str(k): str(v) for k, v in (req.files or {}).items() if k and v is not None})
+    files.update({str(k): str(v) for k, v in (req.scripts or {}).items() if k and v is not None})
+    _add_inline_json(files, "weave.json", req.weave_json)
+    _add_inline_json(files, "vm-template.json", req.vm_template_json)
+    _add_inline_json(files, "recipe.json", req.recipe_json)
+    return files
+
+
+def _add_inline_json(files: dict[str, str], path: str, value: Any) -> None:
+    if value is None:
+        return
+    if isinstance(value, str):
+        files[path] = value
+    else:
+        files[path] = json.dumps(value, indent=2)
+
 
 @router.get("/remote")
 async def list_remote_artifacts():
@@ -425,7 +508,10 @@ async def list_remote_artifacts():
     try:
         artifacts = await _fetch_all_artifacts()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to reach Artifact Manager: {e}")
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            f"Failed to reach the Artifact Manager: {safe_error_detail(e)}.",
+        ))
 
     # Collect all unique tags for the filter UI
     all_tags: dict[str, int] = {}
@@ -450,7 +536,10 @@ async def refresh_remote_artifacts():
     try:
         artifacts = await _fetch_all_artifacts()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to reach Artifact Manager: {e}")
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            f"Failed to reach the Artifact Manager: {safe_error_detail(e)}.",
+        ))
 
     all_tags: dict[str, int] = {}
     for art in artifacts:
@@ -471,7 +560,11 @@ async def get_remote_artifact(uuid: str):
     try:
         art = await _fetch_artifact(uuid)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch artifact: {e}")
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            f"Failed to fetch artifact from the Artifact Manager: {safe_error_detail(e)}.",
+            uuid=uuid,
+        ))
 
     art["tags"] = _normalize_tags(art.get("tags", []))
     art["category"] = _classify_artifact(art["tags"], art.get("description_short", ""), art.get("description_long", ""))
@@ -484,7 +577,11 @@ async def download_artifact(req: DownloadRequest):
     try:
         art = await _fetch_artifact(req.uuid)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch artifact detail: {e}")
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            f"Failed to fetch artifact detail from the Artifact Manager: {safe_error_detail(e)}.",
+            uuid=req.uuid,
+        ))
 
     tag_strs = _normalize_tags(art.get("tags", []))
     category = _classify_artifact(tag_strs, art.get("description_short", ""), art.get("description_long", ""))
@@ -492,26 +589,44 @@ async def download_artifact(req: DownloadRequest):
     # Find the version to download
     versions = art.get("versions", [])
     if not versions:
-        raise HTTPException(status_code=404, detail="Artifact has no downloadable versions")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "ARTIFACT_VERSION_NOT_FOUND",
+            "Artifact has no downloadable versions.",
+            uuid=req.uuid,
+        ))
 
     if req.version_uuid:
         version = next((v for v in versions if v["uuid"] == req.version_uuid), None)
         if not version:
-            raise HTTPException(status_code=404, detail="Specified version not found")
+            raise HTTPException(status_code=404, detail=error_detail(
+                "ARTIFACT_VERSION_NOT_FOUND",
+                f"Version '{req.version_uuid}' was not found on this artifact.",
+                uuid=req.uuid,
+                version_uuid=req.version_uuid,
+            ))
     else:
         active = [v for v in versions if v.get("active", True)]
         version = active[0] if active else versions[0]
 
     urn = version.get("urn", "")
     if not urn:
-        raise HTTPException(status_code=400, detail="Version has no downloadable URN")
+        raise HTTPException(status_code=400, detail=error_detail(
+            "ARTIFACT_DOWNLOAD_FAILED",
+            "Version has no downloadable URN.",
+            uuid=req.uuid,
+            version_uuid=version.get("uuid", ""),
+        ))
 
     download_url = f"{ARTIFACT_API}/contents/download/{urn}"
     try:
         r = await ai_client.get(download_url, headers=_get_auth_headers())
         r.raise_for_status()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Download failed: {e}")
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_DOWNLOAD_FAILED",
+            f"Artifact content download failed: {safe_error_detail(e)}.",
+            uuid=req.uuid,
+        ))
 
     local_name = _sanitize_name(req.local_name or art.get("title", "artifact"))
 
@@ -529,7 +644,12 @@ async def download_artifact(req: DownloadRequest):
         elif not req.overwrite:
             raise HTTPException(
                 status_code=409,
-                detail=f"Local artifact '{local_name}' already exists. Set overwrite=true to replace it."
+                detail=error_detail(
+                    "ARTIFACT_ALREADY_EXISTS",
+                    f"Local artifact '{local_name}' already exists. Set overwrite=true to replace it.",
+                    local_name=local_name,
+                    uuid=req.uuid,
+                ),
             )
         else:
             shutil.rmtree(dest_dir)
@@ -546,7 +666,11 @@ async def download_artifact(req: DownloadRequest):
             with tarfile.open(raw_path, "r:*") as tf:
                 for member in tf.getmembers():
                     if member.name.startswith("/") or ".." in member.name:
-                        raise HTTPException(status_code=400, detail="Artifact contains unsafe paths")
+                        raise HTTPException(status_code=400, detail=error_detail(
+                            "ARTIFACT_ARCHIVE_UNSAFE",
+                            "Artifact archive contains unsafe paths and was rejected.",
+                            uuid=req.uuid,
+                        ))
                 extract_dir = os.path.join(tmpdir, "extracted")
                 os.makedirs(extract_dir, exist_ok=True)
                 tf.extractall(extract_dir)
@@ -711,7 +835,11 @@ def update_local_metadata(dir_name: str, req: LocalMetadataUpdate):
     adir = _artifacts_dir()
     entry_dir = os.path.join(adir, dir_name)
     if not os.path.isdir(entry_dir):
-        raise HTTPException(status_code=404, detail="Artifact not found")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "ARTIFACT_NOT_FOUND",
+            f"Local artifact '{dir_name}' was not found.",
+            dir_name=dir_name,
+        ))
 
     category = _detect_category(entry_dir)
     meta_file = "weave.json"
@@ -887,15 +1015,23 @@ async def _upload_content(headers: dict[str, str], artifact_uuid: str,
                 r.raise_for_status()
                 return r.json()
         except httpx.HTTPStatusError as e:
-            detail = e.response.text
             raise HTTPException(
                 status_code=e.response.status_code,
-                detail=f"Content upload failed for artifact {artifact_uuid}: {detail}",
+                detail=error_detail(
+                    "ARTIFACT_PUBLISH_FAILED",
+                    f"Content upload failed: {safe_error_detail(e.response.text)}.",
+                    uuid=artifact_uuid,
+                    upstream_status=e.response.status_code,
+                ),
             )
         except Exception as e:
             raise HTTPException(
                 status_code=502,
-                detail=f"Content upload failed for artifact {artifact_uuid}: {e}",
+                detail=error_detail(
+                    "ARTIFACT_PUBLISH_FAILED",
+                    f"Content upload failed: {safe_error_detail(e)}.",
+                    uuid=artifact_uuid,
+                ),
             )
 
 
@@ -925,12 +1061,20 @@ async def _create_new_artifact(headers: dict[str, str], req: PublishRequest,
         r.raise_for_status()
         created = r.json()
     except httpx.HTTPStatusError as e:
-        detail = e.response.text
         raise HTTPException(status_code=e.response.status_code,
-                            detail=f"Failed to create artifact: {detail}")
+                            detail=error_detail(
+                                "ARTIFACT_PUBLISH_FAILED",
+                                f"Failed to create artifact: {safe_error_detail(e.response.text)}.",
+                                title=req.title,
+                                upstream_status=e.response.status_code,
+                            ))
     except Exception as e:
         raise HTTPException(status_code=502,
-                            detail=f"Failed to create artifact: {e}")
+                            detail=error_detail(
+                                "ARTIFACT_PUBLISH_FAILED",
+                                f"Failed to create artifact: {safe_error_detail(e)}.",
+                                title=req.title,
+                            ))
 
     artifact_uuid = created["uuid"]
 
@@ -978,7 +1122,11 @@ async def get_publish_info(dir_name: str):
     adir = _artifacts_dir()
     entry_dir = os.path.join(adir, dir_name)
     if not os.path.isdir(entry_dir):
-        raise HTTPException(status_code=404, detail="Artifact not found")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "ARTIFACT_NOT_FOUND",
+            f"Local artifact '{dir_name}' was not found.",
+            dir_name=dir_name,
+        ))
 
     category = _detect_category(entry_dir)
     local_meta, _ = _read_local_metadata(entry_dir, category)
@@ -1026,11 +1174,19 @@ async def publish_artifact(req: PublishRequest):
     """
     headers = _get_auth_headers()
     if not headers:
-        raise HTTPException(status_code=401, detail="No FABRIC token configured — cannot publish")
+        raise HTTPException(status_code=401, detail=error_detail(
+            "ARTIFACT_TOKEN_MISSING",
+            "No FABRIC token is configured. Log in to FABRIC before publishing.",
+        ))
 
     src_dir = os.path.join(_artifacts_dir(), req.dir_name)
     if not os.path.isdir(src_dir):
-        raise HTTPException(status_code=404, detail=f"Local artifact '{req.dir_name}' not found in {req.category}")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "ARTIFACT_NOT_FOUND",
+            f"Local artifact '{req.dir_name}' was not found.",
+            dir_name=req.dir_name,
+            category=req.category,
+        ))
 
     desc_short, desc_long = _make_descriptions(req.description, req.title, req.category, req.description_long)
     publish_tags = _ensure_category_tag(list(req.tags), req.category)
@@ -1040,17 +1196,29 @@ async def publish_artifact(req: PublishRequest):
     if req.action == "update":
         # --- UPDATE existing artifact (user is the author) ---
         if not existing_uuid:
-            raise HTTPException(status_code=400, detail="Cannot update: no artifact_uuid in local metadata")
+            raise HTTPException(status_code=400, detail=error_detail(
+                "ARTIFACT_NOT_LINKED",
+                "Cannot update: local artifact has no artifact_uuid link. Publish it as a new artifact instead.",
+                dir_name=req.dir_name,
+            ))
 
         # Verify authorship
         try:
             remote = await _fetch_artifact(existing_uuid)
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Failed to fetch remote artifact: {e}")
+            raise HTTPException(status_code=502, detail=error_detail(
+                "ARTIFACT_UPSTREAM_ERROR",
+                f"Failed to fetch remote artifact: {safe_error_detail(e)}.",
+                uuid=existing_uuid,
+            ))
 
         user_email, user_name = _get_current_user_identity()
         if not _is_user_author(remote, user_email, user_name):
-            raise HTTPException(status_code=403, detail="You are not the author of this artifact")
+            raise HTTPException(status_code=403, detail=error_detail(
+                "ARTIFACT_FORBIDDEN",
+                "You are not the author of this artifact. Fork it to publish your own copy.",
+                uuid=existing_uuid,
+            ))
 
         update_body: dict[str, Any] = {
             "title": req.title,
@@ -1072,12 +1240,20 @@ async def publish_artifact(req: PublishRequest):
             )
             r.raise_for_status()
         except httpx.HTTPStatusError as e:
-            detail = e.response.text
             raise HTTPException(status_code=e.response.status_code,
-                                detail=f"Failed to update artifact: {detail}")
+                                detail=error_detail(
+                                    "ARTIFACT_UPSTREAM_ERROR",
+                                    f"Failed to update artifact: {safe_error_detail(e.response.text)}.",
+                                    uuid=existing_uuid,
+                                    upstream_status=e.response.status_code,
+                                ))
         except Exception as e:
             raise HTTPException(status_code=502,
-                                detail=f"Failed to update artifact: {e}")
+                                detail=error_detail(
+                                    "ARTIFACT_UPSTREAM_ERROR",
+                                    f"Failed to update artifact: {safe_error_detail(e)}.",
+                                    uuid=existing_uuid,
+                                ))
 
         version_info = await _upload_content(headers, existing_uuid, src_dir, req.dir_name)
 
@@ -1105,7 +1281,11 @@ async def publish_artifact(req: PublishRequest):
     elif req.action == "fork":
         # --- FORK: create new artifact with provenance ---
         if not existing_uuid:
-            raise HTTPException(status_code=400, detail="Cannot fork: no artifact_uuid in local metadata")
+            raise HTTPException(status_code=400, detail=error_detail(
+                "ARTIFACT_NOT_LINKED",
+                "Cannot fork: local artifact has no artifact_uuid link. Publish it as a new artifact instead.",
+                dir_name=req.dir_name,
+            ))
 
         # Fetch remote info for provenance
         remote_title = ""
@@ -1196,12 +1376,20 @@ async def publish_artifact(req: PublishRequest):
                     )
                     r.raise_for_status()
                 except httpx.HTTPStatusError as e:
-                    detail = e.response.text
                     raise HTTPException(status_code=e.response.status_code,
-                                        detail=f"Failed to update artifact: {detail}")
+                                        detail=error_detail(
+                                            "ARTIFACT_UPSTREAM_ERROR",
+                                            f"Failed to update artifact: {safe_error_detail(e.response.text)}.",
+                                            uuid=existing_uuid,
+                                            upstream_status=e.response.status_code,
+                                        ))
                 except Exception as e:
                     raise HTTPException(status_code=502,
-                                        detail=f"Failed to update artifact: {e}")
+                                        detail=error_detail(
+                                            "ARTIFACT_UPSTREAM_ERROR",
+                                            f"Failed to update artifact: {safe_error_detail(e)}.",
+                                            uuid=existing_uuid,
+                                        ))
                 version_info = await _upload_content(headers, existing_uuid, src_dir, req.dir_name)
                 originals_dir = os.path.join(_storage_dir(), ".artifact-originals")
                 os.makedirs(originals_dir, exist_ok=True)
@@ -1255,7 +1443,10 @@ async def list_valid_tags():
         r.raise_for_status()
         data = r.json()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch tags: {e}")
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            f"Failed to fetch valid tags from the Artifact Manager: {safe_error_detail(e)}.",
+        ))
 
     results = data.get("results", data if isinstance(data, list) else [])
     return {
@@ -1379,7 +1570,10 @@ async def update_remote_artifact(uuid: str, req: UpdateArtifactRequest):
     """Update settings for a remote artifact the user authors."""
     headers = _get_auth_headers()
     if not headers:
-        raise HTTPException(status_code=401, detail="No FABRIC token configured")
+        raise HTTPException(status_code=401, detail=error_detail(
+            "ARTIFACT_TOKEN_MISSING",
+            "No FABRIC token is configured. Log in to FABRIC first.",
+        ))
 
     update_body: dict[str, Any] = {}
     if req.title:
@@ -1398,7 +1592,11 @@ async def update_remote_artifact(uuid: str, req: UpdateArtifactRequest):
         update_body["authors"] = req.authors
 
     if not update_body:
-        raise HTTPException(status_code=400, detail="No fields to update")
+        raise HTTPException(status_code=400, detail=error_detail(
+            "ARTIFACT_REQUEST_INVALID",
+            "No fields to update were provided.",
+            uuid=uuid,
+        ))
 
     try:
         r = await fabric_client.put(
@@ -1410,10 +1608,18 @@ async def update_remote_artifact(uuid: str, req: UpdateArtifactRequest):
         r.raise_for_status()
         updated = r.json()
     except httpx.HTTPStatusError as e:
-        detail = e.response.text
-        raise HTTPException(status_code=e.response.status_code, detail=f"Failed to update artifact: {detail}")
+        raise HTTPException(status_code=e.response.status_code, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            f"Failed to update artifact: {safe_error_detail(e.response.text)}.",
+            uuid=uuid,
+            upstream_status=e.response.status_code,
+        ))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to update artifact: {e}")
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            f"Failed to update artifact: {safe_error_detail(e)}.",
+            uuid=uuid,
+        ))
 
     _cache["fetched_at"] = 0
     logger.info("Updated artifact %s", uuid)
@@ -1432,11 +1638,18 @@ async def upload_artifact_version(uuid: str, req: UploadVersionRequest):
     """Upload a new version for an existing remote artifact from a local directory."""
     headers = _get_auth_headers()
     if not headers:
-        raise HTTPException(status_code=401, detail="No FABRIC token configured")
+        raise HTTPException(status_code=401, detail=error_detail(
+            "ARTIFACT_TOKEN_MISSING",
+            "No FABRIC token is configured. Log in to FABRIC first.",
+        ))
 
     src_dir = os.path.join(_artifacts_dir(), req.dir_name)
     if not os.path.isdir(src_dir):
-        raise HTTPException(status_code=404, detail=f"Local artifact '{req.dir_name}' not found")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "ARTIFACT_NOT_FOUND",
+            f"Local artifact '{req.dir_name}' was not found.",
+            dir_name=req.dir_name,
+        ))
 
     tar_filter = _build_tar_filter(src_dir)
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1462,10 +1675,20 @@ async def upload_artifact_version(uuid: str, req: UploadVersionRequest):
                 r.raise_for_status()
                 version_info = r.json()
         except httpx.HTTPStatusError as e:
-            detail = e.response.text
-            raise HTTPException(status_code=e.response.status_code, detail=f"Version upload failed: {detail}")
+            raise HTTPException(status_code=e.response.status_code, detail=error_detail(
+                "ARTIFACT_PUBLISH_FAILED",
+                f"Version upload failed: {safe_error_detail(e.response.text)}.",
+                uuid=uuid,
+                dir_name=req.dir_name,
+                upstream_status=e.response.status_code,
+            ))
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Version upload failed: {e}")
+            raise HTTPException(status_code=502, detail=error_detail(
+                "ARTIFACT_PUBLISH_FAILED",
+                f"Version upload failed: {safe_error_detail(e)}.",
+                uuid=uuid,
+                dir_name=req.dir_name,
+            ))
 
     _cache["fetched_at"] = 0
     logger.info("Uploaded new version for artifact %s from %s", uuid, req.dir_name)
@@ -1482,7 +1705,10 @@ async def delete_artifact_version(uuid: str, version_uuid: str):
     """Delete a specific version from a remote artifact."""
     headers = _get_auth_headers()
     if not headers:
-        raise HTTPException(status_code=401, detail="No FABRIC token configured")
+        raise HTTPException(status_code=401, detail=error_detail(
+            "ARTIFACT_TOKEN_MISSING",
+            "No FABRIC token is configured. Log in to FABRIC first.",
+        ))
     try:
         r = await fabric_client.delete(
             f"{ARTIFACT_API}/contents/{version_uuid}",
@@ -1491,10 +1717,20 @@ async def delete_artifact_version(uuid: str, version_uuid: str):
         )
         r.raise_for_status()
     except httpx.HTTPStatusError as e:
-        detail = e.response.text
-        raise HTTPException(status_code=e.response.status_code, detail=f"Failed to delete version: {detail}")
+        raise HTTPException(status_code=e.response.status_code, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            f"Failed to delete version: {safe_error_detail(e.response.text)}.",
+            uuid=uuid,
+            version_uuid=version_uuid,
+            upstream_status=e.response.status_code,
+        ))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to delete version: {e}")
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            f"Failed to delete version: {safe_error_detail(e)}.",
+            uuid=uuid,
+            version_uuid=version_uuid,
+        ))
 
     _cache["fetched_at"] = 0
     logger.info("Deleted version %s from artifact %s", version_uuid, uuid)
@@ -1515,48 +1751,82 @@ async def revert_local_artifact(dir_name: str, req: RevertRequest):
     # 1. Resolve local artifact directory
     local_dir = os.path.join(_artifacts_dir(), dir_name)
     if not os.path.isdir(local_dir):
-        raise HTTPException(status_code=404, detail=f"Local artifact '{dir_name}' not found")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "ARTIFACT_NOT_FOUND",
+            f"Local artifact '{dir_name}' was not found.",
+            dir_name=dir_name,
+        ))
 
     # 2. Read metadata to get artifact_uuid from weave.json
     weave_path = os.path.join(local_dir, "weave.json")
     if not os.path.isfile(weave_path):
-        raise HTTPException(status_code=400, detail="Local artifact has no weave.json — cannot determine remote link")
+        raise HTTPException(status_code=400, detail=error_detail(
+            "ARTIFACT_NOT_LINKED",
+            "Local artifact has no weave.json, so its remote link cannot be determined.",
+            dir_name=dir_name,
+        ))
 
     try:
         with open(weave_path) as f:
             local_meta = json.load(f)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read weave.json: {e}")
+        raise HTTPException(status_code=400, detail=error_detail(
+            "ARTIFACT_METADATA_INVALID",
+            f"Failed to read weave.json: {safe_error_detail(e)}.",
+            dir_name=dir_name,
+        ))
 
     artifact_uuid = local_meta.get("artifact_uuid", "")
     if not artifact_uuid:
         raise HTTPException(
             status_code=400,
-            detail="Local artifact is not linked to a remote artifact (no artifact_uuid in weave.json)",
+            detail=error_detail(
+                "ARTIFACT_NOT_LINKED",
+                "Local artifact is not linked to a remote artifact (no artifact_uuid in weave.json).",
+                dir_name=dir_name,
+            ),
         )
 
     # 3. Fetch remote artifact info
     try:
         art = await _fetch_artifact(artifact_uuid)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch remote artifact {artifact_uuid}: {e}")
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            f"Failed to fetch remote artifact: {safe_error_detail(e)}.",
+            uuid=artifact_uuid,
+        ))
 
     # 4. Find the version to download
     versions = art.get("versions", [])
     if not versions:
-        raise HTTPException(status_code=404, detail="Remote artifact has no downloadable versions")
+        raise HTTPException(status_code=404, detail=error_detail(
+            "ARTIFACT_VERSION_NOT_FOUND",
+            "Remote artifact has no downloadable versions.",
+            uuid=artifact_uuid,
+        ))
 
     if req.version_uuid:
         version = next((v for v in versions if v["uuid"] == req.version_uuid), None)
         if not version:
-            raise HTTPException(status_code=404, detail=f"Version {req.version_uuid} not found on remote artifact")
+            raise HTTPException(status_code=404, detail=error_detail(
+                "ARTIFACT_VERSION_NOT_FOUND",
+                f"Version '{req.version_uuid}' was not found on the remote artifact.",
+                uuid=artifact_uuid,
+                version_uuid=req.version_uuid,
+            ))
     else:
         active = [v for v in versions if v.get("active", True)]
         version = active[0] if active else versions[0]
 
     urn = version.get("urn", "")
     if not urn:
-        raise HTTPException(status_code=400, detail="Version has no downloadable URN")
+        raise HTTPException(status_code=400, detail=error_detail(
+            "ARTIFACT_DOWNLOAD_FAILED",
+            "Version has no downloadable URN.",
+            uuid=artifact_uuid,
+            version_uuid=version.get("uuid", ""),
+        ))
 
     # 5. Download the tar.gz
     download_url = f"{ARTIFACT_API}/contents/download/{urn}"
@@ -1564,7 +1834,11 @@ async def revert_local_artifact(dir_name: str, req: RevertRequest):
         r = await ai_client.get(download_url, headers=_get_auth_headers())
         r.raise_for_status()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Download failed: {e}")
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_DOWNLOAD_FAILED",
+            f"Artifact content download failed: {safe_error_detail(e)}.",
+            uuid=artifact_uuid,
+        ))
 
     # 6. Extract to a temp directory
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1577,7 +1851,12 @@ async def revert_local_artifact(dir_name: str, req: RevertRequest):
             with tarfile.open(raw_path, "r:*") as tf:
                 for member in tf.getmembers():
                     if member.name.startswith("/") or ".." in member.name:
-                        raise HTTPException(status_code=400, detail="Artifact contains unsafe paths")
+                        raise HTTPException(status_code=400, detail=error_detail(
+                            "ARTIFACT_ARCHIVE_UNSAFE",
+                            "Artifact archive contains unsafe paths and was rejected.",
+                            uuid=artifact_uuid,
+                            dir_name=dir_name,
+                        ))
                 extract_dir = os.path.join(tmpdir, "extracted")
                 os.makedirs(extract_dir, exist_ok=True)
                 tf.extractall(extract_dir)
@@ -1672,7 +1951,10 @@ async def delete_remote_artifact(uuid: str):
     """Delete a remote artifact from the FABRIC Artifact Manager."""
     headers = _get_auth_headers()
     if not headers:
-        raise HTTPException(status_code=401, detail="No FABRIC token configured")
+        raise HTTPException(status_code=401, detail=error_detail(
+            "ARTIFACT_TOKEN_MISSING",
+            "No FABRIC token is configured. Log in to FABRIC first.",
+        ))
 
     try:
         r = await fabric_client.delete(
@@ -1682,10 +1964,18 @@ async def delete_remote_artifact(uuid: str):
         )
         r.raise_for_status()
     except httpx.HTTPStatusError as e:
-        detail = e.response.text
-        raise HTTPException(status_code=e.response.status_code, detail=f"Failed to delete artifact: {detail}")
+        raise HTTPException(status_code=e.response.status_code, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            f"Failed to delete artifact: {safe_error_detail(e.response.text)}.",
+            uuid=uuid,
+            upstream_status=e.response.status_code,
+        ))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to delete artifact: {e}")
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            f"Failed to delete artifact: {safe_error_detail(e)}.",
+            uuid=uuid,
+        ))
 
     _cache["fetched_at"] = 0
     logger.info("Deleted remote artifact %s", uuid)

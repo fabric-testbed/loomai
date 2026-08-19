@@ -2,6 +2,8 @@
 
 import json
 import os
+import shutil
+from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
 
 import httpx
@@ -116,6 +118,60 @@ class TestUpdateLocalMetadata:
         resp = client.put("/api/artifacts/local/nonexistent/metadata",
                           json={"name": "X"})
         assert resp.status_code == 404
+
+
+class TestValidateArtifact:
+    def test_validate_local_shipped_weave_has_no_errors(self, client, storage_dir):
+        src = Path(__file__).resolve().parents[2] / "default_artifacts" / "Hello_FABRIC"
+        dst = storage_dir / "my_artifacts" / "Hello_FABRIC"
+        shutil.copytree(src, dst)
+
+        resp = client.post("/api/artifacts/validate", json={"dir_name": "Hello_FABRIC"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["valid"] is True
+        assert data["artifact_type"] == "weave"
+        assert data["error_count"] == 0
+        assert data["source"] == {"type": "local", "dir_name": "Hello_FABRIC"}
+
+    def test_validate_inline_reports_actionable_findings(self, client):
+        resp = client.post("/api/artifacts/validate", json={
+            "weave_json": {
+                "name": "Bad Weave",
+                "run_script": "weave.sh",
+                "args": {"SLICE_NAME": "bad-shape"},
+            },
+            "scripts": {
+                "weave.sh": "#!/bin/bash\npython3 run.py\nmkdir -p result\necho ok > result/output.txt\n",
+            },
+        })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["valid"] is False
+        assert data["error_count"] >= 1
+        codes = {finding["code"]: finding for finding in data["findings"]}
+        assert codes["WEAVE_ARGS_SHAPE"]["path"] == "weave.json"
+        assert codes["WEAVE_ARGS_SHAPE"]["line"] >= 1
+        assert codes["SCRIPT_SET_E_MISSING"]["path"] == "weave.sh"
+        assert codes["SCRIPT_PROGRESS_MARKER_MISSING"]["path"] == "weave.sh"
+        assert codes["SCRIPT_RESULTS_PATH_CONVENTION"]["line"] in {3, 4}
+        assert "fix-hint" in codes["SCRIPT_RESULTS_PATH_CONVENTION"]
+
+    def test_validate_local_does_not_mutate_artifact(self, client, storage_dir):
+        art_dir = storage_dir / "my_artifacts" / "Read_Only_Check"
+        art_dir.mkdir(parents=True)
+        weave_json = '{"run_script": "weave.sh", "args": "bad"}'
+        weave_sh = "#!/bin/bash\npython3 run.py\n"
+        (art_dir / "weave.json").write_text(weave_json)
+        (art_dir / "weave.sh").write_text(weave_sh)
+
+        resp = client.post("/api/artifacts/validate", json={"dir_name": "Read_Only_Check"})
+
+        assert resp.status_code == 200
+        assert (art_dir / "weave.json").read_text() == weave_json
+        assert (art_dir / "weave.sh").read_text() == weave_sh
 
 
 class TestListRemoteArtifacts:
@@ -400,7 +456,9 @@ class TestPublishAction:
                 "action": "update",
             })
         assert resp.status_code == 400
-        assert "Cannot update" in resp.json()["detail"]
+        detail = resp.json()["detail"]
+        assert detail["error"] == "ARTIFACT_NOT_LINKED"
+        assert "Cannot update" in detail["detail"]
 
     def test_publish_action_fork_requires_uuid(self, client, storage_dir):
         """action=fork with no artifact_uuid → 400."""
@@ -421,7 +479,9 @@ class TestPublishAction:
                 "action": "fork",
             })
         assert resp.status_code == 400
-        assert "Cannot fork" in resp.json()["detail"]
+        detail = resp.json()["detail"]
+        assert detail["error"] == "ARTIFACT_NOT_LINKED"
+        assert "Cannot fork" in detail["detail"]
 
     def test_publish_action_fork_writes_provenance(self, client, storage_dir):
         """action=fork writes forked_from to weave.json."""
@@ -514,3 +574,92 @@ class TestDownloadDedup:
         (storage_dir / "my_artifacts").mkdir(parents=True, exist_ok=True)
         result = _find_local_by_uuid("nonexistent-uuid")
         assert result is None
+
+
+class TestErrorEnvelopes:
+    """FC18-2: structured error envelopes for the artifact routes."""
+
+    def test_publish_missing_local_artifact_envelope(self, client):
+        """Publishing an absent local dir_name → 404 ARTIFACT_NOT_FOUND envelope."""
+        with patch("app.routes.artifacts._get_auth_headers",
+                    return_value={"Authorization": "Bearer fake"}):
+            resp = client.post("/api/artifacts/publish", json={
+                "dir_name": "does_not_exist",
+                "category": "weave",
+                "title": "Nope",
+                "description": "Test desc",
+            })
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "ARTIFACT_NOT_FOUND"
+        assert "does_not_exist" in detail["detail"]
+        assert detail["dir_name"] == "does_not_exist"
+
+    def test_publish_without_token_envelope(self, client, storage_dir):
+        """Publishing with no token → 401 ARTIFACT_TOKEN_MISSING envelope."""
+        token_path = storage_dir / "fabric_config" / "id_token.json"
+        token_path.parent.mkdir(parents=True, exist_ok=True)
+        token_path.write_text("{}")
+
+        resp = client.post("/api/artifacts/publish", json={
+            "dir_name": "whatever",
+            "category": "weave",
+            "title": "Nope",
+            "description": "Test desc",
+        })
+        assert resp.status_code == 401
+        detail = resp.json()["detail"]
+        assert detail["error"] == "ARTIFACT_TOKEN_MISSING"
+
+    def test_download_upstream_error_envelope(self, client):
+        """Upstream fetch failure on download → 502 ARTIFACT_UPSTREAM_ERROR envelope."""
+        with patch("app.routes.artifacts._fetch_artifact",
+                    new_callable=AsyncMock,
+                    side_effect=Exception("Bearer secret=leaked-token upstream 503 /home/fabric/x")):
+            resp = client.post("/api/artifacts/download", json={"uuid": "up-err-uuid"})
+        assert resp.status_code == 502
+        detail = resp.json()["detail"]
+        assert detail["error"] == "ARTIFACT_UPSTREAM_ERROR"
+        assert detail["uuid"] == "up-err-uuid"
+        # Sanitizer redacts secret assignments and absolute paths from upstream text.
+        assert "leaked-token" not in detail["detail"]
+        assert "/home/fabric" not in detail["detail"]
+
+    def test_download_unsafe_archive_envelope(self, client, storage_dir):
+        """A downloaded archive with traversal paths → 400 ARTIFACT_ARCHIVE_UNSAFE envelope."""
+        import io
+        import tarfile
+
+        (storage_dir / "my_artifacts").mkdir(parents=True, exist_ok=True)
+
+        # Build a tarball whose member escapes the extraction root.
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tf:
+            data = b"malicious"
+            info = tarfile.TarInfo(name="../evil.txt")
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+        archive_bytes = buf.getvalue()
+
+        art = {
+            "uuid": "unsafe-uuid",
+            "title": "Unsafe",
+            "tags": [{"tag": "fabric"}],
+            "description_short": "s",
+            "description_long": "d",
+            "versions": [{"uuid": "v1", "active": True, "urn": "urn:x"}],
+        }
+        content_resp = MagicMock()
+        content_resp.content = archive_bytes
+        content_resp.raise_for_status = MagicMock()
+
+        with patch("app.routes.artifacts._fetch_artifact",
+                    new_callable=AsyncMock, return_value=art), \
+             patch("app.routes.artifacts._get_auth_headers",
+                    return_value={"Authorization": "Bearer fake"}), \
+             patch("app.routes.artifacts.ai_client.get",
+                    new=AsyncMock(return_value=content_resp)):
+            resp = client.post("/api/artifacts/download", json={"uuid": "unsafe-uuid"})
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["error"] == "ARTIFACT_ARCHIVE_UNSAFE"

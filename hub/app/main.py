@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="LoomAI Hub",
     description="Multi-user hub for LoomAI on Kubernetes",
-    version="0.6.0",
+    version="0.7.13",
     lifespan=lifespan,
 )
 

@@ -12,6 +12,33 @@ deploy, and troubleshoot experiments on the FABRIC testbed.
 - **Drafts & Slices**: `/home/fabric/work/my_slices/` (drafts and slice registry)
 - **FABRIC context**: `AGENTS.md` in the working directory (comprehensive FABRIC reference)
 
+### Generated Harness Defaults
+
+LoomAI generates default configs for Claude Code and the other external
+harnesses at image build and backend startup. Runtime defaults live under
+`/home/fabric/work` and `/home/fabric` (`AGENTS.md`, `CLAUDE.md`,
+`opencode.json`, `.opencode/`, `.aider.conf.yml`, `CONVENTIONS.md`,
+`.crush.json`, `.config/goose/config.yaml`, `pi/`, `~/.codex/config.toml`).
+
+User-specific overrides belong in those runtime files. The sync process preserves
+unowned keys and user files while restoring LoomAI-managed defaults. Run
+`loomai tools sync` (alias: `loomai ai tools sync`) to re-sync without
+rebuilding or restarting. The generated mapping is
+`/home/fabric/work/.loomai/harness-defaults/MAPPING.md`.
+
+The WebUI Settings > AI Tools > Harnesses section shows status and per-harness
+Configure/Sync and Docs actions for OpenCode, Goose, Pi, Aider, Crush, Codex,
+and Claude Code. It also exposes Reset to overwrite one harness's expected
+generated config files with canonical defaults, and Uninstall to remove
+installed packages plus LoomAI-owned runtime state. Uninstall preserves config
+by default unless the user selects "Also remove harness configuration", and it
+refuses to run while the harness is active.
+
+Post-deploy harness parity verification is
+`python3 /app/scripts/verify_harness_lifecycle.py --execute`; it covers
+install, reset, default uninstall, remove-config uninstall, and reinstall
+outcomes for all managed harnesses after an owner-approved rebuild.
+
 ### Filesystem Write Access
 
 You can read and write anywhere under `/home/fabric/work/`. The artifacts
@@ -112,8 +139,9 @@ frontend, backend, federation, QA, DevOps, and AI/RAG specialist agents.
 
 ## Co-located AI Tools
 
-OpenCode, Aider, and Crush are also available in this container. All tools
-share the same FABRIC skills, agents, workspace, and credentials.
+OpenCode, Aider, Crush, Pi, Codex, Antigravity, and Deep Agents are also
+available in this container. These tools share the same FABRIC workspace,
+credentials, and generated LoomAI context where their harnesses support it.
 
 ## LLM Providers
 

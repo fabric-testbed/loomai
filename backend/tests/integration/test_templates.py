@@ -1,6 +1,7 @@
 """Tests for weave template CRUD."""
 
 import json
+import logging
 import os
 from unittest.mock import patch
 
@@ -44,6 +45,9 @@ class TestSaveTemplate:
         assert "def stop(" in content
         assert "def monitor(" in content
         assert "my_slice.load(" in content
+        assert "FABRIC_MAX_LEASE_HOURS" in content
+        assert "lease_in_hours=max_lease_hours" in content
+        assert "_submit_with_lease_policy(my_slice)" in content
 
     def test_save_template_creates_weave_sh(self, client, storage_dir):
         self._create_and_save(client, "Shell_Test")
@@ -85,6 +89,53 @@ class TestSaveTemplate:
         resp = client.get("/api/templates")
         names = [t["name"] for t in resp.json()]
         assert "Test Tmpl" in names
+
+
+class TestRunTemplate:
+    def test_start_run_injects_policy_env_without_clamping_requested_lease(
+        self,
+        client,
+        storage_dir,
+        caplog,
+    ):
+        tmpl_dir = storage_dir / "my_artifacts" / "Env_Weave"
+        tmpl_dir.mkdir(parents=True, exist_ok=True)
+        (tmpl_dir / "weave.json").write_text(json.dumps({
+            "name": "Env Weave",
+            "run_script": "weave.sh",
+            "log_file": "weave.log",
+        }))
+        script = tmpl_dir / "weave.sh"
+        script.write_text("#!/usr/bin/env bash\nenv\n")
+        os.chmod(script, 0o755)
+
+        captured = {}
+
+        def fake_start_run(**kwargs):
+            captured.update(kwargs)
+            return "run-env-test"
+
+        caplog.set_level(logging.WARNING, logger="app.routes.templates")
+        with patch("app.routes.templates._max_lease_hours_policy", return_value=6), \
+             patch("app.run_manager.start_run", side_effect=fake_start_run), \
+             patch("app.run_manager.get_run", return_value={
+                 "pid": 123,
+                 "pgid": 123,
+                 "started_at": "2026-07-12T00:00:00Z",
+             }):
+            resp = client.post("/api/templates/Env_Weave/start-run/auto", json={
+                "args": {
+                    "SLICE_NAME": "lease-env-test",
+                    "FABRIC_LEASE_HOURS": "24",
+                    "FABRIC_MAX_LEASE_HOURS": "24",
+                },
+            })
+
+        assert resp.status_code == 200
+        script_args = captured["script_args"]
+        assert script_args["FABRIC_MAX_LEASE_HOURS"] == "6"
+        assert script_args["FABRIC_LEASE_HOURS"] == "24"
+        assert "Ignoring conflicting FABRIC_MAX_LEASE_HOURS" in caplog.text
 
 
 class TestCleanupScript:

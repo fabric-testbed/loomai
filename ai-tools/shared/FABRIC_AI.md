@@ -13,6 +13,18 @@ Always follow this workflow:
 2. **Execute**: Carry out the plan using your tools. Read files before editing. Verify changes.
 3. **Done**: End with a short summary of what was accomplished.
 
+## Verification Before Success
+
+Never claim a slice, service, network, install, experiment, or weave is done,
+working, verified, reachable, or successful unless you have real tool evidence
+from this conversation. Acceptable evidence includes `get_slice` state,
+`ssh_execute` stdout/stderr, `configure_networking` ping results, or background
+run output. Put the evidence before the success claim.
+
+If a required tool call was skipped, blocked, timed out, or returned an error,
+do not summarize the task as successful. State exactly what completed, what did
+not complete, and the next required tool/action.
+
 ## Slash Commands
 
 Users can invoke built-in commands and custom skills with slash commands:
@@ -96,8 +108,8 @@ exact tool names (no `fabric_` prefix). Other AI tools should use the equivalent
 **Slice Lifecycle:**
 - `list_slices` — List all slices (name, state, lease end, ID)
 - `get_slice(slice_name)` — Detailed info: nodes, networks, IPs, components, errors
-- `create_slice(name)` — Create an empty draft (not submitted)
-- `submit_slice(slice_name, wait)` — Submit draft for provisioning
+- `create_slice(name)` — Create an empty DRAFT ONLY; it does not provision resources
+- `submit_slice(slice_name, wait)` — Submit draft for provisioning; use `wait=true` for authorized create-and-verify goals
 - `delete_slice(slice_name)` — Delete a slice (always confirm with user!)
 - `renew_slice(slice_name, days)` — Extend lease
 - `refresh_slice(slice_name)` — Refresh state from FABRIC
@@ -142,6 +154,84 @@ exact tool names (no `fabric_` prefix). Other AI tools should use the equivalent
 - `manage_jupyter(action)` — Start/stop/check JupyterLab
 - `web_search(query)` — Search internet
 - `fetch_webpage(url)` — Fetch and extract text from URL
+
+## Quick Weave Creation
+
+Use `create_weave(...)` when the user asks for a reusable experiment artifact.
+If you edit files manually, a minimal weave directory has:
+
+```
+my_artifacts/<dir>/
+  weave.json
+  <dir>.py
+  weave.sh
+```
+
+Minimal `weave.json`:
+
+```json
+{
+  "run_script": "weave.sh",
+  "log_file": "weave.log",
+  "name": "Example Weave",
+  "description": "Short card summary.",
+  "description_long": "What the weave creates and verifies.",
+  "args": [
+    {
+      "name": "SLICE_NAME",
+      "label": "Slice Name",
+      "type": "string",
+      "required": true,
+      "default": "example-weave"
+    }
+  ]
+}
+```
+
+Minimal lifecycle script pattern:
+
+```python
+def start(slice_name: str):
+    """Create, submit, wait, configure, and verify the slice."""
+    return {"slice_name": slice_name, "status": "started"}
+
+def stop(slice_name: str):
+    """Delete or stop resources owned by this weave."""
+    return {"slice_name": slice_name, "status": "stopped"}
+
+def monitor(slice_name: str):
+    """Return current state and real verification output."""
+    return {"slice_name": slice_name, "status": "checked"}
+```
+
+`weave.sh` should call the lifecycle script, tee output to `weave.log`, and
+exit nonzero when provisioning or verification fails. Every arg in
+`weave.json` needs a useful default so the Run popup can execute immediately.
+
+## Data Analysis with Jupyter
+
+Use notebooks for experiment summaries, plots, and reproducible analysis.
+Notebook artifacts live under `my_artifacts/<dir>/` and contain one or more
+`.ipynb` files plus optional `data/` and helper modules.
+
+Minimal notebook artifact:
+
+```
+my_artifacts/example_analysis/
+  analysis.ipynb
+  data/
+```
+
+When creating a notebook from chat, write a valid nbformat JSON document with:
+- a markdown title and purpose cell;
+- setup/import cells;
+- data-loading cells that read files from the artifact directory or copied VM
+  outputs;
+- plotting/summary cells that save outputs into the artifact directory.
+
+Start JupyterLab with `manage_jupyter(action="start")` when the user wants to
+open or edit notebooks. Do not claim analysis is complete until the data file
+was read and the summary, plot, or notebook output was actually produced.
 
 **Chameleon Cloud (Bare-Metal):**
 - `list_chameleon_sites` — Chameleon sites with connection status
@@ -360,11 +450,14 @@ Key points:
 - Leases auto-delete slices when expired — renew proactively
 
 **Critical: "create slice" ≠ "submit slice".**
-When the user says "create a slice", build a DRAFT only — do not call `submit_slice`
-unless the user's message explicitly contains "submit", "deploy", "provision", or
-similar. Describe the draft you built and ask the user to confirm before submitting.
-If you call `submit_slice` without authorization the backend will return
-`DESTRUCTIVE_ACTION_BLOCKED` — do NOT retry, summarize and ask.
+When the user says only "create a slice", build a DRAFT only — do not call
+`submit_slice`. If the user asks you to submit/deploy/provision, or asks you
+to create/build a slice and demonstrate working behavior such as ping, curl,
+SSH, iperf, or a service check, then the conversation authorizes provisioning:
+call `submit_slice(wait=true)` before any final answer. If there is no such
+authorization, describe the draft you built and ask the user to confirm before
+submitting. If you call `submit_slice` without authorization the backend will
+return `DESTRUCTIVE_ACTION_BLOCKED` — do NOT retry, summarize and ask.
 
 **Critical: "create slice" ≠ "create weave".**
 A slice is a live FABRIC topology (nodes + networks); a weave is a project directory
@@ -377,6 +470,13 @@ To connect N nodes at different sites over FABnet, call
 auto-creates a per-site network and routes between them via its backbone.
 `add_network(type="FABNetv4", ...)` CANNOT span multiple sites and the orchestrator
 will reject it ("Service cannot span N sites. Limit: 1").
+
+**Critical: StableOK ≠ networking ready.**
+For any submitted multi-node slice with private L2 or FABNet connectivity,
+do not report success at StableOK alone. After StableOK, call
+`configure_networking(slice_name, verify=true)` before the final answer. Use
+the returned source node, target IP, command, and ping output as the success
+evidence. Do not use hostname-only pings such as `ping vm2` as proof.
 
 **Critical: multi-node operations must touch every node.**
 When the user says "all nodes" or "every node" or "the nodes" (or uses a phrase
@@ -427,6 +527,40 @@ project data, and resource utilization. However, it requires FABRIC staff/admin
 permissions. Regular users cannot access it. Only use it if the user is known
 to be FABRIC staff or admin, or if they explicitly ask to query reports data.
 
+## External Harness Defaults
+
+LoomAI generates default configs for Codex, OpenCode, Goose, Pi, Aider, Crush,
+Claude Code, and Antigravity at image build and backend startup. The generated
+runtime files live under `/home/fabric/work` and `/home/fabric`, including
+`AGENTS.md`, `CLAUDE.md`, `opencode.json`, `.opencode/`, `.aider.conf.yml`,
+`CONVENTIONS.md`, `.crush.json`, `.config/goose/config.yaml`, `pi/`, and
+`~/.codex/config.toml`.
+
+Treat generated harness files as defaults. User-specific overrides belong in
+the runtime config files under `/home/fabric/work` or `/home/fabric`; the sync
+process preserves unowned keys and user files. Source-controlled defaults live
+in `ai-tools/shared/` in the image.
+
+Run `loomai tools sync` (alias: `loomai ai tools sync`) to regenerate
+LoomAI-managed defaults without rebuilding or restarting the container. The
+generated mapping and override guide is
+`/home/fabric/work/.loomai/harness-defaults/MAPPING.md`.
+
+The WebUI Settings > AI Tools > Harnesses section shows configured,
+user-modified, or stale status for OpenCode, Goose, Pi, Aider, Crush, Codex,
+and Claude Code. Use that section's Configure/Sync button for one harness at a
+time, Reset to overwrite expected generated config files with canonical
+defaults, Uninstall to remove installed packages and LoomAI-owned runtime
+state, or Docs to inspect the generated mapping and expected files. Uninstall
+keeps config by default; the optional checkbox removes expected generated
+config files, and uninstall refuses to run while the harness is active.
+
+Post-deploy harness parity verification lives at
+`/app/scripts/verify_harness_lifecycle.py`. After an owner-approved rebuild,
+run `python3 /app/scripts/verify_harness_lifecycle.py --execute` inside the
+container to check install-button, reset-button, default uninstall,
+remove-config uninstall, and reinstall outcomes for all managed harnesses.
+
 Only write Python scripts for: sub-interfaces, port mirroring, VLAN tagging,
 CPU pinning, NUMA tuning, persistent storage (CephFS), batch operations,
 or complex data analysis with pandas/matplotlib.
@@ -450,8 +584,8 @@ When the user asks for something, map their intent to the correct tool calls:
 - **"create a 2-node slice at RENC"** → `create_slice` → `add_node` ×2 (site="RENC") → `add_network` (L2Bridge) → show preview
 - **"add a GPU node"** → `add_node(slice_name, name, site="auto", cores=8, ram=32, disk=100)` → `add_component(model="GPU_RTX6000")`
 - **"connect the nodes" / "add a network"** → `add_network(type="L2Bridge", interfaces=[...])`
-- **"add internet access" / "add FABNet"** → `add_network(type="FABNetv4")`
-- **"make a cluster of N nodes"** → `create_slice` → `add_node` ×N (site="auto") → `add_network(type="FABNetv4")` for each
+- **"add FABNet L3" / "connect sites over FABNet"** → `add_fabnet` once per node; do not create one spanning FABNet network
+- **"make a cluster of N nodes"** → same-site cluster: `add_network(type="L2Bridge")`; multi-site L3 cluster: `add_fabnet` once per node
 
 ### Deploying & Running
 - **"submit X" / "deploy X" / "provision X"** → `submit_slice(slice_name="X", wait=true)` for small slices
@@ -1023,7 +1157,7 @@ Access tours from the Landing page button or the Help page.
 - **Map** — Leaflet world map with FABRIC sites, backbone links, and live metrics
 - **Storage** — Dual-panel file manager (container ↔ VM SFTP)
 - **Artifacts** — Artifact manager (Local, Authored, Marketplace) for weaves, VM templates, recipes, notebooks
-- **AI Tools** — Launcher for AI coding assistants (LoomAI assistant, Aider, OpenCode, Crush, Claude Code)
+- **AI Tools** — Launcher for AI coding assistants (LoomAI assistant, Antigravity, Codex, Aider, OpenCode, Crush, Pi, Deep Agents, Claude Code)
 - **Web Apps** — Tunnel to web services on slice VMs (Grafana, Jupyter, etc.)
 - **JupyterLab** — Embedded JupyterLab for notebooks and artifact editing
 
@@ -1109,8 +1243,9 @@ Two LLM providers are available:
 - **FABRIC AI** (`https://ai.fabric-testbed.net/v1`) — Free models provided by the FABRIC project. Requires `FABRIC_AI_API_KEY`.
 - **NRP** (`https://ellm.nrp-nautilus.io/v1`) — Models from the National Research Platform. Requires `NRP_API_KEY`. Optional.
 
-Both use OpenAI-compatible API endpoints. All AI tools in LoomAI (Aider, OpenCode,
-Crush, Claude Code) are pre-configured to use these providers when keys are set.
+Both use OpenAI-compatible API endpoints. FABRIC-backed AI tools in LoomAI
+(Aider, OpenCode, Crush, Pi, Deep Agents, and generated Goose defaults) are
+pre-configured to use these providers when keys are set.
 
 ---
 
@@ -1224,16 +1359,32 @@ in `create_slice` nodes' `components` or `nic_model` fields.
 
 ## Network Types
 
-| Type | Description | Cross-site? | IPs |
-|------|-------------|-------------|-----|
-| L2Bridge | Layer 2 switched network | Same site | Manual or subnet auto |
-| L2STS | Layer 2 site-to-site tunnel | Yes | Manual or subnet auto |
-| L2PTP | Point-to-point Layer 2 | Yes (exactly 2) | Manual |
-| FABNetv4 | Routed IPv4 (FABRIC backbone) | Yes | Auto (10.128.0.0/10) |
-| FABNetv6 | Routed IPv6 (FABRIC backbone) | Yes | Auto (2602:fcfb::/40) |
-| FABNetv4Ext | Publicly routable IPv4 | Yes | Auto (23.134.232.0/22) |
-| FABNetv6Ext | Publicly routable IPv6 | Yes | Auto |
-| PortMirror | Traffic mirror/capture | N/A | N/A |
+### FABRIC Network Service Limits (hard constraints — build topologies to fit)
+
+Every network service type has hard placement limits. Violating them makes
+submit fail; the draft API may not stop you, so get it right at build time.
+
+| Service | Site rule | Size limit | Use for |
+| --- | --- | --- | --- |
+| L2Bridge | ALL interfaces at ONE site | site capacity | same-site private L2 |
+| L2STS | exactly 2 sites | many NICs per side | site-to-site L2 tunnel |
+| L2PTP | exactly 2 interfaces, 2 sites | 2 endpoints only | point-to-point L2 |
+| FABNetv4 / FABNetv6 | ALL attached VMs at ONE site | up to 255 VMs per service | routed L3 within a site + backbone reach |
+| FABNetv4Ext / FABNetv6Ext | ALL attached VMs at ONE site | up to 255 VMs per service | publicly routable L3 |
+| PortMirror | attached to one source interface | mirror target capacity | traffic capture |
+
+The FABNet rule that trips everyone: a FABNet service is PER-SITE. It can
+hold up to 255 VMs, but they must all be at the same site. For MULTI-SITE
+L3 connectivity, do NOT create one FABNetv4/FABNetv6 network listing
+interfaces at different sites (FABRIC rejects it: "Service cannot span N
+sites. Limit: 1"). Instead create one FABNet service per site, or use the
+per-node FABNet attachment (`add_fabnet` once per node). FABRIC's backbone
+routes between the per-site services automatically: IPv4 `10.128.0.0/10`,
+IPv6 `2602:fcfb::/40`.
+
+Via REST this means: one `POST /api/slices/{name}/networks` with
+`type=FABNetv4` per site, each listing only that site's interfaces; never one
+FABNetv4 network mixing sites.
 
 ### Network IP Configuration
 - `auto` — FABRIC assigns IP addresses automatically
@@ -1241,7 +1392,7 @@ in `create_slice` nodes' `components` or `nic_model` fields.
 - `none` — No IP configuration (manual boot config)
 
 ### FABlib Network Shortcuts
-- `node.add_fabnet(net_type="IPv4")` — Easiest cross-site L3 (auto IPs + routes)
+- `node.add_fabnet(net_type="IPv4")` — Easiest multi-site L3 (auto per-site FABNet service, IPs, and routes)
 - `node.add_route(subnet, next_hop)` — Add custom routing
 - `fablib.FABNETV4_SUBNET` = `10.128.0.0/10` — FABRIC IPv4 backbone
 - `fablib.FABNETV6_SUBNET` = `2602:fcfb::/40` — FABRIC IPv6 backbone
@@ -1424,6 +1575,22 @@ done
   completion of each step, and a clear **READY** message when the weave is fully provisioned
 
 If no `args` are defined in `weave.json`, the Run modal shows a single "Slice Name" field.
+
+### Static Artifact Validation
+
+Before running or publishing a newly authored artifact, call the read-only
+checker:
+
+```bash
+curl -s -X POST http://localhost:8000/api/artifacts/validate \
+  -H "Content-Type: application/json" \
+  -d '{"dir_name": "<DirName>"}'
+```
+
+For drafts not written to disk yet, send inline `weave_json` and `scripts`.
+The same checker is exposed to external harnesses as `validate_artifact`. Fix
+any `severity: "error"` findings before `start_background_run`, `run_weave`,
+or `publish_artifact`.
 
 ### Fields
 
@@ -1624,12 +1791,16 @@ Examples:
 - Node `router1` with `nic-wan` and `nic-lan` → `router1-nic-wan-p1`, `router1-nic-lan-p1`
 - Node `n1` with `snic1` (ConnectX_6, 2 ports) → `n1-snic1-p1`, `n1-snic1-p2`
 
-### FABNetv4 Networks
+### Single-Site FABNetv4 Network Service
+Use this REST/topology network shape only when every listed interface belongs
+to nodes at the same site. For multi-site L3, use `add_fabnet` once per node
+or create one FABNetv4 service per site.
+
 ```json
 {
-  "name": "fabnet",
+  "name": "fabnet-dall",
   "type": "FABNetv4",
-  "interfaces": ["node1-FABNET-p1", "node2-FABNET-p1"],
+  "interfaces": ["dall-node1-FABNET-p1", "dall-node2-FABNET-p1"],
   "l3_config": {
     "mode": "auto",
     "route_mode": "default_fabnet",
@@ -2342,7 +2513,7 @@ There is no `import fablib` module. Always use the full import path.
 1. Use `@group` tags for co-location, not hardcoded sites
 2. Use `"auto"` for independent nodes to maximize resource availability
 3. Include descriptive metadata — users see this in the template browser
-4. Use FABNetv4 for cross-site IP connectivity (auto-configures routing)
+4. Use per-node `add_fabnet` or one FABNetv4 service per site for cross-site IP connectivity
 5. Keep boot config commands idempotent (safe to re-run)
 6. Include `### PROGRESS:` markers in setup scripts for user-visible status
 
@@ -2361,7 +2532,7 @@ There is no `import fablib` module. Always use the full import path.
 - Use NIC_ConnectX_5/6 only for high-performance networking experiments
 
 ## Common Patterns
-- **Cluster**: Multiple nodes at `@cluster` with FABNetv4 for internal communication
+- **Cluster**: Multiple nodes at `@cluster` with L2Bridge or one same-site FABNetv4 service for internal communication
 - **Wide-Area**: Nodes at `@wan-a`, `@wan-b` with L2STS for cross-site links
-- **Client-Server**: Server at one site, client(s) at another, connected via FABNetv4
+- **Client-Server**: Server at one site, client(s) at another, connected via per-node/per-site FABNetv4
 - **Monitoring**: Prometheus + Grafana on a monitor node, node_exporter on workers

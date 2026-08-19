@@ -42,6 +42,11 @@ class TestCloseTunnel:
             mock_mgr.return_value.close_tunnel.return_value = False
             resp = client.delete("/api/tunnels/nonexistent")
         assert resp.status_code == 404
+        assert resp.json()["detail"] == {
+            "error": "TUNNEL_NOT_FOUND",
+            "detail": "Tunnel 'nonexistent' was not found.",
+            "tunnel_id": "nonexistent",
+        }
 
 
 class TestCreateTunnel:
@@ -74,3 +79,27 @@ class TestCreateTunnel:
                 "slice_name": "s1", "node_name": "n1", "port": 8080,
             })
         assert resp.status_code == 503
+        assert resp.json()["detail"] == {
+            "error": "TUNNEL_CREATE_UNAVAILABLE",
+            "detail": "No ports",
+            "slice_name": "s1",
+            "node_name": "n1",
+            "port": 8080,
+        }
+
+    def test_create_unexpected_error_is_structured_and_sanitized(self, client):
+        with patch("app.routes.tunnels.get_tunnel_manager") as mock_mgr:
+            mock_mgr.return_value.create_tunnel.side_effect = ValueError(
+                "failed at /home/fabric/work/token.txt token=abc123"
+            )
+            resp = client.post("/api/tunnels", json={
+                "slice_name": "s1", "node_name": "n1", "port": 8080,
+            })
+        assert resp.status_code == 500
+        detail = resp.json()["detail"]
+        assert detail["error"] == "TUNNEL_CREATE_FAILED"
+        assert detail["slice_name"] == "s1"
+        assert detail["node_name"] == "n1"
+        assert detail["port"] == 8080
+        assert "[path]" in detail["detail"]
+        assert "abc123" not in detail["detail"]

@@ -104,10 +104,11 @@ def delete_slice(ctx, name, force):
 
 @slices.command("submit")
 @click.argument("name", type=SLICE)
+@click.option("--lease-hours", type=int, default=None, help="Set lease duration in hours on submit.")
 @click.option("--wait", "do_wait", is_flag=True, help="Wait for provisioning to complete.")
 @click.option("--timeout", default=600, help="Timeout in seconds when --wait is used.")
 @click.pass_context
-def submit_slice(ctx, name, do_wait, timeout):
+def submit_slice(ctx, name, lease_hours, do_wait, timeout):
     """Submit a draft slice to FABRIC for provisioning.
 
     Examples:
@@ -118,7 +119,8 @@ def submit_slice(ctx, name, do_wait, timeout):
     """
     client = ctx.obj["client"]
     output_message(f"Submitting slice '{name}'...")
-    data = client.post(f"/slices/{name}/submit")
+    body = {"lease_hours": lease_hours} if lease_hours else None
+    data = client.post(f"/slices/{name}/submit", json=body)
     state = data.get("state", "")
     output_message(f"Submitted — state: {state}")
 
@@ -207,9 +209,10 @@ def validate_slice(ctx, name):
 
 @slices.command("renew")
 @click.argument("name", type=SLICE)
-@click.option("--days", required=True, type=int, help="Number of days to extend.")
+@click.option("--days", type=int, default=None, help="Number of days to extend.")
+@click.option("--hours", type=int, default=None, help="Set renewed lease end this many hours from now.")
 @click.pass_context
-def renew_slice(ctx, name, days):
+def renew_slice(ctx, name, days, hours):
     """Extend slice lease expiration.
 
     Examples:
@@ -217,8 +220,14 @@ def renew_slice(ctx, name, days):
       loomai slices renew my-slice --days 7
     """
     client = ctx.obj["client"]
-    data = client.post(f"/slices/{name}/renew", json={"days": days})
-    output_message(f"Renewed slice '{name}' for {days} days")
+    if hours:
+        body = {"hours": hours}
+        output_message(f"Renewed slice '{name}' for {hours} hours")
+    else:
+        days = days or 7
+        body = {"days": days}
+        output_message(f"Renewed slice '{name}' for {days} days")
+    data = client.post(f"/slices/{name}/renew", json=body)
     output(ctx, data)
 
 

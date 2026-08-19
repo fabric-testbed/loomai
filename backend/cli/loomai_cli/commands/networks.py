@@ -108,6 +108,45 @@ def auto_configure(ctx, slice_name):
     output(ctx, data)
 
 
+@networks.command("configure")
+@click.argument("slice_name", type=SLICE)
+@click.option("--no-post-boot", "skip_post_boot", is_flag=True, default=False,
+              help="Skip FABlib post_boot_config before runtime commands.")
+@click.option("--no-l2", "skip_l2", is_flag=True, default=False,
+              help="Skip generated private L2 IP assignment.")
+@click.option("--no-fabnet", "skip_fabnet", is_flag=True, default=False,
+              help="Skip FABNetv4 route configuration.")
+@click.option("--no-verify", "skip_verify", is_flag=True, default=False,
+              help="Skip IP-target ping verification.")
+@click.option("--l2-subnet-base", default="192.168.100.0/24",
+              help="Base IPv4 subnet for generated private L2 addresses.")
+@click.option("--ping-count", default=3, type=int,
+              help="ICMP echo count for verification pings.")
+@click.option("--timeout", default=120, type=int,
+              help="Per-node command timeout in seconds.")
+@click.pass_context
+def configure_runtime(ctx, slice_name, skip_post_boot, skip_l2, skip_fabnet,
+                      skip_verify, l2_subnet_base, ping_count, timeout):
+    """Configure post-StableOK VM data-plane networking."""
+    data = ctx.obj["client"].post(
+        f"/slices/{slice_name}/configure-networking",
+        json={
+            "run_post_boot": not skip_post_boot,
+            "configure_l2": not skip_l2,
+            "configure_fabnet": not skip_fabnet,
+            "verify": not skip_verify,
+            "l2_subnet_base": l2_subnet_base,
+            "ping_count": ping_count,
+            "timeout": timeout,
+        },
+    )
+    if ctx.obj["format"] == "table":
+        pings = data.get("pings", []) if isinstance(data, dict) else []
+        ok = sum(1 for row in pings if row.get("ok"))
+        output_message(f"Configured networking for '{slice_name}' ({ok}/{len(pings)} ping checks passed)")
+    output(ctx, data)
+
+
 @networks.group("ip-hints")
 def ip_hints():
     """Manage IP hints for FABNet/L3 network interfaces."""

@@ -28,6 +28,13 @@ class TestAIMockHelp:
         r = invoke("ai", cmd, "--help")
         assert r.exit_code == 0
 
+    def test_chat_help_shows_generation_flags(self, invoke):
+        r = invoke("ai", "chat", "--help")
+        assert r.exit_code == 0
+        assert "--temperature" in r.output
+        assert "--top-p" in r.output
+        assert "--max-output-tokens" in r.output
+
 
 class TestAIMockModels:
     """Test AI model listing with mocked HTTP."""
@@ -90,6 +97,21 @@ class TestAIMockModels:
             assert r.exit_code == 0
             assert "no API key" in r.output.lower() or "settings" in r.output.lower()
 
+    def test_list_models_custom_provider_strings(self, runner):
+        from loomai_cli.main import cli
+        with patch("loomai_cli.client.Client._request") as mock:
+            mock.return_value = {
+                "fabric": [],
+                "nrp": [],
+                "custom": {"ai-renci": ["gpt-5.5", "Kimi-K2.6"]},
+                "has_key": {"fabric": True, "nrp": True},
+                "default": "ai-renci:gpt-5.5",
+            }
+            r = runner.invoke(cli, ["ai", "models"])
+            assert r.exit_code == 0
+            assert "ai-renci:gpt-5.5 (default)" in r.output
+            assert "ai-renci:Kimi-K2.6" in r.output
+
 
 class TestAIMockAgents:
     """Test AI agent listing with mocked HTTP."""
@@ -145,6 +167,32 @@ class TestAIMockChat:
 
             r = runner.invoke(cli, ["ai", "chat", "--model", "llama3.1-70b", "test query"])
             assert r.exit_code == 0
+
+    def test_chat_sends_generation_flags(self, runner):
+        from loomai_cli.main import cli
+        with patch("httpx.stream") as stream_mock:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.iter_lines.return_value = [
+                'data: {"content": "Response"}',
+                'data: [DONE]',
+            ]
+            stream_mock.return_value.__enter__ = MagicMock(return_value=mock_response)
+            stream_mock.return_value.__exit__ = MagicMock(return_value=False)
+
+            r = runner.invoke(cli, [
+                "ai", "chat",
+                "--model", "qwen3-coder-30b",
+                "--temperature", "0.0",
+                "--top-p", "0.9",
+                "--max-output-tokens", "4096",
+                "test query",
+            ])
+            assert r.exit_code == 0
+            sent_json = stream_mock.call_args.kwargs["json"]
+            assert sent_json["temperature"] == 0.0
+            assert sent_json["top_p"] == 0.9
+            assert sent_json["max_output_tokens"] == 4096
 
     def test_chat_connection_error(self, runner):
         from loomai_cli.main import cli

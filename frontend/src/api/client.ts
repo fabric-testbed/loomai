@@ -1,6 +1,6 @@
 /** API client for the LoomAI backend. */
 
-import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult, UpdateInfo, IpHint, L3Config, FacilityPortInfo, LoomAISettings, ToolConfigStatus, UsersResponse, CalendarData, NextAvailableResult, AlternativeResult, ExperimentVariable, FederatedSlice, FederatedMember, FederatedConnection, FederatedConnectionPlan } from '../types/fabric';
+import type { SliceSummary, SliceData, SiteInfo, SiteDetail, LinkInfo, ComponentModel, ConfigStatus, ProjectsResponse, ValidationResult, SiteMetrics, LinkMetrics, FileEntry, ProvisionRule, BootConfig, BootExecResult, SliceKeySet, VMTemplateSummary, VMTemplateDetail, VMTemplateVariantDetail, HostInfo, ProjectDetails, ToolFile, RecipeSummary, RecipeExecResult, UpdateInfo, IpHint, L3Config, FacilityPortInfo, LoomAISettings, ToolConfigStatus, HarnessConfigStatusResponse, HarnessConfigSyncResponse, HarnessConfigResetResponse, UsersResponse, CalendarData, NextAvailableResult, AlternativeResult, ExperimentVariable, FederatedSlice, FederatedMember, FederatedConnection, FederatedConnectionPlan } from '../types/fabric';
 
 // When deployed on K8s behind the hub proxy at /user/{username}/,
 // window.__LOOMAI_BASE_PATH is set by an injected env-config.js script.
@@ -796,7 +796,17 @@ export function getAiTools(): Promise<Record<string, boolean>> {
   return fetchJson('/config/ai-tools');
 }
 
-export interface AIModelEntry { id: string; name: string; healthy?: boolean; }
+export interface AIModelEntry {
+  id: string;
+  name: string;
+  healthy?: boolean;
+  model_type?: string;
+  endpoint_style?: 'auto' | 'chat' | 'responses' | 'non-chat';
+  context_length?: number;
+  tier?: string;
+  supports_tools?: boolean;
+  warnings?: string[];
+}
 export interface AIModelsResponse {
   fabric: AIModelEntry[];
   nrp: AIModelEntry[];
@@ -836,6 +846,25 @@ export function testModelHealth(model: string, source?: string): Promise<{ healt
 
 export function refreshModelHealth(): Promise<AIModelsResponse> {
   return fetchJson('/ai/models/refresh', { method: 'POST' });
+}
+
+export interface AIModelCapabilities {
+  model: string;
+  id: string;
+  provider: string;
+  found: boolean;
+  healthy?: boolean | null;
+  model_type: string;
+  endpoint_style: 'auto' | 'chat' | 'responses' | 'non-chat';
+  context_length?: number;
+  tier?: string;
+  supports_tools: boolean;
+  warnings: string[];
+}
+
+export function getModelCapabilities(model: string, source?: string): Promise<AIModelCapabilities> {
+  const params = source ? `?source=${encodeURIComponent(source)}` : '';
+  return fetchJson(`/ai/models/${encodeURIComponent(model)}/capabilities${params}`);
 }
 
 // --- Chameleon Cloud ---
@@ -1846,8 +1875,9 @@ export function installTool(toolId: string): Promise<{ status: string; tool: str
   return fetchJson(`/ai/tools/${encodeURIComponent(toolId)}/install`, { method: 'POST' });
 }
 
-export function uninstallTool(toolId: string): Promise<{ status: string; tool: string; output?: string; error?: string }> {
-  return fetchJson(`/ai/tools/${encodeURIComponent(toolId)}/uninstall`, { method: 'POST' });
+export function uninstallTool(toolId: string, removeConfig = false): Promise<{ status: string; tool: string; output?: string; error?: string; removed_paths?: string[]; removed_config_files?: number }> {
+  const suffix = removeConfig ? '?remove_config=true' : '';
+  return fetchJson(`/ai/tools/${encodeURIComponent(toolId)}/uninstall${suffix}`, { method: 'POST' });
 }
 
 export interface InstallStreamEvent {
@@ -2303,7 +2333,7 @@ export function stopChatStream(requestId: string): Promise<{ status: string }> {
 export async function* streamChat(
   messages: Array<{ role: string; content: string }>,
   model: string,
-  options?: { agent?: string; sliceContext?: string; requestId?: string; signal?: AbortSignal },
+  options?: { agent?: string; sliceContext?: string; requestId?: string; conversationId?: string; signal?: AbortSignal },
 ): AsyncGenerator<{ content?: string; error?: string; done?: boolean }> {
   const res = await fetch(`${BASE}/ai/chat/stream`, {
     method: 'POST',
@@ -2314,6 +2344,7 @@ export async function* streamChat(
       agent: options?.agent,
       slice_context: options?.sliceContext,
       request_id: options?.requestId,
+      conversation_id: options?.conversationId,
     }),
     signal: options?.signal,
   });
@@ -3296,6 +3327,26 @@ export function resetToolConfig(tool: string): Promise<{ status: string }> {
   });
 }
 
+export function getHarnessStatuses(): Promise<HarnessConfigStatusResponse> {
+  return fetchJson('/ai/tools/harnesses');
+}
+
+export function syncHarnessDefaults(harness: string): Promise<HarnessConfigSyncResponse> {
+  return fetchJson(`/ai/tools/harnesses/${encodeURIComponent(harness)}/sync`, {
+    method: 'POST',
+  });
+}
+
+export function resetHarnessDefaults(harness: string): Promise<HarnessConfigResetResponse> {
+  return fetchJson(`/ai/tools/harnesses/${encodeURIComponent(harness)}/reset`, {
+    method: 'POST',
+  });
+}
+
+export function getHarnessDocsUrl(harness: string): string {
+  return `${BASE}/ai/tools/harnesses/${encodeURIComponent(harness)}/docs`;
+}
+
 // Claude Code config management
 export interface ClaudeConfigFile {
   name: string;
@@ -3368,6 +3419,10 @@ export interface SettingTestResult {
   expires_at?: string;
   model_count?: number;
   project_name?: string;
+  endpoint_style?: 'auto' | 'chat' | 'responses' | 'non-chat';
+  model_type?: string;
+  models?: string[];
+  warnings?: string[];
 }
 
 export function testSetting(settingName: string, body?: Record<string, unknown>): Promise<SettingTestResult> {
@@ -3381,10 +3436,15 @@ export function testAllSettings(): Promise<Record<string, SettingTestResult>> {
   return fetchJson('/settings/test-all', { method: 'POST' });
 }
 
-export function testCustomProvider(base_url: string, api_key: string): Promise<SettingTestResult> {
-  return fetchJson('/settings/test-custom-provider', {
+export function testCustomProvider(
+  base_url: string,
+  api_key: string,
+  endpoint_style: 'auto' | 'chat' | 'responses' | 'non-chat' = 'auto',
+  model?: string,
+): Promise<SettingTestResult> {
+  return fetchJson('/config/provider/test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ base_url, api_key }),
+    body: JSON.stringify({ base_url, api_key, endpoint_style, model }),
   });
 }

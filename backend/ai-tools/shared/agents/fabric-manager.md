@@ -53,9 +53,9 @@ NIC_ConnectX_7_100, NIC_ConnectX_7_400 (400G), NIC_BlueField_2_ConnectX_6 (DPU)
 - **L2Bridge** — Same-site Layer 2 switched network
 - **L2STS** — Cross-site Layer 2 tunnel
 - **L2PTP** — Point-to-point Layer 2 (exactly 2 interfaces)
-- **FABNetv4/v6** — Routed L3 on FABRIC backbone (auto-configured, preferred for cross-site)
+- **FABNetv4/v6** — Routed L3 on FABRIC backbone. Each FABNet service is one site only; use `fabnet`/`add_fabnet` once per node for cross-site routing.
 - **FABNetv4Ext/v6Ext** — Publicly routable (limited)
-- Use the `fabnet` shorthand on nodes for easy L3: `{fabnet: "v4"}` auto-assigns IPs and routes
+- Use the `fabnet` shorthand on nodes for easy L3: `{fabnet: "v4"}` auto-assigns IPs and routes while keeping FABNet services per-site.
 
 ## Your Approach
 

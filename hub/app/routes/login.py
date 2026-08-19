@@ -7,13 +7,13 @@ import logging
 import secrets
 import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.cilogon import exchange_code, get_authorize_url, get_userinfo
-from app.auth.fabric_auth import check_fabric_role
+from app.auth.fabric_auth import FabricAPIError, check_fabric_role
 from app.auth.session import COOKIE_NAME, create_session_cookie, get_current_user
 from app.config import settings
 from app.db.models import Server, TokenStore, User
@@ -25,6 +25,32 @@ from app.templates import templates
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _auth_error_page(
+    request: Request,
+    status_code: int,
+    heading: str,
+    message: str,
+    show_portal_help: bool = False,
+) -> HTMLResponse:
+    """Render the branded error page for browser-facing auth failures.
+
+    The OAuth callback is always hit by a browser redirect from CILogon, so
+    failures must render HTML — a raw JSON HTTPException is what users would
+    otherwise see.
+    """
+    return templates.TemplateResponse(
+        request,
+        "error.html",
+        {
+            "hub_prefix": settings.HUB_PREFIX,
+            "heading": heading,
+            "message": message,
+            "show_portal_help": show_portal_help,
+        },
+        status_code=status_code,
+    )
 
 
 @router.get("/hub/login")
@@ -72,17 +98,30 @@ async def oauth_callback(
     """
     if error:
         logger.error("OAuth callback error: %s", error)
-        raise HTTPException(status_code=403, detail=f"OAuth error: {error}")
+        return _auth_error_page(
+            request, 403,
+            "Sign-in failed",
+            f"The identity provider returned an error ({error}). Please try signing in again.",
+        )
 
     if not code or not state:
-        raise HTTPException(status_code=400, detail="Missing code or state parameter")
+        return _auth_error_page(
+            request, 400,
+            "Sign-in failed",
+            "The sign-in response was incomplete. Please try signing in again.",
+        )
 
     # Step 1: Exchange code for tokens
     try:
         tokens = await exchange_code(code, state)
     except ValueError as e:
         logger.error("Token exchange failed: %s", e)
-        raise HTTPException(status_code=403, detail=str(e))
+        return _auth_error_page(
+            request, 403,
+            "Sign-in failed",
+            "We could not complete the sign-in with your identity provider. "
+            "Please try signing in again.",
+        )
 
     id_token = tokens.get("id_token", "")
     access_token = tokens.get("access_token", "")
@@ -93,30 +132,68 @@ async def oauth_callback(
         userinfo = await get_userinfo(access_token)
     except ValueError as e:
         logger.error("Userinfo fetch failed: %s", e)
-        raise HTTPException(status_code=403, detail=str(e))
+        return _auth_error_page(
+            request, 403,
+            "Sign-in failed",
+            "We could not retrieve your identity details. Please try signing in again.",
+        )
 
     sub = userinfo.get("sub", "")
     email = userinfo.get("email", "")
 
     if not sub:
-        raise HTTPException(status_code=403, detail="No 'sub' claim in userinfo")
-
-    # Step 3: Check FABRIC role and extract projects from roles
-    authorized, roles, fabric_user_info, projects = await check_fabric_role(sub)
-    if not authorized:
-        raise HTTPException(
-            status_code=403,
-            detail=f"You do not have the required FABRIC role ({settings.FABRIC_REQUIRED_ROLE}). "
-            "Please contact FABRIC support.",
+        return _auth_error_page(
+            request, 403,
+            "Sign-in failed",
+            "Your identity provider did not return a subject identifier. "
+            "Please try signing in again.",
         )
 
-    # Step 4: Get FABRIC UUID as username (from the same API response)
+    # Step 3: Check FABRIC role and extract projects from roles
+    try:
+        authorized, roles, fabric_user_info, projects = await check_fabric_role(sub)
+    except FabricAPIError as e:
+        # Do NOT report this as ineligibility — we could not check at all.
+        logger.error("FABRIC eligibility check unavailable for sub=%s: %s", sub, e)
+        return _auth_error_page(
+            request, 503,
+            "Sign-in temporarily unavailable",
+            "We could not verify your FABRIC account because the FABRIC "
+            "service did not respond. This is not a problem with your "
+            "account — please try again in a few minutes.",
+        )
+    if not authorized:
+        logger.warning("Unauthorized login attempt: sub=%s email=%s", sub, email)
+        return _auth_error_page(
+            request, 403,
+            "You don't have a LoomAI account",
+            "LoomAI is available to FABRIC users who belong to an active project. "
+            "If you already have a FABRIC account, make sure you are a member of "
+            "an active project and sign in again.",
+            show_portal_help=True,
+        )
+
+    # Step 4: Get FABRIC UUID as username (from the same API response).
+    # The user IS authorized at this point, so a missing/unusable uuid is a
+    # Core API data problem — not ineligibility.
     fabric_uuid = fabric_user_info.get("uuid", "")
-    if not fabric_uuid:
-        raise HTTPException(status_code=403, detail="No FABRIC UUID found for user")
+    if not fabric_uuid or not isinstance(fabric_uuid, str):
+        logger.error(
+            "Authorized user has no usable uuid (sub=%s): %.200s",
+            sub, fabric_user_info,
+        )
+        return _auth_error_page(
+            request, 503,
+            "Sign-in temporarily unavailable",
+            "We could not verify your FABRIC account because the FABRIC "
+            "service returned incomplete information. This is not a problem "
+            "with your account — please try again in a few minutes.",
+        )
 
     username = fabric_uuid
     bastion_login = fabric_user_info.get("bastion_login", "")
+    if not isinstance(bastion_login, str):
+        bastion_login = ""
 
     # Step 5a: Pick the first provisionable project from roles
     project_id = ""
@@ -171,10 +248,20 @@ async def oauth_callback(
     else:
         token_store.id_token = id_token
         token_store.refresh_token = refresh_token
-        if project_id and not token_store.project_id:
+        # Reconcile stored project state with the freshly validated list:
+        # a previously stored project may since have become ineligible
+        # (left/expired, SERVICE, or excluded for an unreadable description),
+        # and spawn.py injects the stored value into every new user pod.
+        valid_project_ids = {p["uuid"] for p in projects}
+        if token_store.project_id and token_store.project_id not in valid_project_ids:
+            logger.info(
+                "Stored project %s no longer eligible for user %s; replacing with %s",
+                token_store.project_id, username, project_id or "none",
+            )
+            token_store.project_id = project_id or None
+        elif project_id and not token_store.project_id:
             token_store.project_id = project_id
-        if projects:
-            token_store.projects_json = json.dumps(projects)
+        token_store.projects_json = json.dumps(projects) if projects else None
         token_store.updated_at = datetime.datetime.utcnow()
 
     await db.commit()

@@ -2,9 +2,9 @@
 # Source: FABRIC Jupyter Examples - fablib_api
 # Notebook: create_l3network_fabnet_ipv6ext_manual.ipynb
 #
-# FABRIC provides **FABnetv6Ext**, a routed IPv6 service that spans every FABRIC
-# site and additionally provides **publicly routable IPv6 addresses** — enabling
-# your experiment nodes to communicate wi...
+# FABRIC provides **FABnetv6Ext**, a routed IPv6 backbone with publicly
+# routable IPv6 addresses. One FABNetv6Ext service cannot attach VMs from
+# multiple sites; create one service per site.
 
 # # FABnet IPv6Ext: External Access with Manual Configuration
 # ### FABlib API References

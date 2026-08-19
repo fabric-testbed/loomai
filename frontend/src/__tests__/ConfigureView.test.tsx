@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import ConfigureView from '../components/ConfigureView';
 import * as api from '../api/client';
+import { confirmDialog } from '../components/AppDialogProvider';
 
 vi.mock('../components/ToolInstallOverlay', () => ({
   default: () => <div data-testid="tool-install-overlay" />,
@@ -11,6 +12,11 @@ vi.mock('../api/client', () => ({
   listSliceKeySets: vi.fn(),
   getSettings: vi.fn(),
   getToolConfigs: vi.fn(),
+  getHarnessStatuses: vi.fn(),
+  syncHarnessDefaults: vi.fn(),
+  resetHarnessDefaults: vi.fn(),
+  getHarnessDocsUrl: vi.fn(),
+  uninstallTool: vi.fn(),
   listUsers: vi.fn(),
   getAiModels: vi.fn(),
   getAgents: vi.fn(),
@@ -24,7 +30,12 @@ vi.mock('../api/client', () => ({
   saveConfig: vi.fn(),
   testAllSettings: vi.fn(),
   testSetting: vi.fn(),
+  testCustomProvider: vi.fn(),
   resetToolConfig: vi.fn(),
+}));
+
+vi.mock('../components/AppDialogProvider', () => ({
+  confirmDialog: vi.fn(),
 }));
 
 function mockSettings() {
@@ -90,6 +101,86 @@ describe('ConfigureView', () => {
     vi.mocked(api.listSliceKeySets).mockResolvedValue([]);
     vi.mocked(api.getSettings).mockResolvedValue(mockSettings() as any);
     vi.mocked(api.getToolConfigs).mockResolvedValue([]);
+    vi.mocked(api.getHarnessStatuses).mockResolvedValue({
+      status: 'ok',
+      workspace: '/home/fabric/work',
+      home: '/home/fabric',
+      harnesses: [
+        {
+          name: 'opencode',
+          label: 'OpenCode',
+          description: 'Terminal coding harness with provider, agent, skill, and MCP defaults.',
+          status: 'configured',
+          status_label: 'Configured',
+          configured: true,
+          needs_sync: false,
+          expected_files: 4,
+          configured_files: 4,
+          stale_files: 0,
+          user_modified_files: 0,
+          docs_url: '/api/ai/tools/harnesses/opencode/docs',
+          files: [],
+        },
+        {
+          name: 'pi',
+          label: 'Pi',
+          description: 'Minimal Pi terminal harness with direct provider defaults and surface guard.',
+          status: 'stale',
+          status_label: 'Stale',
+          configured: false,
+          needs_sync: true,
+          expected_files: 5,
+          configured_files: 3,
+          stale_files: 2,
+          user_modified_files: 0,
+          docs_url: '/api/ai/tools/harnesses/pi/docs',
+          files: [{ root: 'workspace', path: 'pi/agent/models.json', state: 'missing', state_label: 'Missing', reason: 'Expected generated file is absent.' }],
+        },
+      ],
+    } as any);
+    vi.mocked(api.syncHarnessDefaults).mockResolvedValue({
+      status: 'ok',
+      workspace: '/home/fabric/work',
+      home: '/home/fabric',
+      harness: {
+        name: 'pi',
+        label: 'Pi',
+        description: 'Minimal Pi terminal harness with direct provider defaults and surface guard.',
+        status: 'configured',
+        status_label: 'Configured',
+        configured: true,
+        needs_sync: false,
+        expected_files: 5,
+        configured_files: 5,
+        stale_files: 0,
+        user_modified_files: 0,
+        docs_url: '/api/ai/tools/harnesses/pi/docs',
+        files: [],
+      },
+    } as any);
+    vi.mocked(api.resetHarnessDefaults).mockResolvedValue({
+      status: 'ok',
+      workspace: '/home/fabric/work',
+      home: '/home/fabric',
+      reset_files: 5,
+      harness: {
+        name: 'pi',
+        label: 'Pi',
+        description: 'Minimal Pi terminal harness with direct provider defaults and surface guard.',
+        status: 'configured',
+        status_label: 'Configured',
+        configured: true,
+        needs_sync: false,
+        expected_files: 5,
+        configured_files: 5,
+        stale_files: 0,
+        user_modified_files: 0,
+        docs_url: '/api/ai/tools/harnesses/pi/docs',
+        files: [],
+      },
+    } as any);
+    vi.mocked(confirmDialog).mockResolvedValue(true);
+    vi.mocked(api.getHarnessDocsUrl).mockReturnValue('/api/ai/tools/harnesses/pi/docs');
     vi.mocked(api.listUsers).mockResolvedValue({ users: [], active_user: null } as any);
     vi.mocked(api.getAiModels).mockResolvedValue({
       default: 'fabric/mock-model',
@@ -103,6 +194,7 @@ describe('ConfigureView', () => {
     vi.mocked(api.getAgents).mockResolvedValue([]);
     vi.mocked(api.getSkills).mockResolvedValue([]);
     vi.mocked(api.getToolInstallStatus).mockResolvedValue({});
+    vi.mocked(api.uninstallTool).mockResolvedValue({ status: 'uninstalled', tool: 'pi', removed_config_files: 0 } as any);
     vi.mocked(api.getProjects).mockResolvedValue({
       projects: [{ uuid: 'project-1', name: 'TestProject' }],
       bastion_login: 'user_0000000000',
@@ -123,6 +215,14 @@ describe('ConfigureView', () => {
     vi.mocked(api.testAllSettings).mockResolvedValue({
       token: { ok: true, message: 'Token ok' },
       fablib: { ok: true, message: 'FABlib ok' },
+    });
+    vi.mocked(api.testCustomProvider).mockResolvedValue({
+      ok: true,
+      message: 'Reachable (1 models: resp-model; responses verified with resp-model)',
+      endpoint_style: 'responses',
+      model_type: 'responses',
+      models: ['resp-model'],
+      warnings: [],
     });
   });
 
@@ -155,6 +255,125 @@ describe('ConfigureView', () => {
       project_id: 'project-1',
       bastion_username: 'user_0000000001',
     }));
+  });
+
+  it('tests and saves custom provider endpoint style', async () => {
+    const settings = mockSettings();
+    settings.ai.custom_providers = [{
+      name: 'Local',
+      base_url: 'https://provider.example',
+      api_key: 'provider-key',
+      endpoint_style: 'responses',
+    }] as any;
+    vi.mocked(api.getSettings).mockResolvedValue(settings as any);
+
+    renderConfigure();
+
+    const tabs = await screen.findAllByTestId('configure-section-tab');
+    fireEvent.click(tabs.find(tab => tab.getAttribute('data-section') === 'llms')!);
+
+    const baseUrl = await screen.findByDisplayValue('https://provider.example');
+    const row = baseUrl.closest('div')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Test' }));
+
+    await waitFor(() => expect(api.testCustomProvider).toHaveBeenCalledWith(
+      'https://provider.example',
+      'provider-key',
+      'responses',
+    ));
+
+    const endpointStyleSelect = row.querySelector('select[title="Endpoint style"]') as HTMLSelectElement;
+    fireEvent.change(endpointStyleSelect, { target: { value: 'chat' } });
+
+    const save = await screen.findByTestId('configure-save');
+    await waitFor(() => expect(save).not.toBeDisabled());
+    fireEvent.click(save);
+
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+    expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      ai: expect.objectContaining({
+        custom_providers: [expect.objectContaining({
+          name: 'Local',
+          endpoint_style: 'chat',
+        })],
+      }),
+    }));
+  });
+
+  it('shows managed harness status and syncs one harness', async () => {
+    renderConfigure();
+
+    const tabs = await screen.findAllByTestId('configure-section-tab');
+    fireEvent.click(tabs.find(tab => tab.getAttribute('data-section') === 'ai-tools')!);
+
+    const piRow = await screen.findByTestId('harness-row-pi');
+    expect(within(piRow).getByText('Pi')).toBeInTheDocument();
+    expect(within(piRow).getByText('Stale')).toBeInTheDocument();
+
+    fireEvent.click(within(piRow).getByTestId('harness-sync-pi'));
+
+    await waitFor(() => expect(api.syncHarnessDefaults).toHaveBeenCalledWith('pi'));
+    expect(await screen.findByText('Pi harness defaults synced')).toBeInTheDocument();
+    expect(api.getHarnessStatuses).toHaveBeenCalled();
+  });
+
+  it('resets one managed harness after confirmation', async () => {
+    renderConfigure();
+
+    const tabs = await screen.findAllByTestId('configure-section-tab');
+    fireEvent.click(tabs.find(tab => tab.getAttribute('data-section') === 'ai-tools')!);
+
+    const piRow = await screen.findByTestId('harness-row-pi');
+    fireEvent.click(within(piRow).getByTestId('harness-reset-pi'));
+
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalledWith(
+      expect.stringContaining('Reset Pi harness defaults'),
+      expect.objectContaining({ tone: 'danger', confirmLabel: 'Reset' }),
+    ));
+    await waitFor(() => expect(api.resetHarnessDefaults).toHaveBeenCalledWith('pi'));
+    expect(await screen.findByText('Pi harness defaults reset')).toBeInTheDocument();
+  });
+
+  it('uninstalls one managed harness and keeps configuration by default', async () => {
+    vi.mocked(api.getToolInstallStatus).mockResolvedValue({
+      pi: { installed: true, display_name: 'Pi', size_estimate: '~700 MB' },
+    } as any);
+    renderConfigure();
+
+    const tabs = await screen.findAllByTestId('configure-section-tab');
+    fireEvent.click(tabs.find(tab => tab.getAttribute('data-section') === 'ai-tools')!);
+
+    const piRow = await screen.findByTestId('harness-row-pi');
+    fireEvent.click(within(piRow).getByTestId('harness-uninstall-pi'));
+
+    const heading = await screen.findByRole('heading', { name: 'Uninstall Pi' });
+    const dialog = heading.parentElement!;
+    expect(within(dialog).getByLabelText('Also remove harness configuration')).not.toBeChecked();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Uninstall' }));
+
+    await waitFor(() => expect(api.uninstallTool).toHaveBeenCalledWith('pi', false));
+    expect(await screen.findByText('Pi uninstalled')).toBeInTheDocument();
+    expect(api.getHarnessStatuses).toHaveBeenCalled();
+  });
+
+  it('passes the remove-configuration option from the harness uninstall dialog', async () => {
+    vi.mocked(api.getToolInstallStatus).mockResolvedValue({
+      pi: { installed: true, display_name: 'Pi', size_estimate: '~700 MB' },
+    } as any);
+    renderConfigure();
+
+    const tabs = await screen.findAllByTestId('configure-section-tab');
+    fireEvent.click(tabs.find(tab => tab.getAttribute('data-section') === 'ai-tools')!);
+
+    const piRow = await screen.findByTestId('harness-row-pi');
+    fireEvent.click(within(piRow).getByTestId('harness-uninstall-pi'));
+
+    const heading = await screen.findByRole('heading', { name: 'Uninstall Pi' });
+    const dialog = heading.parentElement!;
+    fireEvent.click(within(dialog).getByLabelText('Also remove harness configuration'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Uninstall' }));
+
+    await waitFor(() => expect(api.uninstallTool).toHaveBeenCalledWith('pi', true));
   });
 
 

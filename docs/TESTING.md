@@ -2,6 +2,66 @@
 
 Test infrastructure for the fabric-webgui project.
 
+## Help Documentation Validation
+
+User documentation examples and screenshots live in the in-app Help data at
+`frontend/src/data/helpData.ts`. Validate REST examples against backend-contract
+mode or provider fakes whenever possible. Validate CLI examples with the CLI
+test harness for non-mutating commands and with mocked or contract backends for
+mutating workflows. Generate GUI screenshots from deterministic Playwright
+mocked or contract data, and avoid capturing secrets or live user identifiers.
+
+### Help Screenshot Reference Pattern
+
+The canonical screenshot-backed Help example is
+`libraries.marketplace-weave-workflow` ("Find and Open a Marketplace Weave") in
+`frontend/src/data/helpData.ts`, backed by
+`frontend/e2e/tests/help-screenshots.mock.spec.ts`. Use it as the style and
+workflow reference for future Help screenshots.
+
+Good Help screenshots should:
+
+- Explain one workflow, not a random UI state. Interleave each screenshot
+  directly after the written step it illustrates.
+- Reference every visible marker number in the written instruction text, for
+  example "open **FABRIC Marketplace** **(2)**".
+- Prefer arrow-only markers for buttons, tabs, inputs, badges, and other small
+  controls so the control remains readable.
+- Use light region outlines only for large areas, such as a side panel. Avoid
+  tight circles around controls; if a circle is needed, make it loose and light.
+- Keep markers in the LoomAI theme: blue numbered badges, orange arrows, and
+  low-opacity target outlines.
+- Left-align screenshot figures in Help. Do not center them in the Help article
+  body on wide screens.
+- Use deterministic mocked or contract Playwright data. Do not capture live
+  users, tokens, emails, API keys, SSH keys, private project names, or live
+  resource identifiers.
+- Use production-safe examples. For site labels, use production sites and avoid
+  EDC, EDUKY, UKY, RENC, LBNL, and development sites.
+- Prefer stable, familiar artifacts for examples. The marketplace walkthrough
+  uses the `Hello, FABRIC` weave as the reference artifact.
+
+Screenshot image annotations are encoded in the Markdown image alt text after
+`||`:
+
+```text
+![Caption. || arrow=1:x,y,w,h@labelX,labelY:Target label; rect=2:x,y,w,h@labelX,labelY:Large region](/help-screenshots/example.png)
+```
+
+Use `arrow=` for most callouts. Use `rect=` for large highlighted regions.
+Reserve `circle=` for rare cases where an arrow alone is not enough. All
+coordinates are percentages of the screenshot.
+
+Regenerate and preview the reference screenshots with:
+
+```bash
+cd frontend
+UPDATE_HELP_SCREENSHOTS=1 \
+HELP_TOPIC_PREVIEW_PATH=/tmp/loomai-help-marketplace-weave-topic.png \
+E2E_PORT=3100 \
+npx playwright test -c e2e/playwright.config.ts --project=mocked-e2e e2e/tests/help-screenshots.mock.spec.ts
+```
+
 ## Backend Tests
 
 **Framework**: pytest with FastAPI `TestClient`

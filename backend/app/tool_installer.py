@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -47,7 +48,7 @@ TOOL_REGISTRY: dict[str, dict] = {
     },
     "claude": {
         "type": "npm",
-        "packages": ["@anthropic-ai/claude-code"],
+        "packages": ["@anthropic-ai/claude-code@2.1.202"],
         "binary": "claude",
         "display_name": "Claude Code",
         "size_estimate": "~1 GB",
@@ -66,12 +67,38 @@ TOOL_REGISTRY: dict[str, dict] = {
         "display_name": "OpenCode",
         "size_estimate": "~200 MB",
     },
+    "goose": {
+        "type": "archive",
+        "archive_url": (
+            "https://github.com/aaif-goose/goose/releases/download/v1.41.0/"
+            "goose-x86_64-unknown-linux-gnu.tar.bz2"
+        ),
+        "archive_member": "goose",
+        "binary": "goose",
+        "display_name": "Goose",
+        "size_estimate": "~200 MB",
+    },
     "crush": {
         "type": "npm",
         "packages": ["@charmland/crush"],
         "binary": "crush",
         "display_name": "Crush",
         "size_estimate": "~150 MB",
+    },
+    "pi": {
+        "type": "npm",
+        "packages": [
+            "@earendil-works/pi-coding-agent@0.80.3",
+            "pi-mcp-adapter@2.10.0",
+            "@gotgenes/pi-permission-system@16.0.1",
+            "pi-subagents@0.33.1",
+            "pi-web-access@0.10.7",
+            "@lebronj/pi-lsp@0.0.3",
+            "pyright@1.1.411",
+        ],
+        "binary": "pi",
+        "display_name": "Pi",
+        "size_estimate": "~700 MB",
     },
     "deepagents": {
         "type": "pip",
@@ -98,7 +125,9 @@ _SIZE_MB: dict[str, int] = {
     "claude": 1000,
     "aider": 900,
     "opencode": 200,
+    "goose": 200,
     "crush": 150,
+    "pi": 700,
     "deepagents": 500,
     "jupyterlab": 250,
 }
@@ -114,13 +143,17 @@ def _venv_bin() -> str:
     return os.path.join(_VENV_DIR, "bin")
 
 
+def _venv_python() -> str:
+    return os.path.join(_venv_bin(), "python")
+
+
 def _npm_bin() -> str:
     return os.path.join(_NPM_DIR, "bin")
 
 
 def _ensure_venv() -> None:
     """Create the virtualenv if it doesn't exist."""
-    if os.path.isfile(os.path.join(_venv_bin(), "python")):
+    if os.path.isfile(_venv_python()):
         return
     logger.info("Creating AI tools virtualenv at %s", _VENV_DIR)
     subprocess.run(
@@ -152,8 +185,8 @@ def get_tool_binary_path(tool_id: str) -> str | None:
     binary = info["binary"]
     if info["type"] == "pip":
         path = os.path.join(_venv_bin(), binary)
-    elif info["type"] == "shell":
-        # Shell-installed tools typically land in ~/.local/bin
+    elif info["type"] in {"archive", "shell"}:
+        # Archive and shell-installed tools typically land in ~/.local/bin
         path = os.path.join(_local_bin(), binary)
     else:
         path = os.path.join(_npm_bin(), binary)
@@ -183,17 +216,115 @@ def get_tool_env() -> dict[str, str]:
     return env
 
 
+def _npm_package_name(package_spec: str) -> str:
+    """Return the package name portion of an npm package spec."""
+    if package_spec.startswith("@"):
+        version_marker = package_spec.find("@", 1)
+        return package_spec[:version_marker] if version_marker != -1 else package_spec
+    return package_spec.split("@", 1)[0]
+
+
+def _npm_package_version(package_spec: str) -> str | None:
+    if package_spec.startswith("@"):
+        version_marker = package_spec.find("@", 1)
+        return package_spec[version_marker + 1:] if version_marker != -1 else None
+    if "@" not in package_spec:
+        return None
+    return package_spec.rsplit("@", 1)[1]
+
+
+def _npm_package_path(package_name: str) -> str:
+    return os.path.join(_NPM_DIR, "lib", "node_modules", *package_name.split("/"))
+
+
+def _npm_installed_version(package_name: str) -> str | None:
+    package_json = os.path.join(_npm_package_path(package_name), "package.json")
+    try:
+        with open(package_json, encoding="utf-8") as f:
+            data = json.load(f)
+        version = data.get("version")
+        return str(version) if version else None
+    except Exception:
+        return None
+
+
+def _npm_tool_version_status(info: dict, installed: bool) -> dict:
+    if info.get("type") != "npm":
+        return {}
+
+    package_versions = {}
+    version_drift = False
+    for package_spec in info.get("packages", []):
+        pinned = _npm_package_version(package_spec)
+        if not pinned:
+            continue
+        package_name = _npm_package_name(package_spec)
+        installed_version = _npm_installed_version(package_name)
+        drift = bool(installed and installed_version != pinned)
+        package_versions[package_name] = {
+            "pinned": pinned,
+            "installed": installed_version,
+            "drift": drift,
+        }
+        version_drift = version_drift or drift
+
+    if not package_versions:
+        return {}
+
+    first_name = next(iter(package_versions))
+    first = package_versions[first_name]
+    status = {
+        "pinned_version": first["pinned"],
+        "version_drift": version_drift,
+        "package_versions": package_versions,
+    }
+    if first["installed"]:
+        status["installed_version"] = first["installed"]
+    return status
+
+
+def _npm_tool_needs_upgrade(info: dict) -> bool:
+    if info.get("type") != "npm":
+        return False
+    for package_spec in info.get("packages", []):
+        pinned = _npm_package_version(package_spec)
+        if not pinned:
+            continue
+        package_name = _npm_package_name(package_spec)
+        if _npm_installed_version(package_name) != pinned:
+            return True
+    return False
+
+
+def tool_needs_upgrade(tool_id: str) -> bool:
+    info = TOOL_REGISTRY.get(tool_id)
+    if not info or not is_tool_installed(tool_id):
+        return False
+    return _npm_tool_needs_upgrade(info)
+
+
 def get_all_tool_status() -> dict[str, dict]:
     """Return install status for all tools."""
     result = {}
     for tool_id, info in TOOL_REGISTRY.items():
+        installed = is_tool_installed(tool_id)
         result[tool_id] = {
-            "installed": is_tool_installed(tool_id),
+            "installed": installed,
             "display_name": info["display_name"],
             "size_estimate": info["size_estimate"],
             "type": info["type"],
         }
+        result[tool_id].update(_npm_tool_version_status(info, installed))
     return result
+
+
+def _is_public_managed_harness(tool_id: str) -> bool:
+    try:
+        from app.harness_config import PUBLIC_MANAGED_HARNESSES
+
+        return tool_id in PUBLIC_MANAGED_HARNESSES
+    except Exception:
+        return tool_id in {"opencode", "goose", "pi", "aider", "crush", "codex", "claude"}
 
 
 class _ToolLock:
@@ -280,10 +411,18 @@ async def install_tool(
             await progress_callback(f"Unknown tool: {tool_id}\r\n")
         return False
 
-    if is_tool_installed(tool_id):
+    installed = is_tool_installed(tool_id)
+    needs_upgrade = bool(installed and _npm_tool_needs_upgrade(info))
+
+    if installed and not needs_upgrade:
         if progress_callback:
             await progress_callback(f"{info['display_name']} is already installed.\r\n")
+        await _run_post_install_hook(tool_id, progress_callback)
         return True
+    if installed and needs_upgrade and progress_callback:
+        await progress_callback(
+            f"{info['display_name']} is installed but does not match the pinned version; upgrading.\r\n"
+        )
 
     # Pre-flight disk space check
     space = check_disk_space(tool_id)
@@ -303,9 +442,10 @@ async def install_tool(
         # Wait for the other install to finish
         for _ in range(300):  # up to 5 minutes
             await asyncio.sleep(1)
-            if is_tool_installed(tool_id):
+            if is_tool_installed(tool_id) and not _npm_tool_needs_upgrade(info):
                 if progress_callback:
                     await progress_callback(f"{info['display_name']} is now available.\r\n")
+                await _run_post_install_hook(tool_id, progress_callback)
                 return True
         if progress_callback:
             await progress_callback("Timed out waiting for install.\r\n")
@@ -322,8 +462,23 @@ async def install_tool(
             success = await _install_pip(info["packages"], progress_callback)
         elif info["type"] == "shell":
             success = await _install_shell(info["install_cmd"], info["binary"], progress_callback)
+        elif info["type"] == "archive":
+            success = await _install_archive_binary(
+                info["archive_url"],
+                info.get("archive_member", info["binary"]),
+                info["binary"],
+                progress_callback,
+            )
         else:
             success = await _install_npm(info["packages"], progress_callback)
+
+        if success and info["type"] == "npm" and _npm_tool_needs_upgrade(info):
+            success = False
+            if progress_callback:
+                await progress_callback(
+                    "\x1b[31mNpm install completed, but managed package versions "
+                    "still do not match pinned specs.\x1b[0m\r\n"
+                )
 
         if success:
             _update_manifest(tool_id, info)
@@ -333,8 +488,7 @@ async def install_tool(
                 )
 
             # Post-install hooks
-            if tool_id == "jupyterlab":
-                _setup_jupyter_config()
+            await _run_post_install_hook(tool_id, progress_callback)
         else:
             if progress_callback:
                 await progress_callback(
@@ -345,6 +499,31 @@ async def install_tool(
         lock.release()
 
 
+async def _run_post_install_hook(tool_id: str, progress_callback=None) -> None:
+    """Run best-effort setup that makes an installed tool ready to launch."""
+    if tool_id == "jupyterlab":
+        _setup_jupyter_config()
+        return
+    if not _is_public_managed_harness(tool_id):
+        return
+    try:
+        from app.harness_config import sync_harness_defaults
+        from app.settings_manager import get_storage_dir
+
+        workspace = Path(get_storage_dir())
+        home = Path(os.path.expanduser("~"))
+        sync_harness_defaults(workspace=workspace, home=home, harnesses=[tool_id])
+        display_name = TOOL_REGISTRY.get(tool_id, {}).get("display_name", tool_id)
+        if progress_callback:
+            await progress_callback(f"{display_name} LoomAI harness defaults synchronized.\r\n")
+    except Exception as exc:
+        logger.warning("Failed to synchronize %s harness defaults after install: %s", tool_id, exc)
+        if progress_callback:
+            await progress_callback(
+                f"\x1b[33mWarning: {tool_id} installed, but harness defaults could not be synchronized: {exc}\x1b[0m\r\n"
+            )
+
+
 async def _install_pip(packages: list[str], progress_callback=None) -> bool:
     """Install pip packages into the venv."""
     _ensure_venv()
@@ -353,11 +532,162 @@ async def _install_pip(packages: list[str], progress_callback=None) -> bool:
     return await _run_install_cmd(cmd, progress_callback)
 
 
+def _pip_local_env() -> dict[str, str]:
+    env = get_tool_env()
+    env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    env["PIP_NO_INPUT"] = "1"
+    env["PIP_NO_INDEX"] = "1"
+    return env
+
+
+def _pip_uninstall_cmd(packages: list[str]) -> list[str] | None:
+    python = _venv_python()
+    if os.path.isfile(python):
+        return [
+            python,
+            "-m",
+            "pip",
+            "--disable-pip-version-check",
+            "uninstall",
+            "-y",
+            *packages,
+        ]
+    pip = os.path.join(_venv_bin(), "pip")
+    if os.path.isfile(pip):
+        return [
+            pip,
+            "--disable-pip-version-check",
+            "uninstall",
+            "-y",
+            *packages,
+        ]
+    return None
+
+
+def _venv_site_packages_dirs() -> list[Path]:
+    """Return site-packages directories inside the shared AI tools venv."""
+    lib_dir = Path(_VENV_DIR) / "lib"
+    if not lib_dir.is_dir():
+        return []
+    return [
+        path
+        for path in sorted(lib_dir.glob("python*/site-packages"))
+        if path.is_dir()
+    ]
+
+
+async def _restore_pip_vendored_certifi(progress_callback=None) -> bool:
+    """Restore pip's vendored certifi bundle from top-level certifi if missing."""
+    ok = True
+    repaired = False
+    for site_packages in _venv_site_packages_dirs():
+        vendored_dir = site_packages / "pip" / "_vendor" / "certifi"
+        if not vendored_dir.is_dir():
+            continue
+        vendored_cacert = vendored_dir / "cacert.pem"
+        if vendored_cacert.is_file():
+            continue
+        source_cacert = site_packages / "certifi" / "cacert.pem"
+        if not source_cacert.is_file():
+            ok = False
+            if progress_callback:
+                await progress_callback(
+                    f"\x1b[31mCannot restore pip vendored certifi: {source_cacert} is missing.\x1b[0m\r\n"
+                )
+            continue
+        shutil.copy2(source_cacert, vendored_cacert)
+        repaired = True
+        if progress_callback:
+            await progress_callback(
+                f"Restored pip vendored certifi bundle from {source_cacert}\r\n"
+            )
+    if repaired:
+        logger.info("Restored missing pip vendored certifi bundle in %s", _VENV_DIR)
+    return ok
+
+
+async def _repair_venv_pip(progress_callback=None) -> bool:
+    python = _venv_python()
+    if not os.path.isfile(python):
+        if progress_callback:
+            await progress_callback(
+                "\x1b[31mCannot repair pip: venv python is missing.\x1b[0m\r\n"
+            )
+        return False
+    if progress_callback:
+        await progress_callback("Repairing virtualenv pip with ensurepip...\r\n")
+    await _restore_pip_vendored_certifi(progress_callback)
+    repaired = await _run_install_cmd(
+        [python, "-m", "ensurepip", "--upgrade"],
+        progress_callback,
+        extra_env=_pip_local_env(),
+    )
+    if not repaired:
+        return False
+    return await _restore_pip_vendored_certifi(progress_callback)
+
+
+async def _uninstall_pip(packages: list[str], progress_callback=None) -> bool:
+    """Uninstall pip packages locally, repairing broken venv pip once if needed."""
+    cmd = _pip_uninstall_cmd(packages)
+    if cmd is None:
+        return True
+
+    success = await _run_install_cmd(cmd, progress_callback, extra_env=_pip_local_env())
+    if success:
+        return True
+
+    if progress_callback:
+        await progress_callback(
+            "\x1b[33mPip uninstall failed; attempting local pip repair and retry.\x1b[0m\r\n"
+        )
+    if not await _repair_venv_pip(progress_callback):
+        if progress_callback:
+            await progress_callback("\x1b[31mPip repair failed. See output above.\x1b[0m\r\n")
+        return False
+
+    retry_cmd = _pip_uninstall_cmd(packages)
+    if retry_cmd is None:
+        return True
+    success = await _run_install_cmd(retry_cmd, progress_callback, extra_env=_pip_local_env())
+    if not success and progress_callback:
+        await progress_callback(
+            "\x1b[31mPip uninstall failed after repair attempt. See pip output above.\x1b[0m\r\n"
+        )
+    return success
+
+
 async def _install_npm(packages: list[str], progress_callback=None) -> bool:
     """Install npm packages globally into our prefix."""
     _ensure_npm_prefix()
     cmd = ["npm", "install", "-g", f"--prefix={_NPM_DIR}"] + packages
     return await _run_install_cmd(cmd, progress_callback)
+
+
+async def _verify_npm_uninstalled(
+    packages: list[str],
+    binary: str,
+    progress_callback=None,
+) -> bool:
+    """Verify managed npm packages and binary links were actually removed."""
+    remaining: list[str] = []
+    for package in packages:
+        path = _npm_package_path(package)
+        if os.path.lexists(path):
+            remaining.append(f"{package} ({path})")
+
+    binary_path = os.path.join(_npm_bin(), binary)
+    if os.path.lexists(binary_path):
+        remaining.append(f"{binary} binary ({binary_path})")
+
+    if not remaining:
+        return True
+
+    if progress_callback:
+        await progress_callback("\x1b[31mNpm uninstall left managed files behind:\x1b[0m\r\n")
+        for item in remaining:
+            await progress_callback(f"\x1b[31m- {item}\x1b[0m\r\n")
+    return False
 
 
 async def _install_shell(install_cmd: str, binary: str, progress_callback=None) -> bool:
@@ -395,6 +725,113 @@ async def _install_shell(install_cmd: str, binary: str, progress_callback=None) 
         if progress_callback:
             await progress_callback(f"Binary found at: {found}\r\n")
     return success
+
+
+def _find_archive_member(extract_dir: Path, archive_member: str) -> Path | None:
+    normalized = archive_member.lstrip("./")
+    candidates = [extract_dir / archive_member]
+    if normalized != archive_member:
+        candidates.append(extract_dir / normalized)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    member_name = Path(normalized).name
+    matches = [path for path in extract_dir.rglob(member_name) if path.is_file()]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+async def _install_archive_binary(
+    archive_url: str,
+    archive_member: str,
+    binary: str,
+    progress_callback=None,
+) -> bool:
+    """Install a single binary from a tar.bz2 archive into ~/.local/bin."""
+    local_bin = _local_bin()
+    os.makedirs(local_bin, exist_ok=True)
+    os.makedirs(AI_TOOLS_DIR, exist_ok=True)
+
+    env = get_tool_env()
+    path_entries = env.get("PATH", "").split(os.pathsep)
+    if local_bin not in path_entries:
+        env["PATH"] = f"{local_bin}{os.pathsep}{env.get('PATH', '')}"
+
+    with tempfile.TemporaryDirectory(prefix=f"{binary}-install-", dir=AI_TOOLS_DIR) as tmp:
+        tmp_dir = Path(tmp)
+        archive_path = tmp_dir / "download.tar.bz2"
+        extract_dir = tmp_dir / "extract"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+
+        if progress_callback:
+            await progress_callback(f"Downloading {binary} from {archive_url}\r\n")
+        downloaded = await _run_install_cmd(
+            [
+                "curl",
+                "-fL",
+                "--show-error",
+                "--silent",
+                "--output",
+                str(archive_path),
+                archive_url,
+            ],
+            progress_callback,
+            extra_env=env,
+        )
+        if not downloaded:
+            if progress_callback:
+                await progress_callback(
+                    f"\x1b[31mDownload failed for {archive_url}. "
+                    f"See curl output above.\x1b[0m\r\n"
+                )
+            return False
+
+        if progress_callback:
+            await progress_callback(f"Extracting {archive_path}\r\n")
+        extracted = await _run_install_cmd(
+            ["tar", "-xjf", str(archive_path), "-C", str(extract_dir)],
+            progress_callback,
+            extra_env=env,
+        )
+        if not extracted:
+            if progress_callback:
+                await progress_callback(
+                    f"\x1b[31mExtraction failed for {archive_path}. "
+                    f"See tar output above.\x1b[0m\r\n"
+                )
+            return False
+
+        source = _find_archive_member(extract_dir, archive_member)
+        if source is None:
+            if progress_callback:
+                await progress_callback(
+                    f"\x1b[31mArchive did not contain expected member {archive_member!r}.\x1b[0m\r\n"
+                )
+            return False
+
+        destination = Path(local_bin) / binary
+        try:
+            shutil.copy2(source, destination)
+            os.chmod(destination, 0o755)
+        except Exception as exc:
+            logger.exception("Failed to install %s from archive member %s", binary, source)
+            if progress_callback:
+                await progress_callback(f"\x1b[31mFailed to install {binary}: {exc}\x1b[0m\r\n")
+            return False
+
+    found = shutil.which(binary, path=env["PATH"])
+    if not found:
+        if progress_callback:
+            await progress_callback(
+                f"\x1b[33mWarning: {binary} not found on PATH after install. "
+                f"Checked: {local_bin}\x1b[0m\r\n"
+            )
+        return False
+    if progress_callback:
+        await progress_callback(f"Binary found at: {found}\r\n")
+    return True
 
 
 async def _run_install_cmd(cmd: list[str], progress_callback=None, extra_env: dict | None = None) -> bool:
@@ -512,17 +949,19 @@ async def uninstall_tool(
 
         success = False
         if info["type"] == "pip":
-            pip = os.path.join(_venv_bin(), "pip")
-            if os.path.isfile(pip):
-                cmd = [pip, "uninstall", "-y"] + info["packages"]
-                success = await _run_install_cmd(cmd, progress_callback)
-            else:
-                success = True  # venv gone, nothing to uninstall
+            success = await _uninstall_pip(info["packages"], progress_callback)
         elif info["type"] == "npm":
-            cmd = ["npm", "uninstall", "-g", f"--prefix={_NPM_DIR}"] + info["packages"]
+            packages = list(dict.fromkeys(_npm_package_name(spec) for spec in info["packages"]))
+            cmd = ["npm", "uninstall", "-g", f"--prefix={_NPM_DIR}"] + packages
             success = await _run_install_cmd(cmd, progress_callback)
-        elif info["type"] == "shell":
-            # Shell-installed tools: remove the binary
+            if success:
+                success = await _verify_npm_uninstalled(
+                    packages,
+                    info["binary"],
+                    progress_callback,
+                )
+        elif info["type"] in {"archive", "shell"}:
+            # Archive/shell-installed tools: remove the binary
             binary = info["binary"]
             for d in [_local_bin(), _npm_bin(), _venv_bin()]:
                 path = os.path.join(d, binary)

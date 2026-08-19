@@ -40,6 +40,13 @@ def _make_template(storage_dir, name, *, weave_json=None, slice_json=None,
     return tmpl_dir
 
 
+def _set_max_lease_hours(hours: int):
+    from app import settings_manager
+    settings = settings_manager.load_settings()
+    settings.setdefault("fabric", {}).setdefault("slice_policy", {})["max_lease_hours"] = hours
+    settings_manager.save_settings(settings)
+
+
 # ---------------------------------------------------------------------------
 # Get template detail
 # ---------------------------------------------------------------------------
@@ -278,6 +285,79 @@ class TestBackgroundRuns:
             auth_mod._session_secret = None
             auth_mod._login_fails.clear()
 
+    def test_start_run_passes_max_lease_policy_to_child_args(self, client, storage_dir):
+        _set_max_lease_hours(6)
+        _make_template(storage_dir, "lease_tmpl", weave_sh=True)
+
+        captured = {}
+
+        def fake_start_run(**kwargs):
+            captured.update(kwargs)
+            return "run-lease123"
+
+        run_meta = {
+            "run_id": "run-lease123",
+            "pid": 321,
+            "pgid": 321,
+            "started_at": "2026-07-07T00:00:00Z",
+        }
+
+        with patch("app.run_manager.start_run", side_effect=fake_start_run), \
+             patch("app.run_manager.get_run", return_value=run_meta):
+            resp = client.post(
+                "/api/templates/lease_tmpl/start-run/weave.sh",
+                json={
+                    "slice_name": "lease-slice",
+                    "args": {"FABRIC_MAX_LEASE_HOURS": "24"},
+                },
+            )
+
+        assert resp.status_code == 200
+        assert captured["script_args"]["SLICE_NAME"] == "lease-slice"
+        assert captured["script_args"]["FABRIC_MAX_LEASE_HOURS"] == "6"
+
+        weave_json_text = (storage_dir / "my_artifacts" / "lease_tmpl" / "weave.json").read_text()
+        weave_json = json.loads(weave_json_text)
+        assert weave_json["active_run"]["args"]["FABRIC_MAX_LEASE_HOURS"] == "6"
+        assert weave_json["active_run"]["args"]["SLICE_NAME"] == "lease-slice"
+
+    def test_start_run_passes_requested_lease_hours_to_child_args(self, client, storage_dir):
+        _set_max_lease_hours(6)
+        _make_template(storage_dir, "lease_requested_tmpl", weave_sh=True)
+
+        captured = {}
+
+        def fake_start_run(**kwargs):
+            captured.update(kwargs)
+            return "run-lease456"
+
+        run_meta = {
+            "run_id": "run-lease456",
+            "pid": 654,
+            "pgid": 654,
+            "started_at": "2026-07-07T00:00:00Z",
+        }
+
+        with patch("app.run_manager.start_run", side_effect=fake_start_run), \
+             patch("app.run_manager.get_run", return_value=run_meta):
+            resp = client.post(
+                "/api/templates/lease_requested_tmpl/start-run/weave.sh",
+                json={
+                    "slice_name": "lease-requested-slice",
+                    "args": {"lease_hours": 4},
+                },
+            )
+
+        assert resp.status_code == 200
+        assert captured["script_args"]["SLICE_NAME"] == "lease-requested-slice"
+        assert captured["script_args"]["FABRIC_MAX_LEASE_HOURS"] == "6"
+        assert captured["script_args"]["FABRIC_LEASE_HOURS"] == "4"
+
+        weave_json_text = (storage_dir / "my_artifacts" / "lease_requested_tmpl" / "weave.json").read_text()
+        weave_json = json.loads(weave_json_text)
+        assert weave_json["active_run"]["args"]["FABRIC_LEASE_HOURS"] == "4"
+        assert weave_json["active_run"]["args"]["FABRIC_MAX_LEASE_HOURS"] == "6"
+
     def test_get_nonexistent_run_returns_404(self, client):
         resp = client.get("/api/templates/runs/nonexistent-id")
         assert resp.status_code == 404
@@ -330,6 +410,80 @@ class TestWeaveConfig:
         empty_dir.mkdir(parents=True, exist_ok=True)
         from app.routes.templates import _read_weave_config
         assert _read_weave_config(str(empty_dir)) is None
+
+
+# ---------------------------------------------------------------------------
+# Structured error envelopes (FC18-2)
+# ---------------------------------------------------------------------------
+
+class TestErrorEnvelopes:
+    def test_template_not_found_envelope(self, client):
+        resp = client.get("/api/templates/no_such_tmpl_envelope")
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "TEMPLATE_NOT_FOUND"
+        assert "not found" in detail["detail"]
+        assert detail["template"] == "no_such_tmpl_envelope"
+
+    def test_invalid_template_name_envelope(self, client):
+        # A whitespace-only name sanitizes to empty → 400
+        resp = client.get("/api/templates/%20")
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["error"] == "TEMPLATE_NAME_INVALID"
+        assert "name" in detail["detail"].lower()
+
+    def test_run_not_found_envelope(self, client):
+        resp = client.get("/api/templates/runs/nonexistent-run-envelope")
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "WEAVE_RUN_NOT_FOUND"
+        assert "not found" in detail["detail"]
+        assert detail["run_id"] == "nonexistent-run-envelope"
+
+    def test_stop_run_not_active_envelope(self, client):
+        resp = client.post("/api/templates/runs/nonexistent-run-envelope/stop")
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "WEAVE_RUN_NOT_ACTIVE"
+        assert "not running" in detail["detail"]
+
+    def test_script_not_found_envelope(self, client, storage_dir):
+        # Template exists but has no weave.sh → 404 with script envelope
+        _make_template(storage_dir, "no_script_tmpl", weave_sh=False)
+        resp = client.post("/api/templates/no_script_tmpl/start-run/weave.sh",
+                           json={"slice_name": "x", "args": {}})
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "WEAVE_SCRIPT_NOT_FOUND"
+        assert "weave.sh" in detail["detail"]
+        assert detail["script"] == "weave.sh"
+        assert detail["template"] == "no_script_tmpl"
+
+    def test_tool_not_found_envelope(self, client, storage_dir):
+        _make_template(storage_dir, "tool_env_tmpl")
+        resp = client.get("/api/templates/tool_env_tmpl/tools/missing.sh")
+        assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "WEAVE_TOOL_NOT_FOUND"
+        assert detail["filename"] == "missing.sh"
+
+    def test_tool_filename_invalid_envelope(self, client, storage_dir):
+        _make_template(storage_dir, "tool_env_tmpl2")
+        resp = client.get("/api/templates/tool_env_tmpl2/tools/.hidden")
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["error"] == "WEAVE_TOOL_FILENAME_INVALID"
+
+    def test_artifact_already_exists_envelope(self, client, storage_dir):
+        _make_template(storage_dir, "dup_env_tmpl")
+        resp = client.post("/api/templates/create-blank",
+                           json={"name": "dup_env_tmpl"})
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert detail["error"] == "ARTIFACT_ALREADY_EXISTS"
+        assert "already exists" in detail["detail"]
+        assert detail["artifact"] == "dup_env_tmpl"
 
 
 # ---------------------------------------------------------------------------

@@ -71,6 +71,12 @@ notebook + scripts there.
 The Notebook tab opens the XDC's JupyterLab (its `fqdn`) in a new tab — the
 most reliable way to run analysis next to the experiment.
 
+## Verify node connectivity
+To test reachability (ping) or throughput (iperf3) between experiment nodes, see
+the `verify-sphere-connectivity` skill. Key point: all tests run **from a node**
+(through the XDC), never from the container — the container can't reach the
+private data plane.
+
 ## Troubleshooting
 - "Host key verification failed" on a hop → the generated ssh config must apply
   relaxed host-key checking to **every** hop (`Host *`), not just the node.

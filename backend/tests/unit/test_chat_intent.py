@@ -75,6 +75,18 @@ class TestDetectIntent:
         assert args["slice_name"] == "my-exp"
         assert args["days"] == 7
 
+    def test_renew_slice_hours(self):
+        tool, args, conf = detect_intent("renew slice my-exp for 6-hour")
+        assert tool == "renew_slice"
+        assert args["slice_name"] == "my-exp"
+        assert args["hours"] == 6
+
+    def test_renew_slice_word_hours(self):
+        tool, args, conf = detect_intent("extend slice my-exp by six hours")
+        assert tool == "renew_slice"
+        assert args["slice_name"] == "my-exp"
+        assert args["hours"] == 6
+
     def test_submit_slice(self):
         tool, args, conf = detect_intent("submit my-exp")
         assert tool == "submit_slice"

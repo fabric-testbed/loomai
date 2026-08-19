@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.error_envelope import error_detail
 from app.slice_registry import resolve_slice_name
 from app.user_context import get_user_storage
 
@@ -38,14 +39,28 @@ def _recipes_dir() -> str:
 def _sanitize_name(name: str) -> str:
     safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", name.strip())
     if not safe:
-        raise HTTPException(status_code=400, detail="Invalid recipe name")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "RECIPE_NAME_INVALID",
+                "Recipe name is empty or contains no valid characters; use letters, digits, underscores, or hyphens.",
+                recipe=name,
+            ),
+        )
     return safe
 
 
 def _validate_path(base: str, name: str) -> str:
     path = os.path.realpath(os.path.join(base, name))
     if not path.startswith(os.path.realpath(base)):
-        raise HTTPException(status_code=400, detail="Invalid recipe name")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "RECIPE_NAME_INVALID",
+                "Recipe name resolves outside the artifacts directory; use a plain directory name without path separators.",
+                recipe=name,
+            ),
+        )
     return path
 
 
@@ -138,7 +153,14 @@ def _find_recipe_dir(name: str) -> str:
     recipe_dir = _validate_path(rdir, safe)
     if os.path.isfile(os.path.join(recipe_dir, "recipe.json")):
         return recipe_dir
-    raise HTTPException(status_code=404, detail=f"Recipe '{name}' not found")
+    raise HTTPException(
+        status_code=404,
+        detail=error_detail(
+            "RECIPE_NOT_FOUND",
+            f"Recipe '{name}' not found; list available recipes with GET /api/recipes.",
+            recipe=name,
+        ),
+    )
 
 
 @router.get("/{name}")

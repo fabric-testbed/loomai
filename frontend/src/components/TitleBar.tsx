@@ -1,6 +1,8 @@
 'use client';
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import '../styles/titlebar.css';
+import '../styles/toolbar.css';
 import { VERSION } from '../version';
 import { checkForUpdate } from '../api/client';
 import { assetUrl } from '../utils/assetUrl';
@@ -34,6 +36,27 @@ interface TitleBarProps {
   userName?: string;
   onLogout?: () => void;
 }
+
+// PEARC '26 paper — shown in the "Cite LoomAI" dialog.
+const CITATION_DOI_URL = 'https://doi.org/10.1145/3785462.3815878';
+const CITATION_TEXT =
+  "Paul Ruth and Komal Thareja. 2026. LoomAI: An AI-Augmented Interface for Designing, Deploying, and Automating Experiments on FABRIC. In Proceedings of the Practice and Experience in Advanced Research Computing 2026: Resilient Roots + Empowered Communities (PEARC '26). Association for Computing Machinery, New York, NY, USA, Article 59. https://doi.org/10.1145/3785462.3815878";
+const CITATION_BIBTEX = `@inproceedings{10.1145/3785462.3815878,
+author = {Ruth, Paul and Thareja, Komal},
+title = {LoomAI: An AI-Augmented Interface for Designing, Deploying, and Automating Experiments on FABRIC},
+year = {2026},
+isbn = {9798400723773},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+url = {https://doi.org/10.1145/3785462.3815878},
+doi = {10.1145/3785462.3815878},
+abstract = {In distributed systems and networking research, translating theoretical ideas into real experiments remains difficult. Researchers spend much of their time on implementation details, including infrastructure provisioning, software configuration, and data collection, rather than the scientific questions that motivate the work. AI can help automate experiment execution so researchers can focus on research questions and interpretation. We present LoomAI, an open-source, browser-based graphical interface for the international FABRIC testbed that takes a step toward this vision. LoomAI enables AI-assisted design, deployment, and autonomous execution of experiments on FABRIC and other testbeds. It introduces Weaves, packaged experiments that provision slices, autonomously manage execution, collect and analyze data, and present results in an embedded JupyterLab. LoomAI integrates with the FABRIC Artifact Manager for community sharing and supports both commercial AI tools such as Claude Code and open-weight models hosted on FABRIC and National Research Platform (NRP) GPUs at no cost, keeping researcher data off commercial infrastructure. LoomAI is FABRIC’s effort toward AI-augmented research experimentation.},
+booktitle = {Proceedings of the Practice and Experience in Advanced Research Computing 2026: Resilient Roots + Empowered Communities},
+articleno = {59},
+numpages = {5},
+keywords = {FABRIC testbed, network experimentation, graphical user interface, AI-assisted research, topology visualization, experiment management},
+series = {PEARC '26}
+}`;
 
 const VIEWS: Array<{ key: TopView; label: string; icon: string; desc: string; requiresChameleon?: boolean; requiresFederated?: boolean; requiresSphere?: boolean }> = [
   { key: 'slices', label: 'Federated Slice', icon: '__federated_icon__', desc: 'Federated Slice — build, monitor, transfer files, and launch apps', requiresFederated: true },
@@ -89,9 +112,12 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
   const [copiedRun, setCopiedRun] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [logoutConfirm, setLogoutConfirm] = useState(false);
+  const [citeOpen, setCiteOpen] = useState(false);
+  const [copiedCite, setCopiedCite] = useState(false);
   const viewRef = useRef<HTMLDivElement>(null);
   const updateRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const citeModalRef = useRef<HTMLDivElement>(null);
 
   // Show the selected AI tool name in the pill when an AI view is active
   const activeAiTool = aiTools?.find((t) => t.id === selectedAiTool);
@@ -115,6 +141,50 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  // Citation dialog keyboard support: Escape closes, focus moves into the
+  // dialog on open, and Tab cycles within it (the portal renders outside the
+  // title bar, so without this Tab would land behind the overlay).
+  useEffect(() => {
+    if (!citeOpen) return;
+    const prevFocus = document.activeElement as HTMLElement | null;
+    citeModalRef.current?.querySelector<HTMLElement>('button.primary')?.focus();
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setCiteOpen(false);
+        return;
+      }
+      if (e.key !== 'Tab' || !citeModalRef.current) return;
+      const focusables = citeModalRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not(:disabled), [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (!citeModalRef.current.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => {
+      document.removeEventListener('keydown', handler);
+      // The menu item that opened the dialog unmounts with the dropdown, so
+      // prevFocus is usually document.body — fall back to the user pill.
+      const restore =
+        prevFocus && prevFocus.isConnected && prevFocus !== document.body
+          ? prevFocus
+          : userMenuRef.current?.querySelector<HTMLElement>('.title-user-pill-btn');
+      restore?.focus();
+    };
+  }, [citeOpen]);
 
   const handleVersionClick = () => {
     setUpdateOpen(!updateOpen);
@@ -350,6 +420,13 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
               </button>
               <button
                 className="title-user-menu-item"
+                onClick={() => { setUserMenuOpen(false); setCopiedCite(false); setCiteOpen(true); }}
+                data-help-id="titlebar.cite"
+              >
+                <span className="title-user-menu-icon">{'❝'}</span> Cite LoomAI
+              </button>
+              <button
+                className="title-user-menu-item"
                 onClick={onToggleDark}
                 data-help-id="titlebar.theme"
               >
@@ -390,6 +467,66 @@ export default React.memo(function TitleBar({ dark, currentView, onToggleDark, o
           )}
         </div>
       </div>
+
+      {citeOpen && createPortal(
+        <div
+          className="toolbar-modal-overlay"
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }}
+          onClick={() => setCiteOpen(false)}
+          data-testid="cite-loomai-modal"
+        >
+          <div
+            ref={citeModalRef}
+            className="toolbar-modal"
+            style={{ maxWidth: 640, maxHeight: '80vh', overflowY: 'auto' }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cite-loomai-title"
+          >
+            <h4 id="cite-loomai-title">Cite LoomAI</h4>
+            <p>
+              If LoomAI helped your research, please cite our PEARC &rsquo;26 paper
+              {' '}(<a href={CITATION_DOI_URL} target="_blank" rel="noreferrer">doi:10.1145/3785462.3815878</a>):
+            </p>
+            <p style={{ color: 'var(--fabric-text)', userSelect: 'text' }}>{CITATION_TEXT}</p>
+            <pre
+              style={{
+                background: 'var(--fabric-light, #f8f9fa)',
+                border: '1px solid var(--fabric-border-solid, rgba(87, 152, 188, 0.35))',
+                borderRadius: 4,
+                padding: '10px 12px',
+                fontSize: 11,
+                lineHeight: 1.45,
+                maxHeight: '32vh',
+                overflow: 'auto',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                userSelect: 'text',
+                margin: 0,
+              }}
+            >{CITATION_BIBTEX}</pre>
+            <div className="toolbar-modal-actions">
+              <button onClick={() => setCiteOpen(false)}>Close</button>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(CITATION_TEXT).catch(() => {});
+                }}
+              >Copy Citation</button>
+              <button
+                className="primary"
+                onClick={() => {
+                  navigator.clipboard.writeText(CITATION_BIBTEX).then(() => {
+                    setCopiedCite(true);
+                    setTimeout(() => setCopiedCite(false), 2000);
+                  }).catch(() => {});
+                }}
+              >{copiedCite ? 'Copied!' : 'Copy BibTeX'}</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 });

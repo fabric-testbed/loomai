@@ -12,6 +12,15 @@ class TestCreateSlice:
         assert data["id"].startswith("draft-")
         assert "graph" in data
 
+    def test_create_accepts_json_body_name(self, client):
+        """MCP harnesses create drafts by sending name in the JSON body."""
+        resp = client.post("/api/slices", json={"name": "body-slice"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "body-slice"
+        assert data["state"] == "Draft"
+        assert data["id"].startswith("draft-")
+
     def test_create_includes_graph(self, client):
         resp = client.post("/api/slices?name=graphed")
         data = resp.json()

@@ -156,6 +156,21 @@ def test_backend_mirror_pilot_skills_are_valid_canonical_assets():
         assert errors == [], f"{path}: {errors}"
 
 
+def test_fabric_query_reporter_agent_is_valid_built_in_asset():
+    repo_root = Path(__file__).resolve().parents[3]
+    for base in (repo_root / "ai-tools", repo_root / "backend" / "ai-tools"):
+        path = base / "shared" / "agents" / "fabric-query-reporter.md"
+        errors = validate_markdown_asset(
+            path.read_text(),
+            filename_stem="fabric-query-reporter",
+            require_canonical=True,
+        )
+        assert errors == [], f"{path}: {errors}"
+        parsed = parse_markdown_asset(path.read_text())
+        assert parsed.metadata["asset_type"] == "agent"
+        assert "FINAL ANSWER" in parsed.body
+
+
 def test_curated_rag_starter_assets_are_valid_canonical_assets():
     repo_root = Path(__file__).resolve().parents[3]
     for base in (repo_root / "ai-tools", repo_root / "backend" / "ai-tools"):
@@ -166,6 +181,21 @@ def test_curated_rag_starter_assets_are_valid_canonical_assets():
             require_canonical=True,
         )
         assert errors == [], f"{path}: {errors}"
+
+
+def test_in_container_harness_docs_explain_sync_and_overrides():
+    repo_root = Path(__file__).resolve().parents[3]
+    for base in (repo_root / "ai-tools", repo_root / "backend" / "ai-tools"):
+        fabric_ai = (base / "shared" / "FABRIC_AI.md").read_text()
+        claude_md = (base / "claude-code" / "CLAUDE.md").read_text()
+        readme = (base / "README.md").read_text()
+
+        for text in (fabric_ai, claude_md, readme):
+            assert "loomai tools sync" in text
+            assert "/home/fabric/work" in text
+        assert "User-specific overrides" in fabric_ai
+        assert "User-specific overrides" in claude_md
+        assert "Runtime harness files are defaults" in readme
 
 
 def test_rag_curated_loader_indexes_all_requested_domains():

@@ -16,15 +16,18 @@ export default function AutoRefreshSelect({
   onChange,
   className,
   title,
+  'data-help-id': dataHelpId,
 }: {
   value: number;
   onChange: (value: number) => void;
   className: string;
   title: string;
+  'data-help-id'?: string;
 }) {
   return (
     <InAppSelect
       className={className}
+      data-help-id={dataHelpId}
       value={value}
       onChange={(e) => onChange(parseInt(e.target.value, 10))}
       title={title}

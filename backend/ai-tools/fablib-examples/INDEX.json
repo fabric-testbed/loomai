@@ -1,5 +1,11 @@
 [
   {
+    "file": "networking/multisite_fabnet_per_site.py",
+    "title": "Multi-Site FABNetv4 Uses Per-Site Services",
+    "tags": ["fabnetv4", "fabnetv6", "multi-site", "network-service-limits", "add_fabnet", "per-site", "l3", "backbone", "wrong-pattern"],
+    "description": "Shows the wrong single FABNetv4 network spanning DALL and WASH that FABRIC rejects, then the correct multi-site L3 pattern: call node.add_fabnet() once per node or create one FABNet service per site. Records the one-site, 255-VM hard limit for FABNet services and the 10.128.0.0/10 backbone route."
+  },
+  {
     "file": "experiments/federated_slice_weave_pattern.py",
     "title": "Federated Slice and Weave Registration Pattern",
     "tags": [
@@ -428,7 +434,7 @@
       "ssh",
       "submit"
     ],
-    "description": "FABRIC provides **FABnetv4**, a private IPv4 overlay network that spans every FABRIC site \u2014 a dedicated research internet connecting nodes across geographically distributed data centers over FABRIC..."
+    "description": "FABNetv4 is a private IPv4 backbone that routes between per-site FABNet services. This example creates one IPv4 service per site; never attach VMs from multiple sites to one FABNetv4 service."
   },
   {
     "file": "networking/create_l3network_fabnet_ipv4_full_auto.py",
@@ -449,7 +455,7 @@
       "ssh",
       "submit"
     ],
-    "description": "FABRIC provides **FABnetv4**, a private IPv4 overlay network that spans every FABRIC site \u2014 a dedicated research internet connecting nodes across geographically distributed sites over FABRIC's high..."
+    "description": "FABNetv4 routes between per-site services over the FABRIC backbone. This fully automatic example uses node.add_fabnet() so multi-site L3 stays one FABNet service per site."
   },
   {
     "file": "networking/create_l3network_fabnet_ipv4_manual.py",
@@ -473,7 +479,7 @@
       "ssh",
       "submit"
     ],
-    "description": "FABRIC provides **FABnetv4**, a private IPv4 overlay network that spans every FABRIC site. Think of it as a dedicated research internet: nodes at different geographic sites can route packets to eac..."
+    "description": "Manual FABNetv4 IP configuration with the required per-site service pattern. A single FABNetv4 service cannot attach VMs from multiple sites."
   },
   {
     "file": "networking/create_l3network_fabnet_ipv4ext_manual.py",
@@ -497,7 +503,7 @@
       "ssh",
       "submit"
     ],
-    "description": "FABRIC provides **FABnetv4Ext**, a routed IPv4 service that spans every FABRIC site and additionally provides **publicly routable IP addresses** \u2014 enabling your experiment nodes to send and receive..."
+    "description": "FABNetv4Ext provides publicly routable IPv4 addresses through per-site services. Create one FABNetv4Ext service per site; do not attach VMs from multiple sites to one service."
   },
   {
     "file": "networking/create_l3network_fabnet_ipv6_auto.py",
@@ -521,7 +527,7 @@
       "ssh",
       "submit"
     ],
-    "description": "FABRIC provides **FABnetv6**, a private IPv6 overlay network spanning every FABRIC site. Nodes at different geographic locations can route IPv6 packets to each other over FABRIC's high-performance ..."
+    "description": "FABNetv6 is a private IPv6 backbone that routes between per-site FABNet services. This example creates one IPv6 service per site for multi-site L3."
   },
   {
     "file": "networking/create_l3network_fabnet_ipv6_full_auto.py",
@@ -542,7 +548,7 @@
       "ssh",
       "submit"
     ],
-    "description": "FABRIC provides **FABnetv6**, a private IPv6 overlay network spanning every FABRIC site. This notebook demonstrates the **fully automatic** approach using `node.add_fabnet(net_type='IPv6')` \u2014 a sin..."
+    "description": "FABNetv6 routes between per-site services over the FABRIC backbone. This fully automatic example uses node.add_fabnet(net_type='IPv6') to keep services per-site."
   },
   {
     "file": "networking/create_l3network_fabnet_ipv6_manual.py",
@@ -566,7 +572,7 @@
       "ssh",
       "submit"
     ],
-    "description": "FABRIC provides **FABnetv6**, a private IPv6 overlay network that spans every FABRIC site \u2014 analogous to FABnetv4 but using IPv6 addressing. Nodes at different geographic sites can route IPv6 packe..."
+    "description": "Manual FABNetv6 IP configuration with the required per-site service pattern. A single FABNetv6 service cannot attach VMs from multiple sites."
   },
   {
     "file": "networking/create_l3network_fabnet_ipv6ext_manual.py",
@@ -590,7 +596,7 @@
       "ssh",
       "submit"
     ],
-    "description": "FABRIC provides **FABnetv6Ext**, a routed IPv6 service that spans every FABRIC site and additionally provides **publicly routable IPv6 addresses** \u2014 enabling your experiment nodes to communicate wi..."
+    "description": "FABNetv6Ext provides publicly routable IPv6 addresses through per-site services. Create one FABNetv6Ext service per site; do not attach VMs from multiple sites to one service."
   },
   {
     "file": "advanced_networking/port_mirror.py",

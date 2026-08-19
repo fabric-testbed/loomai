@@ -23,9 +23,10 @@ For facility ports and backbone link queries, use Python with `FablibManager()`.
 
 **Start here: What do you need?**
 
-1. **Simple cross-site IP connectivity** → **FABNetv4**
-   - Auto-assigns IPs from `10.128.0.0/10`, auto-configures routes
-   - Works across all sites, uses FABRIC backbone
+1. **Simple cross-site IP connectivity** → **FABNetv4 via `add_fabnet` per node**
+   - Creates one FABNet service per site, auto-assigns IPs from `10.128.0.0/10`, auto-configures routes
+   - Routes between sites over the FABRIC backbone
+   - Do not create one FABNetv4 service that mixes interfaces from different sites
    - Use `NIC_Basic` (shared 25Gbps, available everywhere)
 
 2. **Layer 2 between nodes at the same site** → **L2Bridge**
@@ -44,6 +45,7 @@ For facility ports and backbone link queries, use Python with `FablibManager()`.
 5. **Publicly routable IPs** → **FABNetv4Ext** / **FABNetv6Ext**
    - Limited availability; auto-assigns from `23.134.232.0/22`
    - For experiments needing external reachability
+   - Same hard rule as FABNetv4/v6: one service attaches VMs at one site only
 
 6. **Traffic capture** → **PortMirror**
    - Mirror traffic from one interface to another for analysis
@@ -65,7 +67,7 @@ For facility ports and backbone link queries, use Python with `FablibManager()`.
 
 ## IP Planning
 
-- **FABNetv4**: Auto from `10.128.0.0/10` — no planning needed
+- **FABNetv4**: Auto from `10.128.0.0/10` — no planning needed when using per-node/per-site FABNet
 - **L2Bridge/L2STS**: Plan your own subnets
   - Use `/24` for small networks (up to 254 hosts)
   - Use private ranges: `10.x.x.0/24`, `192.168.x.0/24`, `172.16.x.0/24`
@@ -82,10 +84,23 @@ For facility ports and backbone link queries, use Python with `FablibManager()`.
 
 ## Common Patterns
 
-- **Cluster with internal network**: All nodes at `@cluster`, FABNetv4 for communication
+- **Cluster with internal network**: All nodes at `@cluster`, L2Bridge or one same-site FABNetv4 service for communication
 - **Wide-area experiment**: Nodes at `@site-a`, `@site-b`, L2STS between them
 - **Router mesh**: Multiple L2Bridge networks, FRR for OSPF/BGP routing
 - **Bandwidth test**: L2PTP link, NIC_ConnectX_6, iperf3
+
+## Hard Service Limits
+
+| Service | Site rule | Size limit |
+| --- | --- | --- |
+| L2Bridge | all interfaces at one site | site capacity |
+| L2STS | exactly two sites | many NICs per side |
+| L2PTP | exactly two interfaces, two sites | two endpoints |
+| FABNetv4/v6/Ext | all attached VMs at one site | up to 255 VMs per service |
+
+For multi-site FABNet L3, use one FABNet service per site or `add_fabnet` once
+per node. FABRIC routes between those per-site services over `10.128.0.0/10`
+or `2602:fcfb::/40`.
 
 ## Backend REST API
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Optional
 from unittest.mock import MagicMock
@@ -333,15 +334,18 @@ class MockSlice:
 
     def __init__(self, name: str = "test-slice", slice_id: str = "test-uuid-1234",
                  state: str = "Draft", nodes: list | None = None,
-                 networks: list | None = None):
+                 networks: list | None = None, lease_end=None):
         self._name = name
         self._slice_id = slice_id
         self._state = state
+        self._lease_end = lease_end
         self._nodes = nodes or []
         self._networks = networks or []
         self._facility_ports: list = []
         self._port_mirrors: list = []
         self._error_messages: list = []
+        self.submitted_kwargs: dict = {}
+        self.renew_kwargs: dict = {}
         for node in self._nodes:
             node._slice = self
         for net in self._networks:
@@ -376,7 +380,7 @@ class MockSlice:
         return None
 
     def get_lease_end(self):
-        return None
+        return self._lease_end
 
     def add_node(self, name: str, site: str = "RENC", cores: int = 2,
                  ram: int = 8, disk: int = 10, image: str = "default_ubuntu_22",
@@ -427,8 +431,23 @@ class MockSlice:
     def get_project_id(self) -> str:
         return ""
 
-    def submit(self):
+    def submit(self, **kwargs):
+        self.submitted_kwargs = kwargs
         self._state = "Configuring"
+        if kwargs.get("lease_in_hours"):
+            self._lease_end = datetime.now(timezone.utc) + timedelta(hours=int(kwargs["lease_in_hours"]))
+        elif kwargs.get("lease_end_time"):
+            self._lease_end = kwargs["lease_end_time"]
+
+    def renew(self, end_date=None, days=None, **kwargs):
+        self.renew_kwargs = {"end_date": end_date, "days": days, **kwargs}
+        if end_date:
+            self._lease_end = end_date
+        elif days:
+            self._lease_end = datetime.now(timezone.utc) + timedelta(days=int(days))
+
+    def update(self):
+        pass
 
     def save(self, filename: str = ""):
         if filename:
@@ -473,7 +492,7 @@ class MockCoreManager:
                 name=slice_obj.get_name(),
                 slice_id=slice_id,
                 state=state,
-                lease_end_time="",
+                lease_end_time=str(slice_obj.get_lease_end() or ""),
                 project_id=slice_obj.get_project_id() or self._fablib_manager.get_project_id(),
             ))
         return dtos

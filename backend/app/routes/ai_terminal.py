@@ -17,7 +17,7 @@ import urllib.request
 from typing import Iterable
 
 from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app import terminal_sessions as _term_sessions
@@ -32,17 +32,31 @@ from app.ai_tool_adapters import (
     sync_skill_directories,
     write_text,
 )
-from app.settings_manager import get_fabric_api_key as _get_ai_api_key, get_nrp_api_key as _get_nrp_api_key
+from app.settings_manager import (
+    get_ai_renci_api_key as _get_ai_renci_api_key,
+    get_fabric_api_key as _get_ai_api_key,
+    get_nrp_api_key as _get_nrp_api_key,
+    normalize_ai_endpoint_style,
+)
 from app.tracking_headers import add_tracking_headers, get_tracking_headers
 from app.tool_installer import (
     is_tool_installed, install_tool, uninstall_tool, get_tool_binary_path,
     get_tool_env, get_all_tool_status, TOOL_REGISTRY,
-    check_disk_space,
+    check_disk_space, tool_needs_upgrade,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _is_public_managed_harness_tool(tool_id: str) -> bool:
+    try:
+        from app.harness_config import PUBLIC_MANAGED_HARNESSES
+
+        return tool_id in PUBLIC_MANAGED_HARNESSES
+    except Exception:
+        return tool_id in {"opencode", "goose", "pi", "aider", "crush", "codex", "claude"}
 
 def _contract_mode() -> bool:
     return os.environ.get("LOOMAI_CONTRACT_MODE", "").strip() == "1"
@@ -79,6 +93,11 @@ def _nrp_server_url() -> str:
     from app.settings_manager import get_nrp_server_url
     return get_nrp_server_url()
 
+
+def _ai_renci_api_key_or_fabric(fabric_api_key: str = "") -> str:
+    return _get_ai_renci_api_key() or fabric_api_key
+
+
 def _model_proxy_port() -> int:
     from app.settings_manager import get_model_proxy_port
     return get_model_proxy_port()
@@ -107,14 +126,18 @@ _PREFERRED_SMALL = [
 _NRP_CONTEXT_DEFAULTS: dict[str, int] = {
     "gpt-oss": 131072,
     "kimi": 131072,
-    "minimax-m2": 1048576,
+    "minimax-m2": 131072,
     "olmo": 32768,
     "glm-4.7": 131072,
-    "qwen3": 131072,
-    "qwen3-small": 131072,
+    "glm-5": 32768,
+    "qwen3": 32768,
+    "qwen3-small": 32768,
+    "qwen3-4bit": 32768,
     "qwen3-27b": 131072,
-    "gemma": 8192,
-    "gh200-test": 131072,
+    "gemma": 32768,
+    "gemma-small": 32768,
+    "gemma-small-e4b": 32768,
+    "gh200-test": 32768,
 }
 _NRP_EXCLUDE = {"qwen3-embedding"}  # Embedding models, not for chat
 
@@ -308,6 +331,37 @@ def _check_model_health(server_url: str, api_key: str, model_id: str,
     return False, "down"
 
 
+def _check_model_health_with_endpoint_style(
+    server_url: str,
+    api_key: str,
+    model_id: str,
+    endpoint_style: str = "auto",
+    timeout: int = 30,
+) -> tuple[bool, str]:
+    """Verify model health while honoring a forced endpoint style."""
+    style = normalize_ai_endpoint_style(endpoint_style)
+    if style == "auto":
+        return _check_model_health(server_url, api_key, model_id, timeout=timeout)
+    headers = add_tracking_headers({
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    })
+    if style == "responses":
+        ok = _try_responses_api(server_url, headers, model_id, timeout)
+        return ok, "responses" if ok else "down"
+    if style == "chat":
+        ok, _err_body, _err_code = _try_chat_completions(
+            server_url,
+            headers,
+            model_id,
+            timeout,
+        )
+        return ok, "chat" if ok else "down"
+    if style == "non-chat":
+        return True, "non-chat"
+    return _check_model_health(server_url, api_key, model_id, timeout=timeout)
+
+
 def _model_ids(models: list) -> list[str]:
     """Extract model IDs from a list that may be strings or dicts."""
     return [m["id"] if isinstance(m, dict) else m for m in models]
@@ -353,17 +407,25 @@ def _build_opencode_config(
 
     small = _pick_model(models, _PREFERRED_SMALL, default) if models else default
 
-    # Build models dict — each available model gets an entry
+    from app.model_capability_defaults import harness_model_config
+
+    try:
+        from app.harness_config import _opencode_providers
+
+        providers: dict = _opencode_providers()
+    except Exception:
+        providers = {}
+
+    # Build models dict — each available model gets an ideal harness entry.
     models_dict = {}
     for m in (_model_ids(models) if models else [default]):
-        models_dict[m] = {"name": m}
+        models_dict[m] = harness_model_config(m, "fabric")
     if default not in models_dict:
-        models_dict[default] = {"name": default}
+        models_dict[default] = harness_model_config(default, "fabric")
     if small not in models_dict:
-        models_dict[small] = {"name": small}
+        models_dict[small] = harness_model_config(small, "fabric")
 
-    providers: dict = {
-        "fabric": {
+    providers["fabric"] = {
             "npm": "@ai-sdk/openai-compatible",
             "name": "FABRIC AI",
             "options": {
@@ -371,7 +433,6 @@ def _build_opencode_config(
                 "apiKey": "{env:FABRIC_AI_API_KEY}",
             },
             "models": models_dict,
-        }
     }
 
     # Add NRP provider if key is available
@@ -379,7 +440,7 @@ def _build_opencode_config(
     if nrp_key:
         nrp_models = _fetch_nrp_models(nrp_key)
         if nrp_models:
-            nrp_models_dict = {m: {"name": m} for m in _model_ids(nrp_models)}
+            nrp_models_dict = {m: harness_model_config(m, "nrp") for m in _model_ids(nrp_models)}
             providers["nrp"] = {
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "NRP",
@@ -736,6 +797,12 @@ def _setup_opencode_workspace(cwd: str) -> dict:
             "enabled": True,
             "timeout": 15000,
         }
+    mcp_cfg["loomai-harness"] = {
+        "type": "local",
+        "command": ["python3", "-m", "app.harness_mcp_server"],
+        "enabled": True,
+        "timeout": 30000,
+    }
     logger.info("Created MCP wrapper scripts for %s", list(mcp_cfg.keys()))
 
     # --- Custom commands ---
@@ -785,14 +852,17 @@ def _setup_aider_workspace(cwd: str) -> None:
     src_conf = os.path.join(_AIDER_DEFAULTS_DIR, ".aider.conf.yml")
     if os.path.isfile(src_conf):
         dst_conf = os.path.join(cwd, ".aider.conf.yml")
-        shutil.copy2(src_conf, dst_conf)
-        logger.info("Wrote .aider.conf.yml")
+        if not os.path.isfile(dst_conf):
+            shutil.copy2(src_conf, dst_conf)
+            logger.info("Wrote .aider.conf.yml")
 
     # Aider ignore patterns
     src_ignore = os.path.join(_AIDER_DEFAULTS_DIR, ".aiderignore")
     if os.path.isfile(src_ignore):
-        shutil.copy2(src_ignore, os.path.join(cwd, ".aiderignore"))
-        logger.info("Wrote .aiderignore")
+        dst_ignore = os.path.join(cwd, ".aiderignore")
+        if not os.path.isfile(dst_ignore):
+            shutil.copy2(src_ignore, dst_ignore)
+            logger.info("Wrote .aiderignore")
 
 
 def _setup_claude_workspace(cwd: str) -> None:
@@ -885,8 +955,8 @@ def _setup_crush_workspace(cwd: str, api_key: str, model_override: str = "") -> 
                 pass
 
     dst = os.path.join(cwd, ".crush.json")
-    with open(dst, "w") as f:
-        json.dump(crush_config, f, indent=2)
+    from app.harness_config import _merge_json_file
+    _merge_json_file(dst, crush_config)
     logger.info("Wrote .crush.json for Crush with %d providers", len(providers))
 
     # Adapt shared + user-custom skills and agents so Crush has FABRIC context.
@@ -1108,10 +1178,10 @@ def _setup_codex_workspace(cwd: str) -> None:
         logger.info("Wrote Codex config.toml: provider=%s model=%s url=%s",
                      provider_name, model_id, base_url)
     else:
-        # No provider flagged — remove config.toml if it exists so Codex uses its default
+        # No provider flagged — keep existing config.toml. It may be a
+        # user-authored file or the generated container default.
         if os.path.isfile(config_path):
-            os.remove(config_path)
-            logger.info("Removed Codex config.toml — using default OpenAI config")
+            logger.info("Keeping existing Codex config.toml — no provider flagged")
 
     logger.info("Set up Codex workspace at %s", cwd)
 
@@ -1159,6 +1229,34 @@ def _codex_env(fabric_key: str) -> dict[str, str]:
     return {}
 
 
+def _custom_provider_env() -> dict[str, str]:
+    try:
+        from app.settings_manager import (
+            custom_provider_base_url_env_key,
+            custom_provider_env_key,
+            get_custom_providers,
+        )
+    except Exception:
+        return {}
+    env: dict[str, str] = {}
+    for provider in get_custom_providers() or []:
+        if not isinstance(provider, dict):
+            continue
+        name = str(provider.get("name") or "custom").strip()
+        if not name:
+            continue
+        base_url = str(provider.get("base_url") or "").strip()
+        api_key = str(provider.get("api_key") or "")
+        if base_url:
+            env[custom_provider_base_url_env_key(name)] = base_url.rstrip("/")
+        if api_key:
+            api_env = custom_provider_env_key(name)
+            env[api_env] = api_key
+            if api_env == "LOOMAI_CUSTOM_PROVIDER_AI_RENCI_API_KEY":
+                env["AI_RENCI_API_KEY"] = api_key
+    return env
+
+
 # Tool definitions: env setup and command for each AI tool
 TOOL_CONFIGS = {
     "antigravity": {
@@ -1200,12 +1298,35 @@ TOOL_CONFIGS = {
         "cmd": ["opencode"],
         "needs_key": True,
     },
+    "goose": {
+        "env": lambda key: {
+            "OPENAI_API_KEY": key,
+            "FABRIC_AI_API_KEY": key,
+            "AI_RENCI_API_KEY": _ai_renci_api_key_or_fabric(key),
+            "OPENAI_BASE_URL": f"{_ai_server_url()}/v1",
+            "GOOSE_PROVIDER": "openai",
+            "GOOSE_MODEL": "qwen3-coder-30b",
+        },
+        "cmd": ["goose"],
+        "needs_key": True,
+    },
     "crush": {
         "env": lambda key: {
             "OPENAI_API_KEY": key,
             "OPENAI_BASE_URL": f"{_ai_server_url()}/v1",
         },
         "cmd": ["crush"],
+        "needs_key": True,
+    },
+    "pi": {
+        "env": lambda key: {
+            "OPENAI_API_KEY": key,
+            "FABRIC_AI_API_KEY": key,
+            "AI_RENCI_API_KEY": _ai_renci_api_key_or_fabric(key),
+            "OPENAI_BASE_URL": f"{_ai_server_url()}/v1",
+            "PI_MODE": "text",
+        },
+        "cmd": ["pi"],
         "needs_key": True,
     },
     "deepagents": {
@@ -1246,14 +1367,29 @@ async def trigger_tool_install(tool_id: str):
     """Trigger installation of an AI tool. Returns when complete."""
     if tool_id not in TOOL_REGISTRY:
         return {"error": f"Unknown tool: {tool_id}", "status": "error"}
-    if is_tool_installed(tool_id):
+    needs_upgrade = tool_needs_upgrade(tool_id)
+    if is_tool_installed(tool_id) and not needs_upgrade:
+        if _is_public_managed_harness_tool(tool_id):
+            lines: list[str] = []
+
+            async def collect(line: str):
+                lines.append(line)
+
+            await install_tool(tool_id, progress_callback=collect)
+            return {
+                "status": "already_installed",
+                "tool": tool_id,
+                "output": "".join(lines),
+            }
         return {"status": "already_installed", "tool": tool_id}
     lines: list[str] = []
     async def collect(line: str):
         lines.append(line)
     success = await install_tool(tool_id, progress_callback=collect)
     return {
-        "status": "installed" if success else "error",
+        "status": (
+            "upgraded" if needs_upgrade else "installed"
+        ) if success else "error",
         "tool": tool_id,
         "output": "".join(lines),
     }
@@ -1269,7 +1405,36 @@ async def trigger_tool_install_stream(tool_id: str):
 
     info = TOOL_REGISTRY[tool_id]
 
-    if is_tool_installed(tool_id):
+    needs_upgrade = tool_needs_upgrade(tool_id)
+
+    if is_tool_installed(tool_id) and not needs_upgrade:
+        if _is_public_managed_harness_tool(tool_id):
+            async def _already_configured():
+                queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+                async def progress_cb(line: str):
+                    await queue.put(line)
+
+                async def run_sync():
+                    try:
+                        await install_tool(tool_id, progress_callback=progress_cb)
+                    finally:
+                        await queue.put(None)
+
+                task = asyncio.create_task(run_sync())
+                yield f"data: {json.dumps({'type': 'start', 'tool': tool_id, 'display_name': info['display_name'], 'size_estimate': info['size_estimate']})}\n\n"
+                while True:
+                    line = await queue.get()
+                    if line is None:
+                        break
+                    clean = line.replace("\x1b[36m", "").replace("\x1b[32m", "").replace("\x1b[31m", "").replace("\x1b[33m", "").replace("\x1b[0m", "").rstrip("\r\n")
+                    if clean:
+                        yield f"data: {json.dumps({'type': 'output', 'message': clean})}\n\n"
+                await task
+                yield f"data: {json.dumps({'type': 'done', 'status': 'already_installed', 'tool': tool_id})}\n\n"
+
+            return StreamingResponse(_already_configured(), media_type="text/event-stream")
+
         async def _already():
             yield f"data: {json.dumps({'type': 'done', 'status': 'already_installed', 'tool': tool_id})}\n\n"
         return StreamingResponse(_already(), media_type="text/event-stream")
@@ -1316,29 +1481,96 @@ async def trigger_tool_install_stream(tool_id: str):
         # Get final result
         result = await queue.get()
         await task
-        status = "installed" if result == "__SUCCESS__" else "error"
+        status = (
+            "upgraded" if needs_upgrade else "installed"
+        ) if result == "__SUCCESS__" else "error"
         yield f"data: {json.dumps({'type': 'done', 'status': status, 'tool': tool_id})}\n\n"
 
     return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
+def _active_tool_reason(tool_id: str) -> str:
+    if _term_sessions.has_live_type(f"ai-{tool_id}"):
+        return f"{tool_id} has an active terminal session. Close or stop it before uninstalling."
+    if tool_id == "claude" and _has_active_process("claude"):
+        return "Claude Code is running in another process. Stop it before uninstalling Claude Code."
+    if tool_id == "opencode":
+        if (_opencode_web_proc and _opencode_web_proc.poll() is None) or (
+            _opencode_web_proxy and _opencode_web_proxy.poll() is None
+        ):
+            return "OpenCode web is running. Stop it before uninstalling OpenCode."
+    if tool_id == "aider" and _aider_web_proc and _aider_web_proc.poll() is None:
+        return "Aider web is running. Stop it before uninstalling Aider."
+    return ""
+
+
+def _has_active_process(binary: str) -> bool:
+    pattern = f"(^|[ /]){binary}($|[[:space:]])"
+    try:
+        result = subprocess.run(
+            ["pgrep", "-af", pattern],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception as exc:
+        logger.debug("Could not inspect active %s processes: %s", binary, exc)
+        return False
+
+    if result.returncode != 0:
+        return False
+
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(maxsplit=1)
+        try:
+            if int(parts[0]) == os.getpid():
+                continue
+        except (ValueError, IndexError):
+            pass
+        command = parts[1] if len(parts) > 1 else ""
+        if "pgrep" in command and pattern in command:
+            continue
+        return True
+    return False
+
+
 @router.post("/api/ai/tools/{tool_id}/uninstall")
-async def trigger_tool_uninstall(tool_id: str):
+async def trigger_tool_uninstall(tool_id: str, remove_config: bool = Query(False)):
     """Uninstall an AI tool. Returns when complete."""
     if tool_id not in TOOL_REGISTRY:
         return {"error": f"Unknown tool: {tool_id}", "status": "error"}
+    active_reason = _active_tool_reason(tool_id)
+    if active_reason:
+        return {"error": active_reason, "status": "running", "tool": tool_id}
     if not is_tool_installed(tool_id):
-        return {"status": "not_installed", "tool": tool_id}
+        cleanup: dict = {}
+        if remove_config and _is_public_managed_harness_tool(tool_id):
+            from app.harness_config import cleanup_harness_uninstall
+
+            workspace, home = _harness_workspace_home()
+            cleanup = cleanup_harness_uninstall(tool_id, remove_config=True, workspace=workspace, home=home)
+        return {"status": "not_installed", "tool": tool_id, **cleanup}
     lines: list[str] = []
 
     async def collect(line: str):
         lines.append(line)
 
     success = await uninstall_tool(tool_id, progress_callback=collect)
+    cleanup = {}
+    if success and _is_public_managed_harness_tool(tool_id):
+        from app.harness_config import cleanup_harness_uninstall
+
+        workspace, home = _harness_workspace_home()
+        cleanup = cleanup_harness_uninstall(tool_id, remove_config=remove_config, workspace=workspace, home=home)
     return {
         "status": "uninstalled" if success else "error",
         "tool": tool_id,
         "output": "".join(lines),
+        **cleanup,
     }
 
 
@@ -1377,11 +1609,13 @@ async def start_opencode_web(model: str = ""):
         "TERM": "xterm-256color",
         "OPENAI_API_KEY": api_key,
         "FABRIC_AI_API_KEY": api_key,
+        "AI_RENCI_API_KEY": _ai_renci_api_key_or_fabric(api_key),
         "OPENAI_BASE_URL": f"{_ai_server_url()}/v1",
     }
     nrp_key = _get_nrp_api_key()
     if nrp_key:
         tool_env["NRP_API_KEY"] = nrp_key
+    tool_env.update(_custom_provider_env())
 
     # Start model proxy
     _opencode_web_proxy = _start_model_proxy(
@@ -1570,7 +1804,16 @@ def _persist_model_list(models_data: dict) -> dict:
     removed = len(set(old_lookup.keys()) - set(new_lookup.keys()))
     updated = 0
     for key in set(new_lookup.keys()) & set(old_lookup.keys()):
-        if new_lookup[key].get("context_length") != old_lookup[key].get("context_length"):
+        if any(
+            new_lookup[key].get(field) != old_lookup[key].get(field)
+            for field in (
+                "context_length",
+                "model_type",
+                "endpoint_style",
+                "healthy",
+                "supports_tools",
+            )
+        ):
             updated += 1
 
     # Persist the new model list
@@ -1697,21 +1940,41 @@ def _fetch_all_models() -> dict:
         cp_name = cp.get("name", "custom")
         cp_url = cp.get("base_url", "")
         cp_key = cp.get("api_key", "")
+        cp_endpoint_style = normalize_ai_endpoint_style(cp.get("endpoint_style"))
         if not cp_url:
             continue
         try:
-            url = f"{cp_url.rstrip('/')}/v1/models"
+            cp_base_url = cp_url.rstrip("/")
+            url = f"{cp_base_url}/v1/models"
             req = urllib.request.Request(url, headers=add_tracking_headers({"Authorization": f"Bearer {cp_key}"}))
             with urllib.request.urlopen(req, timeout=10) as resp:
                 body = json.loads(resp.read())
             cp_models = []
             for m in body.get("data", []):
                 mid = m["id"]
-                healthy, model_type = _check_model_health(cp_url.rstrip("/"), cp_key, mid)
-                cp_models.append({"id": mid, "name": mid, "healthy": healthy,
-                                  "model_type": model_type,
-                                  "context_length": m.get("context_length")})
-                if healthy and model_type == "chat" and not default:
+                healthy, model_type = _check_model_health_with_endpoint_style(
+                    cp_base_url,
+                    cp_key,
+                    mid,
+                    cp_endpoint_style,
+                )
+                ctx = m.get("context_length") or m.get("context_window")
+                profile = get_model_profile(mid, context_length=ctx)
+                effective_endpoint = cp_endpoint_style if cp_endpoint_style != "auto" else model_type
+                cp_models.append({
+                    "id": mid,
+                    "name": mid,
+                    "healthy": healthy,
+                    "model_type": model_type,
+                    "endpoint_style": effective_endpoint,
+                    "context_length": ctx,
+                    "tier": profile["tier"],
+                    "supports_tools": (
+                        model_type != "non-chat"
+                        and profile.get("supports_tools", True)
+                    ),
+                })
+                if healthy and model_type in {"chat", "responses"} and not default:
                     default = f"{cp_name}:{mid}"
             custom_entries[cp_name] = cp_models
         except Exception as e:
@@ -1921,6 +2184,143 @@ def discover_and_persist_default_model() -> dict:
         logger.warning("No healthy models found — default_model remains empty")
 
     return result
+
+
+def _model_provider_and_bare_id(model_id: str, source: str = "") -> tuple[str, str, str]:
+    """Return (provider, provider_name, bare_model_id) for a UI model id."""
+    raw = str(model_id or "").strip()
+    source = str(source or "").strip()
+    if source.startswith("custom:"):
+        provider_name = source.split(":", 1)[1]
+        bare = raw.split(":", 1)[1] if ":" in raw else raw
+        return "custom", provider_name, bare
+    if source == "nrp" or raw.startswith("nrp:"):
+        return "nrp", "nrp", raw[4:] if raw.startswith("nrp:") else raw
+    if source == "fabric":
+        return "fabric", "fabric", raw[7:] if raw.startswith("fabric:") else raw
+    if ":" in raw:
+        prefix, _, bare = raw.partition(":")
+        if prefix == "nrp":
+            return "nrp", "nrp", bare
+        if prefix == "fabric":
+            return "fabric", "fabric", bare
+        return "custom", prefix, bare
+    return "fabric", "fabric", raw
+
+
+def _custom_provider_endpoint_style(provider_name: str) -> str:
+    """Return configured endpoint style for a custom provider."""
+    from app.settings_manager import get_custom_providers
+
+    for provider in get_custom_providers():
+        if isinstance(provider, dict) and provider.get("name") == provider_name:
+            return normalize_ai_endpoint_style(provider.get("endpoint_style"))
+    return "auto"
+
+
+def _lookup_discovered_model(model_id: str, source: str = "") -> tuple[str, str, dict | None]:
+    """Look up a model in persisted discovered_models."""
+    from app.settings_manager import load_settings
+
+    provider, provider_name, bare = _model_provider_and_bare_id(model_id, source)
+    discovered = load_settings().get("ai", {}).get("discovered_models", {})
+    if provider in {"fabric", "nrp"}:
+        for entry in discovered.get(provider, []) or []:
+            if isinstance(entry, dict) and entry.get("id") == bare:
+                return provider, bare, entry
+        return provider, bare, None
+    custom = discovered.get("custom", {})
+    if isinstance(custom, dict):
+        for entry in custom.get(provider_name, []) or []:
+            if isinstance(entry, dict) and entry.get("id") == bare:
+                return f"custom:{provider_name}", bare, entry
+    return f"custom:{provider_name}", bare, None
+
+
+def _model_capabilities_payload(model_id: str, source: str = "") -> dict:
+    """Build a stable capability payload for frontend warnings."""
+    provider, bare, entry = _lookup_discovered_model(model_id, source)
+    provider_kind, provider_name, _ = _model_provider_and_bare_id(model_id, source)
+    profile_key = (
+        f"{provider_name}:{bare}"
+        if provider_kind == "custom"
+        else f"{provider}:{bare}"
+        if provider in {"fabric", "nrp"}
+        else model_id
+    )
+    from app.settings_manager import get_model_capability_profile
+    capability_profile = get_model_capability_profile(profile_key)
+    configured_style = (
+        _custom_provider_endpoint_style(provider_name)
+        if provider_kind == "custom"
+        else "auto"
+    )
+    found = isinstance(entry, dict)
+    context_length = (
+        capability_profile.get("context_window_tokens")
+        or (entry or {}).get("context_length")
+    )
+    from app.chat_context import get_model_profile
+
+    profile = get_model_profile(bare, context_length=context_length)
+    model_type = str((entry or {}).get("model_type") or "").strip()
+    endpoint_style = normalize_ai_endpoint_style(
+        capability_profile.get("endpoint_style")
+        or (entry or {}).get("endpoint_style")
+        or (configured_style if configured_style != "auto" else model_type)
+        or "auto"
+    )
+    if not model_type:
+        model_type = endpoint_style if endpoint_style != "auto" else "chat"
+    healthy = (entry or {}).get("healthy")
+    supports_tools = (entry or {}).get("supports_tools")
+    if "supports_tools" in capability_profile:
+        supports_tools = capability_profile["supports_tools"]
+    if supports_tools is None:
+        supports_tools = model_type != "non-chat" and profile.get("supports_tools", True)
+
+    warnings: list[str] = []
+    if not found:
+        warnings.append("Model metadata has not been refreshed yet.")
+    if healthy is False:
+        warnings.append("Model health check is currently failing.")
+    if model_type == "non-chat":
+        warnings.append("This model is listed by the provider but does not support chat.")
+    elif supports_tools is False:
+        warnings.append("Tool calling is not available for this model.")
+    if provider_kind == "custom" and endpoint_style == "auto":
+        warnings.append("Custom provider endpoint style is auto-detected; set it explicitly if calls fail.")
+
+    return {
+        "model": model_id,
+        "id": bare,
+        "provider": provider,
+        "found": found,
+        "healthy": healthy if healthy is not None else None,
+        "model_type": model_type,
+        "endpoint_style": endpoint_style,
+        "context_length": context_length or profile.get("context_window"),
+        "tier": (entry or {}).get("tier") or profile.get("tier"),
+        "supports_tools": bool(supports_tools),
+        "capability_profile": capability_profile or None,
+        "warnings": warnings,
+    }
+
+
+@router.get("/api/ai/models/{model_id:path}/capabilities")
+async def get_ai_model_capabilities(model_id: str, source: str = ""):
+    """Return capability metadata and warnings for one assistant model."""
+    if not model_id:
+        return JSONResponse({"error": "model id is required"}, status_code=400)
+    return _model_capabilities_payload(model_id, source)
+
+
+@router.get("/api/models/{model_id:path}/capabilities")
+async def get_model_capabilities_alias(model_id: str, source: str = ""):
+    """Compatibility alias for model capability metadata."""
+    if not model_id:
+        return JSONResponse({"error": "model id is required"}, status_code=400)
+    return _model_capabilities_payload(model_id, source)
 
 
 @router.get("/api/ai/models/default")
@@ -2163,12 +2563,18 @@ async def build_ai_tool_launch(tool: str, model: str = "", cwd: str = "", progre
     if tool not in TOOL_CONFIGS:
         raise ValueError(f"Unknown tool: {tool}")
     config = TOOL_CONFIGS[tool]
-    api_key = _get_ai_api_key() if config["needs_key"] else ""
+    fabric_api_key = _get_ai_api_key()
+    api_key = fabric_api_key if config["needs_key"] else ""
     if config["needs_key"] and not api_key:
         raise PermissionError("AI API key not configured")
 
     env: dict[str, str] = {"TERM": "xterm-256color"}
     env.update(config["env"](api_key))
+    if fabric_api_key:
+        env.setdefault("OPENAI_API_KEY", fabric_api_key)
+        env["FABRIC_AI_API_KEY"] = fabric_api_key
+        env["AI_RENCI_API_KEY"] = _ai_renci_api_key_or_fabric(fabric_api_key)
+    env.update(_custom_provider_env())
 
     from app.settings_manager import get_storage_dir as _storage
     default_cwd = _storage() if os.path.isdir(_storage()) else os.path.expanduser("~")
@@ -2183,6 +2589,13 @@ async def build_ai_tool_launch(tool: str, model: str = "", cwd: str = "", progre
     if nrp_key:
         env["NRP_API_KEY"] = nrp_key
 
+    if _is_public_managed_harness_tool(tool):
+        try:
+            from app.harness_config import sync_harness_defaults
+            sync_harness_defaults(workspace=default_cwd, home=os.path.expanduser("~"), harnesses=[tool])
+        except Exception as e:
+            logger.warning("Could not sync %s harness defaults: %s", tool, e)
+
     # Tool-specific workspace setup
     if tool == "antigravity":
         _setup_antigravity_workspace(cwd)
@@ -2196,6 +2609,10 @@ async def build_ai_tool_launch(tool: str, model: str = "", cwd: str = "", progre
     elif tool == "crush":
         _ensure_git_ready(cwd)
         _setup_crush_workspace(cwd, api_key, model_override=model)
+    elif tool == "goose":
+        _ensure_git_ready(cwd)
+    elif tool == "pi":
+        pass
     elif tool == "deepagents":
         _ensure_git_ready(cwd)
         _setup_deepagents_workspace(cwd, api_key, model_override=model)
@@ -2229,6 +2646,10 @@ async def build_ai_tool_launch(tool: str, model: str = "", cwd: str = "", progre
     installed_path = get_tool_binary_path(tool)
     if installed_path:
         run_cmd[0] = installed_path
+    if tool == "pi":
+        pi_wrapper = os.path.join(default_cwd, "pi", "pi-fabric")
+        if os.path.isfile(pi_wrapper):
+            run_cmd = [pi_wrapper]
     path_val = get_tool_env().get("PATH")
     if path_val:
         env["PATH"] = path_val
@@ -2584,6 +3005,7 @@ def seed_ai_tool_defaults() -> None:
     - OpenCode:    ~/.opencode.json, <cwd>/.opencode/ (skills, agents, MCP)
     - Aider:       ~/.aider.conf.yml, ~/.aiderignore, <cwd>/AI_ASSETS.md
     - Crush:       ~/.config/crush/crush.json, .crush/skills/, .crush/agents/
+    - Pi:          pi/agent/models.json, pi/agent/settings.json, pi/pi-fabric
     - Deep Agents: .deepagents/AGENTS.md, config.json, skills/, agents/
     - Antigravity: .antigravity/skills/, .antigravity/agents/, AI_ASSETS.md
     - Codex:       .codex/skills/, .codex/agents/, AI_ASSETS.md
@@ -2593,9 +3015,15 @@ def seed_ai_tool_defaults() -> None:
     home = os.path.expanduser("~")
     cwd = _storage() if os.path.isdir(_storage()) else home
 
+    try:
+        from app.harness_config import sync_harness_defaults
+        sync_harness_defaults(workspace=cwd, home=home)
+    except Exception as e:
+        logger.warning("Could not sync LoomAI harness defaults: %s", e)
+
     # --- Shared FABRIC context (AGENTS.md in workspace) ---
     agents_dst = os.path.join(cwd, "AGENTS.md")
-    if os.path.isfile(_FABRIC_AI_MD_PATH):
+    if os.path.isfile(_FABRIC_AI_MD_PATH) and not os.path.isfile(agents_dst):
         shutil.copy2(_FABRIC_AI_MD_PATH, agents_dst)
 
     # --- Claude Code: ~/.claude/ + .mcp.json (restore from persistent or seed fresh) ---
@@ -2645,7 +3073,7 @@ def seed_ai_tool_defaults() -> None:
     src_claude_md = os.path.join(_CLAUDE_DEFAULTS_DIR, "CLAUDE.md")
     proj_claude_dir = os.path.join(cwd, ".claude")
     os.makedirs(proj_claude_dir, exist_ok=True)
-    if os.path.isfile(src_claude_md):
+    if os.path.isfile(src_claude_md) and not os.path.isfile(os.path.join(cwd, "CLAUDE.md")):
         shutil.copy2(src_claude_md, os.path.join(cwd, "CLAUDE.md"))
 
     # --- OpenCode: ~/.opencode.json + workspace skills/agents ---
@@ -2658,25 +3086,26 @@ def seed_ai_tool_defaults() -> None:
             write_cfg = {k: v for k, v in oc_config.items() if not k.startswith("_")}
 
             # Write to both global and workspace locations
-            with open(os.path.join(home, ".opencode.json"), "w") as f:
-                json.dump(write_cfg, f, indent=2)
-            with open(os.path.join(cwd, "opencode.json"), "w") as f:
-                json.dump(write_cfg, f, indent=2)
+            from app.harness_config import _merge_json_file
+            _merge_json_file(os.path.join(home, ".opencode.json"), write_cfg)
+            _merge_json_file(os.path.join(cwd, "opencode.json"), write_cfg)
         except Exception as e:
             logger.warning("Could not seed OpenCode config: %s", e)
 
     # --- Aider: ~/.aider.conf.yml ---
     src_aider_conf = os.path.join(_AIDER_DEFAULTS_DIR, ".aider.conf.yml")
-    if os.path.isfile(src_aider_conf):
+    if os.path.isfile(src_aider_conf) and not os.path.isfile(os.path.join(home, ".aider.conf.yml")):
         shutil.copy2(src_aider_conf, os.path.join(home, ".aider.conf.yml"))
 
     src_aider_ignore = os.path.join(_AIDER_DEFAULTS_DIR, ".aiderignore")
     if os.path.isfile(src_aider_ignore):
-        shutil.copy2(src_aider_ignore, os.path.join(home, ".aiderignore"))
-        shutil.copy2(src_aider_ignore, os.path.join(cwd, ".aiderignore"))
+        if not os.path.isfile(os.path.join(home, ".aiderignore")):
+            shutil.copy2(src_aider_ignore, os.path.join(home, ".aiderignore"))
+        if not os.path.isfile(os.path.join(cwd, ".aiderignore")):
+            shutil.copy2(src_aider_ignore, os.path.join(cwd, ".aiderignore"))
 
     # --- Crush: ~/.config/crush/crush.json ---
-    if api_key:
+    if api_key and not os.path.isfile(os.path.join(cwd, ".crush.json")):
         crush_global_dir = os.path.join(home, ".config", "crush")
         os.makedirs(crush_global_dir, exist_ok=True)
         try:
@@ -2706,10 +3135,72 @@ def seed_ai_tool_defaults() -> None:
     except Exception as e:
         logger.warning("Could not seed Codex workspace: %s", e)
 
-    # --- Git setup (needed by Aider, OpenCode, Crush, Deep Agents) ---
+    # --- Git setup (needed by Aider, OpenCode, Crush, Pi, Deep Agents) ---
     _ensure_git_ready(cwd)
 
     logger.info("AI tool defaults seeded to home=%s, workspace=%s", home, cwd)
+
+
+def _harness_workspace_home() -> tuple[str, str]:
+    from app.settings_manager import get_storage_dir as _storage
+
+    home = os.path.expanduser("~")
+    workspace = _storage() if os.path.isdir(_storage()) else home
+    return workspace, home
+
+
+def sync_ai_tool_harness_defaults(harness: str | None = None) -> dict:
+    """Regenerate source-controlled external harness defaults for this user."""
+    from app.harness_config import harness_status, sync_harness_defaults
+
+    workspace, home = _harness_workspace_home()
+    selected = [harness] if harness else None
+    result = sync_harness_defaults(workspace=workspace, home=home, harnesses=selected)
+    mcp_servers: list[str] = []
+    opencode_path = os.path.join(workspace, "opencode.json")
+    try:
+        with open(opencode_path) as f:
+            opencode_config = json.load(f)
+        mcp_servers = sorted((opencode_config.get("mcp") or {}).keys())
+    except (OSError, json.JSONDecodeError, AttributeError):
+        mcp_servers = []
+
+    response = {
+        "status": "ok",
+        "workspace": result.get("workspace", workspace),
+        "home": result.get("home", home),
+        "agents": result.get("agents", 0),
+        "skills": result.get("skills", 0),
+        "providers": result.get("providers", []),
+        "mcp_servers": mcp_servers,
+        "mapping": os.path.join(workspace, ".loomai", "harness-defaults", "MAPPING.md"),
+        "managed_service": {
+            "name": "loomai-harness",
+            "transport": "stdio",
+            "command": "python3 -m app.harness_mcp_server",
+            "backend_url_env": "LOOMAI_URL",
+        },
+    }
+    if harness:
+        response["harness"] = harness_status(harness, workspace=workspace, home=home)
+    return response
+
+
+def reset_ai_tool_harness_defaults(harness: str) -> dict:
+    """Overwrite one LoomAI-managed external harness with pristine defaults."""
+    from app.harness_config import reset_harness_defaults
+
+    workspace, home = _harness_workspace_home()
+    return reset_harness_defaults(harness, workspace=workspace, home=home)
+
+
+def _harness_status_response(harness: str | None = None) -> dict:
+    from app.harness_config import harness_status, harness_statuses
+
+    workspace, home = _harness_workspace_home()
+    if harness:
+        return {"status": "ok", "workspace": workspace, "home": home, "harness": harness_status(harness, workspace=workspace, home=home)}
+    return {"status": "ok", **harness_statuses(workspace=workspace, home=home)}
 
 
 # ---------------------------------------------------------------------------
@@ -2742,10 +3233,12 @@ def propagate_ai_configs() -> dict:
             oc_config = _build_opencode_config(api_key, workspace_config=ws_config)
             write_cfg = {k: v for k, v in oc_config.items() if not k.startswith("_")}
 
-            with open(os.path.join(home, ".opencode.json"), "w") as f:
-                json.dump(write_cfg, f, indent=2)
-            with open(os.path.join(cwd, "opencode.json"), "w") as f:
-                json.dump(write_cfg, f, indent=2)
+            from app.harness_config import _merge_json_file
+            _merge_json_file(os.path.join(cwd, "opencode.json"), write_cfg)
+            try:
+                _merge_json_file(os.path.join(home, ".opencode.json"), write_cfg)
+            except OSError as e:
+                logger.debug("Skipped home OpenCode config copy: %s", e)
             results["opencode"] = "ok"
         else:
             results["opencode"] = "skipped (no API key)"
@@ -2759,11 +3252,20 @@ def propagate_ai_configs() -> dict:
         # Also update global aider config
         src_aider_conf = os.path.join(_AIDER_DEFAULTS_DIR, ".aider.conf.yml")
         if os.path.isfile(src_aider_conf):
-            shutil.copy2(src_aider_conf, os.path.join(home, ".aider.conf.yml"))
+            try:
+                if not os.path.isfile(os.path.join(home, ".aider.conf.yml")):
+                    shutil.copy2(src_aider_conf, os.path.join(home, ".aider.conf.yml"))
+            except OSError as e:
+                logger.debug("Skipped home Aider config copy: %s", e)
         src_aider_ignore = os.path.join(_AIDER_DEFAULTS_DIR, ".aiderignore")
         if os.path.isfile(src_aider_ignore):
-            shutil.copy2(src_aider_ignore, os.path.join(home, ".aiderignore"))
-            shutil.copy2(src_aider_ignore, os.path.join(cwd, ".aiderignore"))
+            try:
+                if not os.path.isfile(os.path.join(home, ".aiderignore")):
+                    shutil.copy2(src_aider_ignore, os.path.join(home, ".aiderignore"))
+            except OSError as e:
+                logger.debug("Skipped home Aider ignore copy: %s", e)
+            if not os.path.isfile(os.path.join(cwd, ".aiderignore")):
+                shutil.copy2(src_aider_ignore, os.path.join(cwd, ".aiderignore"))
         results["aider"] = "ok"
     except Exception as e:
         logger.warning("Failed to propagate Aider config: %s", e)
@@ -2783,10 +3285,13 @@ def propagate_ai_configs() -> dict:
             _setup_crush_workspace(cwd, api_key)
             # Also copy to global location
             crush_global_dir = os.path.join(home, ".config", "crush")
-            os.makedirs(crush_global_dir, exist_ok=True)
             crush_workspace = os.path.join(cwd, ".crush.json")
-            if os.path.isfile(crush_workspace):
-                shutil.copy2(crush_workspace, os.path.join(crush_global_dir, "crush.json"))
+            try:
+                os.makedirs(crush_global_dir, exist_ok=True)
+                if os.path.isfile(crush_workspace):
+                    shutil.copy2(crush_workspace, os.path.join(crush_global_dir, "crush.json"))
+            except OSError as e:
+                logger.debug("Skipped home Crush config copy: %s", e)
             results["crush"] = "ok"
         else:
             results["crush"] = "skipped (no API key)"
@@ -2862,6 +3367,67 @@ async def propagate_config_endpoint():
     """
     results = propagate_ai_configs()
     return {"status": "ok", "tools": results}
+
+
+@router.get("/api/ai/tools/harnesses")
+async def list_ai_tool_harnesses_endpoint():
+    """Return Configure-page status for LoomAI-managed external harnesses."""
+    try:
+        return _harness_status_response()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/api/ai/tools/harnesses/{harness_name}/status")
+async def get_ai_tool_harness_status_endpoint(harness_name: str):
+    """Return status for one LoomAI-managed external harness."""
+    try:
+        return _harness_status_response(harness_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/api/ai/tools/harnesses/{harness_name}/sync")
+async def sync_ai_tool_harness_endpoint(harness_name: str):
+    """Regenerate one LoomAI-managed external harness default."""
+    try:
+        return sync_ai_tool_harness_defaults(harness_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/api/ai/tools/harnesses/{harness_name}/reset")
+async def reset_ai_tool_harness_endpoint(harness_name: str):
+    """Overwrite one LoomAI-managed external harness with pristine defaults."""
+    try:
+        return reset_ai_tool_harness_defaults(harness_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/api/ai/tools/harnesses/{harness_name}/docs")
+async def get_ai_tool_harness_docs_endpoint(harness_name: str):
+    """Return markdown docs for one LoomAI-managed external harness."""
+    from app.harness_config import harness_docs_markdown
+
+    workspace, home = _harness_workspace_home()
+    try:
+        text = harness_docs_markdown(harness_name, workspace=workspace, home=home)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return PlainTextResponse(text, media_type="text/markdown")
+
+
+@router.post("/api/ai/tools/sync")
+async def sync_ai_tools_endpoint():
+    """Regenerate LoomAI-managed external harness defaults.
+
+    This is the user-facing equivalent of the startup/build sync hook. It
+    refreshes generated AGENTS/CLAUDE/Aider/Codex/OpenCode/Goose/Crush
+    defaults, including the fabric-reports and loomai-harness MCP entries,
+    while preserving user-owned config values.
+    """
+    return sync_ai_tool_harness_defaults()
 
 
 def _read_master(fd: int) -> str:

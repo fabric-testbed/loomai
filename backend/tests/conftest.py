@@ -69,6 +69,7 @@ def storage_dir(tmp_path):
         "FABRIC_CONFIG_DIR": str(config_dir),
         "FABRIC_TOKEN_FILE": str(config_dir / "id_token.json"),
         "FABRIC_PROJECT_ID": "test-project-id",
+        "HOME": str(storage),
     }
 
     with patch.dict(os.environ, env_vars):

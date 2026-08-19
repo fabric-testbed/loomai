@@ -598,7 +598,7 @@ class FakeSlice:
         self._port_mirrors.append(pm)
         return pm
 
-    def submit(self, wait: bool = False) -> None:
+    def submit(self, wait: bool = False, **kwargs) -> None:
         self._slice_id = self._slice_id or contract_slice_id(self._name)
         self._state = "StableOK"
         for index, node in enumerate(self._nodes, start=10):

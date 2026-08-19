@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.error_envelope import error_detail, safe_error_detail
 from app.user_context import get_user_storage
 from app.routes.slices import build_slice_model, import_slice, SliceModelImport, _get_site_groups, _get_draft, _store_site_groups, _serialize, _get_slice_obj
 
@@ -31,7 +32,14 @@ def _sanitize_name(name: str) -> str:
     """Sanitize template name to safe directory name."""
     safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", name.strip())
     if not safe:
-        raise HTTPException(status_code=400, detail="Invalid template name")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "TEMPLATE_NAME_INVALID",
+                "Template name is empty or contains no usable characters. Provide a name with letters, numbers, underscores, or hyphens.",
+                template=name,
+            ),
+        )
     return safe
 
 
@@ -39,7 +47,14 @@ def _validate_path(base: str, name: str) -> str:
     """Return full path for template dir, with traversal protection."""
     path = os.path.realpath(os.path.join(base, name))
     if not path.startswith(os.path.realpath(base)):
-        raise HTTPException(status_code=400, detail="Invalid template name")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "TEMPLATE_NAME_INVALID",
+                "Template name resolves outside the artifacts directory. Provide a plain directory name without path separators.",
+                template=name,
+            ),
+        )
     return path
 
 
@@ -148,6 +163,37 @@ def _list_tools(tmpl_dir: str) -> list[dict[str, str]]:
             if os.path.isfile(os.path.join(tools_dir, fn))]
 
 
+def _max_lease_hours_policy() -> int | None:
+    """Return configured max lease hours, or None when policy is disabled."""
+    try:
+        from app.settings_manager import get_max_slice_lease_hours
+        return get_max_slice_lease_hours()
+    except Exception:
+        logger.debug("Could not read max slice lease policy", exc_info=True)
+        return None
+
+
+def _add_max_lease_policy_arg(script_args: dict[str, str]) -> dict[str, str]:
+    """Expose the configured max lease policy to weave processes."""
+    args = {
+        str(key): str(value)
+        for key, value in (script_args or {}).items()
+        if value is not None
+    }
+    max_hours = _max_lease_hours_policy()
+    if max_hours:
+        policy_value = str(max_hours)
+        existing = args.get("FABRIC_MAX_LEASE_HOURS")
+        if existing and existing != policy_value:
+            logger.warning(
+                "Ignoring conflicting FABRIC_MAX_LEASE_HOURS=%r from weave args; using policy value %s",
+                existing,
+                policy_value,
+            )
+        args["FABRIC_MAX_LEASE_HOURS"] = policy_value
+    return args
+
+
 # ---------------------------------------------------------------------------
 # Helper: generate FABlib-native weave scripts
 # ---------------------------------------------------------------------------
@@ -185,6 +231,35 @@ TOPOLOGY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "slice_topology.graphml")
 
 
+def _positive_int_from_env(name):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        hours = int(raw)
+    except ValueError:
+        print("### PROGRESS: Ignoring invalid %s=%r" % (name, raw))
+        return None
+    return hours if hours > 0 else None
+
+
+def _max_lease_hours_from_env():
+    requested_hours = _positive_int_from_env("FABRIC_LEASE_HOURS")
+    max_lease_hours = _positive_int_from_env("FABRIC_MAX_LEASE_HOURS")
+    if requested_hours and max_lease_hours:
+        return min(requested_hours, max_lease_hours)
+    return requested_hours or max_lease_hours
+
+
+def _submit_with_lease_policy(slice_obj):
+    max_lease_hours = _max_lease_hours_from_env()
+    if max_lease_hours:
+        print("### PROGRESS: Applying lease duration: %s hours" % max_lease_hours)
+        slice_obj.submit(lease_in_hours=max_lease_hours)
+    else:
+        slice_obj.submit()
+
+
 def start(slice_name):
     """Create a slice from the saved topology and wait for it to be ready."""
     fablib = FablibManager()
@@ -196,7 +271,7 @@ def start(slice_name):
     my_slice.load(TOPOLOGY_FILE)
 
     print("### PROGRESS: Submitting slice to FABRIC...")
-    my_slice.submit()
+    _submit_with_lease_policy(my_slice)
 
     print("### PROGRESS: Waiting for SSH access (this may take a few minutes)...")
     my_slice.wait_ssh(progress=True)
@@ -411,12 +486,27 @@ def save_template(req: SaveTemplateRequest) -> dict[str, Any]:
     tmpl_dir = _validate_path(tdir, safe_name)
 
     if os.path.isdir(tmpl_dir):
-        raise HTTPException(status_code=409, detail=f"Template '{req.name}' already exists")
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "TEMPLATE_ALREADY_EXISTS",
+                f"Template '{req.name}' already exists. Choose a different name or delete the existing template first.",
+                template=req.name,
+            ),
+        )
 
     try:
         model = build_slice_model(req.slice_name)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to export slice: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=error_detail(
+                "TEMPLATE_EXPORT_FAILED",
+                f"Failed to export slice '{req.slice_name}' as a template: {safe_error_detail(e)}. Check that the source slice exists and is loadable.",
+                template=req.name,
+                slice=req.slice_name,
+            ),
+        )
 
     # Override the name in the model to use the template name
     model["name"] = req.name
@@ -493,7 +583,14 @@ def create_blank_artifact(req: CreateArtifactRequest) -> dict[str, Any]:
     tmpl_dir = _validate_path(tdir, safe_name)
 
     if os.path.isdir(tmpl_dir):
-        raise HTTPException(status_code=409, detail=f"Artifact '{req.name}' already exists")
+        raise HTTPException(
+            status_code=409,
+            detail=error_detail(
+                "ARTIFACT_ALREADY_EXISTS",
+                f"Artifact '{req.name}' already exists. Choose a different name or delete the existing artifact first.",
+                artifact=req.name,
+            ),
+        )
 
     os.makedirs(tmpl_dir, exist_ok=True)
 
@@ -532,7 +629,13 @@ async def create_weave_endpoint(req: Request) -> dict[str, Any]:
     body = await req.json()
     name = body.get("name", "").strip()
     if not name:
-        raise HTTPException(400, "name is required")
+        raise HTTPException(
+            400,
+            detail=error_detail(
+                "TEMPLATE_NAME_INVALID",
+                "Weave name is required. Provide a non-empty 'name' field in the request body.",
+            ),
+        )
     from app.routes.ai_chat import _create_weave_tool
     result_json = await _create_weave_tool({
         "name": name,
@@ -544,7 +647,18 @@ async def create_weave_endpoint(req: Request) -> dict[str, Any]:
     import json as _json
     result = _json.loads(result_json)
     if "error" in result:
-        raise HTTPException(409, result["error"])
+        err_text = safe_error_detail(str(result["error"]))
+        code = "ARTIFACT_ALREADY_EXISTS" if "already exists" in err_text.lower() else "TEMPLATE_NAME_INVALID"
+        if not err_text.endswith("."):
+            err_text += "."
+        raise HTTPException(
+            409,
+            detail=error_detail(
+                code,
+                f"{err_text} Choose a different weave name and try again.",
+                weave=name,
+            ),
+        )
     return result
 
 
@@ -582,7 +696,14 @@ def get_background_run(run_id: str):
     from app.run_manager import get_run
     meta = get_run(run_id)
     if not meta:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "WEAVE_RUN_NOT_FOUND",
+                f"Run '{run_id}' not found. List runs via GET /api/templates/runs to see valid run IDs.",
+                run_id=run_id,
+            ),
+        )
     return meta
 
 
@@ -597,7 +718,14 @@ def get_background_run_output(run_id: str, offset: int = 0):
     from app.run_manager import get_run, get_run_output
     meta = get_run(run_id)
     if not meta:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "WEAVE_RUN_NOT_FOUND",
+                f"Run '{run_id}' not found. List runs via GET /api/templates/runs to see valid run IDs.",
+                run_id=run_id,
+            ),
+        )
     output, new_offset = get_run_output(run_id, offset)
     return {
         "output": output,
@@ -618,7 +746,14 @@ def stop_background_run(run_id: str):
 
     meta = get_run(run_id)
     if not meta or meta.get("status") != "running":
-        raise HTTPException(status_code=404, detail="Run not found or already finished")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "WEAVE_RUN_NOT_ACTIVE",
+                f"Run '{run_id}' is not running (not found or already finished). Check its status via GET /api/templates/runs/{run_id}.",
+                run_id=run_id,
+            ),
+        )
 
     _threading.Thread(target=stop_run, args=(run_id,), daemon=True).start()
     return {"status": "stopping"}
@@ -630,7 +765,14 @@ def delete_background_run(run_id: str):
     from app.run_manager import delete_run
     if delete_run(run_id):
         return {"status": "deleted"}
-    raise HTTPException(status_code=404, detail="Run not found")
+    raise HTTPException(
+        status_code=404,
+        detail=error_detail(
+            "WEAVE_RUN_NOT_FOUND",
+            f"Run '{run_id}' not found. List runs via GET /api/templates/runs to see valid run IDs.",
+            run_id=run_id,
+        ),
+    )
 
 
 @router.get("/{name}/weave-log")
@@ -673,7 +815,14 @@ def get_template(name: str) -> dict[str, Any]:
     weave_path = os.path.join(tmpl_dir, "weave.json")
     tmpl_path = os.path.join(tmpl_dir, "slice.json")
     if not os.path.isfile(weave_path) or not os.path.isfile(tmpl_path):
-        raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "TEMPLATE_NOT_FOUND",
+                f"Template '{name}' not found. List templates via GET /api/templates to see available names.",
+                template=name,
+            ),
+        )
 
     with open(weave_path) as f:
         metadata = json.load(f)
@@ -696,7 +845,14 @@ def load_template(name: str, req: LoadTemplateRequest) -> dict[str, Any]:
 
     tmpl_path = os.path.join(tmpl_dir, "slice.json")
     if not os.path.isfile(tmpl_path):
-        raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "TEMPLATE_NOT_FOUND",
+                f"Template '{name}' not found or has no topology file. List templates via GET /api/templates to see available names.",
+                template=name,
+            ),
+        )
 
     with open(tmpl_path) as f:
         model_data = json.load(f)
@@ -783,7 +939,14 @@ def delete_template(name: str) -> dict[str, str]:
     tmpl_dir = _validate_path(tdir, safe_name)
 
     if not os.path.isdir(tmpl_dir):
-        raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "TEMPLATE_NOT_FOUND",
+                f"Template '{name}' not found. List templates via GET /api/templates to see available names.",
+                template=name,
+            ),
+        )
 
     shutil.rmtree(tmpl_dir)
     return {"status": "deleted", "name": name}
@@ -799,7 +962,14 @@ def update_template(name: str, req: UpdateTemplateRequest) -> dict[str, Any]:
 
     weave_path = os.path.join(tmpl_dir, "weave.json")
     if not os.path.isfile(weave_path):
-        raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "TEMPLATE_NOT_FOUND",
+                f"Template '{name}' not found. List templates via GET /api/templates to see available names.",
+                template=name,
+            ),
+        )
 
     with open(weave_path) as f:
         metadata = json.load(f)
@@ -820,7 +990,14 @@ def _validate_tool_filename(filename: str) -> str:
     """Sanitize and validate a tool filename."""
     safe = re.sub(r"[^a-zA-Z0-9_\-.]", "_", filename.strip())
     if not safe or safe.startswith("."):
-        raise HTTPException(status_code=400, detail="Invalid tool filename")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "WEAVE_TOOL_FILENAME_INVALID",
+                "Tool filename is empty or starts with a dot. Provide a filename with letters, numbers, underscores, hyphens, or dots that does not start with a dot.",
+                filename=filename,
+            ),
+        )
     return safe
 
 
@@ -834,7 +1011,15 @@ def read_tool(name: str, filename: str) -> dict[str, str]:
     tool_path = os.path.join(tmpl_dir, "tools", safe_file)
 
     if not os.path.isfile(tool_path):
-        raise HTTPException(status_code=404, detail=f"Tool file '{filename}' not found")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "WEAVE_TOOL_NOT_FOUND",
+                f"Tool file '{filename}' not found in template '{name}'. Check the tools listing in the template detail.",
+                filename=filename,
+                template=name,
+            ),
+        )
 
     with open(tool_path) as f:
         content = f.read()
@@ -850,7 +1035,14 @@ def write_tool(name: str, filename: str, body: ToolFileBody) -> dict[str, str]:
     tmpl_dir = _validate_path(tdir, safe_name)
 
     if not os.path.isdir(tmpl_dir):
-        raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "TEMPLATE_NOT_FOUND",
+                f"Template '{name}' not found. List templates via GET /api/templates to see available names.",
+                template=name,
+            ),
+        )
 
     tools_dir = os.path.join(tmpl_dir, "tools")
     os.makedirs(tools_dir, exist_ok=True)
@@ -871,7 +1063,15 @@ def delete_tool(name: str, filename: str) -> dict[str, str]:
     tool_path = os.path.join(tmpl_dir, "tools", safe_file)
 
     if not os.path.isfile(tool_path):
-        raise HTTPException(status_code=404, detail=f"Tool file '{filename}' not found")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "WEAVE_TOOL_NOT_FOUND",
+                f"Tool file '{filename}' not found in template '{name}'. Check the tools listing in the template detail.",
+                filename=filename,
+                template=name,
+            ),
+        )
 
     os.remove(tool_path)
     return {"filename": safe_file, "status": "deleted"}
@@ -885,7 +1085,7 @@ def delete_tool(name: str, filename: str) -> dict[str, str]:
 
 class RunScriptRequest(BaseModel):
     slice_name: str = ""
-    args: dict[str, str] = {}
+    args: dict[str, Any] = {}
 
 
 @router.post("/{name}/run-script/{script}")
@@ -909,7 +1109,15 @@ def run_weave_script(name: str, script: str, req: RunScriptRequest):
 
     script_path = os.path.join(tmpl_dir, script)
     if not os.path.isfile(script_path):
-        raise HTTPException(status_code=404, detail=f"Script '{script}' not found in weave '{name}'")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "WEAVE_SCRIPT_NOT_FOUND",
+                f"Script '{script}' not found in weave '{name}'. Check the weave's run_script setting in weave.json.",
+                script=script,
+                template=name,
+            ),
+        )
 
     def _stream():
         import json as _json
@@ -918,7 +1126,7 @@ def run_weave_script(name: str, script: str, req: RunScriptRequest):
             return "data: " + _json.dumps(payload) + "\n\n"
 
         # Build env vars from args dict (with legacy slice_name fallback)
-        script_args = dict(req.args)
+        script_args = _add_max_lease_policy_arg(req.args)
         if req.slice_name and "SLICE_NAME" not in script_args:
             script_args["SLICE_NAME"] = req.slice_name
         env = {**os.environ, **script_args}
@@ -961,7 +1169,7 @@ def run_weave_script(name: str, script: str, req: RunScriptRequest):
 
 class StartRunRequest(BaseModel):
     slice_name: str = ""
-    args: dict[str, str] = {}
+    args: dict[str, Any] = {}
 
 
 def _run_extra_env_from_request(request: Request | None) -> dict[str, str]:
@@ -1002,11 +1210,27 @@ def start_background_run(name: str, script: str, req: StartRunRequest, request: 
         # Allow any script name that exists in the weave directory
         script_path = os.path.join(tmpl_dir, script)
         if not os.path.isfile(script_path):
-            raise HTTPException(status_code=400, detail=f"Script '{script}' not found")
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail(
+                    "WEAVE_SCRIPT_NOT_FOUND",
+                    f"Script '{script}' not found in weave '{name}'. Check the script name or the weave's run_script setting in weave.json.",
+                    script=script,
+                    template=name,
+                ),
+            )
     else:
         script_path = os.path.join(tmpl_dir, script)
         if not os.path.isfile(script_path):
-            raise HTTPException(status_code=404, detail=f"Script '{script}' not found in weave '{name}'")
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "WEAVE_SCRIPT_NOT_FOUND",
+                    f"Script '{script}' not found in weave '{name}'. Check the weave's run_script setting in weave.json.",
+                    script=script,
+                    template=name,
+                ),
+            )
 
     # Read weave display name from weave.json
     weave_json_path = os.path.join(tmpl_dir, "weave.json")
@@ -1021,6 +1245,7 @@ def start_background_run(name: str, script: str, req: StartRunRequest, request: 
     # Build script args — merge legacy slice_name with new args dict
     from app.run_manager import sanitize_run_args
     script_args = sanitize_run_args(req.args)
+    script_args = _add_max_lease_policy_arg(script_args)
     if req.slice_name and "SLICE_NAME" not in script_args:
         script_args["SLICE_NAME"] = req.slice_name
 
@@ -1062,4 +1287,3 @@ def start_background_run(name: str, script: str, req: StartRunRequest, request: 
         logger.warning("Failed to write run info to weave.json: %s", e)
 
     return {"run_id": run_id, "status": "running"}
-

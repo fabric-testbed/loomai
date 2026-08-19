@@ -248,7 +248,16 @@ Interface naming: `{node-name}-{component-name}-p{port-number}`.
    - At the start, print a summary of what the weave will do and how long it typically takes
 
 8. **Verify**: Read back all created files to confirm JSON is valid, interface
-   wiring is consistent, and the Python script syntax is correct.
+   wiring is consistent, and the Python script syntax is correct. Then call the
+   read-only artifact checker before running or publishing:
+   ```bash
+   curl -s -X POST http://localhost:8000/api/artifacts/validate \
+     -H "Content-Type: application/json" \
+     -d '{"dir_name": "<DirName>"}'
+   ```
+   Fix any `severity: "error"` findings. The same checker is available to
+   harnesses as the `validate_artifact` MCP tool and accepts inline
+   `weave_json` plus `scripts` before files are written.
 
 ## Managing Background Runs
 

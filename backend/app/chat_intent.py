@@ -56,6 +56,22 @@ def _extract_duration_days(full_message: str, default: int = 7) -> int:
     return default
 
 
+def _extract_duration_hours(full_message: str) -> int | None:
+    """Parse '6 hours', '6-hour', '6h', or 'six hours' out of a user message."""
+    s = full_message.lower()
+    m = re.search(r"(\d+)[\s-]*(?:hours?|hrs?|hr|h)\b", s)
+    if m:
+        try:
+            return max(1, min(24 * 180, int(m.group(1))))
+        except ValueError:
+            pass
+    _WORDS = {"a": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7}
+    for word, n in _WORDS.items():
+        if re.search(rf"\b{word}[\s-]+(?:hours?|hrs?)\b", s):
+            return n
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Intent patterns: (compiled_regex, tool_name, arg_extractor, confidence)
 # ---------------------------------------------------------------------------
@@ -146,7 +162,15 @@ _RAW_PATTERNS: list[tuple[str, str, Optional[Callable], str]] = [
      "delete_slice", lambda m: {"slice_name": m.group(1)}, "medium"),
 
     # Renew slice with explicit duration — HIGH
-    # Matches: "renew my-slice for 14 days", "extend foo by 3 days", "renew bar 2 weeks"
+    # Matches: "renew my-slice for 6 hours", "renew foo 6-hour", "extend foo by 3 days", "renew bar 2 weeks"
+    (r"(?:renew|extend)\s+(?:slice\s+|lease\s+(?:on|for)\s+)?['\"]?(\S+?)['\"]?\s+(?:by\s+|for\s+)?(\d+[\s-]*(?:hours?|hrs?|hr|h)\b.*)",
+     "renew_slice",
+     lambda m: {"slice_name": m.group(1), "hours": _extract_duration_hours(m.group(0))},
+     "high"),
+    (r"(?:renew|extend)\s+(?:slice\s+|lease\s+(?:on|for)\s+)?['\"]?(\S+?)['\"]?\s+(?:by\s+|for\s+)?((?:a|one|two|three|four|five|six|seven)[\s-]+(?:hours?|hrs?)\b.*)",
+     "renew_slice",
+     lambda m: {"slice_name": m.group(1), "hours": _extract_duration_hours(m.group(0))},
+     "high"),
     (r"(?:renew|extend)\s+(?:slice\s+|lease\s+(?:on|for)\s+)?['\"]?(\S+?)['\"]?\s+(?:by\s+|for\s+)?(\d+\s*(?:days?|d|weeks?)\b.*)",
      "renew_slice",
      lambda m: {"slice_name": m.group(1), "days": _extract_duration_days(m.group(0))},
@@ -280,6 +304,10 @@ _RAW_PATTERNS: list[tuple[str, str, Optional[Callable], str]] = [
     (r"sphere\s+realizations?", "list_sphere_realizations", None, "high"),
     (r"sphere\s+status", "sphere_status", None, "high"),
     (r"(?:list|show|my)\s+(?:sphere\s+)?xdcs?\b", "list_sphere_xdcs", None, "high"),
+    # Create/manage an XDC — LOW (needs tool-calling to supply/confirm the name),
+    # kept below the list pattern so "list xdcs" still fast-paths.
+    (r"(?:create|make|build|new)\s+(?:a\s+|an\s+)?(?:new\s+)?(?:sphere\s+)?xdc",
+     "", None, "low"),
 
     # Help / greeting — LOW (let LLM handle)
     (r"^(?:hi|hello|hey|help)[\s!?.]*$", "", None, "low"),

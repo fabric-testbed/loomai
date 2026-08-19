@@ -2,9 +2,9 @@
 # Source: FABRIC Jupyter Examples - fablib_api
 # Notebook: create_l3network_fabnet_ipv4ext_manual.ipynb
 #
-# FABRIC provides **FABnetv4Ext**, a routed IPv4 service that spans every FABRIC
-# site and additionally provides **publicly routable IP addresses** — enabling
-# your experiment nodes to send and receive...
+# FABRIC provides **FABnetv4Ext**, a routed IPv4 backbone with publicly
+# routable IP addresses. One FABNetv4Ext service cannot attach VMs from
+# multiple sites; create one service per site.
 
 # # FABnet IPv4Ext: External Access with Manual Configuration
 # ### FABlib API References

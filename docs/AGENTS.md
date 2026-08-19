@@ -2,6 +2,23 @@
 
 Two distinct agent systems operate in this project: **Claude Code slash commands** (development-time) and **in-container AI tool agents** (runtime).
 
+## User-Facing Documentation
+
+The in-app Help menu is the canonical user documentation surface. When adding or
+updating user-visible workflows, update `frontend/src/data/helpData.ts` with the
+GUI guidance, API examples, CLI examples, and screenshot-backed walkthroughs.
+Use production FABRIC sites in Help examples, and do not use EDC, EDUKY, UKY,
+RENC, LBNL, or other development sites as example site codes.
+
+For screenshot-backed Help topics, follow the reference pattern in
+`docs/TESTING.md`: the `libraries.marketplace-weave-workflow` Help topic and
+`frontend/e2e/tests/help-screenshots.mock.spec.ts` are the canonical example
+for interleaved text, numbered arrow callouts, deterministic mocked data, and
+production-safe example content.
+
+Keep repo-development instructions in this file, `CLAUDE.md`, and other
+developer docs.
+
 ## Claude Code Slash Commands
 
 34 slash-command files are available for development work. These are defined

@@ -20,10 +20,11 @@ COPY backend/requirements.txt .
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc python3-dev libffi-dev libssl-dev \
     openssh-client git nginx supervisor tmux sudo curl bubblewrap \
-    vim nano less htop strace tree jq wget rsync zip unzip \
+    vim nano less htop strace tree jq wget rsync zip unzip bzip2 \
     iputils-ping dnsutils net-tools traceroute ripgrep \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
+    && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies (separate RUN so failures are not masked)
@@ -237,6 +238,8 @@ RUN mkdir -p /home/fabric/work/fabric_config && chown -R fabric:fabric /home/fab
 ENV FABRIC_CONFIG_DIR=/home/fabric/work/fabric_config
 ENV FABRIC_STORAGE_DIR=/home/fabric/work
 ENV HOME=/home/fabric
+RUN python3 -m app.harness_config --workspace /home/fabric/work --home /home/fabric --quiet \
+    && chown -R fabric:fabric /home/fabric
 # Keep the matplotlib cache on the storage mount: always writable (the
 # entrypoint chowns /home/fabric/work on every start) and persistent across
 # pod restarts, unlike the default ~/.cache which can end up root-owned.

@@ -22,6 +22,29 @@ def _print_models(ctx, data):
         output(ctx, data)
         return
 
+    def _model_id(entry):
+        if isinstance(entry, dict):
+            return entry.get("id") or entry.get("name") or ""
+        return str(entry or "")
+
+    def _custom_model_entries(raw):
+        if isinstance(raw, dict):
+            entries = []
+            for provider, models in raw.items():
+                if isinstance(models, list):
+                    for model in models:
+                        mid = _model_id(model)
+                        if mid:
+                            entries.append(f"{provider}:{mid}")
+                else:
+                    mid = _model_id(models)
+                    if mid:
+                        entries.append(f"{provider}:{mid}")
+            return entries
+        if isinstance(raw, list):
+            return [_model_id(m) for m in raw if _model_id(m)]
+        return []
+
     fabric = data.get("fabric", [])
     nrp = data.get("nrp", [])
     custom = data.get("custom", [])
@@ -31,23 +54,24 @@ def _print_models(ctx, data):
     if fabric:
         click.echo("FABRIC AI Models:")
         for m in fabric:
-            marker = " (default)" if m.get("id") == default else ""
-            click.echo(f"  {m.get('id', m.get('name', ''))}{marker}")
+            model_id = _model_id(m)
+            marker = " (default)" if model_id == default else ""
+            click.echo(f"  {model_id}{marker}")
     if not has_key.get("fabric"):
         click.echo("  (no API key — enter your FABRIC AI key in settings)")
 
     if nrp:
         click.echo("\nNRP/Nautilus Models:")
         for m in nrp:
-            marker = " (default)" if m.get("id") == default else ""
-            click.echo(f"  {m.get('id', m.get('name', ''))}{marker}")
+            model_id = _model_id(m)
+            marker = " (default)" if model_id == default else ""
+            click.echo(f"  {model_id}{marker}")
     if not has_key.get("nrp"):
         click.echo("  (no API key — enter your NRP key in settings)")
 
     if custom:
         click.echo("\nCustom Models:")
-        for m in custom:
-            model_id = m.get("id", m.get("name", ""))
+        for model_id in _custom_model_entries(custom):
             marker = " (default)" if model_id == default else ""
             click.echo(f"  {model_id}{marker}")
 
@@ -493,6 +517,16 @@ def tools_propagate_config(ctx):
     output(ctx, data)
 
 
+@tools.command("sync")
+@click.pass_context
+def tools_sync(ctx):
+    """Regenerate LoomAI-managed harness defaults and MCP entries."""
+    data = ctx.obj["client"].post("/ai/tools/sync")
+    if ctx.obj["format"] == "table":
+        output_message("AI tool harness defaults synced")
+    output(ctx, data)
+
+
 @tools.group("web")
 def web_tools():
     """Start, stop, and inspect web-based AI tools."""
@@ -545,8 +579,11 @@ def web_tools_status(ctx, tool):
 @click.argument("message", required=False)
 @click.option("--model", help="Override model (e.g. qwen3-coder-30b).")
 @click.option("--agent", help="Agent to use (see 'loomai ai agents').")
+@click.option("--temperature", type=float, help="Sampling temperature to send to the model provider.")
+@click.option("--top-p", "top_p", type=float, help="Nucleus sampling top-p value to send to the model provider.")
+@click.option("--max-output-tokens", type=int, help="Maximum output tokens for the model response.")
 @click.pass_context
-def chat(ctx, message, model, agent):
+def chat(ctx, message, model, agent, temperature, top_p, max_output_tokens):
     """Chat with the LoomAI AI assistant.
 
     With MESSAGE: one-shot query, prints response and exits.
@@ -566,7 +603,15 @@ def chat(ctx, message, model, agent):
         # One-shot mode: resolve model if not explicitly set
         if not model:
             model = _resolve_default_model(client)
-        _send_chat(client, [{"role": "user", "content": message}], model, agent)
+        _send_chat(
+            client,
+            [{"role": "user", "content": message}],
+            model,
+            agent,
+            temperature=temperature,
+            top_p=top_p,
+            max_output_tokens=max_output_tokens,
+        )
     else:
         # Interactive mode
         click.echo("LoomAI AI Assistant (type 'exit' or Ctrl+D to quit)")
@@ -580,7 +625,15 @@ def chat(ctx, message, model, agent):
             if user_input.strip().lower() in ("exit", "quit", "q"):
                 break
             messages.append({"role": "user", "content": user_input})
-            response = _send_chat(client, messages, model, agent)
+            response = _send_chat(
+                client,
+                messages,
+                model,
+                agent,
+                temperature=temperature,
+                top_p=top_p,
+                max_output_tokens=max_output_tokens,
+            )
             if response:
                 messages.append({"role": "assistant", "content": response})
 
@@ -630,13 +683,27 @@ def _save_local_config(data: dict) -> None:
         json.dump(existing, f, indent=2)
 
 
-def _send_chat(client, messages, model=None, agent=None) -> str:
+def _send_chat(
+    client,
+    messages,
+    model=None,
+    agent=None,
+    temperature=None,
+    top_p=None,
+    max_output_tokens=None,
+) -> str:
     """Send a chat request and stream the response."""
     body: dict = {"messages": messages}
     if model:
         body["model"] = model
     if agent:
         body["agent"] = agent
+    if temperature is not None:
+        body["temperature"] = temperature
+    if top_p is not None:
+        body["top_p"] = top_p
+    if max_output_tokens is not None:
+        body["max_output_tokens"] = max_output_tokens
 
     # Use httpx directly for SSE streaming
     url = f"{client.base_url}/api/ai/chat/stream"

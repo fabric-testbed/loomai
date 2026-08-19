@@ -31,7 +31,8 @@ If the user describes a custom topology:
 
 ## Option 3: Easy L3 Networking with fabnet
 
-For simple cross-site IP connectivity, use the `fabnet` shorthand on each node:
+For simple cross-site IP connectivity, use the `fabnet` shorthand on each
+node. This creates per-site FABNet services and routes between them:
 
 ```
 create_slice(
@@ -43,7 +44,9 @@ create_slice(
 )
 ```
 
-This auto-assigns IPv4 addresses and routes. No manual network definition needed.
+This auto-assigns IPv4 addresses and routes. No manual network definition is
+needed. Do not create one `FABNetv4` network whose interfaces are at multiple
+sites.
 
 ## Node Spec Fields
 
@@ -68,6 +71,12 @@ This auto-assigns IPv4 addresses and routes. No manual network definition needed
 | type | L2Bridge | L2Bridge, L2STS, L2PTP, FABNetv4, FABNetv6, FABNetv4Ext, FABNetv6Ext |
 | interfaces | required | List of **node names** to connect (tool auto-wires NICs) |
 | subnet | (auto) | Optional CIDR for L2 networks (e.g. "192.168.1.0/24") |
+
+FABNet network entries are per-site services: all listed interfaces must be at
+one site, with at most 255 VMs per service. For multi-site L3, prefer
+`fabnet: "v4"`/`"v6"` on each node, or create one FABNet service per site.
+L2Bridge is one-site only; L2STS spans exactly two sites; L2PTP has exactly two
+interfaces.
 
 **Note:** The `create_slice` tool takes simple node names in `interfaces`
 and auto-creates NICs. When writing weave topology files directly, you
@@ -95,7 +104,7 @@ Weaves can be run from the Artifacts panel with one click.
 ## Tips
 
 - Use "auto" for sites unless the user specifies — picks the best available
-- Use FABNetv4 or `fabnet: "v4"` for cross-site IP connectivity (simplest)
+- Use `fabnet: "v4"` on each node for cross-site IP connectivity (simplest)
 - Use L2Bridge for same-site Layer 2
 - Use L2STS for cross-site Layer 2
 - L2PTP is for exactly 2 interfaces (point-to-point)

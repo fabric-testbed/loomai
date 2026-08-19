@@ -42,6 +42,14 @@ const INSTALL_STEPS: Record<string, string[]> = {
     'Configuring workspace...',
     'Finalizing...',
   ],
+  pi: [
+    'Preparing environment...',
+    'Setting up npm prefix...',
+    'Downloading Pi packages...',
+    'Installing dependencies...',
+    'Configuring harness defaults...',
+    'Finalizing...',
+  ],
   aider: [
     'Preparing environment...',
     'Creating virtual environment...',

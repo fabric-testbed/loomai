@@ -27,13 +27,15 @@ def estimate_tokens(text: str | None) -> int:
 
 def estimate_message_tokens(msg: dict) -> int:
     """Estimate tokens in a single chat message (content + role overhead)."""
-    content = msg.get("content") or ""
+    content = msg.get("content") or msg.get("output") or ""
     # Tool call messages have function arguments
     tool_calls = msg.get("tool_calls") or []
     extra = sum(
         len(tc.get("function", {}).get("arguments") or "")
         for tc in tool_calls
     )
+    if msg.get("type") == "function_call":
+        extra += len(msg.get("arguments") or "")
     return estimate_tokens(content) + estimate_tokens(str(extra)) + 4  # role overhead
 
 
@@ -78,9 +80,10 @@ PROFILE_TIERS = {
         # models should use a per-model max_output_override.
         "max_output": 6144,
         "system_prompt": "standard",
-        # Bumped from 800 → 2000: slice JSON responses are 2-4KB typical and
-        # 800 chars drops network/interface details the LLM needs for follow-ups.
-        "tool_result_max": 2000,
+        # Standard-tier operational workflows need full slice/tool evidence
+        # (interfaces, command output, weave logs). 2000 chars cut off worked
+        # examples and multi-node topology details.
+        "tool_result_max": 6000,
         "summarize_at": 0.70,
         # Keep the full CORE_TOOLS set available for standard-tier models.
         # The assistant quality evals cover this so roadmap-critical tools
@@ -98,7 +101,7 @@ PROFILE_TIERS = {
         # with analysis + plots in one write call.
         "max_output": 12288,
         "system_prompt": "full",
-        "tool_result_max": 2000,
+        "tool_result_max": 6000,
         "summarize_at": 0.85,
         "max_tools": 50,
         "temperature": 0.5,
@@ -159,14 +162,23 @@ MODEL_OVERRIDES: dict[str, dict] = {
     "claude-haiku": {"tier": "standard", "temperature": 0.5},
     "gpt-4": {"tier": "large"},
     "gpt-3.5": {"tier": "standard"},
+    # FABRIC AI floor models: keep capability tier standard even when the
+    # advertised context window is 128K/262K. The context budget is handled
+    # separately from this capability tier.
     "gpt-oss-20b": {"tier": "standard"},
     "gpt-oss": {"tier": "standard"},
+    "gemma-4-27b": {"tier": "standard"},
     "mixtral": {"tier": "standard"},
     "llama": {"tier": "standard"},
     "gemma": {"tier": "compact"},
     "olmo": {"tier": "compact"},
     "kimi": {"tier": "standard"},
     "minimax": {"tier": "standard"},
+    "glm-5": {
+        "tier": "standard",
+        "is_reasoning": True,
+        "max_output_scale": 3.0,
+    },
     "glm": {"tier": "standard"},
     # Reasoning model — separate reasoning_content field, ~2-3x completion
     # overhead, strong on multi-step design questions, noticeably slower than
@@ -327,7 +339,8 @@ def _build_compact_prompt() -> str:
     code_block_lines = 0
 
     for line in lines:
-        # Track code blocks — limit to 10 lines each in compact mode
+        # Track code blocks — limit to 20 lines each in compact mode.
+        # Standard/full prompts do not apply this cap.
         if line.strip().startswith("```"):
             if in_code_block:
                 in_code_block = False
@@ -343,7 +356,7 @@ def _build_compact_prompt() -> str:
 
         if in_code_block:
             code_block_lines += 1
-            if code_block_lines <= 10 and include:
+            if code_block_lines <= 20 and include:
                 result.append(line)
             continue
 
@@ -408,12 +421,10 @@ def _build_standard_prompt() -> str:
         "Available VM Images",
         "Component Models",
         "Network Types",
-        "weave.json",
         "Topology Definition",
         "tools/ Scripts (Per-VM Setup)",
         "vm-template.json",
         "recipe.json",
-        "Creating a notebook from scratch",
         "Basic Slice Creation",
         "Adding Components",
         "Sub-Interfaces",
@@ -478,12 +489,275 @@ def get_system_prompt(variant: str) -> str:
 
 class TrimResult:
     """Result of conversation trimming with context status flags."""
-    __slots__ = ("messages", "near_full", "was_trimmed")
+    __slots__ = (
+        "messages",
+        "near_full",
+        "was_trimmed",
+        "was_compacted",
+        "compacted_from_tokens",
+        "compacted_to_tokens",
+    )
 
-    def __init__(self, messages: list[dict], near_full: bool = False, was_trimmed: bool = False):
+    def __init__(
+        self,
+        messages: list[dict],
+        near_full: bool = False,
+        was_trimmed: bool = False,
+        was_compacted: bool = False,
+        compacted_from_tokens: int = 0,
+        compacted_to_tokens: int = 0,
+    ):
         self.messages = messages
         self.near_full = near_full
         self.was_trimmed = was_trimmed
+        self.was_compacted = was_compacted
+        self.compacted_from_tokens = compacted_from_tokens
+        self.compacted_to_tokens = compacted_to_tokens
+
+
+def _is_user_message(msg: dict) -> bool:
+    return msg.get("role") == "user"
+
+
+def _message_role(msg: dict) -> str:
+    return str(msg.get("role") or "")
+
+
+def _is_instruction_message(msg: dict) -> bool:
+    role = _message_role(msg)
+    if role in {"system", "developer"}:
+        return True
+    return msg.get("type") == "message" and role in {"system", "developer"}
+
+
+def _message_text(msg: dict) -> str:
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    output = msg.get("output")
+    if isinstance(output, str):
+        return output
+    return ""
+
+
+def _one_line(text: str, max_chars: int = 180) -> str:
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "..."
+
+
+def _tool_call_names(msg: dict) -> list[str]:
+    if msg.get("type") == "function_call":
+        name = str(msg.get("name") or "").strip()
+        return [name] if name else []
+    names: list[str] = []
+    for call in msg.get("tool_calls") or []:
+        if isinstance(call, dict):
+            name = str(call.get("function", {}).get("name") or "").strip()
+            if name:
+                names.append(name)
+    return names
+
+
+def _tool_output_call_id(msg: dict) -> str:
+    if msg.get("role") == "tool":
+        return str(msg.get("tool_call_id") or "")
+    if msg.get("type") == "function_call_output":
+        return str(msg.get("call_id") or "")
+    return ""
+
+
+def _tool_call_ids(msg: dict) -> set[str]:
+    if msg.get("type") == "function_call":
+        call_id = str(msg.get("call_id") or msg.get("id") or "")
+        return {call_id} if call_id else set()
+    ids: set[str] = set()
+    for call in msg.get("tool_calls") or []:
+        if isinstance(call, dict):
+            call_id = str(call.get("id") or "")
+            if call_id:
+                ids.add(call_id)
+    return ids
+
+
+def _add_matching_tool_call_indices(messages: list[dict], keep_indices: set[int]) -> None:
+    """Keep tool-call messages paired with any preserved tool outputs."""
+    for index in list(keep_indices):
+        if index < 0 or index >= len(messages):
+            continue
+        call_id = _tool_output_call_id(messages[index])
+        if not call_id:
+            continue
+        for prior in range(index - 1, -1, -1):
+            if call_id in _tool_call_ids(messages[prior]):
+                keep_indices.add(prior)
+                break
+
+
+def _add_matching_tool_output_indices(messages: list[dict], keep_indices: set[int]) -> None:
+    """Keep available tool outputs for any preserved tool-call message."""
+    for index in list(keep_indices):
+        if index < 0 or index >= len(messages):
+            continue
+        call_ids = _tool_call_ids(messages[index])
+        if not call_ids:
+            continue
+        for later in range(index + 1, len(messages)):
+            call_id = _tool_output_call_id(messages[later])
+            if call_id in call_ids:
+                keep_indices.add(later)
+            elif call_id:
+                continue
+            elif _message_role(messages[later]) not in {"tool", ""}:
+                break
+
+
+def _latest_tool_output_indices(messages: list[dict], max_outputs: int) -> set[int]:
+    if max_outputs <= 0:
+        return set()
+    indices: set[int] = set()
+    found = 0
+    for index in range(len(messages) - 1, -1, -1):
+        if _tool_output_call_id(messages[index]):
+            indices.add(index)
+            found += 1
+            if found >= max_outputs:
+                break
+    _add_matching_tool_call_indices(messages, indices)
+    _add_matching_tool_output_indices(messages, indices)
+    return indices
+
+
+def _summarize_compacted_messages(messages: list[dict]) -> str:
+    parts: list[str] = []
+    for msg in messages:
+        role = _message_role(msg)
+        if msg.get("type") == "function_call":
+            name = str(msg.get("name") or "tool")
+            args = _one_line(str(msg.get("arguments") or ""), 160)
+            parts.append(f"Tool requested: {name}({args})")
+            continue
+        if msg.get("type") == "function_call_output":
+            output = _one_line(str(msg.get("output") or ""), 220)
+            parts.append(f"Tool output: {output}")
+            continue
+        names = _tool_call_names(msg)
+        if names:
+            parts.append(f"Assistant requested tools: {', '.join(names)}")
+            continue
+        text = _one_line(_message_text(msg), 220)
+        if not text:
+            continue
+        if role == "user":
+            parts.append(f"User: {text}")
+        elif role == "assistant":
+            parts.append(f"Assistant: {text}")
+        elif role == "tool":
+            name = str(msg.get("name") or "tool")
+            parts.append(f"Tool {name}: {text}")
+        else:
+            parts.append(text)
+    if not parts:
+        parts.append("Older turns were compacted; no user-visible facts were lost.")
+    return "## Compacted prior progress\n" + "\n".join(f"- {part}" for part in parts[-24:])
+
+
+def _state_preserving_compaction(
+    messages: list[dict],
+    system_tokens: int,
+    profile: dict,
+    conv_tokens: int,
+) -> TrimResult | None:
+    """Compact weak-model conversations while preserving current state and tools."""
+    if not profile.get("context_compaction_enabled"):
+        return None
+
+    trigger_messages = int(profile.get("context_compaction_trigger_messages") or 0)
+    trigger_tokens = int(profile.get("context_compaction_trigger_tokens") or 0)
+    non_instruction_count = sum(1 for msg in messages if not _is_instruction_message(msg))
+    should_compact = (
+        bool(trigger_messages and non_instruction_count > trigger_messages)
+        or bool(trigger_tokens and conv_tokens > trigger_tokens)
+    )
+    if not should_compact:
+        return None
+
+    keep_last = int(profile.get("context_compaction_keep_last_messages") or 10)
+    keep_last = max(4, min(40, keep_last))
+    keep_tool_outputs = int(profile.get("context_compaction_preserve_last_tool_outputs") or 3)
+    keep_tool_outputs = max(0, min(10, keep_tool_outputs))
+
+    keep_indices: set[int] = {
+        index for index, msg in enumerate(messages) if _is_instruction_message(msg)
+    }
+    if keep_last:
+        keep_indices.update(range(max(0, len(messages) - keep_last), len(messages)))
+
+    latest_user = next(
+        (index for index in range(len(messages) - 1, -1, -1) if _is_user_message(messages[index])),
+        None,
+    )
+    if latest_user is not None:
+        keep_indices.add(latest_user)
+
+    keep_indices.update(_latest_tool_output_indices(messages, keep_tool_outputs))
+    _add_matching_tool_call_indices(messages, keep_indices)
+    _add_matching_tool_output_indices(messages, keep_indices)
+    keep_indices = {idx for idx in keep_indices if 0 <= idx < len(messages)}
+
+    old_messages = [
+        msg for index, msg in enumerate(messages)
+        if index not in keep_indices and not _is_instruction_message(msg)
+    ]
+    if not old_messages:
+        return None
+
+    from_tokens = estimate_conversation_tokens(messages)
+    instruction_messages = [
+        msg for index, msg in enumerate(messages)
+        if index in keep_indices and _is_instruction_message(msg)
+    ]
+    preserved_messages = [
+        msg for index, msg in enumerate(messages)
+        if index in keep_indices and not _is_instruction_message(msg)
+    ]
+    summary_msg = {"role": "user", "content": _summarize_compacted_messages(old_messages)}
+    compacted = instruction_messages + [summary_msg] + preserved_messages
+    compacted = _truncate_tool_results(compacted, profile["tool_result_max"])
+    to_tokens = estimate_conversation_tokens(compacted)
+    near_full = system_tokens + to_tokens + int(profile.get("max_output") or 0) > (
+        int(profile.get("context_window") or 0) * 0.90
+    )
+    logger.info(
+        "State-preserving compaction: %d → %d messages, %d → %d tokens",
+        len(messages),
+        len(compacted),
+        from_tokens,
+        to_tokens,
+    )
+    return TrimResult(
+        compacted,
+        near_full=near_full,
+        was_trimmed=True,
+        was_compacted=True,
+        compacted_from_tokens=from_tokens,
+        compacted_to_tokens=to_tokens,
+    )
+
+
+def _recent_messages_preserving_latest_user(messages: list[dict], keep_last: int) -> list[dict]:
+    """Return recent messages, always including the newest user turn."""
+    if keep_last <= 0:
+        recent: list[dict] = []
+    else:
+        recent = list(messages[-keep_last:])
+    latest_user = next((msg for msg in reversed(messages) if _is_user_message(msg)), None)
+    if latest_user is not None and all(msg is not latest_user for msg in recent):
+        recent.append(latest_user)
+        original_order = {id(msg): idx for idx, msg in enumerate(messages)}
+        recent.sort(key=lambda msg: original_order.get(id(msg), 0))
+    return recent
 
 
 def trim_conversation(
@@ -500,7 +774,8 @@ def trim_conversation(
     Strategy:
     1. Calculate token budget (context_window * summarize_at - system_tokens - max_output)
     2. If conversation fits, return as-is
-    3. Otherwise, keep system message + last 4 messages, summarize the rest
+    3. Otherwise, keep system message + the latest user turn + recent messages,
+       summarize the rest
     """
     context_window = profile["context_window"]
     max_output = profile["max_output"]
@@ -510,11 +785,18 @@ def trim_conversation(
     if budget <= 0:
         logger.warning("System prompt (%d tokens) exceeds budget for %d context",
                         system_tokens, context_window)
-        trimmed = [messages[0]] + messages[-2:] if len(messages) > 2 else messages
+        if len(messages) > 2:
+            trimmed = [messages[0]] + _recent_messages_preserving_latest_user(messages[1:], 2)
+        else:
+            trimmed = messages
         return TrimResult(trimmed, near_full=True, was_trimmed=True)
 
     # Estimate current conversation tokens (excluding system)
     conv_tokens = sum(estimate_message_tokens(m) for m in messages[1:])
+
+    compacted = _state_preserving_compaction(messages, system_tokens, profile, conv_tokens)
+    if compacted is not None:
+        return compacted
 
     if conv_tokens <= budget:
         # Check if we're getting close to full (>80% of total context used)
@@ -522,15 +804,16 @@ def trim_conversation(
         near_full = total_used > context_window * 0.90
         return TrimResult(messages, near_full=near_full)
 
-    # Need to trim — keep system + last 4 messages
+    # Need to trim — keep system + latest user turn + last 4 messages.
     keep_last = 4
     if len(messages) <= keep_last + 1:
         truncated = _truncate_tool_results(messages, profile["tool_result_max"])
         return TrimResult(truncated, near_full=True, was_trimmed=True)
 
     system_msg = messages[0]
-    old_messages = messages[1:-keep_last]
-    recent_messages = messages[-keep_last:]
+    recent_messages = _recent_messages_preserving_latest_user(messages[1:], keep_last)
+    recent_ids = {id(msg) for msg in recent_messages}
+    old_messages = [msg for msg in messages[1:] if id(msg) not in recent_ids]
 
     summary_parts = []
     for msg in old_messages:
@@ -566,6 +849,10 @@ def _truncate_tool_results(messages: list[dict], max_chars: int) -> list[dict]:
         content = msg.get("content") or ""
         if msg.get("role") == "tool" and len(content) > max_chars:
             msg = {**msg, "content": content[:max_chars] + "..."}
+        elif msg.get("type") == "function_call_output":
+            output = msg.get("output") or ""
+            if len(output) > max_chars:
+                msg = {**msg, "output": output[:max_chars] + "..."}
         result.append(msg)
     return result
 
@@ -580,8 +867,9 @@ def _truncate_tool_results(messages: list[dict], max_chars: int) -> list[dict]:
 # needed for placement decisions. Chameleon core kept alongside FABRIC.
 CORE_TOOLS = {
     # Slice lifecycle
-    "list_slices", "get_slice", "create_slice", "submit_slice", "delete_slice",
-    "renew_slice", "validate_slice", "refresh_slice",
+    "list_slices", "get_slice", "create_slice", "clone_slice", "submit_slice",
+    "get_job_status", "configure_networking", "delete_slice", "renew_slice",
+    "validate_slice", "refresh_slice",
     # Slice mutation (topology editing)
     "add_node", "add_component", "add_network", "add_fabnet",
     "update_node", "remove_node", "remove_network",
@@ -589,12 +877,14 @@ CORE_TOOLS = {
     "query_sites", "get_site_hosts",
     # Weaves / templates
     "create_weave", "list_templates", "load_template", "save_as_template",
+    "list_recipes", "execute_recipe",
     # Background run lifecycle
     "start_background_run", "stop_background_run",
     "list_background_runs", "get_background_run_output",
     # Files + VM ops
-    "write_file", "read_file", "ssh_execute", "write_vm_file", "read_vm_file",
-    "reboot_and_wait",
+    "write_file", "read_file", "run_python_script", "run_jupyter_notebook",
+    "ssh_execute", "write_vm_file", "read_vm_file", "download_file_bulk",
+    "reboot_and_wait", "create_tunnel",
     # Examples / search
     "search_examples",
     # Chameleon core
@@ -604,6 +894,8 @@ CORE_TOOLS = {
     "list_sphere_realizations", "create_sphere_experiment", "push_sphere_model",
     "sphere_realize", "sphere_materialize", "get_sphere_materialization",
     "package_sphere_experiment",
+    # SPHERE XDC lifecycle (reaching experiment nodes)
+    "list_sphere_xdcs", "create_sphere_xdc", "attach_sphere_xdc",
     # Federated/composite core
     "list_composite_slices", "get_composite_slice",
 }

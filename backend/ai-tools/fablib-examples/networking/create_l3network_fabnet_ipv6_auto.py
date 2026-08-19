@@ -2,9 +2,9 @@
 # Source: FABRIC Jupyter Examples - fablib_api
 # Notebook: create_l3network_fabnet_ipv6_auto.ipynb
 #
-# FABRIC provides **FABnetv6**, a private IPv6 overlay network spanning every
-# FABRIC site. Nodes at different geographic locations can route IPv6 packets to
-# each other over FABRIC's high-performance ...
+# FABRIC provides **FABnetv6**, a private IPv6 backbone that routes between
+# per-site FABNet services. One FABNetv6 service cannot attach VMs from
+# multiple sites; this example correctly creates one IPv6 service per site.
 
 # # FABnet IPv6: Automatic IP Configuration
 # ### FABlib API References

@@ -11,12 +11,13 @@ COPY requirements.txt .
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc python3-dev libffi-dev libssl-dev \
     openssh-client git tmux sudo curl bubblewrap \
-    vim less htop tree wget jq net-tools iputils-ping dnsutils procps nano ripgrep \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    vim less htop tree wget jq net-tools iputils-ping dnsutils procps nano ripgrep bzip2 \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
+    && npm cache clean --force \
     && sed -i "s|fabrictestbed-extensions.*|fabrictestbed-extensions @ git+https://github.com/fabric-testbed/fabrictestbed-extensions.git@${FABLIB_BRANCH}|" requirements.txt \
     && pip install --no-cache-dir -r requirements.txt \
-    && pip uninstall -y jupyter-collaboration jupyter-collaboration-ui jupyter-docprovider jupyter-server-ydoc jupyter-server-documents 2>/dev/null || true \
+    && (pip uninstall -y jupyter-collaboration jupyter-collaboration-ui jupyter-docprovider jupyter-server-ydoc jupyter-server-documents 2>/dev/null || true) \
     && rm -f /usr/local/etc/jupyter/jupyter_server_config.d/jupyter_server_documents.json \
        /usr/local/etc/jupyter/jupyter_server_config.d/jupyter_collaboration.json 2>/dev/null || true \
     && rm -rf /var/lib/apt/lists/* /tmp/* /root/.cache
@@ -46,6 +47,8 @@ RUN mkdir -p /home/fabric/work/fabric_config && chown -R fabric:fabric /home/fab
 ENV FABRIC_CONFIG_DIR=/home/fabric/work/fabric_config
 ENV FABRIC_STORAGE_DIR=/home/fabric/work
 ENV HOME=/home/fabric
+RUN python3 -m app.harness_config --workspace /home/fabric/work --home /home/fabric --quiet \
+    && chown -R fabric:fabric /home/fabric
 # Keep the matplotlib cache on the storage mount so it's always writable and
 # persists across container restarts (avoids "Permission denied:
 # /home/fabric/.cache/matplotlib" when ~/.cache ownership drifts).

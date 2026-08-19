@@ -11,6 +11,7 @@ vi.mock('../api/client', () => ({
   refreshAiModels: vi.fn(),
   streamChat: vi.fn(),
   stopChatStream: vi.fn(),
+  getModelCapabilities: vi.fn(),
 }));
 
 const modelsResponse = {
@@ -44,6 +45,19 @@ describe('AIChatPanel', () => {
     vi.mocked(api.refreshAiModels).mockResolvedValue({ ...modelsResponse, added: 0, removed: 0, updated: 0, message: 'Models up to date' } as any);
     vi.mocked(api.streamChat).mockImplementation(mockChatStream as any);
     vi.mocked(api.stopChatStream).mockResolvedValue({ status: 'stopped' });
+    vi.mocked(api.getModelCapabilities).mockResolvedValue({
+      model: 'fabric/mock-model',
+      id: 'fabric/mock-model',
+      provider: 'fabric',
+      found: true,
+      healthy: true,
+      model_type: 'chat',
+      endpoint_style: 'chat',
+      context_length: 128000,
+      tier: 'large',
+      supports_tools: true,
+      warnings: [],
+    });
   });
 
   it('loads model choices and persists model selection', async () => {
@@ -54,7 +68,7 @@ describe('AIChatPanel', () => {
 
     fireEvent.change(select, { target: { value: 'fabric/other-model' } });
 
-    expect(api.setDefaultModel).toHaveBeenCalledWith('fabric/other-model');
+    expect(api.setDefaultModel).toHaveBeenCalledWith('fabric/other-model', 'fabric');
     expect(localStorage.getItem('loomai-chat-selected-model')).toBe('fabric/other-model');
   });
 
@@ -79,5 +93,47 @@ describe('AIChatPanel', () => {
     await waitFor(() => expect(api.refreshAiModels).toHaveBeenCalled());
     await waitFor(() => expect(api.getAiModels).toHaveBeenCalledTimes(2));
     expect(await screen.findByText('Models up to date')).toBeInTheDocument();
+  });
+
+  it('shows capability warnings for the selected model', async () => {
+    vi.mocked(api.getModelCapabilities).mockResolvedValue({
+      model: 'fabric/mock-model',
+      id: 'fabric/mock-model',
+      provider: 'fabric',
+      found: true,
+      healthy: false,
+      model_type: 'chat',
+      endpoint_style: 'chat',
+      context_length: 128000,
+      tier: 'large',
+      supports_tools: false,
+      warnings: ['Model health check is currently failing.', 'Tool calling is not available for this model.'],
+    });
+
+    render(<AIChatPanel onCollapse={() => {}} />);
+
+    expect(await screen.findByTestId('ai-chat-model-warning')).toHaveTextContent('Model health check is currently failing.');
+    expect(screen.getByTestId('ai-chat-model-warning')).toHaveTextContent('Tool calling is not available');
+  });
+
+  it('saves custom provider model selections with the custom source', async () => {
+    const customModelsResponse = {
+      ...modelsResponse,
+      custom: {
+        Local: [
+          { id: 'custom-model', name: 'custom-model', healthy: true, context_length: 32000, tier: 'standard', supports_tools: true },
+        ],
+      },
+    };
+    vi.mocked(api.getAiModels).mockResolvedValue(customModelsResponse as any);
+
+    render(<AIChatPanel onCollapse={() => {}} />);
+
+    const select = await screen.findByTestId('ai-chat-model-select');
+    await screen.findByText(/custom-model/);
+    fireEvent.change(select, { target: { value: 'Local:custom-model' } });
+
+    expect(api.setDefaultModel).toHaveBeenCalledWith('Local:custom-model', 'custom:Local');
+    expect(localStorage.getItem('loomai-chat-selected-model')).toBe('Local:custom-model');
   });
 });

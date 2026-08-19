@@ -45,6 +45,13 @@ def clean_dirs(tmp_path):
     ti._LOCK_DIR = old_lock
 
 
+def _write_npm_package(package_name: str, version: str) -> None:
+    package_dir = ti._npm_package_path(package_name)
+    os.makedirs(package_dir, exist_ok=True)
+    with open(os.path.join(package_dir, "package.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": package_name, "version": version}, f)
+
+
 # ---------------------------------------------------------------------------
 # Tool binary path
 # ---------------------------------------------------------------------------
@@ -148,6 +155,27 @@ class TestGetAllToolStatus:
             status = ti.get_all_tool_status()
         assert status["aider"]["installed"] is True
         assert status["opencode"]["installed"] is False
+
+    def test_surfaces_npm_version_drift(self, clean_dirs):
+        npm_bin = os.path.join(ti._NPM_DIR, "bin")
+        os.makedirs(npm_bin, exist_ok=True)
+        with open(os.path.join(npm_bin, "claude"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+        _write_npm_package("@anthropic-ai/claude-code", "2.1.170")
+
+        with patch("shutil.which", return_value=None):
+            status = ti.get_all_tool_status()
+
+        claude = status["claude"]
+        assert claude["installed"] is True
+        assert claude["installed_version"] == "2.1.170"
+        assert claude["pinned_version"] == "2.1.202"
+        assert claude["version_drift"] is True
+        assert claude["package_versions"]["@anthropic-ai/claude-code"] == {
+            "installed": "2.1.170",
+            "pinned": "2.1.202",
+            "drift": True,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -257,9 +285,443 @@ class TestInstallTool:
         with open(os.path.join(venv_bin, "aider"), "w") as f:
             f.write("#!/bin/bash\n")
         logs = []
-        result = await ti.install_tool("aider", progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)))
+        with patch("app.settings_manager.get_storage_dir", return_value=str(clean_dirs / "work")), \
+             patch("app.harness_config.sync_harness_defaults") as sync:
+            result = await ti.install_tool("aider", progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)))
         assert result is True
+        sync.assert_called_once()
+        assert sync.call_args.kwargs["harnesses"] == ["aider"]
         assert any("already installed" in l for l in logs)
+
+    @pytest.mark.asyncio
+    async def test_install_already_installed_opencode_syncs_defaults(self, clean_dirs, tmp_path):
+        npm_bin = os.path.join(ti._NPM_DIR, "bin")
+        os.makedirs(npm_bin, exist_ok=True)
+        with open(os.path.join(npm_bin, "opencode"), "w") as f:
+            f.write("#!/bin/bash\n")
+        logs = []
+        with patch("app.settings_manager.get_storage_dir", return_value=str(tmp_path / "work")), \
+             patch("app.harness_config.sync_harness_defaults") as sync:
+            result = await ti.install_tool("opencode", progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)))
+        assert result is True
+        sync.assert_called_once()
+        assert sync.call_args.kwargs["harnesses"] == ["opencode"]
+        assert any("already installed" in l for l in logs)
+        assert any("harness defaults synchronized" in l for l in logs)
+
+    @pytest.mark.asyncio
+    async def test_install_already_installed_pi_syncs_defaults(self, clean_dirs, tmp_path):
+        npm_bin = os.path.join(ti._NPM_DIR, "bin")
+        os.makedirs(npm_bin, exist_ok=True)
+        with open(os.path.join(npm_bin, "pi"), "w") as f:
+            f.write("#!/bin/bash\n")
+        _write_npm_package("@earendil-works/pi-coding-agent", "0.80.3")
+        _write_npm_package("pi-mcp-adapter", "2.10.0")
+        _write_npm_package("@gotgenes/pi-permission-system", "16.0.1")
+        _write_npm_package("pi-subagents", "0.33.1")
+        _write_npm_package("pi-web-access", "0.10.7")
+        _write_npm_package("@lebronj/pi-lsp", "0.0.3")
+        _write_npm_package("pyright", "1.1.411")
+        logs = []
+        with patch("app.settings_manager.get_storage_dir", return_value=str(tmp_path / "work")), \
+             patch("app.harness_config.sync_harness_defaults") as sync:
+            result = await ti.install_tool("pi", progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)))
+        assert result is True
+        sync.assert_called_once()
+        assert sync.call_args.kwargs["harnesses"] == ["pi"]
+        assert any("already installed" in l for l in logs)
+        assert any("harness defaults synchronized" in l for l in logs)
+
+    @pytest.mark.asyncio
+    async def test_install_already_installed_goose_syncs_defaults(self, clean_dirs, tmp_path):
+        local_bin = tmp_path / ".local" / "bin"
+        local_bin.mkdir(parents=True)
+        (local_bin / "goose").write_text("#!/bin/bash\n", encoding="utf-8")
+        logs = []
+        with patch.dict(os.environ, {"HOME": str(tmp_path)}), \
+             patch("app.settings_manager.get_storage_dir", return_value=str(tmp_path / "work")), \
+             patch("app.harness_config.sync_harness_defaults") as sync:
+            result = await ti.install_tool("goose", progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)))
+        assert result is True
+        sync.assert_called_once()
+        assert sync.call_args.kwargs["harnesses"] == ["goose"]
+        assert any("already installed" in l for l in logs)
+        assert any("harness defaults synchronized" in l for l in logs)
+
+    @pytest.mark.asyncio
+    async def test_install_already_installed_claude_syncs_defaults(self, clean_dirs, tmp_path):
+        npm_bin = os.path.join(ti._NPM_DIR, "bin")
+        os.makedirs(npm_bin, exist_ok=True)
+        with open(os.path.join(npm_bin, "claude"), "w") as f:
+            f.write("#!/bin/bash\n")
+        _write_npm_package("@anthropic-ai/claude-code", "2.1.202")
+        logs = []
+        with patch("app.settings_manager.get_storage_dir", return_value=str(tmp_path / "work")), \
+             patch("app.harness_config.sync_harness_defaults") as sync:
+            result = await ti.install_tool("claude", progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)))
+        assert result is True
+        sync.assert_called_once()
+        assert sync.call_args.kwargs["harnesses"] == ["claude"]
+        assert any("already installed" in l for l in logs)
+        assert any("harness defaults synchronized" in l for l in logs)
+
+    @pytest.mark.asyncio
+    async def test_install_existing_claude_with_version_drift_upgrades(self, clean_dirs, tmp_path):
+        npm_bin = os.path.join(ti._NPM_DIR, "bin")
+        os.makedirs(npm_bin, exist_ok=True)
+        with open(os.path.join(npm_bin, "claude"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+        _write_npm_package("@anthropic-ai/claude-code", "2.1.170")
+        logs = []
+
+        async def fake_install_npm(packages, progress_callback=None):
+            _write_npm_package("@anthropic-ai/claude-code", "2.1.202")
+            return True
+
+        with patch("app.tool_installer._install_npm", side_effect=fake_install_npm) as install_npm, \
+             patch("app.tool_installer._run_post_install_hook", new_callable=AsyncMock) as post_hook:
+            result = await ti.install_tool(
+                "claude",
+                progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)),
+            )
+
+        assert result is True
+        install_npm.assert_called_once()
+        assert install_npm.call_args.args[0] == ["@anthropic-ai/claude-code@2.1.202"]
+        post_hook.assert_awaited_once()
+        assert any("does not match the pinned version; upgrading" in line for line in logs)
+
+
+# ---------------------------------------------------------------------------
+# Archive installer
+# ---------------------------------------------------------------------------
+
+class TestArchiveInstaller:
+    @pytest.mark.asyncio
+    async def test_archive_binary_downloads_extracts_and_installs_executable(self, clean_dirs, tmp_path):
+        logs = []
+        commands = []
+
+        async def fake_run(cmd, progress_callback=None, extra_env=None):
+            commands.append(cmd)
+            if cmd[0] == "curl":
+                if progress_callback:
+                    await progress_callback("curl ok\r\n")
+                return True
+            if cmd[0] == "tar":
+                extract_dir = cmd[cmd.index("-C") + 1]
+                os.makedirs(extract_dir, exist_ok=True)
+                source = os.path.join(extract_dir, "goose")
+                with open(source, "w", encoding="utf-8") as f:
+                    f.write("#!/bin/sh\n")
+                return True
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        url = "https://example.test/goose.tar.bz2"
+        with patch.dict(os.environ, {"HOME": str(tmp_path)}), \
+             patch("app.tool_installer._run_install_cmd", side_effect=fake_run):
+            result = await ti._install_archive_binary(
+                url,
+                "goose",
+                "goose",
+                progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)),
+            )
+
+        installed = tmp_path / ".local" / "bin" / "goose"
+        assert result is True
+        assert installed.is_file()
+        assert os.access(installed, os.X_OK)
+        assert commands[0][:5] == ["curl", "-fL", "--show-error", "--silent", "--output"]
+        assert commands[0][-1] == url
+        assert commands[1][0] == "tar"
+        assert "-xjf" in commands[1]
+        assert any("Binary found at:" in line for line in logs)
+
+    @pytest.mark.asyncio
+    async def test_archive_binary_reports_underlying_curl_error(self, clean_dirs, tmp_path):
+        logs = []
+        commands = []
+
+        async def fake_run(cmd, progress_callback=None, extra_env=None):
+            commands.append(cmd)
+            if progress_callback:
+                await progress_callback("curl: (22) The requested URL returned error: 404\r\n")
+            return False
+
+        with patch.dict(os.environ, {"HOME": str(tmp_path)}), \
+             patch("app.tool_installer._run_install_cmd", side_effect=fake_run):
+            result = await ti._install_archive_binary(
+                "https://example.test/missing.tar.bz2",
+                "goose",
+                "goose",
+                progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)),
+            )
+
+        assert result is False
+        assert [cmd[0] for cmd in commands] == ["curl"]
+        assert any("curl: (22)" in line for line in logs)
+        assert any("Download failed" in line for line in logs)
+
+    @pytest.mark.asyncio
+    async def test_archive_binary_reports_underlying_tar_error(self, clean_dirs, tmp_path):
+        logs = []
+        commands = []
+
+        async def fake_run(cmd, progress_callback=None, extra_env=None):
+            commands.append(cmd)
+            if cmd[0] == "curl":
+                return True
+            if progress_callback:
+                await progress_callback("tar: This does not look like a tar archive\r\n")
+            return False
+
+        with patch.dict(os.environ, {"HOME": str(tmp_path)}), \
+             patch("app.tool_installer._run_install_cmd", side_effect=fake_run):
+            result = await ti._install_archive_binary(
+                "https://example.test/bad.tar.bz2",
+                "goose",
+                "goose",
+                progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)),
+            )
+
+        assert result is False
+        assert [cmd[0] for cmd in commands] == ["curl", "tar"]
+        assert any("tar:" in line for line in logs)
+        assert any("Extraction failed" in line for line in logs)
+
+
+# ---------------------------------------------------------------------------
+# Pip uninstall
+# ---------------------------------------------------------------------------
+
+class TestPipUninstall:
+    @pytest.mark.asyncio
+    async def test_uninstall_pip_uses_venv_python_with_local_offline_env(self, clean_dirs):
+        venv_bin = os.path.join(ti._VENV_DIR, "bin")
+        os.makedirs(venv_bin, exist_ok=True)
+        python = os.path.join(venv_bin, "python")
+        with open(python, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+        with open(os.path.join(venv_bin, "aider"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+
+        commands = []
+        envs = []
+
+        async def fake_run(cmd, progress_callback=None, extra_env=None):
+            commands.append(cmd)
+            envs.append(extra_env)
+            return True
+
+        with patch("app.tool_installer._run_install_cmd", side_effect=fake_run):
+            result = await ti.uninstall_tool("aider")
+
+        assert result is True
+        assert commands == [
+            [
+                python,
+                "-m",
+                "pip",
+                "--disable-pip-version-check",
+                "uninstall",
+                "-y",
+                "aider-chat",
+                "streamlit",
+            ]
+        ]
+        assert envs[0]["PIP_DISABLE_PIP_VERSION_CHECK"] == "1"
+        assert envs[0]["PIP_NO_INPUT"] == "1"
+        assert envs[0]["PIP_NO_INDEX"] == "1"
+
+    @pytest.mark.asyncio
+    async def test_uninstall_pip_repairs_and_retries_after_pip_crash(self, clean_dirs):
+        venv_bin = os.path.join(ti._VENV_DIR, "bin")
+        os.makedirs(venv_bin, exist_ok=True)
+        python = os.path.join(venv_bin, "python")
+        with open(python, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+        with open(os.path.join(venv_bin, "aider"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+
+        commands = []
+        logs = []
+
+        async def fake_run(cmd, progress_callback=None, extra_env=None):
+            commands.append(cmd)
+            if len(commands) == 1:
+                if progress_callback:
+                    await progress_callback("FileNotFoundError: certifi/cacert.pem\r\n")
+                return False
+            return True
+
+        with patch("app.tool_installer._run_install_cmd", side_effect=fake_run):
+            result = await ti.uninstall_tool(
+                "aider",
+                progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)),
+            )
+
+        assert result is True
+        assert commands[0][2:6] == ["pip", "--disable-pip-version-check", "uninstall", "-y"]
+        assert commands[1] == [python, "-m", "ensurepip", "--upgrade"]
+        assert commands[2][2:6] == ["pip", "--disable-pip-version-check", "uninstall", "-y"]
+        assert any("FileNotFoundError" in line for line in logs)
+        assert any("attempting local pip repair" in line for line in logs)
+        assert any("Repairing virtualenv pip" in line for line in logs)
+
+    @pytest.mark.asyncio
+    async def test_uninstall_pip_restores_missing_vendored_certifi(self, clean_dirs):
+        venv_bin = os.path.join(ti._VENV_DIR, "bin")
+        os.makedirs(venv_bin, exist_ok=True)
+        python = os.path.join(venv_bin, "python")
+        with open(python, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+        with open(os.path.join(venv_bin, "aider"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+
+        site_packages = os.path.join(ti._VENV_DIR, "lib", "python3.11", "site-packages")
+        vendored_certifi = os.path.join(site_packages, "pip", "_vendor", "certifi")
+        top_level_certifi = os.path.join(site_packages, "certifi")
+        os.makedirs(vendored_certifi, exist_ok=True)
+        os.makedirs(top_level_certifi, exist_ok=True)
+        with open(os.path.join(top_level_certifi, "cacert.pem"), "w", encoding="utf-8") as f:
+            f.write("CERT-BUNDLE")
+
+        commands = []
+        logs = []
+
+        async def fake_run(cmd, progress_callback=None, extra_env=None):
+            commands.append(cmd)
+            if len(commands) == 1:
+                if progress_callback:
+                    await progress_callback("FileNotFoundError: pip/_vendor/certifi/cacert.pem\r\n")
+                return False
+            return True
+
+        with patch("app.tool_installer._run_install_cmd", side_effect=fake_run):
+            result = await ti.uninstall_tool(
+                "aider",
+                progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)),
+            )
+
+        assert result is True
+        assert commands[1] == [python, "-m", "ensurepip", "--upgrade"]
+        restored = os.path.join(vendored_certifi, "cacert.pem")
+        assert os.path.isfile(restored)
+        with open(restored, encoding="utf-8") as f:
+            assert f.read() == "CERT-BUNDLE"
+        assert any("Restored pip vendored certifi bundle" in line for line in logs)
+
+    @pytest.mark.asyncio
+    async def test_uninstall_pip_reports_repair_failure(self, clean_dirs):
+        venv_bin = os.path.join(ti._VENV_DIR, "bin")
+        os.makedirs(venv_bin, exist_ok=True)
+        with open(os.path.join(venv_bin, "python"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+        with open(os.path.join(venv_bin, "aider"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+
+        async def fake_run(cmd, progress_callback=None, extra_env=None):
+            if progress_callback:
+                await progress_callback("pip traceback on stderr\r\n")
+            return False
+
+        logs = []
+        with patch("app.tool_installer._run_install_cmd", side_effect=fake_run):
+            result = await ti.uninstall_tool(
+                "aider",
+                progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)),
+            )
+
+        assert result is False
+        assert any("pip traceback on stderr" in line for line in logs)
+        assert any("Pip repair failed" in line for line in logs)
+        assert any("Failed to uninstall Aider" in line for line in logs)
+
+
+# ---------------------------------------------------------------------------
+# Npm uninstall
+# ---------------------------------------------------------------------------
+
+class TestNpmUninstall:
+    def test_npm_package_name_strips_versions(self):
+        assert (
+            ti._npm_package_name("@earendil-works/pi-coding-agent@0.80.3")
+            == "@earendil-works/pi-coding-agent"
+        )
+        assert (
+            ti._npm_package_name("@gotgenes/pi-permission-system")
+            == "@gotgenes/pi-permission-system"
+        )
+        assert ti._npm_package_name("pyright@1.1.411") == "pyright"
+        assert ti._npm_package_name("opencode-ai") == "opencode-ai"
+        assert (
+            ti._npm_package_version("@anthropic-ai/claude-code@2.1.202")
+            == "2.1.202"
+        )
+        assert ti._npm_package_version("@openai/codex") is None
+        assert ti._npm_package_version("pyright@1.1.411") == "1.1.411"
+
+    @pytest.mark.asyncio
+    async def test_uninstall_npm_uses_unversioned_package_names_and_verifies_absence(self, clean_dirs):
+        npm_bin = os.path.join(ti._NPM_DIR, "bin")
+        os.makedirs(npm_bin, exist_ok=True)
+        pi_bin = os.path.join(npm_bin, "pi")
+        with open(pi_bin, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+
+        package_dir = ti._npm_package_path("@earendil-works/pi-coding-agent")
+        os.makedirs(package_dir, exist_ok=True)
+        commands = []
+
+        async def fake_run(cmd, progress_callback=None, extra_env=None):
+            commands.append(cmd)
+            shutil.rmtree(package_dir)
+            os.remove(pi_bin)
+            return True
+
+        logs = []
+        with patch("app.tool_installer._run_install_cmd", side_effect=fake_run):
+            result = await ti.uninstall_tool(
+                "pi",
+                progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)),
+            )
+
+        assert result is True
+        uninstall_cmd = commands[0]
+        assert uninstall_cmd[:4] == ["npm", "uninstall", "-g", f"--prefix={ti._NPM_DIR}"]
+        assert "@earendil-works/pi-coding-agent" in uninstall_cmd
+        assert "@earendil-works/pi-coding-agent@0.80.3" not in uninstall_cmd
+        assert "@gotgenes/pi-permission-system" in uninstall_cmd
+        assert "@gotgenes/pi-permission-system@16.0.1" not in uninstall_cmd
+        assert "pyright" in uninstall_cmd
+        assert "pyright@1.1.411" not in uninstall_cmd
+        assert any("uninstalled successfully" in line for line in logs)
+
+    @pytest.mark.asyncio
+    async def test_uninstall_npm_fails_when_package_or_binary_remains(self, clean_dirs):
+        npm_bin = os.path.join(ti._NPM_DIR, "bin")
+        os.makedirs(npm_bin, exist_ok=True)
+        with open(os.path.join(npm_bin, "pi"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+
+        package_dir = ti._npm_package_path("@earendil-works/pi-coding-agent")
+        os.makedirs(package_dir, exist_ok=True)
+
+        async def fake_run(cmd, progress_callback=None, extra_env=None):
+            return True
+
+        logs = []
+        with patch("app.tool_installer._run_install_cmd", side_effect=fake_run):
+            result = await ti.uninstall_tool(
+                "pi",
+                progress_callback=AsyncMock(side_effect=lambda msg: logs.append(msg)),
+            )
+
+        assert result is False
+        assert any("Npm uninstall left managed files behind" in line for line in logs)
+        assert any("@earendil-works/pi-coding-agent" in line for line in logs)
+        assert any("pi binary" in line for line in logs)
+        assert any("Failed to uninstall Pi" in line for line in logs)
 
 
 # ---------------------------------------------------------------------------
@@ -309,16 +771,47 @@ class TestToolRegistry:
             assert "type" in info, f"{tool_id} missing type"
             assert "binary" in info, f"{tool_id} missing binary"
             assert "display_name" in info, f"{tool_id} missing display_name"
-            assert info["type"] in ("pip", "npm", "shell"), f"{tool_id} has invalid type"
+            assert info["type"] in ("pip", "npm", "shell", "archive"), f"{tool_id} has invalid type"
             if info["type"] == "shell":
                 assert "install_cmd" in info, f"{tool_id} missing install_cmd"
+            elif info["type"] == "archive":
+                assert "archive_url" in info, f"{tool_id} missing archive_url"
+                assert "archive_member" in info, f"{tool_id} missing archive_member"
             else:
                 assert "packages" in info, f"{tool_id} missing packages"
 
     def test_known_tools_exist(self):
         assert "aider" in ti.TOOL_REGISTRY
         assert "opencode" in ti.TOOL_REGISTRY
+        assert "goose" in ti.TOOL_REGISTRY
         assert "claude" in ti.TOOL_REGISTRY
         assert "jupyterlab" in ti.TOOL_REGISTRY
         assert "antigravity" in ti.TOOL_REGISTRY
         assert "codex" in ti.TOOL_REGISTRY
+
+    def test_pi_registry_installs_pinned_extension_stack(self):
+        packages = ti.TOOL_REGISTRY["pi"]["packages"]
+        assert packages == [
+            "@earendil-works/pi-coding-agent@0.80.3",
+            "pi-mcp-adapter@2.10.0",
+            "@gotgenes/pi-permission-system@16.0.1",
+            "pi-subagents@0.33.1",
+            "pi-web-access@0.10.7",
+            "@lebronj/pi-lsp@0.0.3",
+            "pyright@1.1.411",
+        ]
+        assert ti._SIZE_MB["pi"] == 700
+
+    def test_goose_registry_installs_pinned_cli(self):
+        info = ti.TOOL_REGISTRY["goose"]
+        assert info["type"] == "archive"
+        assert info["binary"] == "goose"
+        assert info["archive_url"] == (
+            "https://github.com/aaif-goose/goose/releases/download/v1.41.0/"
+            "goose-x86_64-unknown-linux-gnu.tar.bz2"
+        )
+        assert info["archive_member"] == "goose"
+        assert ti._SIZE_MB["goose"] == 200
+
+    def test_claude_registry_installs_pinned_cli(self):
+        assert ti.TOOL_REGISTRY["claude"]["packages"] == ["@anthropic-ai/claude-code@2.1.202"]

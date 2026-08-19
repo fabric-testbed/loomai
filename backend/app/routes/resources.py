@@ -92,6 +92,30 @@ DEFAULT_IMAGES = [
 ]
 
 
+def _derive_component_availability(comp_info: dict) -> tuple[int, int, int]:
+    """Return capacity, allocated, and available for a ResourcesV2 component."""
+    try:
+        capacity = int(comp_info.get("capacity", 0) or 0)
+    except (TypeError, ValueError):
+        capacity = 0
+
+    raw_allocated = comp_info.get("allocated")
+    if raw_allocated is not None:
+        try:
+            allocated = int(raw_allocated or 0)
+        except (TypeError, ValueError):
+            allocated = 0
+        available = max(0, capacity - allocated)
+        return capacity, allocated, available
+
+    try:
+        available = int(comp_info.get("available", 0) or 0)
+    except (TypeError, ValueError):
+        available = 0
+    allocated = max(0, capacity - available)
+    return capacity, allocated, available
+
+
 def _host_dict_to_detail(host: dict) -> dict[str, Any]:
     """Convert a ResourcesV2 host dict to our API host detail format."""
     host_components: dict[str, dict[str, int]] = {}
@@ -99,11 +123,12 @@ def _host_dict_to_detail(host: dict) -> dict[str, Any]:
     if isinstance(comp_data, dict):
         for model_name, comp_info in comp_data.items():
             if isinstance(comp_info, dict):
-                cap = comp_info.get("capacity", 0) or 0
-                if cap > 0:
+                capacity, allocated, available = _derive_component_availability(comp_info)
+                if capacity > 0:
                     host_components[model_name] = {
-                        "capacity": cap,
-                        "available": comp_info.get("available", 0) or 0,
+                        "capacity": capacity,
+                        "allocated": allocated,
+                        "available": available,
                     }
     return {
         "name": host.get("name", ""),
@@ -161,12 +186,12 @@ def _site_dict_to_api(site: dict, hosts_data: list[dict]) -> dict[str, Any]:
     if isinstance(comp_data, dict):
         for model_name, comp_info in comp_data.items():
             if isinstance(comp_info, dict):
-                cap = comp_info.get("capacity", 0) or 0
-                if cap > 0:
+                capacity, allocated, available = _derive_component_availability(comp_info)
+                if capacity > 0:
                     components[model_name] = {
-                        "capacity": cap,
-                        "allocated": comp_info.get("allocated", 0) or 0,
-                        "available": comp_info.get("available", 0) or 0,
+                        "capacity": capacity,
+                        "allocated": allocated,
+                        "available": available,
                     }
 
     # Host details for this site
@@ -189,10 +214,8 @@ def _site_dict_to_api(site: dict, hosts_data: list[dict]) -> dict[str, Any]:
                 if model_name not in agg_components:
                     agg_components[model_name] = {"capacity": 0, "allocated": 0, "available": 0}
                 agg_components[model_name]["capacity"] += comp_info.get("capacity", 0)
+                agg_components[model_name]["allocated"] += comp_info.get("allocated", 0)
                 agg_components[model_name]["available"] += comp_info.get("available", 0)
-            # allocated = capacity - available
-        for v in agg_components.values():
-            v["allocated"] = v["capacity"] - v["available"]
 
         # Also include components from site data that may not appear in host data
         for model_name, comp_info in components.items():
@@ -407,12 +430,12 @@ async def get_site_detail(site_name: str) -> dict[str, Any]:
             if isinstance(comp_data, dict):
                 for model_name, comp_info in comp_data.items():
                     if isinstance(comp_info, dict):
-                        cap = comp_info.get("capacity", 0) or 0
-                        if cap > 0:
+                        capacity, allocated, available = _derive_component_availability(comp_info)
+                        if capacity > 0:
                             components[model_name] = {
-                                "capacity": cap,
-                                "allocated": comp_info.get("allocated", 0) or 0,
-                                "available": comp_info.get("available", 0) or 0,
+                                "capacity": capacity,
+                                "allocated": allocated,
+                                "available": available,
                             }
 
             # Fetch host data and recompute site totals from hosts
@@ -434,9 +457,8 @@ async def get_site_detail(site_name: str) -> dict[str, Any]:
                         if mn not in agg_components:
                             agg_components[mn] = {"capacity": 0, "allocated": 0, "available": 0}
                         agg_components[mn]["capacity"] += ci.get("capacity", 0)
+                        agg_components[mn]["allocated"] += ci.get("allocated", 0)
                         agg_components[mn]["available"] += ci.get("available", 0)
-                for v in agg_components.values():
-                    v["allocated"] = v["capacity"] - v["available"]
                 for mn, ci in components.items():
                     if mn not in agg_components:
                         agg_components[mn] = ci
@@ -589,4 +611,3 @@ async def list_images() -> list[str]:
 async def list_component_models() -> list[dict[str, str]]:
     """List available component models."""
     return COMPONENT_MODELS
-

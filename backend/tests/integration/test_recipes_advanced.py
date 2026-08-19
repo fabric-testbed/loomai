@@ -158,6 +158,10 @@ class TestUpdateRecipeAdvanced:
         resp = client.patch("/api/recipes/nonexistent_recipe",
                             json={"starred": False})
         assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "RECIPE_NOT_FOUND"
+        assert "not found" in detail["detail"]
+        assert detail["recipe"] == "nonexistent_recipe"
 
 
 # ---------------------------------------------------------------------------

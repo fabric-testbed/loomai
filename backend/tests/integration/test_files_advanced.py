@@ -8,6 +8,7 @@ import io
 import json
 import os
 import zipfile
+from unittest.mock import patch
 
 import pytest
 
@@ -27,6 +28,9 @@ class TestListFilesAdvanced:
     def test_list_nonexistent_dir_returns_404(self, client):
         resp = client.get("/api/files?path=nonexistent_dir")
         assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "FILE_NOT_FOUND"
+        assert "not found" in detail["detail"]
 
     def test_list_hidden_dirs_excluded(self, client, storage_dir):
         """Internal dirs like .provisions should be filtered out."""
@@ -87,6 +91,9 @@ class TestReadFileAdvanced:
     def test_read_nonexistent_returns_404(self, client):
         resp = client.get("/api/files/content?path=no_such_file.txt")
         assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "FILE_NOT_FOUND"
+        assert "not found" in detail["detail"]
 
     def test_read_returns_content_and_path(self, client, browse_root):
         (browse_root / "readme.md").write_text("# Hello")
@@ -102,7 +109,9 @@ class TestReadFileAdvanced:
         big.write_bytes(b"x" * (6 * 1024 * 1024))
         resp = client.get("/api/files/content?path=big.bin")
         assert resp.status_code == 400
-        assert "too large" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        assert detail["error"] == "FILE_TOO_LARGE"
+        assert "too large" in detail["detail"].lower()
 
     def test_read_binary_file_with_replace_errors(self, client, browse_root):
         """Binary files should be read with errors='replace' (no crash)."""
@@ -159,10 +168,16 @@ class TestDeleteFileAdvanced:
     def test_delete_root_rejected(self, client):
         resp = client.delete("/api/files?path=")
         assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["error"] == "FILE_PATH_INVALID"
+        assert "storage root" in detail["detail"]
 
     def test_delete_nonexistent_returns_404(self, client):
         resp = client.delete("/api/files?path=no_such_thing")
         assert resp.status_code == 404
+        detail = resp.json()["detail"]
+        assert detail["error"] == "FILE_NOT_FOUND"
+        assert "not found" in detail["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -267,10 +282,24 @@ class TestPathTraversal:
         resp = client.get("/api/files?path=../../etc")
         # Should either 404 (not found under base) or 400 (traversal)
         assert resp.status_code in (400, 404)
+        detail = resp.json()["detail"]
+        assert detail["error"] in ("FILE_PATH_INVALID", "FILE_NOT_FOUND")
 
     def test_traversal_blocked_in_delete(self, client):
         resp = client.delete("/api/files?path=../../etc/passwd")
         assert resp.status_code in (400, 404)
+        detail = resp.json()["detail"]
+        assert detail["error"] in ("FILE_PATH_INVALID", "FILE_NOT_FOUND")
+
+    def test_traversal_returns_structured_envelope(self, client):
+        """A deep traversal escaping every allowed root must 400 with FILE_PATH_INVALID."""
+        bad = "../" * 12 + "etc/passwd"
+        resp = client.get(f"/api/files/content?path={bad}")
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert detail["error"] == "FILE_PATH_INVALID"
+        assert "allowed storage roots" in detail["detail"]
+        assert detail["path"] == bad
 
 
 # ---------------------------------------------------------------------------
@@ -466,3 +495,110 @@ class TestFileHelpers:
         with open(os.path.join(d, "n1.json")) as f:
             saved = json.load(f)
         assert saved["commands"][0]["command"] == "ls"
+
+
+# ---------------------------------------------------------------------------
+# Structured error envelopes (FC18-2 audit coverage)
+# ---------------------------------------------------------------------------
+
+class TestVmDownloadFailureEnvelope:
+    def test_download_direct_error_from_fablib(self, client, storage_dir):
+        """A FABlib download failure must return 500 with VM_DOWNLOAD_FAILED."""
+        class FakeNode:
+            def download_file(self, local_path, remote_path):
+                raise RuntimeError("SFTP session dropped")
+
+        with patch("app.routes.files._get_node", return_value=FakeNode()):
+            resp = client.get(
+                "/api/files/vm/my-slice/node1/download-direct",
+                params={"remote_path": "/tmp/result.log"},
+            )
+        assert resp.status_code == 500
+        detail = resp.json()["detail"]
+        assert detail["error"] == "VM_DOWNLOAD_FAILED"
+        assert "Download from VM failed" in detail["detail"]
+        assert detail["slice_name"] == "my-slice"
+        assert detail["node_name"] == "node1"
+
+    def test_download_direct_no_file_produced(self, client, storage_dir):
+        """download_file succeeding without producing a file must also 500."""
+        class FakeNode:
+            def download_file(self, local_path, remote_path):
+                pass  # writes nothing
+
+        with patch("app.routes.files._get_node", return_value=FakeNode()):
+            resp = client.get(
+                "/api/files/vm/my-slice/node1/download-direct",
+                params={"remote_path": "/tmp/missing.log"},
+            )
+        assert resp.status_code == 500
+        detail = resp.json()["detail"]
+        assert detail["error"] == "VM_DOWNLOAD_FAILED"
+        assert "produced no file" in detail["detail"]
+
+
+class TestBootConfigExecuteFailureEnvelope:
+    def test_execute_unreachable_node_returns_envelope(self, client, storage_dir):
+        """Boot config execute must 500 with BOOT_CONFIG_EXECUTE_FAILED when the node can't be reached."""
+        from app.routes.files import _boot_config_dir
+        d = _boot_config_dir("bc-fail-slice")
+        config = {"uploads": [], "commands": [{"command": "echo hi", "order": 0}], "network": []}
+        with open(os.path.join(d, "n1.json"), "w") as f:
+            json.dump(config, f)
+
+        with patch("app.routes.files._get_node",
+                   side_effect=RuntimeError("slice not found on orchestrator")):
+            resp = client.post("/api/files/boot-config/bc-fail-slice/n1/execute")
+        assert resp.status_code == 500
+        detail = resp.json()["detail"]
+        assert detail["error"] == "BOOT_CONFIG_EXECUTE_FAILED"
+        assert "Cannot reach node" in detail["detail"]
+        assert detail["slice_name"] == "bc-fail-slice"
+        assert detail["node_name"] == "n1"
+
+
+class TestStderrSanitization:
+    def test_vm_command_stderr_redacts_secrets_and_paths(self, client, storage_dir):
+        """Raw stderr with a secret assignment and an absolute path must be redacted."""
+        stderr = ("mkdir: cannot create directory: auth failed "
+                  "token=abc123 while reading /home/fabric/work/fabric_config/id_token.json")
+
+        class FakeNode:
+            def execute(self, cmd, quiet=False, **kwargs):
+                return "", stderr
+
+        with patch("app.routes.files._get_node", return_value=FakeNode()):
+            resp = client.post(
+                "/api/files/vm/my-slice/node1/mkdir",
+                json={"path": "/opt/data"},
+            )
+        assert resp.status_code == 500
+        detail = resp.json()["detail"]
+        assert detail["error"] == "VM_COMMAND_FAILED"
+        text = detail["detail"]
+        # Actionable front of the message is preserved
+        assert "cannot create directory" in text
+        # Secret value and absolute container path are redacted
+        assert "abc123" not in text
+        assert "/home/fabric" not in text
+        assert "token=[redacted]" in text
+        assert "[path]" in text
+        assert detail["node_name"] == "node1"
+
+    def test_vm_write_content_stderr_redacted(self, client, storage_dir):
+        """write-content failures go through the same sanitizer."""
+        class FakeNode:
+            def execute(self, cmd, quiet=False, **kwargs):
+                return "", "write failed: password=hunter2 at /var/log/loomai.err"
+
+        with patch("app.routes.files._get_node", return_value=FakeNode()):
+            resp = client.post(
+                "/api/files/vm/my-slice/node1/write-content",
+                json={"path": "/opt/file.txt", "content": "hello"},
+            )
+        assert resp.status_code == 500
+        detail = resp.json()["detail"]
+        assert detail["error"] == "VM_COMMAND_FAILED"
+        assert "hunter2" not in detail["detail"]
+        assert "/var/log" not in detail["detail"]
+        assert "password=[redacted]" in detail["detail"]

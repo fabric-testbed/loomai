@@ -2,9 +2,9 @@
 # Source: FABRIC Jupyter Examples - fablib_api
 # Notebook: create_l3network_fabnet_ipv6_full_auto.ipynb
 #
-# FABRIC provides **FABnetv6**, a private IPv6 overlay network spanning every
-# FABRIC site. This notebook demonstrates the **fully automatic** approach using
-# `node.add_fabnet(net_type='IPv6')` — a sin...
+# FABRIC provides **FABnetv6**, a private IPv6 backbone that routes between
+# per-site FABNet services. This example uses node.add_fabnet(net_type='IPv6')
+# to keep services per-site automatically.
 
 # # FABnet IPv6: Fully Automatic Configuration
 # ### FABlib API References

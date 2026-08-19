@@ -188,6 +188,45 @@ class TestSettingsTestAIServer:
 
 
 # ===========================================================================
+# POST /api/config/provider/test — custom provider validation
+# ===========================================================================
+
+class TestCustomProviderValidation:
+    def test_provider_test_responses_endpoint_style(self, client):
+        """Forced Responses providers should probe /v1/responses."""
+        models_resp = MagicMock()
+        models_resp.status_code = 200
+        models_resp.json.return_value = {"data": [{"id": "resp-model"}]}
+
+        probe_resp = MagicMock()
+        probe_resp.status_code = 200
+        probe_resp.text = ""
+
+        with patch("app.routes.config.fabric_client") as mock_client:
+            mock_client.get = AsyncMock(return_value=models_resp)
+            mock_client.post = AsyncMock(return_value=probe_resp)
+
+            resp = client.post("/api/config/provider/test", json={
+                "base_url": "https://provider.example",
+                "api_key": "provider-key",
+                "endpoint_style": "responses",
+                "model": "resp-model",
+            })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["endpoint_style"] == "responses"
+        assert data["model_type"] == "responses"
+        assert data["models"] == ["resp-model"]
+
+        post_call = mock_client.post.await_args
+        assert post_call.args[0] == "https://provider.example/v1/responses"
+        assert post_call.kwargs["json"]["input"] == "hi"
+        assert "messages" not in post_call.kwargs["json"]
+
+
+# ===========================================================================
 # POST /api/settings/test/project — project validation (mock UIS)
 # ===========================================================================
 

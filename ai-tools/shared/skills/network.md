@@ -8,7 +8,7 @@ NIC model tables, see AGENTS.md.
 
 1. **Same site or cross-site?**
    - Same site: L2Bridge (simplest)
-   - Cross-site with IP routing: FABNetv4 / `fabnet: "v4"` (recommended)
+   - Cross-site with IP routing: `fabnet: "v4"` on each node, or one FABNetv4 service per site
    - Cross-site raw Ethernet: L2STS
    - Exactly 2 endpoints: L2PTP
 
@@ -31,7 +31,9 @@ nodes=[
   {name: "n2", site: "TACC", fabnet: "v4"}
 ]
 ```
-Auto-assigns IPs on 10.128.0.0/10. Ping just works.
+Auto-creates one FABNetv4 service per site and assigns IPs on
+10.128.0.0/10. Ping works after the slice reaches StableOK and networking is
+configured.
 
 ### Same-site L2 LAN
 ```
@@ -43,6 +45,21 @@ networks=[{name: "lan", type: "L2Bridge", interfaces: ["n1", "n2"], subnet: "192
 ```
 networks=[{name: "tunnel", type: "L2STS", interfaces: ["n1", "n2"], subnet: "10.0.0.0/24"}]
 ```
+
+## Hard Service Limits
+
+| Service | Site rule | Size limit |
+| --- | --- | --- |
+| L2Bridge | all interfaces at one site | site capacity |
+| L2STS | exactly two sites | many NICs per side |
+| L2PTP | exactly two interfaces, two sites | two endpoints |
+| FABNetv4/v6/Ext | all attached VMs at one site | up to 255 VMs per service |
+
+Do not create one FABNetv4/FABNetv6 network that lists interfaces from
+multiple sites; FABRIC rejects it with "Service cannot span N sites. Limit: 1".
+For multi-site L3, use `fabnet` on each node or create one FABNet service per
+site. FABRIC routes between per-site services over `10.128.0.0/10` or
+`2602:fcfb::/40`.
 
 ## Key Subnets
 
@@ -62,7 +79,7 @@ See AGENTS.md "Wiring Nodes to Networks" for full details and examples.
 
 ## Tips
 
-- FABNetv4 is the simplest cross-site option — use it unless you need raw L2
+- FABNetv4 is the simplest cross-site L3 option when used per-node/per-site
 - L2PTP is strictly 2 endpoints; use L2STS for more
 - Check availability first: `query_sites(component="NIC_ConnectX_6")`
 - Co-locate nodes needing low latency at the same site

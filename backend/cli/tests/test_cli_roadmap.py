@@ -170,6 +170,27 @@ def test_network_l3_config_set_json(runner):
     assert json.loads(result.output)["l3_config"]["mode"] == "user_octet"
 
 
+def test_network_configure_json(runner):
+    from loomai_cli.main import cli
+
+    with patch("loomai_cli.client.Client._request") as mock:
+        mock.return_value = {
+            "status": "ok",
+            "pings": [{"ok": True, "target_ip": "192.168.100.2"}],
+        }
+        result = runner.invoke(cli, [
+            "networks", "configure", "slice-a",
+            "--no-post-boot",
+            "--l2-subnet-base", "192.168.200.0/24",
+            "--format", "json",
+        ])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["status"] == "ok"
+    assert mock.call_args.kwargs["json"]["run_post_boot"] is False
+    assert mock.call_args.kwargs["json"]["l2_subnet_base"] == "192.168.200.0/24"
+
+
 def test_facility_port_update_json(runner):
     from loomai_cli.main import cli
 
@@ -393,6 +414,35 @@ def test_ai_tools_install_json(runner):
     parsed = json.loads(result.output)
     assert parsed["tool"] == "opencode"
     assert parsed["output"] == "ok"
+
+
+def test_ai_tools_sync_json(runner):
+    from loomai_cli.main import cli
+
+    with patch("loomai_cli.client.Client._request") as mock:
+        mock.return_value = {
+            "status": "ok",
+            "mcp_servers": ["fabric-reports", "loomai-harness"],
+        }
+        result = runner.invoke(cli, ["ai", "tools", "sync", "--format", "json"])
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["status"] == "ok"
+    assert "loomai-harness" in parsed["mcp_servers"]
+    assert mock.call_args.args[:2] == ("POST", "/ai/tools/sync")
+
+
+def test_root_tools_sync_alias_json(runner):
+    from loomai_cli.main import cli
+
+    with patch("loomai_cli.client.Client._request") as mock:
+        mock.return_value = {"status": "ok"}
+        result = runner.invoke(cli, ["tools", "sync", "--format", "json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["status"] == "ok"
+    assert mock.call_args.args[:2] == ("POST", "/ai/tools/sync")
 
 
 def test_ai_tools_web_start_json(runner):

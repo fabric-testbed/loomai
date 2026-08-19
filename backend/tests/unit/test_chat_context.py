@@ -7,6 +7,7 @@ from app.chat_context import (
     estimate_message_tokens,
     estimate_conversation_tokens,
     get_model_profile,
+    get_system_prompt,
     filter_tool_schemas,
     trim_conversation,
     PROFILE_TIERS,
@@ -54,6 +55,7 @@ class TestGetModelProfile:
         profile = get_model_profile("qwen3-coder-30b")
         assert profile["tier"] == "standard"
         assert profile["temperature"] == 0.3
+        assert profile["tool_result_max"] == 6000
 
     def test_small_model(self):
         profile = get_model_profile("qwen3-coder-8b")
@@ -63,10 +65,51 @@ class TestGetModelProfile:
     def test_large_model(self):
         profile = get_model_profile("claude-3-5-sonnet-20241022")
         assert profile["tier"] == "large"
+        assert profile["tool_result_max"] == 6000
 
     def test_unknown_model_defaults_standard(self):
         profile = get_model_profile("some-random-model")
         assert profile["tier"] == "standard"
+
+    def test_glm5_is_reasoning_model(self):
+        profile = get_model_profile("nrp:glm-5", context_length=32768)
+        assert profile["tier"] == "standard"
+        assert profile["is_reasoning"] is True
+
+    @pytest.mark.parametrize(
+        ("model_name", "context_length", "expected_max_output"),
+        [
+            ("qwen3-coder-30b", 262144, 12288),
+            ("gpt-oss-20b", 131072, 6144),
+            ("gemma-4-27b", 262144, 6144),
+        ],
+    )
+    def test_fabric_floor_models_use_standard_tier(self, model_name, context_length, expected_max_output):
+        profile = get_model_profile(model_name, context_length=context_length)
+
+        assert profile["tier"] == "standard"
+        assert profile["context_window"] == context_length
+        assert profile["system_prompt"] == "standard"
+        assert profile["tool_result_max"] == 6000
+        assert profile["max_output"] == expected_max_output
+
+    def test_fabric_floor_reasoning_model_profile(self):
+        profile = get_model_profile("nemotron-nano-30b", context_length=262144)
+
+        assert profile["tier"] == "standard"
+        assert profile["context_window"] == 262144
+        assert profile["system_prompt"] == "standard"
+        assert profile["tool_result_max"] == 6000
+        assert profile["is_reasoning"] is True
+        assert profile["max_output"] == 15360
+
+    def test_fabric_context_defaults_cover_floor_models(self):
+        from app.routes.ai_terminal import _FABRIC_CONTEXT_DEFAULTS
+
+        assert _FABRIC_CONTEXT_DEFAULTS["gpt-oss-20b"] == 131072
+        assert _FABRIC_CONTEXT_DEFAULTS["qwen3-coder-30b"] == 262144
+        assert _FABRIC_CONTEXT_DEFAULTS["nemotron-nano-30b"] == 262144
+        assert _FABRIC_CONTEXT_DEFAULTS["gemma-4-27b"] == 262144
 
     def test_context_length_override(self):
         profile = get_model_profile("unknown-model", context_length=4096)
@@ -83,6 +126,24 @@ class TestGetModelProfile:
                      "tool_result_max", "summarize_at", "max_tools",
                      "temperature", "supports_tools"]:
             assert key in profile, f"Missing key: {key}"
+
+    def test_standard_prompt_keeps_weave_and_notebook_guidance(self):
+        from app import chat_context
+
+        chat_context._prompt_cache.clear()
+        prompt = get_system_prompt("standard")
+
+        assert "## Quick Weave Creation" in prompt
+        assert "Minimal `weave.json`" in prompt
+        assert "## Data Analysis with Jupyter" in prompt
+
+        import inspect
+        source = inspect.getsource(chat_context._build_standard_prompt)
+        assert '"weave.json"' not in source
+        assert '"Creating a notebook from scratch"' not in source
+
+        compact_source = inspect.getsource(chat_context._build_compact_prompt)
+        assert "code_block_lines <= 20" in compact_source
 
 
 # ---------------------------------------------------------------------------
@@ -175,3 +236,69 @@ class TestTrimConversation:
         result = trim_conversation(msgs, system_tokens=3000, profile=profile)
         # With 3K system tokens in 8K context, should be near full after trimming
         assert result.near_full or result.was_trimmed
+
+    def test_negative_budget_preserves_latest_user_turn(self):
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "Which hosts have at least 64 GB RAM?"},
+            {"role": "assistant", "content": None, "tool_calls": []},
+            {"role": "tool", "content": '{"rows": []}', "tool_call_id": "1"},
+        ]
+        profile = dict(PROFILE_TIERS["standard"])
+        profile["context_window"] = 32768
+        profile["max_output"] = 32768
+        result = trim_conversation(msgs, system_tokens=1000, profile=profile)
+
+        assert result.was_trimmed
+        assert any(
+            m.get("role") == "user" and "64 GB RAM" in m.get("content", "")
+            for m in result.messages
+        )
+
+    def test_state_preserving_compaction_keeps_state_and_recent_tool_exchange(self):
+        msgs = [{"role": "system", "content": "sys\n\n## CURRENT SESSION STATE\nbench-a StableOK"}]
+        for i in range(12):
+            msgs.append({"role": "user", "content": f"old user turn {i}"})
+            msgs.append({"role": "assistant", "content": f"old assistant turn {i}"})
+        msgs.extend([
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "get_slice", "arguments": '{"slice_name":"bench-a"}'},
+                }],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": '{"name":"bench-a","state":"StableOK","nodes":[{"name":"vm1"},{"name":"vm2"}]}',
+            },
+            {"role": "user", "content": "Continue and verify ping now."},
+        ])
+        profile = dict(PROFILE_TIERS["standard"])
+        profile.update({
+            "context_compaction_enabled": True,
+            "context_compaction_trigger_messages": 10,
+            "context_compaction_trigger_tokens": 0,
+            "context_compaction_keep_last_messages": 4,
+            "context_compaction_preserve_last_tool_outputs": 1,
+        })
+
+        result = trim_conversation(msgs, system_tokens=50, profile=profile)
+
+        assert result.was_compacted is True
+        assert result.compacted_from_tokens > result.compacted_to_tokens
+        assert result.messages[0]["role"] == "system"
+        assert "CURRENT SESSION STATE" in result.messages[0]["content"]
+        assert any(
+            m.get("role") == "user" and "Compacted prior progress" in m.get("content", "")
+            for m in result.messages
+        )
+        assert any(m.get("role") == "tool" and "StableOK" in m.get("content", "") for m in result.messages)
+        assert any(
+            m.get("role") == "assistant" and m.get("tool_calls")
+            for m in result.messages
+        )
+        assert result.messages[-1]["content"] == "Continue and verify ping now."

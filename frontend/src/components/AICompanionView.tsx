@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { wireClipboard } from '../utils/xtermClipboard';
 import { buildWsUrl } from '../utils/wsUrl';
+import { installTerminalClipboard, TERMINAL_CLIPBOARD_OPTIONS } from '../utils/terminalClipboard';
 import { getConfig, getAiTools, getToolInstallStatus, createAiTerminal, mintTerminalTicket, type ToolInstallInfo } from '../api/client';
 import ContainerFileBrowser from './ContainerFileBrowser';
 import TerminalCompanionView from './TerminalCompanionView';
@@ -100,11 +101,27 @@ const TOOLS: ToolDef[] = [
     needsKey: true,
   },
   {
+    id: 'goose',
+    name: 'Goose',
+    desc: 'Agentic terminal coding assistant with LoomAI provider defaults and shared FABRIC instructions. Requires a free FABRIC API key.',
+    icon: 'Go',
+    iconClass: 'goose',
+    needsKey: true,
+  },
+  {
     id: 'crush',
     name: 'Crush',
     desc: 'Terminal-based AI coding assistant from Charm. Supports FABRIC and NRP LLMs. Requires a free FABRIC API key.',
     icon: 'Cr',
     iconClass: 'crush',
+    needsKey: true,
+  },
+  {
+    id: 'pi',
+    name: 'Pi',
+    desc: 'Minimal terminal coding agent with LoomAI provider defaults, shared skills, and restricted FABRIC rails. Requires a free FABRIC API key.',
+    icon: 'Pi',
+    iconClass: 'pi',
     needsKey: true,
   },
   {
@@ -342,11 +359,13 @@ function AITerminalPane({ toolId, tabId }: { toolId: string; tabId: string }) {
     if (!containerRef.current) return;
 
     const term = new Terminal({
+      ...TERMINAL_CLIPBOARD_OPTIONS,
       cursorBlink: true,
       fontSize: 13,
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
       theme: { ...TERM_THEME },
     });
+    installTerminalClipboard(term);
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);

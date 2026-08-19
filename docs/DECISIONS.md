@@ -40,7 +40,7 @@ Key architectural decisions for the fabric-webgui project.
 
 **Status**: Accepted
 
-**Context**: Multiple AI surfaces (LoomAI, Aider, OpenCode, Crush, Deep Agents, Jupyter AI, and optional Codex provider paths) need OpenAI-compatible LLM access. FABRIC provides a free AI server; NRP/Nautilus is a fallback. Claude Code and Antigravity use their own account-based auth paths.
+**Context**: Multiple AI surfaces (LoomAI, Aider, OpenCode, Crush, Pi, Deep Agents, Jupyter AI, generated Goose defaults, and optional Codex provider paths) need OpenAI-compatible LLM access. FABRIC provides a free AI server; NRP/Nautilus is a fallback. Claude Code and Antigravity use their own account-based auth paths.
 
 **Decision**: Use the OpenAI-compatible chat completions API format (LiteLLM proxy on FABRIC side). Backend uses `httpx.AsyncClient` (not the `openai` Python library) for direct HTTP calls. A local model proxy (`scripts/model_proxy.py`) rewrites unknown model names to a configured default.
 

@@ -68,6 +68,8 @@ class TestLoadSettings:
         assert "ai" in settings
         assert "paths" in settings
         assert "chameleon" in settings
+        assert settings["ai"]["harnesses"]["mcp_metatools"] is False
+        assert sm.get_mcp_metatools_enabled() is False
 
     def test_load_existing_file(self, isolated_storage):
         """When settings.json exists on disk, its values are loaded."""
@@ -86,6 +88,100 @@ class TestLoadSettings:
         assert "ai" in settings
         assert "paths" in settings
 
+    def test_legacy_zero_lease_policy_is_seeded_to_default_once(self, isolated_storage):
+        settings_dir = os.path.join(str(isolated_storage), ".loomai")
+        os.makedirs(settings_dir, exist_ok=True)
+        path = os.path.join(settings_dir, "settings.json")
+        with open(path, "w") as f:
+            json.dump({
+                "schema_version": 1,
+                "fabric": {"slice_policy": {"max_lease_hours": 0}},
+            }, f)
+
+        settings = sm.load_settings()
+
+        assert settings["fabric"]["slice_policy"]["max_lease_hours"] == 6
+        assert settings["migrations"][sm._MIGRATION_SLICE_POLICY_DEFAULT] is True
+        with open(path) as f:
+            persisted = json.load(f)
+        assert persisted["fabric"]["slice_policy"]["max_lease_hours"] == 6
+        assert persisted["migrations"][sm._MIGRATION_SLICE_POLICY_DEFAULT] is True
+
+    def test_lease_policy_migration_preserves_nonzero_override(self, isolated_storage):
+        settings_dir = os.path.join(str(isolated_storage), ".loomai")
+        os.makedirs(settings_dir, exist_ok=True)
+        with open(os.path.join(settings_dir, "settings.json"), "w") as f:
+            json.dump({
+                "schema_version": 1,
+                "fabric": {"slice_policy": {"max_lease_hours": 4}},
+            }, f)
+
+        settings = sm.load_settings()
+
+        assert settings["fabric"]["slice_policy"]["max_lease_hours"] == 4
+        assert settings["migrations"][sm._MIGRATION_SLICE_POLICY_DEFAULT] is True
+        assert sm.get_max_slice_lease_hours() == 4
+
+    def test_post_migration_zero_lease_policy_disables_cap(self, isolated_storage):
+        settings_dir = os.path.join(str(isolated_storage), ".loomai")
+        os.makedirs(settings_dir, exist_ok=True)
+        with open(os.path.join(settings_dir, "settings.json"), "w") as f:
+            json.dump({
+                "schema_version": 1,
+                "migrations": {sm._MIGRATION_SLICE_POLICY_DEFAULT: True},
+                "fabric": {"slice_policy": {"max_lease_hours": 0}},
+            }, f)
+
+        settings = sm.load_settings()
+
+        assert settings["fabric"]["slice_policy"]["max_lease_hours"] == 0
+        assert sm.get_max_slice_lease_hours() is None
+
+    def test_load_seeds_custom_provider_from_env_when_empty(self, isolated_storage, monkeypatch):
+        monkeypatch.setenv("LOOMAI_CUSTOM_PROVIDER_AI_RENCI_BASE_URL", "https://ai-renci.example/v1/")
+        monkeypatch.setenv("LOOMAI_CUSTOM_PROVIDER_AI_RENCI_API_KEY", "env-ai-renci-key")
+
+        settings = sm.load_settings()
+
+        providers = settings["ai"]["custom_providers"]
+        ai_renci = next(p for p in providers if p["name"] == "ai-renci")
+        assert ai_renci == {
+            "name": "ai-renci",
+            "base_url": "https://ai-renci.example/v1",
+            "api_key": "env-ai-renci-key",
+            "endpoint_style": "auto",
+        }
+        with open(sm.get_settings_path()) as f:
+            persisted = json.load(f)
+        assert any(p.get("name") == "ai-renci" for p in persisted["ai"]["custom_providers"])
+
+    def test_load_preserves_persisted_custom_providers_over_env(self, isolated_storage, monkeypatch):
+        monkeypatch.setenv("LOOMAI_CUSTOM_PROVIDER_AI_RENCI_BASE_URL", "https://ai-renci.example/v1")
+        monkeypatch.setenv("LOOMAI_CUSTOM_PROVIDER_AI_RENCI_API_KEY", "env-ai-renci-key")
+        settings_dir = os.path.join(str(isolated_storage), ".loomai")
+        os.makedirs(settings_dir, exist_ok=True)
+        with open(os.path.join(settings_dir, "settings.json"), "w") as f:
+            json.dump({
+                "schema_version": 1,
+                "ai": {
+                    "custom_providers": [{
+                        "name": "manual",
+                        "base_url": "https://manual.example/v1",
+                        "api_key": "manual-key",
+                        "endpoint_style": "chat",
+                    }],
+                },
+            }, f)
+
+        settings = sm.load_settings()
+
+        assert settings["ai"]["custom_providers"] == [{
+            "name": "manual",
+            "base_url": "https://manual.example/v1",
+            "api_key": "manual-key",
+            "endpoint_style": "chat",
+        }]
+
     def test_load_corrupt_file_returns_defaults(self, isolated_storage):
         """Corrupt settings.json should fall back to defaults."""
         settings_dir = os.path.join(str(isolated_storage), ".loomai")
@@ -97,11 +193,61 @@ class TestLoadSettings:
         # Should get defaults
         assert settings["schema_version"] == 1
 
+    def test_load_heals_empty_root_fallback_from_user_settings(self, isolated_storage):
+        settings_dir = isolated_storage / ".loomai"
+        settings_dir.mkdir(exist_ok=True)
+        root_settings_path = settings_dir / "settings.json"
+        root_settings_path.write_text(json.dumps({
+            "schema_version": 1,
+            "fabric": {"slice_policy": {"max_lease_hours": 6}},
+        }))
+
+        uuid = "aaaaaaaa-1111-1111-1111-111111111111"
+        user_settings_dir = settings_dir / "users" / uuid / ".loomai"
+        user_settings_dir.mkdir(parents=True)
+        (user_settings_dir / "settings.json").write_text(json.dumps({
+            "schema_version": 1,
+            "fabric": {
+                "bastion_username": "user-bastion",
+                "project_id": "user-project",
+            },
+            "ai": {
+                "fabric_api_key": "fabric-key",
+                "nrp_api_key": "nrp-key",
+                "custom_providers": [{
+                    "name": "fabric",
+                    "base_url": "https://ai.fabric-testbed.net",
+                    "api_key": "provider-key",
+                    "endpoint_style": "chat",
+                }],
+                "discovered_models": {"fabric": [{"id": "qwen3-coder-30b"}]},
+            },
+        }))
+
+        settings = sm.load_settings()
+
+        assert settings["fabric"]["bastion_username"] == "user-bastion"
+        assert settings["fabric"]["project_id"] == "user-project"
+        assert settings["ai"]["fabric_api_key"] == "fabric-key"
+        assert settings["ai"]["nrp_api_key"] == "nrp-key"
+        assert settings["ai"]["custom_providers"][0]["api_key"] == "provider-key"
+        healed = json.loads(root_settings_path.read_text())
+        assert healed["fabric"]["bastion_username"] == "user-bastion"
+        assert healed["fabric"]["project_id"] == "user-project"
+
     def test_load_caches_result(self, isolated_storage):
         """Subsequent loads return cached result."""
         s1 = sm.load_settings()
         s2 = sm._get_settings()
         assert s1 is s2
+
+    def test_mcp_metatools_setting_can_be_enabled(self, isolated_storage):
+        settings = sm.load_settings()
+        settings["ai"]["harnesses"]["mcp_metatools"] = True
+        sm.save_settings(settings)
+        sm.invalidate_settings_cache()
+
+        assert sm.get_mcp_metatools_enabled() is True
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +272,20 @@ class TestSaveSettings:
         path = sm.get_settings_path()
         assert os.path.isfile(path)
 
+    def test_save_seeds_missing_assistant_defaults(self, isolated_storage):
+        sm.save_settings({"schema_version": 1, "ai": {"tools": {"aider": False}}})
+
+        with open(sm.get_settings_path()) as f:
+            on_disk = json.load(f)
+
+        assistant = on_disk["ai"]["assistant"]
+        assert assistant["strict_fabric_query_contract"] is True
+        assert assistant["final_answer_retry"] is True
+        assert assistant["compact_fabric_resource_tools"] is True
+        assert assistant["resource_query_generation_defaults"] is True
+        assert assistant["capability_profiles_enabled"] is True
+        assert on_disk["ai"]["tools"]["aider"] is False
+
     def test_save_generates_fabric_rc(self, isolated_storage):
         settings = sm.load_settings()
         settings["fabric"]["project_id"] = "rc-test"
@@ -145,6 +305,52 @@ class TestSaveSettings:
         with open(ssh_path) as f:
             content = f.read()
         assert "testuser" in content
+
+    def test_save_partial_update_preserves_manual_config(self, isolated_storage):
+        settings = sm.load_settings()
+        settings["fabric"]["bastion_username"] = "persisted-user"
+        settings["fabric"]["project_id"] = "persisted-project"
+        settings["fabric"]["slice_policy"]["max_lease_hours"] = 12
+        settings["ai"]["fabric_api_key"] = "fabric-key"
+        settings["ai"]["nrp_api_key"] = "nrp-key"
+        settings["ai"]["custom_providers"] = [{
+            "name": "fabric",
+            "base_url": "https://ai.fabric-testbed.net",
+            "api_key": "provider-key",
+            "endpoint_style": "chat",
+        }]
+        settings["ai"]["discovered_models"] = {"fabric": [{"id": "qwen3-coder-30b"}]}
+        sm.save_settings(settings)
+
+        sm.save_settings({"fabric": {"slice_policy": {"max_lease_hours": 6}}})
+        sm.invalidate_settings_cache()
+        raw = sm.load_settings()
+
+        assert raw["fabric"]["bastion_username"] == "persisted-user"
+        assert raw["fabric"]["project_id"] == "persisted-project"
+        assert raw["fabric"]["slice_policy"]["max_lease_hours"] == 6
+        assert raw["ai"]["fabric_api_key"] == "fabric-key"
+        assert raw["ai"]["nrp_api_key"] == "nrp-key"
+        assert raw["ai"]["custom_providers"][0]["api_key"] == "provider-key"
+        assert raw["ai"]["discovered_models"]["fabric"][0]["id"] == "qwen3-coder-30b"
+
+    def test_save_refuses_empty_manual_fabric_identity_overwrite(self, isolated_storage):
+        settings = sm.load_settings()
+        settings["fabric"]["bastion_username"] = "persisted-user"
+        settings["fabric"]["project_id"] = "persisted-project"
+        sm.save_settings(settings)
+
+        sm.save_settings({"fabric": {"bastion_username": "", "project_id": ""}})
+        sm.invalidate_settings_cache()
+        raw = sm.load_settings()
+
+        assert raw["fabric"]["bastion_username"] == "persisted-user"
+        assert raw["fabric"]["project_id"] == "persisted-project"
+        rc = (isolated_storage / "fabric_config" / "fabric_rc").read_text()
+        ssh = (isolated_storage / "fabric_config" / "ssh_config").read_text()
+        assert "FABRIC_BASTION_USERNAME=persisted-user" in rc
+        assert "FABRIC_PROJECT_ID=persisted-project" in rc
+        assert "    User persisted-user" in ssh
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +491,27 @@ class TestApplyEnvVars:
         sm.apply_env_vars(settings)
         assert os.environ.get("FABRIC_AI_API_KEY") == "env-ai-key"
 
+    def test_ai_renci_key_uses_custom_provider_secret(self, isolated_storage):
+        settings = sm.load_settings()
+        settings["ai"]["fabric_api_key"] = "stale-fabric-key"
+        settings["ai"]["custom_providers"] = [{
+            "name": "ai-renci",
+            "base_url": "https://ai-renci.example/v1",
+            "api_key": "valid-ai-renci-key",
+            "endpoint_style": "auto",
+        }]
+
+        sm.apply_env_vars(settings)
+        sm.generate_fabric_rc(settings)
+
+        assert os.environ.get("FABRIC_AI_API_KEY") == "stale-fabric-key"
+        assert os.environ.get("LOOMAI_CUSTOM_PROVIDER_AI_RENCI_API_KEY") == "valid-ai-renci-key"
+        assert os.environ.get("AI_RENCI_API_KEY") == "valid-ai-renci-key"
+        with open(os.path.join(str(isolated_storage), "fabric_config", "fabric_rc")) as f:
+            content = f.read()
+        assert "export FABRIC_AI_API_KEY=stale-fabric-key" in content
+        assert "export AI_RENCI_API_KEY=valid-ai-renci-key" in content
+
     def test_sets_bastion_host(self, isolated_storage):
         settings = sm.load_settings()
         settings["fabric"]["hosts"]["bastion"] = "bastion.example.com"
@@ -412,9 +639,297 @@ class TestDefaultSchema:
         tools = defaults["ai"]["tools"]
         assert tools["aider"] is True
         assert tools["opencode"] is True
+        assert tools["goose"] is True
         assert tools["crush"] is True
         assert tools["claude"] is True
         assert tools["deepagents"] is True
+
+    def test_defaults_assistant_flags_on(self, isolated_storage):
+        defaults = sm.get_default_settings()
+        assistant = defaults["ai"]["assistant"]
+        assert assistant["strict_fabric_query_contract"] is True
+        assert assistant["final_answer_retry"] is True
+        assert assistant["final_answer_retry_scope"] == "all"
+        assert assistant["compact_fabric_resource_tools"] is True
+        assert assistant["resource_query_generation_defaults"] is True
+        assert assistant["resource_query_generation"] == {"default": {}, "models": {}}
+        assert assistant["weak_model_context_management"] is False
+        assert assistant["capability_profiles_enabled"] is True
+        assert assistant["capability_profile_path"].endswith(
+            "runs/model-capabilities/current/model_capabilities.json"
+        )
+        assert assistant["tool_loop"]["no_progress_limit"] == 3
+        assert assistant["turn_budget"]["default"]["max_tokens"] == 0
+        assert assistant["turn_budget"]["default"]["max_cost_usd"] == 0
+        assert assistant["turn_budget"]["default"]["cost_per_1k_tokens_usd"] == 0
+
+    def test_assistant_flags_can_be_explicitly_disabled(self, isolated_storage):
+        settings = sm.load_settings()
+        assistant = settings["ai"]["assistant"]
+        assistant["strict_fabric_query_contract"] = False
+        assistant["final_answer_retry"] = False
+        assistant["compact_fabric_resource_tools"] = False
+        assistant["resource_query_generation_defaults"] = False
+        assistant["capability_profiles_enabled"] = False
+        sm.save_settings(settings)
+
+        assert sm.is_strict_fabric_query_contract_enabled() is False
+        assert sm.is_final_answer_retry_enabled() is False
+        assert sm.is_compact_fabric_resource_tools_enabled() is False
+        assert sm.is_resource_query_generation_defaults_enabled() is False
+        assert sm.is_capability_profiles_enabled() is False
+
+        assistant["weak_model_context_management"] = True
+        sm.save_settings(settings)
+        assert sm.is_weak_model_context_management_enabled() is True
+
+    def test_mcp_evidence_closure_hints_gating(self, isolated_storage):
+        # Global flag off (default): disabled even for weak-profile models.
+        assert sm.get_mcp_evidence_closure_hints_enabled("fabric:qwen3-coder-30b") is False
+
+        settings = sm.load_settings()
+        settings["ai"]["assistant"]["weak_model_context_management"] = True
+        sm.save_settings(settings)
+
+        # Flag on: weak-profile models opt in via capability profile.
+        assert sm.get_mcp_evidence_closure_hints_enabled("fabric:qwen3-coder-30b") is True
+        assert sm.get_mcp_evidence_closure_hints_enabled("nrp:qwen3") is True
+        assert sm.get_mcp_evidence_closure_hints_enabled("nrp:minimax-m2") is True
+        # Strong profiles and missing model keys stay off.
+        assert sm.get_mcp_evidence_closure_hints_enabled("ai-renci:gpt-5.5") is False
+        assert sm.get_mcp_evidence_closure_hints_enabled("") is False
+
+    def test_assistant_turn_budget_resolves_provider_and_model_overrides(self, isolated_storage):
+        settings = sm.load_settings()
+        assistant = settings["ai"]["assistant"]
+        assistant["turn_budget"] = {
+            "default": {
+                "max_tokens": 20000,
+                "max_cost_usd": 0,
+                "cost_per_1k_tokens_usd": 0,
+            },
+            "providers": {
+                "fabric": {
+                    "max_tokens": 40000,
+                    "cost_per_1k_tokens_usd": 0.05,
+                },
+                "nrp": {
+                    "max_tokens": 12000,
+                },
+            },
+            "models": {
+                "fabric:qwen3-coder-30b": {
+                    "max_tokens": 80000,
+                    "max_cost_usd": 2.5,
+                },
+            },
+        }
+        sm.save_settings(settings)
+
+        fabric_budget = sm.get_assistant_turn_budget("fabric:qwen3-coder-30b")
+        assert fabric_budget["max_tokens"] == 80000
+        assert fabric_budget["max_cost_usd"] == 2.5
+        assert fabric_budget["cost_per_1k_tokens_usd"] == 0.05
+
+        nrp_budget = sm.get_assistant_turn_budget("nrp:glm-5")
+        assert nrp_budget["max_tokens"] == 12000
+        assert nrp_budget["max_cost_usd"] == 0
+
+    def test_max_slice_lease_policy_default_six_hours(self, isolated_storage):
+        defaults = sm.get_default_settings()
+        assert defaults["fabric"]["slice_policy"]["max_lease_hours"] == 6
+        assert sm.get_max_slice_lease_hours() == 6
+
+        settings = sm.load_settings()
+        settings["fabric"]["slice_policy"]["max_lease_hours"] = 4
+        sm.save_settings(settings)
+
+        assert sm.get_max_slice_lease_hours() == 4
+
+    def test_resource_query_generation_defaults_model_override(self, isolated_storage):
+        settings = sm.load_settings()
+        assistant = settings["ai"]["assistant"]
+        assistant["resource_query_generation"] = {
+            "default": {
+                "temperature": 0.1,
+                "top_p": 0.95,
+                "max_output_tokens": 4096,
+            },
+            "models": {
+                "qwen3-coder-30b": {
+                    "temperature": 0.0,
+                    "max_output_tokens": 8192,
+                    "reasoning_effort": "HIGH",
+                },
+            },
+        }
+        sm.save_settings(settings)
+
+        defaults = sm.get_resource_query_generation_defaults("fabric:qwen3-coder-30b")
+
+        assert defaults == {
+            "temperature": 0.0,
+            "top_p": 0.95,
+            "max_output_tokens": 8192,
+            "reasoning_effort": "high",
+        }
+
+    def test_model_capability_profile_loader(self, isolated_storage):
+        profile_path = isolated_storage / "model_capabilities.json"
+        profile_path.write_text(json.dumps({
+            "schema_version": 1,
+            "profiles": [{
+                "model_key": "fabric:test-profile-model",
+                "provider": "fabric",
+                "capabilities": {
+                    "endpoint_style": "responses",
+                    "context_window_tokens": {"value": 65536, "source": "probe"},
+                    "max_output_tokens": {"value": 8192, "source": "probe"},
+                    "reasoning_model": {"supported": True, "source": "probe"},
+                    "interaction_features": {
+                        "tool_calling": {"supported": False, "source": "probe"},
+                    },
+                },
+                "evaluation": {
+                    "confidence": "high",
+                    "status": "profiled",
+                },
+                "recommended_configuration": {
+                    "config_id": "test-profile",
+                    "context_window_tokens": 65536,
+                    "max_input_tokens": 32768,
+                    "max_output_tokens": 4096,
+                    "temperature": 0.0,
+                    "top_p": 0.9,
+                    "reasoning_effort": "high",
+                    "context_truncation_policy": "preserve current task",
+                },
+            }],
+        }))
+        settings = sm.load_settings()
+        assistant = settings["ai"]["assistant"]
+        assistant["capability_profiles_enabled"] = True
+        assistant["capability_profile_path"] = str(profile_path)
+        sm.save_settings(settings)
+
+        profile = sm.get_model_capability_profile("test-profile-model")
+
+        assert profile["model_key"] == "fabric:test-profile-model"
+        assert profile["endpoint_style"] == "responses"
+        assert profile["context_window_tokens"] == 65536
+        assert profile["max_input_tokens"] == 32768
+        assert profile["max_output_tokens"] == 4096
+        assert profile["temperature"] == 0.0
+        assert profile["top_p"] == 0.9
+        assert profile["reasoning_effort"] == "high"
+        assert profile["supports_tools"] is False
+        assert profile["reasoning_model"] is True
+        assert profile["config_id"] == "test-profile"
+
+    def test_builtin_model_capability_profiles_are_default_fallback(self, isolated_storage):
+        settings = sm.load_settings()
+        assistant = settings["ai"]["assistant"]
+        assistant["capability_profiles_enabled"] = True
+        assistant["capability_profile_path"] = str(isolated_storage / "missing-capabilities.json")
+        sm.save_settings(settings)
+        sm.invalidate_settings_cache()
+
+        qwen = sm.get_model_capability_profile("fabric:qwen3-coder-30b")
+        assert qwen["context_window_tokens"] == 262144
+        assert qwen["temperature"] == 0.3
+        assert qwen["max_output_tokens"] == 32768
+        assert qwen["weak_model_context_management"] is True
+        assert qwen["context_compaction_enabled"] is True
+        assert qwen["context_compaction_trigger_messages"] == 18
+
+        nrp_qwen = sm.get_model_capability_profile("nrp:qwen3")
+        assert nrp_qwen["context_window_tokens"] == 32768
+        assert nrp_qwen["weak_model_context_management"] is True
+        assert nrp_qwen["context_compaction_enabled"] is True
+        assert nrp_qwen["context_compaction_trigger_tokens"] == 12000
+
+        minimax = sm.get_model_capability_profile("nrp:minimax-m2")
+        assert minimax["context_window_tokens"] == 131072
+        assert minimax["weak_model_context_management"] is True
+        assert minimax["context_compaction_enabled"] is True
+        assert minimax["context_compaction_trigger_tokens"] == 16000
+
+        gpt55 = sm.get_model_capability_profile("ai-renci:gpt-5.5")
+        assert gpt55["endpoint_style"] == "responses"
+        assert gpt55["reasoning_effort"] == "medium"
+        assert gpt55["strip_temperature"] is True
+        assert "weak_model_context_management" not in gpt55
+
+    def test_known_model_ideal_overrides_runtime_profile_values(self, isolated_storage):
+        profile_path = isolated_storage / "model_capabilities.json"
+        profile_path.write_text(json.dumps({
+            "schema_version": 1,
+            "profiles": [
+                {
+                    "model_key": "qwen3-coder-30b",
+                    "provider": "fabric",
+                    "capabilities": {
+                        "endpoint_style": "chat-completions",
+                        "context_window_tokens": {"value": 32768, "source": "stale"},
+                    },
+                    "recommended_configuration": {
+                        "context_window_tokens": 32768,
+                        "max_output_tokens": 4096,
+                        "temperature": 0.0,
+                    },
+                },
+                {
+                    "model_key": "gemma-4-27b",
+                    "provider": "fabric",
+                    "recommended_configuration": {
+                        "context_window_tokens": 32768,
+                        "max_input_tokens": 28672,
+                    },
+                },
+            ],
+        }))
+        settings = sm.load_settings()
+        assistant = settings["ai"]["assistant"]
+        assistant["capability_profiles_enabled"] = True
+        assistant["capability_profile_path"] = str(profile_path)
+        sm.save_settings(settings)
+        sm.invalidate_settings_cache()
+
+        qwen = sm.get_model_capability_profile("fabric:qwen3-coder-30b")
+        assert qwen["context_window_tokens"] == 262144
+        assert qwen["max_input_tokens"] == 229376
+        assert qwen["max_output_tokens"] == 32768
+        assert qwen["temperature"] == 0.3
+        assert qwen["weak_model_context_management"] is True
+        assert qwen["context_compaction_enabled"] is True
+
+        gemma = sm.get_model_capability_profile("fabric:gemma-4-27b")
+        assert gemma["context_window_tokens"] == 262144
+        assert gemma["max_input_tokens"] == 258048
+
+    def test_model_capability_profile_excludes_nonbenchmarkable(self, isolated_storage):
+        profile_path = isolated_storage / "model_capabilities.json"
+        profile_path.write_text(json.dumps({
+            "schema_version": 1,
+            "profiles": [{
+                "model_key": "nrp:qwen3-embedding",
+                "provider": "nrp",
+                "benchmarkable": False,
+                "capabilities": {
+                    "endpoint_style": "non-chat",
+                },
+                "recommended_configuration": {
+                    "max_output_tokens": 1024,
+                },
+            }],
+        }))
+        settings = sm.load_settings()
+        assistant = settings["ai"]["assistant"]
+        assistant["capability_profiles_enabled"] = True
+        assistant["capability_profile_path"] = str(profile_path)
+        sm.save_settings(settings)
+
+        assert sm.get_model_capability_profile("nrp:qwen3-embedding") == {}
 
     def test_defaults_chameleon_sites(self, isolated_storage):
         defaults = sm.get_default_settings()

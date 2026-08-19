@@ -12,6 +12,7 @@ A minimal app with only ``config.router`` is built (no full-app lifespan), and
 the real user environment.
 """
 import os
+import json
 from pathlib import Path
 
 import pytest
@@ -118,6 +119,119 @@ def test_put_settings_allows_clearing_a_secret(client):
     assert client.put("/api/settings", json=masked).status_code == 200
     sm.invalidate_settings_cache()
     assert sm.load_settings()["ai"]["fabric_api_key"] == ""
+
+
+def test_partial_put_settings_preserves_manual_fabric_and_ai_config(client, tmp_path):
+    """A narrow settings update must not wipe manual FABRIC/AI configuration."""
+    import app.settings_manager as sm
+
+    settings = sm.load_settings()
+    settings["fabric"]["bastion_username"] = "fabric-user"
+    settings["fabric"]["project_id"] = "project-123"
+    settings["fabric"]["slice_policy"]["max_lease_hours"] = 12
+    settings["ai"]["fabric_api_key"] = "fabric-api-key"
+    settings["ai"]["nrp_api_key"] = "nrp-api-key"
+    settings["ai"]["custom_providers"] = [
+        {
+            "name": "fabric",
+            "base_url": "https://ai.fabric-testbed.net",
+            "api_key": "fabric-provider-key",
+            "endpoint_style": "chat",
+        },
+    ]
+    settings["ai"]["discovered_models"] = {
+        "fabric": [{"id": "qwen3-coder-30b", "context_length": 32768}],
+        "nrp": [{"id": "llama3", "context_length": 8192}],
+    }
+    assert client.put("/api/settings", json=settings).status_code == 200
+
+    resp = client.put(
+        "/api/settings",
+        json={"fabric": {"slice_policy": {"max_lease_hours": 6}}},
+    )
+
+    assert resp.status_code == 200
+    sm.invalidate_settings_cache()
+    raw = sm.load_settings()
+    assert raw["fabric"]["bastion_username"] == "fabric-user"
+    assert raw["fabric"]["project_id"] == "project-123"
+    assert raw["fabric"]["slice_policy"]["max_lease_hours"] == 6
+    assert raw["ai"]["fabric_api_key"] == "fabric-api-key"
+    assert raw["ai"]["nrp_api_key"] == "nrp-api-key"
+    assert raw["ai"]["custom_providers"][0]["api_key"] == "fabric-provider-key"
+    assert raw["ai"]["discovered_models"]["fabric"][0]["id"] == "qwen3-coder-30b"
+
+    config_dir = tmp_path / "storage" / "fabric_config"
+    rc = (config_dir / "fabric_rc").read_text()
+    ssh = (config_dir / "ssh_config").read_text()
+    assert "FABRIC_BASTION_USERNAME=fabric-user" in rc
+    assert "FABRIC_PROJECT_ID=project-123" in rc
+    assert "FABRIC_AI_API_KEY=fabric-api-key" in rc
+    assert "NRP_API_KEY=nrp-api-key" in rc
+    assert "LOOMAI_CUSTOM_PROVIDER_FABRIC_API_KEY=fabric-provider-key" in rc
+    assert "    User fabric-user" in ssh
+    assert "ProxyJump fabric-user@bastion.fabric-testbed.net:22" in ssh
+    assert "    User \n" not in ssh
+
+
+def test_put_settings_persists_active_user_fields_to_disk(client, tmp_path):
+    """Regression for active-user settings that must survive backend restart."""
+    import importlib
+    import app.user_registry as user_registry
+    import app.settings_manager as sm
+    storage = tmp_path / "storage"
+    _seed_two_users(storage)
+    assert client.post("/api/users/switch", json={"uuid": A}).status_code == 200
+
+    settings = client.get("/api/settings").json()
+    settings["fabric"]["bastion_username"] = "alice-bastion"
+    settings["fabric"]["slice_policy"]["max_lease_hours"] = 4
+    settings["ai"]["custom_providers"] = [{
+        "name": "ai-renci",
+        "base_url": "https://ai-renci.example/v1",
+        "api_key": "ai-renci-key",
+        "endpoint_style": "auto",
+    }]
+
+    resp = client.put("/api/settings", json=settings)
+
+    assert resp.status_code == 200
+    path = storage / ".loomai" / "users" / A / ".loomai" / "settings.json"
+    with path.open() as f:
+        persisted = json.load(f)
+    assert persisted["fabric"]["bastion_username"] == "alice-bastion"
+    assert persisted["fabric"]["slice_policy"]["max_lease_hours"] == 4
+    assert persisted["ai"]["custom_providers"][0]["name"] == "ai-renci"
+
+    sm.invalidate_settings_cache()
+    reloaded = sm.load_settings()
+    assert reloaded["fabric"]["bastion_username"] == "alice-bastion"
+    assert reloaded["fabric"]["slice_policy"]["max_lease_hours"] == 4
+    assert reloaded["ai"]["custom_providers"][0]["api_key"] == "ai-renci-key"
+
+    # Simulate a fresh backend process: module globals/caches are gone, but the
+    # same FABRIC_STORAGE_DIR and active-user registry remain on disk.
+    user_registry = importlib.reload(user_registry)
+    sm = importlib.reload(sm)
+
+    assert user_registry.get_active_user_uuid() == A
+    restarted = sm.load_settings()
+    assert restarted["fabric"]["bastion_username"] == "alice-bastion"
+    assert restarted["fabric"]["slice_policy"]["max_lease_hours"] == 4
+    assert restarted["ai"]["custom_providers"][0]["api_key"] == "ai-renci-key"
+
+
+def test_put_settings_reports_persist_failure(client, monkeypatch):
+    import app.settings_manager as sm
+
+    def fail_save(_settings):
+        raise OSError("read-only settings directory")
+
+    monkeypatch.setattr(sm, "save_settings", fail_save)
+    resp = client.put("/api/settings", json=sm.load_settings())
+
+    assert resp.status_code == 500
+    assert resp.json()["detail"]["error"] == "SETTINGS_PERSIST_FAILED"
 
 
 # ---------------------------------------------------------------------------

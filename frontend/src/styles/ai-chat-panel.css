@@ -87,6 +87,7 @@
 
 .ai-chat-config {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--fabric-border-solid);
@@ -112,6 +113,14 @@
 [data-theme="dark"] .ai-chat-select {
   background: #1a1a2e;
   border-color: rgba(255,255,255,0.12);
+}
+
+.ai-chat-model-warning {
+  flex: 0 0 100%;
+  color: var(--fabric-coral, #e25241);
+  font-size: 11px;
+  line-height: 1.3;
+  padding: 2px 0 0;
 }
 
 .ai-chat-select:focus {

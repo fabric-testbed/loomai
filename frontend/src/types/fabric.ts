@@ -560,8 +560,35 @@ export interface LoomAISettings {
     nrp_api_key: string;
     ai_server_url: string;
     nrp_server_url: string;
-    custom_providers?: Array<{name: string; base_url: string; api_key: string; codex_provider?: boolean}>;
+    custom_providers?: Array<{
+      name: string;
+      base_url: string;
+      api_key: string;
+      codex_provider?: boolean;
+      endpoint_style?: 'auto' | 'chat' | 'responses' | 'non-chat';
+    }>;
     tools: Record<string, boolean>;
+    assistant?: {
+      strict_fabric_query_contract?: boolean;
+      final_answer_retry?: boolean;
+      final_answer_retry_scope?: 'all' | 'useful_tier';
+      compact_fabric_resource_tools?: boolean;
+      resource_query_generation_defaults?: boolean;
+      resource_query_generation?: {
+        default?: {
+          temperature?: number;
+          top_p?: number;
+          max_output_tokens?: number;
+        };
+        models?: Record<string, {
+          temperature?: number;
+          top_p?: number;
+          max_output_tokens?: number;
+        }>;
+      };
+      capability_profiles_enabled?: boolean;
+      capability_profile_path?: string;
+    };
   };
   chameleon?: {
     enabled: boolean;
@@ -614,6 +641,50 @@ export interface ToolConfigStatus {
   tool: string;
   has_config: boolean;
   files: string[];
+}
+
+export type HarnessConfigStatus = 'configured' | 'user_modified' | 'stale';
+
+export interface HarnessConfigFileStatus {
+  root: 'workspace' | 'home';
+  path: string;
+  state: 'configured' | 'missing' | 'stale' | 'user_modified';
+  state_label: string;
+  reason: string;
+}
+
+export interface HarnessConfigStatusEntry {
+  name: string;
+  label: string;
+  description: string;
+  status: HarnessConfigStatus;
+  status_label: string;
+  configured: boolean;
+  needs_sync: boolean;
+  expected_files: number;
+  configured_files: number;
+  stale_files: number;
+  user_modified_files: number;
+  docs_url: string;
+  files: HarnessConfigFileStatus[];
+}
+
+export interface HarnessConfigStatusResponse {
+  status: string;
+  workspace: string;
+  home: string;
+  harnesses: HarnessConfigStatusEntry[];
+}
+
+export interface HarnessConfigSyncResponse {
+  status: string;
+  workspace: string;
+  home: string;
+  harness: HarnessConfigStatusEntry;
+}
+
+export interface HarnessConfigResetResponse extends HarnessConfigSyncResponse {
+  reset_files: number;
 }
 
 export interface UserInfo {

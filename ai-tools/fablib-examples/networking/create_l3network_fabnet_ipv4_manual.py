@@ -2,9 +2,9 @@
 # Source: FABRIC Jupyter Examples - fablib_api
 # Notebook: create_l3network_fabnet_ipv4_manual.ipynb
 #
-# FABRIC provides **FABnetv4**, a private IPv4 overlay network that spans every
-# FABRIC site. Think of it as a dedicated research internet: nodes at different
-# geographic sites can route packets to eac...
+# FABRIC provides **FABnetv4**, a private IPv4 backbone that routes between
+# per-site FABNet services. One FABNetv4 service cannot attach VMs from
+# multiple sites; this example correctly creates one IPv4 service per site.
 
 # # FABnet IPv4: Manual IP Configuration
 # ### FABlib API References

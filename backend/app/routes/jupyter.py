@@ -15,6 +15,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.error_envelope import error_detail, safe_error_detail
 from app.http_pool import fabric_client, ai_client
 from app.user_context import get_user_storage, register_user_changed_callback
 from app.tool_installer import is_tool_installed, get_tool_binary_path, get_tool_env
@@ -519,7 +520,14 @@ def _artifacts_dir() -> str:
 def _sanitize_name(name: str) -> str:
     safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", name.strip())
     if not safe:
-        raise HTTPException(status_code=400, detail="Invalid name")
+        raise HTTPException(
+            status_code=400,
+            detail=error_detail(
+                "NOTEBOOK_NAME_INVALID",
+                "Notebook name must contain at least one letter, digit, underscore, or hyphen.",
+                name=name,
+            ),
+        )
     return safe
 
 
@@ -552,7 +560,14 @@ async def launch_notebook(name: str, force_refresh: bool = False):
     safe = _sanitize_name(name)
     artifact_dir = os.path.join(_artifacts_dir(), safe)
     if not os.path.isdir(artifact_dir):
-        raise HTTPException(status_code=404, detail=f"Notebook artifact '{name}' not found")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "NOTEBOOK_NOT_FOUND",
+                f"Notebook artifact '{name}' was not found in your local artifacts — get it from the marketplace first.",
+                name=name,
+            ),
+        )
 
     # Create (or refresh) working copy
     notebooks_root = _notebooks_workdir()
@@ -626,7 +641,14 @@ async def reset_notebook(name: str):
     if source is None:
         source = artifact_dir
     if not os.path.isdir(source):
-        raise HTTPException(status_code=404, detail=f"No original copy found for '{name}'")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "NOTEBOOK_ORIGINAL_NOT_FOUND",
+                f"No original copy of '{name}' was found to reset from — launch the notebook first to create one.",
+                name=name,
+            ),
+        )
 
     # Remove existing workspace
     if os.path.isdir(work_dir):
@@ -676,7 +698,14 @@ async def publish_fork(name: str, req: PublishForkRequest):
     safe = _sanitize_name(name)
     work_dir = os.path.join(_notebooks_workdir(), safe)
     if not os.path.isdir(work_dir):
-        raise HTTPException(status_code=404, detail=f"No workspace for '{name}' — launch it first")
+        raise HTTPException(
+            status_code=404,
+            detail=error_detail(
+                "NOTEBOOK_WORKSPACE_NOT_FOUND",
+                f"No workspace exists for '{name}' — launch the notebook first to create a working copy.",
+                name=name,
+            ),
+        )
 
     # Read original metadata for fork provenance from weave.json
     artifact_dir = os.path.join(_artifacts_dir(), safe)
@@ -721,7 +750,13 @@ async def publish_fork(name: str, req: PublishForkRequest):
 
     headers = _get_auth_headers()
     if not headers:
-        raise HTTPException(status_code=401, detail="No FABRIC token configured — cannot publish")
+        raise HTTPException(
+            status_code=401,
+            detail=error_detail(
+                "NOTEBOOK_TOKEN_MISSING",
+                "No FABRIC token is configured — log in via the Configure view before publishing.",
+            ),
+        )
 
     # Step 1: Create artifact record (include title and tags upfront)
     from app.routes.artifacts import _make_descriptions
@@ -746,10 +781,24 @@ async def publish_fork(name: str, req: PublishForkRequest):
         r.raise_for_status()
         created = r.json()
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code,
-                          detail=f"Failed to create artifact: {e.response.text}")
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=error_detail(
+                "NOTEBOOK_UPSTREAM_ERROR",
+                f"Artifact Manager rejected the artifact creation: {safe_error_detail(e.response.text)}.",
+                name=safe,
+                upstream_status=e.response.status_code,
+            ),
+        )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to create artifact: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=error_detail(
+                "NOTEBOOK_PUBLISH_FAILED",
+                f"Failed to create the artifact record: {safe_error_detail(e)}.",
+                name=safe,
+            ),
+        )
 
     artifact_uuid = created["uuid"]
 
@@ -799,10 +848,24 @@ async def publish_fork(name: str, req: PublishForkRequest):
                 r.raise_for_status()
                 version_info = r.json()
         except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code,
-                              detail=f"Content upload failed: {e.response.text}")
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=error_detail(
+                    "NOTEBOOK_UPSTREAM_ERROR",
+                    f"Artifact Manager rejected the content upload: {safe_error_detail(e.response.text)}.",
+                    name=safe,
+                    upstream_status=e.response.status_code,
+                ),
+            )
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Content upload failed: {e}")
+            raise HTTPException(
+                status_code=502,
+                detail=error_detail(
+                    "NOTEBOOK_PUBLISH_FAILED",
+                    f"Content upload to the Artifact Manager failed: {safe_error_detail(e)}.",
+                    name=safe,
+                ),
+            )
 
     _cache["fetched_at"] = 0
     logger.info("Published fork of %s as %s", name, artifact_uuid)

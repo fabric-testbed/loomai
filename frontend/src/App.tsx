@@ -5626,7 +5626,9 @@ export default function App() {
     { id: 'codex', name: 'Codex', icon: 'Cx' },
     { id: 'aider', name: 'Aider', icon: 'Ai' },
     { id: 'opencode', name: 'OpenCode', icon: 'OC' },
+    { id: 'goose', name: 'Goose', icon: 'Go' },
     { id: 'crush', name: 'Crush', icon: 'Cr' },
+    { id: 'pi', name: 'Pi', icon: 'Pi' },
     { id: 'deepagents', name: 'Deep Agents', icon: 'DA' },
     { id: 'claude', name: 'Claude Code', icon: 'CC' },
   ];
@@ -5854,7 +5856,7 @@ export default function App() {
 
       {/* Chameleon title bar — mirrors FABRIC bar with extracted callbacks */}
       {currentView === 'chameleon' && !(settingsOpen || helpOpen) && chameleonEnabled && (
-        <div className="chameleon-bar" data-testid="chameleon-bar">
+        <div className="chameleon-bar" data-testid="chameleon-bar" data-help-id="chameleon-view.overview">
           <img src={assetUrl('/chameleon-icon.png')} alt="" className="chameleon-bar-logo" />
           <span className="chameleon-bar-title">Chameleon</span>
           <div className="chameleon-bar-tabs" data-testid="chameleon-bar-tabs">
@@ -5869,11 +5871,13 @@ export default function App() {
               <button key={t.key} className={`chameleon-bar-tab${chameleonSubView === t.key ? ' active' : ''}`}
                 data-testid="chameleon-bar-tab"
                 data-chameleon-bar-tab={t.key}
+                data-help-id={`chameleon-view.${t.key === 'openstack' ? 'inventory' : t.key}`}
                 onClick={() => setChameleonSubView(t.key)}>{t.label}</button>
             ))}
           </div>
           <InAppSelect className="chameleon-bar-select" value={selectedChameleonSliceId}
             data-testid="chameleon-bar-slice-select"
+            data-help-id="chameleon-view.slice-selector"
             onChange={(e) => { setSelectedChameleonSliceId(e.target.value); if (e.target.value) setChameleonSubView('topology'); }}>
             <option value="">-- Select Slice --</option>
             {chameleonSlices.filter(s => !['Terminated', 'Error'].includes(s.state || '') || s.id === selectedChameleonSliceId).map(s => {
@@ -5902,11 +5906,12 @@ export default function App() {
             setChameleonSliceData(null);
             handleRefreshChameleonSlices();
           }} title="Delete all drafts">Delete All</button>
-          <button className="chameleon-bar-btn" data-testid="chameleon-bar-refresh-slices" onClick={() => handleRefreshChameleonSlices()} disabled={chameleonSlicesLoading} title="Refresh slices">
+          <button className="chameleon-bar-btn" data-testid="chameleon-bar-refresh-slices" data-help-id="chameleon-view.actions" onClick={() => handleRefreshChameleonSlices()} disabled={chameleonSlicesLoading} title="Refresh slices">
             {chameleonSlicesLoading ? '...' : '\u21BB Slices'}
           </button>
           <AutoRefreshSelect
             className="chameleon-bar-btn"
+            data-help-id="chameleon-view.actions"
             value={chameleonAutoRefresh ? pollInterval : 0}
             onChange={(val) => {
               setChameleonAutoRefresh(val > 0);
@@ -5984,7 +5989,7 @@ export default function App() {
 
       {/* Federated Slice bar — mirrors FABRIC/Chameleon bar with LoomAI indigo */}
       {currentView === 'slices' && !(settingsOpen || helpOpen) && (
-        <div className="composite-bar" data-testid="federated-bar">
+        <div className="composite-bar" data-testid="federated-bar" data-help-id="federated-view.overview">
           <img src={assetUrl('/loomai-icon-transparent.svg')} alt="" className="composite-bar-logo" />
           <span className="composite-bar-title">Federated Slices</span>
           <div className="composite-bar-tabs" data-testid="federated-bar-tabs">
@@ -6001,6 +6006,7 @@ export default function App() {
                 className={`composite-bar-tab${slicesSubView === t.key ? ' active' : ''}`}
                 data-testid="federated-bar-tab"
                 data-federated-bar-tab={t.key}
+                data-help-id={`federated-view.${t.key === 'apps' ? 'tunnels' : t.key}`}
                 onClick={() => {
                   setSlicesSubView(t.key);
                   if (t.key === 'slices') {
@@ -6016,6 +6022,7 @@ export default function App() {
             <InAppSelect
               className="composite-bar-select"
               data-testid="federated-bar-slice-select"
+              data-help-id="federated-view.slice-selector"
               value={selectedCompositeSliceId}
               onChange={async (e) => {
                 const id = e.target.value;
@@ -6048,7 +6055,7 @@ export default function App() {
                 setSlicesSubView('slices');
               } catch (e: any) { addError(e.message); }
             }} title="Create new federated slice">+ New</button>
-            <button className="composite-bar-btn" data-testid="federated-bar-submit-slice" onClick={async () => {
+            <button className="composite-bar-btn" data-testid="federated-bar-submit-slice" data-help-id="federated-view.actions" onClick={async () => {
               if (!selectedCompositeSliceId) return;
               setLoading(true);
               try {
@@ -6068,15 +6075,16 @@ export default function App() {
               } catch (e: any) { addError(e.message); }
               finally { setLoading(false); }
             }} disabled={!selectedCompositeSliceId || loading} title="Submit federated slice">Submit</button>
-            <button className="composite-bar-btn composite-bar-btn-danger" data-testid="federated-bar-delete-slice" onClick={() => {
+            <button className="composite-bar-btn composite-bar-btn-danger" data-testid="federated-bar-delete-slice" data-help-id="federated-view.actions" onClick={() => {
               if (!selectedCompositeSliceId) return;
               handleDeleteFederatedSlice(selectedCompositeSliceId);
             }} disabled={!selectedCompositeSliceId} title="Delete federated slice">Delete</button>
-            <button className="composite-bar-btn" data-testid="federated-bar-refresh-slices" onClick={handleRefreshSlices} disabled={compositeSlicesLoading} title="Refresh federated slices">
+            <button className="composite-bar-btn" data-testid="federated-bar-refresh-slices" data-help-id="federated-view.actions" onClick={handleRefreshSlices} disabled={compositeSlicesLoading} title="Refresh federated slices">
               {compositeSlicesLoading ? '...' : '\u21BB Slices'}
             </button>
             <AutoRefreshSelect
               className="composite-bar-btn"
+              data-help-id="federated-view.actions"
               value={pollInterval}
               onChange={(val) => {
                 setPollInterval(val);

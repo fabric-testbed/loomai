@@ -1,8 +1,9 @@
 'use client';
 import InAppSelect from './InAppSelect';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import * as api from '../api/client';
-import type { ConfigStatus, ProjectInfo, SliceKeySet, LoomAISettings, ToolConfigStatus, UserInfo } from '../types/fabric';
+import type { ConfigStatus, ProjectInfo, SliceKeySet, LoomAISettings, ToolConfigStatus, HarnessConfigStatusEntry, UserInfo } from '../types/fabric';
 import type { SettingTestResult, ToolInstallInfo } from '../api/client';
 import ToolInstallOverlay from './ToolInstallOverlay';
 import { confirmDialog } from './AppDialogProvider';
@@ -58,6 +59,16 @@ const SECTIONS: SectionDef[] = [
   { id: 'storage',    label: 'Storage',         icon: '\u25A8' },   // ▨
 ];
 
+const MANAGED_HARNESSES: Array<Pick<HarnessConfigStatusEntry, 'name' | 'label' | 'description'>> = [
+  { name: 'opencode', label: 'OpenCode', description: 'Provider, agent, skill, and MCP defaults' },
+  { name: 'goose', label: 'Goose', description: 'Workspace profile with LoomAI providers and instructions' },
+  { name: 'pi', label: 'Pi', description: 'Minimal terminal harness with provider defaults and guardrails' },
+  { name: 'aider', label: 'Aider', description: 'Pair-programming defaults and shared LoomAI conventions' },
+  { name: 'crush', label: 'Crush', description: 'TUI defaults with shared agents, skills, and providers' },
+  { name: 'codex', label: 'Codex', description: 'CLI defaults with LoomAI providers, agents, and skills' },
+  { name: 'claude', label: 'Claude Code', description: 'Instructions and slash-command defaults' },
+];
+
 function serializeChameleonSitesForDirty(sites?: Record<string, ChameleonSiteSettings | Record<string, unknown>>): string {
   const normalized = Object.fromEntries(
     Object.entries(sites || {})
@@ -73,8 +84,17 @@ function serializeChameleonSitesForDirty(sites?: Record<string, ChameleonSiteSet
   return JSON.stringify(normalized);
 }
 
+type CustomProviderEndpointStyle = 'auto' | 'chat' | 'responses' | 'non-chat';
+type CustomProviderConfig = {
+  name: string;
+  base_url: string;
+  api_key: string;
+  codex_provider?: boolean;
+  endpoint_style?: CustomProviderEndpointStyle;
+};
+
 function serializeCustomProvidersForDirty(
-  providers?: Array<{ name?: string; base_url?: string; api_key?: string; codex_provider?: boolean }>,
+  providers?: Array<Partial<CustomProviderConfig>>,
 ): string {
   return JSON.stringify(
     (providers || []).map((cp) => ({
@@ -82,6 +102,7 @@ function serializeCustomProvidersForDirty(
       base_url: cp.base_url || '',
       api_key: cp.api_key || '',
       codex_provider: !!cp.codex_provider,
+      endpoint_style: cp.endpoint_style || 'auto',
     })),
   );
 }
@@ -138,13 +159,15 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   const [nrpApiKey, setNrpApiKey] = useState('');
   const [aiTools, setAiTools] = useState<Record<string, boolean>>({
     antigravity: false, codex: false, claude: false,
-    aider: true, opencode: true, crush: true, deepagents: true,
+    aider: true, opencode: true, goose: true, crush: true, pi: true, deepagents: true,
   });
 
   // Tool install status & overlay
   const [installStatus, setInstallStatus] = useState<Record<string, ToolInstallInfo> | null>(null);
   const [installingToolId, setInstallingToolId] = useState<string | null>(null);
   const [uninstallingToolId, setUninstallingToolId] = useState<string | null>(null);
+  const [pendingUninstallToolId, setPendingUninstallToolId] = useState<string | null>(null);
+  const [removeConfigOnUninstall, setRemoveConfigOnUninstall] = useState(false);
 
   // Multi-user state
   const [registeredUsers, setRegisteredUsers] = useState<UserInfo[]>([]);
@@ -154,6 +177,9 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   // Unified settings and tool configs
   const [settings, setSettings] = useState<LoomAISettings | null>(null);
   const [toolConfigs, setToolConfigs] = useState<ToolConfigStatus[]>([]);
+  const [harnessStatuses, setHarnessStatuses] = useState<HarnessConfigStatusEntry[]>([]);
+  const [syncingHarness, setSyncingHarness] = useState<string | null>(null);
+  const [resettingHarness, setResettingHarness] = useState<string | null>(null);
 
   // Path settings
   const [pathStorageDir, setPathStorageDir] = useState('');
@@ -178,7 +204,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   const [aiModels, setAiModels] = useState<api.AIModelsResponse | null>(null);
   const [showKeyModal, setShowKeyModal] = useState<'fabric' | 'nrp' | null>(null);
   // Custom LLM providers
-  const [customProviders, setCustomProviders] = useState<Array<{name: string; base_url: string; api_key: string; codex_provider?: boolean}>>([]);
+  const [customProviders, setCustomProviders] = useState<CustomProviderConfig[]>([]);
   const [cpTestResults, setCpTestResults] = useState<Record<number, { testing: boolean; result?: SettingTestResult }>>({});
 
   // LLM key creation
@@ -230,6 +256,10 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   const bastionKeyRef = useRef<HTMLInputElement>(null);
   const slicePrivKeyRef = useRef<HTMLInputElement>(null);
   const slicePubKeyRef = useRef<HTMLInputElement>(null);
+  const harnessStatusByName = useMemo(
+    () => new Map(harnessStatuses.map((harness) => [harness.name, harness])),
+    [harnessStatuses],
+  );
 
   /* ---------- Data loading ---------- */
   const loadStatus = useCallback(async () => {
@@ -271,7 +301,10 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
       setAiTools(s.ai.tools);
       setAiServerUrl(s.ai.ai_server_url);
       setNrpServerUrl(s.ai.nrp_server_url);
-      setCustomProviders(s.ai.custom_providers || []);
+      setCustomProviders((s.ai.custom_providers || []).map((cp) => ({
+        ...cp,
+        endpoint_style: cp.endpoint_style || 'auto',
+      })));
       // Views
       if (s.views) {
         setFederatedViewEnabled(s.views.federated_enabled ?? s.views.composite_enabled ?? false);
@@ -321,6 +354,15 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     }
   }, []);
 
+  const loadHarnessStatuses = useCallback(async () => {
+    try {
+      const data = await api.getHarnessStatuses();
+      setHarnessStatuses(data.harnesses);
+    } catch {
+      setHarnessStatuses([]);
+    }
+  }, []);
+
   const loadUsers = useCallback(async () => {
     try {
       const data = await api.listUsers();
@@ -352,12 +394,13 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     loadKeySets();
     loadSettings();
     loadToolConfigs();
+    loadHarnessStatuses();
     loadUsers();
     loadModels();
     loadAgents();
     loadSkills();
     loadInstallStatus();
-  }, [loadStatus, loadKeySets, loadSettings, loadToolConfigs, loadUsers, loadModels, loadAgents, loadSkills, loadInstallStatus]);
+  }, [loadStatus, loadKeySets, loadSettings, loadToolConfigs, loadHarnessStatuses, loadUsers, loadModels, loadAgents, loadSkills, loadInstallStatus]);
 
   // Load projects when token is available.
   //
@@ -629,6 +672,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           nrp_server_url: nrpServerUrl,
           custom_providers: customProviders,
           tools: aiTools,
+          assistant: settings?.ai.assistant,
         },
         chameleon: {
           enabled: chameleonEnabled,
@@ -1600,7 +1644,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
       <div className="configure-section">
         <h3>Available LLM Models</h3>
         <p>
-          Models available from FABRIC AI and NRP servers. All FABRIC testbed users are eligible for a free API key.
+          Models available from FABRIC AI and NRP servers. FABRIC AI keys are free but opt-in — request membership in the FABRIC-LLM project to create one.
         </p>
         {aiModels && (
           <div style={{ fontSize: 12, marginTop: 4 }}>
@@ -1647,7 +1691,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
             )}
             {(!aiModels.has_key.fabric || !aiModels.has_key.nrp) && (
               <p style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
-                {!aiModels.has_key.fabric && <>Missing FABRIC API key — all FABRIC testbed users are eligible. Enter your key in the API Keys section above. </>}
+                {!aiModels.has_key.fabric && <>Missing FABRIC API key — free for FABRIC-LLM project members (request access via the FABRIC Help Desk). Enter your key in the API Keys section above. </>}
                 {!aiModels.has_key.nrp && <>Missing NRP API key — enter it in the API Keys section above for additional models.</>}
               </p>
             )}
@@ -1669,12 +1713,27 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
               onChange={e => { const next = [...customProviders]; next[i] = { ...cp, base_url: e.target.value }; setCustomProviders(next); }} />
             <input type="password" placeholder="API Key" value={cp.api_key} style={{ width: 120, fontSize: 12 }}
               onChange={e => { const next = [...customProviders]; next[i] = { ...cp, api_key: e.target.value }; setCustomProviders(next); }} />
+            <InAppSelect
+              value={cp.endpoint_style || 'auto'}
+              onChange={e => {
+                const next = [...customProviders];
+                next[i] = { ...cp, endpoint_style: e.target.value as CustomProviderEndpointStyle };
+                setCustomProviders(next);
+              }}
+              style={{ width: 132, fontSize: 12 }}
+              title="Endpoint style"
+            >
+              <option value="auto">Auto</option>
+              <option value="chat">Chat</option>
+              <option value="responses">Responses</option>
+              <option value="non-chat">Non-chat</option>
+            </InAppSelect>
             <button className="test-btn" disabled={!cp.base_url || cpTestResults[i]?.testing}
               style={{ fontSize: 11, padding: '2px 8px' }}
               onClick={async () => {
                 setCpTestResults(prev => ({ ...prev, [i]: { testing: true } }));
                 try {
-                  const result = await api.testCustomProvider(cp.base_url, cp.api_key);
+                  const result = await api.testCustomProvider(cp.base_url, cp.api_key, cp.endpoint_style || 'auto');
                   setCpTestResults(prev => ({ ...prev, [i]: { testing: false, result } }));
                 } catch {
                   setCpTestResults(prev => ({ ...prev, [i]: { testing: false, result: { ok: false, message: 'Request failed' } } }));
@@ -1702,12 +1761,15 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
               <span className={`test-result ${cpTestResults[i].result!.ok ? 'test-ok' : 'test-fail'}`} style={{ fontSize: 11 }}>
                 {cpTestResults[i].result!.ok ? '\u2713' : '\u2717'} {cpTestResults[i].result!.message}
                 {cpTestResults[i].result!.latency_ms != null && <span className="test-latency"> ({cpTestResults[i].result!.latency_ms}ms)</span>}
+                {cpTestResults[i].result!.warnings?.length ? (
+                  <span className="test-latency"> {cpTestResults[i].result!.warnings!.join(' ')}</span>
+                ) : null}
               </span>
             )}
           </div>
         ))}
         <button className="btn" style={{ marginTop: 6, fontSize: 12, padding: '4px 12px' }}
-          onClick={() => setCustomProviders([...customProviders, { name: '', base_url: '', api_key: '', codex_provider: false }])}>
+          onClick={() => setCustomProviders([...customProviders, { name: '', base_url: '', api_key: '', codex_provider: false, endpoint_style: 'auto' }])}>
           + Add Provider
         </button>
       </div>
@@ -1721,22 +1783,24 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     </>
   );
 
-  const handleUninstall = async (toolId: string) => {
-    if (!await confirmDialog(`Uninstall ${installStatus?.[toolId]?.display_name || toolId}? This will remove the tool and free disk space.`, {
-      title: 'Uninstall AI Tool',
-      confirmLabel: 'Uninstall',
-      tone: 'danger',
-    })) return;
+  const openUninstallDialog = (toolId: string) => {
+    setRemoveConfigOnUninstall(false);
+    setPendingUninstallToolId(toolId);
+  };
+
+  const handleUninstall = async (toolId: string, removeConfig: boolean) => {
+    setPendingUninstallToolId(null);
     setUninstallingToolId(toolId);
     try {
-      const result = await api.uninstallTool(toolId);
+      const result = await api.uninstallTool(toolId, removeConfig);
       if (result.status === 'uninstalled' || result.status === 'not_installed') {
         setAiTools((prev) => ({ ...prev, [toolId]: false }));
         setMessage({ text: `${installStatus?.[toolId]?.display_name || toolId} uninstalled`, type: 'success' });
       } else {
-        setMessage({ text: `Failed to uninstall ${toolId}`, type: 'error' });
+        setMessage({ text: result.error || `Failed to uninstall ${toolId}`, type: 'error' });
       }
       await loadInstallStatus();
+      await loadHarnessStatuses();
     } catch (err: any) {
       setMessage({ text: `Uninstall failed: ${err.message}`, type: 'error' });
     } finally {
@@ -1744,8 +1808,72 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     }
   };
 
+  const handleSyncHarness = async (harnessName: string) => {
+    setSyncingHarness(harnessName);
+    try {
+      const result = await api.syncHarnessDefaults(harnessName);
+      setMessage({ text: `${result.harness.label} harness defaults synced`, type: 'success' });
+      await loadHarnessStatuses();
+    } catch (err: any) {
+      setMessage({ text: `Harness sync failed: ${err.message}`, type: 'error' });
+    } finally {
+      setSyncingHarness(null);
+    }
+  };
+
+  const handleResetHarness = async (harnessName: string) => {
+    const harness = harnessStatusByName.get(harnessName) || MANAGED_HARNESSES.find((item) => item.name === harnessName);
+    const label = harness?.label || harnessName;
+    if (!await confirmDialog(`Reset ${label} harness defaults? This overwrites user changes to that harness configuration.`, {
+      title: 'Reset Harness Defaults',
+      confirmLabel: 'Reset',
+      tone: 'danger',
+    })) return;
+    setResettingHarness(harnessName);
+    try {
+      const result = await api.resetHarnessDefaults(harnessName);
+      setMessage({ text: `${result.harness.label} harness defaults reset`, type: 'success' });
+      await loadHarnessStatuses();
+    } catch (err: any) {
+      setMessage({ text: `Harness reset failed: ${err.message}`, type: 'error' });
+    } finally {
+      setResettingHarness(null);
+    }
+  };
+
+  const openHarnessDocs = (harnessName: string) => {
+    window.open(api.getHarnessDocsUrl(harnessName), '_blank', 'noopener');
+  };
+
   const renderAITools = () => (
     <>
+      {pendingUninstallToolId && createPortal(
+        <div
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 99999 }}
+          onClick={() => setPendingUninstallToolId(null)}
+        >
+          <div
+            style={{ width: 'min(460px, calc(100vw - 32px))', maxHeight: '80vh', overflowY: 'auto', background: 'var(--fabric-bg)', color: 'var(--fabric-text)', border: '1px solid var(--fabric-border)', borderRadius: 6, boxShadow: '0 18px 48px rgba(0,0,0,0.35)', padding: 18 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0 }}>Uninstall {installStatus?.[pendingUninstallToolId]?.display_name || pendingUninstallToolId}</h3>
+            <p style={{ fontSize: 13, color: 'var(--fabric-text-muted)' }}>Installed binaries/packages and LoomAI-owned runtime state will be removed. Harness configuration is kept unless selected below.</p>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, margin: '14px 0' }}>
+              <input
+                type="checkbox"
+                checked={removeConfigOnUninstall}
+                onChange={(e) => setRemoveConfigOnUninstall(e.target.checked)}
+              />
+              <span>Also remove harness configuration</span>
+            </label>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn-sm" onClick={() => setPendingUninstallToolId(null)}>Cancel</button>
+              <button className="btn-sm danger" onClick={() => handleUninstall(pendingUninstallToolId, removeConfigOnUninstall)}>Uninstall</button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
       {installingToolId && (
         <ToolInstallOverlay
           toolId={installingToolId}
@@ -1771,7 +1899,9 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
             { id: 'claude', label: 'Claude Code', desc: 'Anthropic CLI (requires your own account)' },
             { id: 'aider', label: 'Aider', desc: 'AI pair programming terminal' },
             { id: 'opencode', label: 'OpenCode', desc: 'Terminal-based AI coding assistant' },
+            { id: 'goose', label: 'Goose', desc: 'Agentic terminal coding assistant with LoomAI defaults' },
             { id: 'crush', label: 'Crush', desc: 'Terminal AI assistant (Charm)' },
+            { id: 'pi', label: 'Pi', desc: 'Minimal terminal coding agent with LoomAI harness defaults' },
             { id: 'deepagents', label: 'Deep Agents', desc: 'LangChain coding agent with planning and memory' },
           ] as const).map((tool) => {
             const info = installStatus?.[tool.id];
@@ -1799,7 +1929,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                     <button
                       className="ai-tool-uninstall-btn"
                       disabled={isUninstalling}
-                      onClick={(e) => { e.preventDefault(); handleUninstall(tool.id); }}
+                      onClick={(e) => { e.preventDefault(); openUninstallDialog(tool.id); }}
                       title="Uninstall this tool"
                     >
                       {isUninstalling ? 'Removing...' : 'Uninstall'}
@@ -1814,6 +1944,83 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                   </button>
                 )}
               </label>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="configure-section">
+        <h3>Harnesses</h3>
+        <div className="harness-config-list">
+          {MANAGED_HARNESSES.map((harness) => {
+            const current = harnessStatusByName.get(harness.name);
+            const installInfo = installStatus?.[harness.name];
+            const statusLoaded = installStatus !== null;
+            const isInstalled = statusLoaded ? (!installInfo || installInfo.installed) : true;
+            const statusClass = current?.status || 'loading';
+            const statusLabel = current?.status_label || 'Checking';
+            const syncLabel = syncingHarness === harness.name
+              ? 'Syncing...'
+              : current?.needs_sync
+                ? 'Configure'
+                : 'Sync';
+            const resetLabel = resettingHarness === harness.name ? 'Resetting...' : 'Reset';
+            const firstReason = current?.files.find((file) => file.reason)?.reason || '';
+            const fileSummary = current
+              ? `${current.configured_files}/${current.expected_files} files`
+              : 'checking files';
+            const driftSummary = current && current.user_modified_files > 0
+              ? `${current.user_modified_files} user-modified`
+              : current && current.stale_files > 0
+                ? `${current.stale_files} stale`
+                : fileSummary;
+
+            return (
+              <div key={harness.name} className="harness-config-row" data-testid={`harness-row-${harness.name}`}>
+                <div className="harness-config-info">
+                  <span className="harness-config-name">{harness.label}</span>
+                  <span className="harness-config-desc">{current?.description || harness.description}</span>
+                </div>
+                <div className="harness-config-status">
+                  <span className={`harness-status-badge ${statusClass}`} title={firstReason || statusLabel}>
+                    {statusLabel}
+                  </span>
+                  <span className="harness-file-count">{driftSummary}</span>
+                </div>
+                <div className="harness-config-actions">
+                  <button
+                    className="btn-sm primary"
+                    disabled={syncingHarness === harness.name || resettingHarness === harness.name}
+                    onClick={() => handleSyncHarness(harness.name)}
+                    data-testid={`harness-sync-${harness.name}`}
+                  >
+                    {syncLabel}
+                  </button>
+                  <button
+                    className="btn-sm danger"
+                    disabled={syncingHarness === harness.name || resettingHarness === harness.name}
+                    onClick={() => handleResetHarness(harness.name)}
+                    data-testid={`harness-reset-${harness.name}`}
+                  >
+                    {resetLabel}
+                  </button>
+                  <button
+                    className="btn-sm danger"
+                    disabled={!isInstalled || uninstallingToolId === harness.name}
+                    onClick={() => openUninstallDialog(harness.name)}
+                    data-testid={`harness-uninstall-${harness.name}`}
+                  >
+                    {uninstallingToolId === harness.name ? 'Removing...' : 'Uninstall'}
+                  </button>
+                  <button
+                    className="btn-sm"
+                    onClick={() => openHarnessDocs(harness.name)}
+                    data-testid={`harness-docs-${harness.name}`}
+                  >
+                    Docs
+                  </button>
+                </div>
+              </div>
             );
           })}
         </div>
@@ -1935,7 +2142,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
 
   const renderChameleon = () => (
     <div className="configure-section">
-      <h3>Chameleon Cloud</h3>
+      <h3 data-help-id="settings.chameleon">Chameleon Cloud</h3>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
         <label style={{ fontSize: 12, cursor: 'pointer' }}>
           <input
@@ -2082,7 +2289,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                   </>
                 )}
                 <div style={{ marginTop: 6 }}>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 600, marginBottom: 3 }}>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 600, marginBottom: 3 }} data-help-id="settings.chameleon-keys">
                     Default SSH key
                   </label>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 4, alignItems: 'center' }}>
@@ -2110,7 +2317,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
                   </div>
                 </div>
                 <div style={{ marginTop: 8 }}>
-                  <label style={{ display: 'block', fontSize: 11, fontWeight: 600, marginBottom: 3 }}>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 600, marginBottom: 3 }} data-help-id="settings.chameleon-keys">
                     Keypair private keys
                   </label>
                   <div style={{ display: 'grid', gap: 4 }}>
@@ -2396,10 +2603,10 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     );
 
     return (
-      <>
+      <div data-help-id="settings.agents-skills">
         {renderItemList(agentsList, 'agent', editingAgent, setEditingAgent, agentForm, setAgentForm, creatingAgent, setCreatingAgent, loadAgents)}
         {renderItemList(skillsList, 'skill', editingSkill, setEditingSkill, skillForm, setSkillForm, creatingSkill, setCreatingSkill, loadSkills)}
-      </>
+      </div>
     );
   };
 

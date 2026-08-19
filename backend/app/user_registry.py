@@ -23,9 +23,45 @@ _REGISTRY_FILE = "user_registry.json"
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-?[0-9a-fA-F-]{4,}$")
 
 
+def _looks_like_storage_root(path: str) -> bool:
+    """Return True when *path* appears to be a LoomAI storage root."""
+    loomai_dir = os.path.join(path, ".loomai")
+    return (
+        os.path.isfile(os.path.join(loomai_dir, _REGISTRY_FILE))
+        or os.path.isdir(os.path.join(loomai_dir, "users"))
+    )
+
+
+def _normalize_storage_root(path: str) -> str:
+    """Strip an accidental per-user suffix from ``FABRIC_STORAGE_DIR``.
+
+    Older settings/env handling could point ``FABRIC_STORAGE_DIR`` at an active
+    user directory. If left as-is, registry and settings paths recurse under
+    ``users/{uuid}/users/{uuid}``. Only normalize when the stripped candidate
+    already looks like a LoomAI storage root, so unrelated single-user paths are
+    left untouched.
+    """
+    raw = os.path.abspath(os.path.expanduser(path or "/home/fabric/work"))
+    parts = raw.split(os.sep)
+    if len(parts) >= 3 and _UUID_RE.match(parts[-1] or "") and parts[-2] == "users":
+        if len(parts) >= 4 and parts[-3] == ".loomai":
+            candidate_parts = parts[:-3]
+        else:
+            candidate_parts = parts[:-2]
+        candidate = os.sep.join(candidate_parts) or os.sep
+        if _looks_like_storage_root(candidate):
+            return candidate
+    return raw
+
+
+def get_storage_root_dir() -> str:
+    """Return the canonical flat LoomAI storage root."""
+    return _normalize_storage_root(os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work"))
+
+
 def _registry_path() -> str:
     """Return the path to user_registry.json."""
-    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    storage = get_storage_root_dir()
     return os.path.join(storage, ".loomai", _REGISTRY_FILE)
 
 
@@ -224,7 +260,7 @@ def set_active_user(uuid: str) -> dict:
 
 def users_base_dir() -> str:
     """Return the base dir holding all per-user storage: ``{storage}/.loomai/users``."""
-    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    storage = get_storage_root_dir()
     return os.path.join(storage, ".loomai", "users")
 
 

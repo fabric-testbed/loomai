@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.next-e2e-*/
+frontend/.next-dev-*/
+frontend/e2e/playwright-report/
+frontend/e2e/test-results/
+backend/venv/
+backend/.venv/
+backend/__pycache__/
+backend/app/__pycache__/
+backend/app/routes/__pycache__/
+__pycache__/
+*.pyc
+frontend/tsconfig.tsbuildinfo
+frontend/playwright-report/
+frontend/test-results/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Environment
+.env
+*.log
+
+# Docker
+backend/static/
+backend/slice-libraries/
+backend/WEAVE.md
+.claude/settings.local.json
+.codex/STATE.md
+values-gke-test.yaml
+values-gke-https.yaml

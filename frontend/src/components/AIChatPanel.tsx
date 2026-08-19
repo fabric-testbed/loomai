@@ -2,8 +2,8 @@
 import InAppSelect from './InAppSelect';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { getAiModels, getDefaultModel, setDefaultModel as apiSetDefaultModel, refreshAiModels, getChatAgents, streamChat, stopChatStream, getConfig } from '../api/client';
-import type { ChatAgent } from '../api/client';
+import { getAiModels, getDefaultModel, setDefaultModel as apiSetDefaultModel, refreshAiModels, getChatAgents, streamChat, stopChatStream, getConfig, getModelCapabilities } from '../api/client';
+import type { AIModelCapabilities, ChatAgent } from '../api/client';
 import '../styles/ai-chat-panel.css';
 import { assetUrl } from '../utils/assetUrl';
 
@@ -180,6 +180,7 @@ async function runModuleStream(
       agent: agent || undefined,
       sliceContext,
       requestId: reqId,
+      conversationId: storeId,
       signal: controller.signal,
     })) {
       if (chunk.error) {
@@ -403,7 +404,18 @@ interface AIChatPanelProps {
   showPopout?: boolean;
 }
 
-function formatModelLabel(m: {id: string; healthy?: boolean; context_length?: number; tier?: string; supports_tools?: boolean}, isDefault: boolean): string {
+type ModelInfo = {
+  id: string;
+  healthy?: boolean;
+  context_length?: number;
+  tier?: string;
+  supports_tools?: boolean;
+  model_type?: string;
+  endpoint_style?: string;
+  warnings?: string[];
+};
+
+function formatModelLabel(m: ModelInfo, isDefault: boolean): string {
   const ctx = m.context_length;
   const ctxLabel = ctx ? (ctx >= 100000 ? '128K+' : ctx >= 30000 ? '32K' : ctx >= 12000 ? '16K' : '8K') : '';
   const badges: string[] = [];
@@ -411,11 +423,35 @@ function formatModelLabel(m: {id: string; healthy?: boolean; context_length?: nu
   // Speed tier from backend profile
   const tierLabel = m.tier === 'compact' ? 'fast' : m.tier === 'large' ? 'powerful' : '';
   if (tierLabel) badges.push(tierLabel);
+  if (m.model_type === 'responses' || m.endpoint_style === 'responses') badges.push('responses');
+  if (m.model_type === 'non-chat') badges.push('non-chat');
   if (m.supports_tools) badges.push('tools');
+  if (m.supports_tools === false) badges.push('no tools');
   const badgeStr = badges.length ? ` [${badges.join(', ')}]` : '';
   const star = isDefault ? ' \u2605' : '';
   const unavail = m.healthy === false ? ' (unavailable)' : '';
   return `${m.id}${badgeStr}${star}${unavail}`;
+}
+
+function modelSourceForValue(value: string, customModels: Record<string, ModelInfo[]>): string {
+  if (value.startsWith('nrp:')) return 'nrp';
+  for (const name of Object.keys(customModels)) {
+    if (value.startsWith(`${name}:`)) return `custom:${name}`;
+  }
+  return 'fabric';
+}
+
+function toModelInfo(m: any): ModelInfo {
+  return {
+    id: m.id || m,
+    healthy: m.healthy !== false,
+    context_length: m.context_length,
+    tier: m.tier,
+    supports_tools: m.supports_tools,
+    model_type: m.model_type,
+    endpoint_style: m.endpoint_style,
+    warnings: m.warnings || [],
+  };
 }
 
 export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, panelIcon, sliceContext, onSliceChanged, fullScreen, persistId, showPopout }: AIChatPanelProps) {
@@ -472,11 +508,12 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
   const savedInputRef = useRef(''); // saves current input when browsing history
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [models, setModels] = useState<string[]>([]);
-  const [fabricModels, setFabricModels] = useState<Array<{id: string; healthy?: boolean; context_length?: number; tier?: string; supports_tools?: boolean}>>([]);
-  const [nrpModels, setNrpModels] = useState<Array<{id: string; healthy?: boolean; context_length?: number; tier?: string; supports_tools?: boolean}>>([]);
+  const [fabricModels, setFabricModels] = useState<ModelInfo[]>([]);
+  const [nrpModels, setNrpModels] = useState<ModelInfo[]>([]);
   const [defaultModel, setDefaultModel] = useState('');
   const [hasProviderKey, setHasProviderKey] = useState<{fabric: boolean; nrp: boolean}>({fabric: false, nrp: false});
-  const [customModels, setCustomModels] = useState<Record<string, Array<{id: string; healthy?: boolean}>>>({});
+  const [customModels, setCustomModels] = useState<Record<string, ModelInfo[]>>({});
+  const [selectedCapabilities, setSelectedCapabilities] = useState<AIModelCapabilities | null>(null);
   const [showKeyModal, setShowKeyModal] = useState<'fabric' | 'nrp' | null>(null);
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState('');
@@ -547,17 +584,17 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
 
     // Full model list with health checks (slower — loads in background)
     getAiModels().then(data => {
-      const fab = (data.fabric || []).map((m: any) => ({ id: m.id || m, healthy: m.healthy !== false, context_length: m.context_length, tier: m.tier, supports_tools: m.supports_tools }));
-      const nrp = (data.nrp || []).map((m: any) => ({ id: m.id || m, healthy: m.healthy !== false, context_length: m.context_length, tier: m.tier, supports_tools: m.supports_tools }));
+      const fab = (data.fabric || []).map(toModelInfo);
+      const nrp = (data.nrp || []).map(toModelInfo);
       setDefaultModel(data.default || '');
       setFabricModels(fab);
       setNrpModels(nrp);
       setHasProviderKey(data.has_key || {fabric: false, nrp: false});
       // Custom providers
       const custom = (data as any).custom || {};
-      const customParsed: Record<string, Array<{id: string; healthy?: boolean}>> = {};
+      const customParsed: Record<string, ModelInfo[]> = {};
       for (const [name, models] of Object.entries(custom)) {
-        customParsed[name] = ((models as any[]) || []).map((m: any) => ({ id: m.id || m, healthy: m.healthy !== false }));
+        customParsed[name] = ((models as any[]) || []).map(toModelInfo);
       }
       setCustomModels(customParsed);
       // Flat list for internal use
@@ -588,6 +625,25 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
     }, 30_000);
     return () => clearInterval(pollInterval);
   }, []);
+
+  useEffect(() => {
+    if (!selectedModel) {
+      setSelectedCapabilities(null);
+      return;
+    }
+    let cancelled = false;
+    const source = modelSourceForValue(selectedModel, customModels);
+    getModelCapabilities(selectedModel, source)
+      .then((capabilities) => {
+        if (!cancelled) setSelectedCapabilities(capabilities);
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedCapabilities(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedModel, customModels]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -797,6 +853,17 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
     }
   }, [store]);
 
+  const selectedSource = modelSourceForValue(selectedModel, customModels);
+  const selectedLocalModel =
+    selectedSource === 'nrp'
+      ? nrpModels.find(m => `nrp:${m.id}` === selectedModel)
+      : selectedSource.startsWith('custom:')
+        ? customModels[selectedSource.slice('custom:'.length)]?.find(m => `${selectedSource.slice('custom:'.length)}:${m.id}` === selectedModel)
+        : fabricModels.find(m => m.id === selectedModel);
+  const selectedWarnings = selectedCapabilities?.warnings?.length
+    ? selectedCapabilities.warnings
+    : selectedLocalModel?.warnings || [];
+
   if (hasKey === false) {
     return (
       <div className={`ai-chat-panel${fullScreen ? ' ai-chat-fullscreen' : ''}`}>
@@ -837,7 +904,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
           if (isNrp && !hasProviderKey.nrp) { setShowKeyModal('nrp'); return; }
           setSelectedModel(val);
           try { localStorage.setItem('loomai-chat-selected-model', val); } catch { /* ignore */ }
-          apiSetDefaultModel(val).catch(() => { /* best-effort */ });
+          apiSetDefaultModel(val, modelSourceForValue(val, customModels)).catch(() => { /* best-effort */ });
         }} title="Model" data-help-id="ai-chat.model" data-testid="ai-chat-model-select" disabled={streaming}>
           {fabricModels.length === 0 && nrpModels.length === 0 && <option value="">Loading...</option>}
           {fabricModels.length > 0 && (
@@ -878,9 +945,14 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
               setRefreshMsg(result.message || 'Models up to date');
               // Reload model list
               const data = await getAiModels();
-              setFabricModels(data.fabric || []);
-              setNrpModels(data.nrp || []);
-              setCustomModels(data.custom || {});
+              setFabricModels((data.fabric || []).map(toModelInfo));
+              setNrpModels((data.nrp || []).map(toModelInfo));
+              setCustomModels(Object.fromEntries(
+                Object.entries(data.custom || {}).map(([name, ms]) => [
+                  name,
+                  (ms || []).map(toModelInfo),
+                ]),
+              ));
               setHasProviderKey(data.has_key || { fabric: false, nrp: false });
               if (data.default) setDefaultModel(data.default);
             } catch (e: any) {
@@ -898,6 +970,11 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
           {refreshingModels ? '\u21BB...' : '\u21BB'}
         </button>
         {refreshMsg && <span style={{ fontSize: 10, color: 'var(--fabric-text-muted)', marginLeft: 6 }}>{refreshMsg}</span>}
+        {selectedWarnings.length > 0 && (
+          <div className="ai-chat-model-warning" data-testid="ai-chat-model-warning">
+            {selectedWarnings.join(' ')}
+          </div>
+        )}
       </div>
 
       <div className="ai-chat-messages">
@@ -996,7 +1073,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
               {showKeyModal === 'fabric' ? (
                 <>
                   A <strong>FABRIC AI API key</strong> is required to use FABRIC AI models.
-                  All FABRIC testbed users are eligible for a free API key.
+                  Keys are free but opt-in — membership in the <strong>FABRIC-LLM</strong> project is required.
                 </>
               ) : (
                 <>
@@ -1007,12 +1084,13 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
             <p style={{ fontSize: 13 }}>
               {showKeyModal === 'fabric' ? (
                 <>
-                  To get your key, visit the <strong>FABRIC portal</strong> and generate an AI API key
-                  from your account settings. Then enter it in <strong>LoomAI Settings &rarr; AI API Keys &rarr; FABRIC AI API Key</strong>.
+                  To get your key: request to join the <strong>FABRIC-LLM</strong> project (via the FABRIC
+                  Help Desk or forums), then create a token on the <strong>LLM Tokens</strong> page of the
+                  FABRIC Credential Manager. Then enter it in <strong>LoomAI Settings &rarr; LLMs &rarr; API Keys &rarr; FABRIC AI API key</strong>.
                 </>
               ) : (
                 <>
-                  Enter your NRP API key in <strong>LoomAI Settings &rarr; AI API Keys &rarr; NRP AI API Key</strong>.
+                  Enter your NRP API key in <strong>LoomAI Settings &rarr; LLMs &rarr; API Keys &rarr; NRP API key</strong>.
                 </>
               )}
             </p>
