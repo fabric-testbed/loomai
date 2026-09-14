@@ -11,6 +11,9 @@ data:
   COOKIE_MAX_AGE: {{ .Values.hub.cookie.maxAge | quote }}
   COOKIE_SECURE: {{ .Values.hub.cookie.secure | quote }}
   HUB_DB_TYPE: {{ .Values.hub.db.type | quote }}
+  {{- if eq .Values.hub.db.type "sqlite" }}
+  DATABASE_URL: "sqlite+aiosqlite:///{{ .Values.hub.db.mountPath }}/hub.db"
+  {{- end }}
 
   # CILogon / OAuth
   CILOGON_SCOPES: {{ .Values.auth.cilogon.scopes | quote }}

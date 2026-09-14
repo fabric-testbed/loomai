@@ -63,7 +63,7 @@ spec:
             {{- toYaml .Values.hub.resources | nindent 12 }}
           volumeMounts:
             - name: hub-db
-              mountPath: /srv/loomai/data
+              mountPath: {{ .Values.hub.db.mountPath | quote }}
       volumes:
         - name: hub-db
           persistentVolumeClaim:
