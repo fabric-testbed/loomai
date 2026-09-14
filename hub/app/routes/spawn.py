@@ -18,6 +18,7 @@ from app.config import settings
 from app.db.models import Server, TokenStore, User
 from app.db.session import get_db
 from app.proxy.chp_client import add_route, delete_route
+from app.proxy.reconciler import ensure_route, route_spec_for, target_for
 from app.spawner.kubespawner import (
     create_token_secret,
     get_pod_status,
@@ -123,10 +124,7 @@ async def _do_spawn(username: str, db: AsyncSession) -> str:
             raise RuntimeError(f"Pod for {username} did not become ready in time")
 
         # 5. Add proxy route
-        safe_name = sanitize_username(username)
-        route_spec = f"/user/{safe_name}/"
-        target = f"http://loomai-{safe_name}:3000"
-        await add_route(route_spec, target)
+        await add_route(route_spec_for(username), target_for(username))
 
         # 6. Update server state
         server.state = "ready"
@@ -163,7 +161,17 @@ async def spawn_page(
         server = result.scalar_one_or_none()
 
         if server and server.state == "ready":
-            return RedirectResponse(url=f"/user/{safe_name}/", status_code=302)
+            # The DB state survives a proxy restart but the CHP routing table
+            # does not. Redirecting without a route sends the browser into a
+            # /user/ -> hub -> login -> /user/ loop, so confirm the route is
+            # there (restoring it if the pod is still alive) before we do.
+            if await ensure_route(username):
+                return RedirectResponse(url=f"/user/{safe_name}/", status_code=302)
+            logger.warning(
+                "Server for %s is marked ready but has no usable proxy route; "
+                "falling back to the spawn page",
+                username,
+            )
 
     # Render spawn progress page
     return templates.TemplateResponse(
@@ -267,9 +275,17 @@ async def spawn_progress(
         server = result.scalar_one_or_none()
 
         if server and server.state == "ready":
-            safe_name = sanitize_username(username)
-            yield f"data: {json.dumps({'event': 'ready', 'url': f'/user/{safe_name}/'})}\n\n"
-            return
+            # Same trap as spawn_page: a "ready" record means nothing if the
+            # proxy lost the route. Only send the browser to the server once
+            # the route is confirmed, otherwise fall through and respawn.
+            if await ensure_route(username):
+                yield f"data: {json.dumps({'event': 'ready', 'url': route_spec_for(username)})}\n\n"
+                return
+            logger.warning(
+                "Server for %s is marked ready but has no usable proxy route; "
+                "respawning",
+                username,
+            )
 
         # Start the spawn process in the background
         yield f"data: {json.dumps({'event': 'progress', 'message': 'Starting server...'})}\n\n"
@@ -353,15 +369,12 @@ async def spawn_progress(
                 return
 
             # Add proxy route
-            safe_name = sanitize_username(username)
-            route_spec = f"/user/{safe_name}/"
-            target = f"http://loomai-{safe_name}:3000"
-            await add_route(route_spec, target)
+            await add_route(route_spec_for(username), target_for(username))
 
             server.state = "ready"
             await db.commit()
 
-            yield f"data: {json.dumps({'event': 'ready', 'url': f'/user/{safe_name}/'})}\n\n"
+            yield f"data: {json.dumps({'event': 'ready', 'url': route_spec_for(username)})}\n\n"
 
         except Exception as e:
             logger.exception("Spawn SSE error for %s", username)

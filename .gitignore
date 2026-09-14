@@ -36,3 +36,6 @@ backend/WEAVE.md
 .codex/STATE.md
 values-gke-test.yaml
 values-gke-https.yaml
+
+# Local virtualenv for hub development
+.venv/

@@ -11,11 +11,12 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.culler.idle_culler import start_culler, stop_culler
+from app.proxy.reconciler import ensure_route, start_reconciler, stop_reconciler
 from app.db.session import async_session_maker, init_db
 from app.proxy.chp_client import add_route
 from app.routes import admin, auth_check, health, login, spawn
@@ -57,11 +58,19 @@ async def lifespan(app: FastAPI):
     if culler_task:
         logger.info("Idle culler started")
 
+    # 4. Start proxy route reconciler. CHP holds routes in memory, so a proxy
+    #    restart silently drops every user route while the DB still reports
+    #    those servers as ready; the reconciler puts them back.
+    reconciler_task = start_reconciler(async_session_maker)
+    if reconciler_task:
+        logger.info("Proxy route reconciler started")
+
     yield
 
     # --- Shutdown ---
     logger.info("LoomAI Hub shutting down")
     stop_culler()
+    stop_reconciler()
 
 
 app = FastAPI(
@@ -91,12 +100,34 @@ async def root_redirect():
     return RedirectResponse(url=f"{settings.HUB_PREFIX}/login", status_code=302)
 
 
-# Catch-all for /user/* when the proxy route has been removed (pod died).
-# CHP falls back to the hub default target for paths with no matching route,
-# so the browser lands here after the 503 handler cleans up the stale route.
+# Catch-all for /user/* when the proxy route is missing. CHP falls back to the
+# hub default target for paths with no matching route, so the browser lands
+# here either because the pod died (the 503 handler removed the route) or
+# because the proxy restarted and lost its in-memory routing table.
 @app.get("/user/{path:path}")
-async def user_catch_all(path: str):
-    """Redirect stale /user/* requests to the hub home page."""
+async def user_catch_all(path: str, request: Request):
+    """Recover a lost proxy route if possible, else send the user to login."""
     from fastapi.responses import RedirectResponse
+
+    safe_name = path.split("/", 1)[0]
+
+    # Only attempt recovery once per request chain: if the route is restored
+    # the retry is served by CHP and never reaches the hub again, so a second
+    # arrival here means recovery did not take effect.
+    if safe_name and "route_retry" not in request.query_params:
+        try:
+            if await ensure_route(safe_name):
+                logger.info(
+                    "Restored missing proxy route for %s, retrying %s",
+                    safe_name,
+                    request.url.path,
+                )
+                return RedirectResponse(
+                    url=f"{request.url.path}?route_retry=1", status_code=302
+                )
+        except Exception:
+            logger.warning(
+                "Route recovery failed for %s", safe_name, exc_info=True
+            )
 
     return RedirectResponse(url=f"{settings.HUB_PREFIX}/login", status_code=302)
