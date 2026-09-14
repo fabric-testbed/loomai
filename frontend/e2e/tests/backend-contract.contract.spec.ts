@@ -70,12 +70,35 @@ test.describe('backend contract', () => {
     const interfaceName = withComponent.nodes[0].components[0].interfaces[0].name;
     expect(interfaceName).toBe('fabric-node-1-nic1-p1');
 
+    // A second node on the SAME site: an L2Bridge needs >= 2 interfaces and is
+    // a single-site service. Submit has enforced slice validation since bbb8d2a
+    // ("Preflight slice submit validation"), so the original single-interface
+    // bridge this test used now 422s at submit rather than being accepted.
+    await expectOk(await request.post(`${backendBaseUrl}/api/slices/${sliceName}/nodes`, {
+      data: {
+        name: 'fabric-node-2',
+        site: 'RENC',
+        cores: 2,
+        ram: 8,
+        disk: 10,
+        image: 'default_ubuntu_22',
+      },
+    }));
+    const withComponent2 = await (await expectOk(
+      await request.post(`${backendBaseUrl}/api/slices/${sliceName}/nodes/fabric-node-2/components`, {
+        data: { name: 'nic1', model: 'NIC_Basic' },
+      }),
+    )).json();
+    const node2 = withComponent2.nodes.find((n: any) => n.name === 'fabric-node-2');
+    const interfaceName2 = node2.components[0].interfaces[0].name;
+    expect(interfaceName2).toBe('fabric-node-2-nic1-p1');
+
     const withNetwork = await (await expectOk(
       await request.post(`${backendBaseUrl}/api/slices/${sliceName}/networks`, {
         data: {
           name: 'fabric-net-1',
           type: 'L2Bridge',
-          interfaces: [interfaceName],
+          interfaces: [interfaceName, interfaceName2],
           subnet: '192.168.10.0/24',
           gateway: '192.168.10.1',
         },

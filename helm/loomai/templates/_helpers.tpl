@@ -121,3 +121,15 @@ Generate a cookie secret if the provided value is empty.
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/*
+Mount path for the hub database PVC.
+
+Falls back to the default rather than reading the value directly, because
+`helm upgrade --reuse-values` replays the previous release's values and so
+does not see keys newly added to values.yaml. Without the fallback this
+renders empty and the upgrade is rejected with "mountPath: Required value".
+*/}}
+{{- define "loomai.hub.dbMountPath" -}}
+{{- (.Values.hub.db).mountPath | default "/srv/loomai/data" }}
+{{- end }}

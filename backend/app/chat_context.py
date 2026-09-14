@@ -90,7 +90,7 @@ PROFILE_TIERS = {
         # (create_weave, search_examples, Chameleon, SPHERE, Federated) do not
         # silently fall out of the filtered schema as the tool list grows.
         # Keep this == len(CORE_TOOLS); bump both together when core tools grow.
-        "max_tools": 46,
+        "max_tools": 58,
         "temperature": 0.5,
         "supports_tools": True,
     },
@@ -103,7 +103,9 @@ PROFILE_TIERS = {
         "system_prompt": "full",
         "tool_result_max": 6000,
         "summarize_at": 0.85,
-        "max_tools": 50,
+        # Also == len(CORE_TOOLS): large-tier models have the most headroom,
+        # so they must never expose fewer core tools than standard.
+        "max_tools": 58,
         "temperature": 0.5,
         "supports_tools": True,
     },

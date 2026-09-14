@@ -3357,6 +3357,113 @@ def propagate_ai_configs() -> dict:
     return results
 
 
+def refresh_live_ai_tools() -> dict:
+    """Stop live AI tool processes that captured the API key in their env.
+
+    Called after the FABRIC LLM key is replaced: OpenCode web, Aider web and
+    the model proxies receive the key via environment at launch, so rewriting
+    config files (propagate_ai_configs) does not reach the running processes.
+    Stopped tools restart with the current key on next use — the terminal
+    model proxy on the next AI terminal launch, the web tools when reopened.
+
+    Returns a dict mapping tool names to "stopped"/"not_running".
+    """
+    global _opencode_web_proc, _opencode_web_proxy, _aider_web_proc, _terminal_model_proxy
+
+    def _kill(proc: subprocess.Popen | None) -> bool:
+        if proc is None or proc.poll() is not None:
+            return False
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        return True
+
+    results = {}
+    oc_stopped = _kill(_opencode_web_proc)
+    oc_proxy_stopped = _kill(_opencode_web_proxy)
+    results["opencode-web"] = "stopped" if (oc_stopped or oc_proxy_stopped) else "not_running"
+    _opencode_web_proc = None
+    _opencode_web_proxy = None
+
+    results["aider-web"] = "stopped" if _kill(_aider_web_proc) else "not_running"
+    _aider_web_proc = None
+
+    results["model-proxy"] = "stopped" if _kill(_terminal_model_proxy) else "not_running"
+    _terminal_model_proxy = None
+
+    # PTY-backed AI tool terminal sessions also captured the key in their
+    # env at launch (build_ai_tool_launch exports FABRIC_AI_API_KEY /
+    # OPENAI_API_KEY for every tool, even needs_key=False ones) — kill them
+    # all so the next launch picks up the current key. Plain shell terminals
+    # are left alone.
+    killed = 0
+    try:
+        for session_meta in _term_sessions.list_sessions():
+            if not session_meta.get("type", "").startswith("ai-"):
+                continue
+            if _term_sessions.kill(session_meta["id"]):
+                killed += 1
+    except Exception as e:
+        logger.warning("Failed to kill AI terminal sessions after key change: %s", e)
+    results["ai-terminals"] = f"stopped {killed}" if killed else "not_running"
+
+    # JupyterLab: the server receives OPENAI_API_KEY/base via env and reads
+    # the Jupyter AI provider config only at startup, so a running instance
+    # keeps the replaced key. Stop the backend-managed process; in the
+    # combined-image/helm modes signal the supervisord-managed one (its
+    # supervisor respawns it); in the split-image mode kill the unsupervised
+    # entrypoint-started one and take over with a backend-managed instance.
+    try:
+        from app.routes import jupyter as _jupyter
+        managed_stopped = _jupyter.stop_jupyter_sync("LLM key changed")
+        outcome = "none" if managed_stopped else _jupyter.restart_external_jupyter()
+        if outcome == "supervised":
+            results["jupyterlab"] = "restarted"
+        elif outcome == "stuck":
+            results["jupyterlab"] = "error: old instance did not release the port"
+        elif managed_stopped and not _jupyter.wait_jupyter_port_free():
+            # start_jupyter() would mistake the dying instance's socket for
+            # a running server and falsely report success without spawning.
+            results["jupyterlab"] = "error: old instance did not release the port"
+        elif managed_stopped or outcome == "unsupervised":
+            # Usually running in a background-task worker thread (no loop);
+            # fall back to a dedicated thread if a loop is already running.
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                start_result = asyncio.run(_jupyter.start_jupyter())
+            else:
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    start_result = pool.submit(asyncio.run, _jupyter.start_jupyter()).result()
+            status = start_result.get("status", "unknown")
+            if status == "running" and start_result.get("ready", True):
+                results["jupyterlab"] = "restarted (running)"
+            elif status == "running":
+                # Spawned, but the 30s readiness poll never saw it accept a
+                # connection — a launch that cannot be verified is a failure,
+                # not a success.
+                logger.warning("JupyterLab takeover spawned a server that never became ready")
+                results["jupyterlab"] = "error: replacement started but not responding"
+            else:
+                detail = start_result.get("error") or status
+                logger.warning("JupyterLab takeover did not start a server: %s", detail)
+                results["jupyterlab"] = f"error: takeover failed ({detail})"
+        else:
+            results["jupyterlab"] = "not_running"
+    except Exception as e:
+        logger.warning("Failed to restart JupyterLab after key change: %s", e)
+        results["jupyterlab"] = f"error: {e}"
+
+    logger.info("Live AI tool refresh after key change: %s", results)
+    return results
+
+
 @router.post("/api/ai/propagate-config")
 async def propagate_config_endpoint():
     """Manually trigger AI config propagation to all tool workspaces.

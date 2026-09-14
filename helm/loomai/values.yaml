@@ -12,6 +12,10 @@ hub:
       memory: 512Mi
   db:
     type: sqlite
+    # Where the hub-db PVC is mounted. DATABASE_URL is derived from this, so
+    # the database lands on the PVC rather than the container's ephemeral
+    # filesystem (which loses every user and token on each restart).
+    mountPath: /srv/loomai/data
     pvc:
       capacity: 1Gi
       storageClass: ""

@@ -173,13 +173,41 @@ def _max_lease_hours_policy() -> int | None:
         return None
 
 
+def _coerce_positive_int(value) -> int | None:
+    """Parse a positive int from weave args; None for missing/invalid/non-positive."""
+    if value is None or value == "":
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
 def _add_max_lease_policy_arg(script_args: dict[str, str]) -> dict[str, str]:
-    """Expose the configured max lease policy to weave processes."""
+    """Expose the requested lease duration and the max lease policy to weaves.
+
+    FABRIC_MAX_LEASE_HOURS is the administrative cap and always wins over a
+    conflicting weave arg. FABRIC_LEASE_HOURS is what the caller asked for and
+    is passed through UNCLAMPED on purpose: the weave script applies the cap
+    itself via _max_lease_hours_from_env(), which takes min(requested, max).
+    Clamping here too would duplicate that in a second place -- see
+    test_start_run_injects_policy_env_without_clamping_requested_lease.
+
+    The requested value is accepted under any of FABRIC_LEASE_HOURS,
+    LEASE_HOURS or lease_hours, since the UI, CLI and AI tools spell it
+    differently; normalising the aliases is what 044962e dropped.
+    """
     args = {
         str(key): str(value)
         for key, value in (script_args or {}).items()
         if value is not None
     }
+    requested_hours = (
+        _coerce_positive_int(args.get("FABRIC_LEASE_HOURS"))
+        or _coerce_positive_int(args.get("LEASE_HOURS"))
+        or _coerce_positive_int(args.get("lease_hours"))
+    )
     max_hours = _max_lease_hours_policy()
     if max_hours:
         policy_value = str(max_hours)
@@ -191,6 +219,8 @@ def _add_max_lease_policy_arg(script_args: dict[str, str]) -> dict[str, str]:
                 policy_value,
             )
         args["FABRIC_MAX_LEASE_HOURS"] = policy_value
+    if requested_hours:
+        args["FABRIC_LEASE_HOURS"] = str(requested_hours)
     return args
 
 

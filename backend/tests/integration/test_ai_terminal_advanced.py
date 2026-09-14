@@ -81,7 +81,14 @@ class TestToolInstallAdvanced:
         assert data["status"] == "error"
 
     def test_install_already_installed(self, client):
-        with patch("app.routes.ai_terminal.is_tool_installed", return_value=True):
+        # aider is a "public managed harness" tool, so the route calls
+        # install_tool() even when the tool reports as installed (to re-run
+        # post-install hooks). That reaches the real installer -- _install_pip
+        # -> _ensure_venv -> subprocess.run(python -m venv) + pip upgrade over
+        # the network. Stub it: this test is about the route's response, not
+        # about performing an install.
+        with patch("app.routes.ai_terminal.is_tool_installed", return_value=True), \
+             patch("app.routes.ai_terminal.install_tool", new=AsyncMock(return_value=True)):
             resp = client.post("/api/ai/tools/aider/install")
         assert resp.status_code == 200
         assert resp.json()["status"] == "already_installed"

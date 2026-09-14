@@ -131,7 +131,15 @@ class TestSettingsTestBastionSSH:
 class TestSettingsTestFablib:
     def test_fablib_configured(self, client):
         """When FABlib is configured and get_fablib() works, ok=True."""
-        resp = client.post("/api/settings/test/fablib")
+        # config.py does `from app.fablib_manager import is_configured,
+        # get_fablib` at import, binding both names in this module -- so the
+        # mock_fablib fixture's patches of app.fablib_manager.* do not reach
+        # them and the REAL FABlib init runs. That happens to succeed on a
+        # developer machine and fails on a clean runner. Patch the names the
+        # route actually resolves, as test_fablib_not_configured already does.
+        with patch("app.routes.config.is_configured", return_value=True), \
+             patch("app.routes.config.get_fablib", return_value=MagicMock()):
+            resp = client.post("/api/settings/test/fablib")
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True

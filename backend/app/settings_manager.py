@@ -339,6 +339,8 @@ def get_default_settings() -> dict:
         },
         "ai": {
             "fabric_api_key": "",
+            "fabric_api_key_name": "",     # CM key name of the stored key (loomai-*)
+            "fabric_api_key_expires": "",  # ISO-8601 expiry of the stored key
             "nrp_api_key": "",
             "ai_server_url": "https://ai.fabric-testbed.net",
             "nrp_server_url": "https://ellm.nrp-nautilus.io",
@@ -829,6 +831,12 @@ def get_log_file() -> str:
 def get_fabric_api_key() -> str:
     """Return ``ai.fabric_api_key``."""
     return _get_settings()["ai"]["fabric_api_key"]
+
+
+def get_fabric_api_key_meta() -> tuple[str, str]:
+    """Return (``ai.fabric_api_key_name``, ``ai.fabric_api_key_expires``)."""
+    ai = _get_settings()["ai"]
+    return ai.get("fabric_api_key_name", ""), ai.get("fabric_api_key_expires", "")
 
 
 def get_nrp_api_key() -> str:

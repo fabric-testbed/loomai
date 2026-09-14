@@ -17,6 +17,63 @@ from tests.fixtures.site_data import default_sites
 
 
 @pytest.fixture(autouse=True)
+def _no_real_package_installs():
+    """No test may shell out to a real package install.
+
+    app.tool_installer spawns processes through exactly two primitives, and
+    both are blocked here:
+
+      * asyncio.create_subprocess_exec -- reached only via _run_install_cmd(),
+        which is where _install_pip / _install_npm / _install_shell /
+        _install_archive_binary all end up (pip, npm, curl, tar).
+      * subprocess.run -- used directly by _ensure_venv() and
+        fixup_jupyter_kernel(). _install_pip() calls _ensure_venv() FIRST, and
+        that creates a real virtualenv and then runs `pip install --upgrade
+        pip` against the network. Guarding only _run_install_cmd lets that
+        bootstrap through and fires afterwards, once the damage is done.
+
+    Guard the primitives, not the installers: enumerating install functions is
+    how the archive path and then the venv bootstrap were each missed in turn.
+
+    Nothing in the app guarantees a test cannot reach these. Until the
+    storage_dir fixture redirected tool_installer's paths, the only thing
+    stopping it was os.makedirs('/home/fabric') failing -- an accident of the
+    environment, not a safeguard. Make the property explicit so a future
+    change fails loudly here instead of quietly downloading hundreds of MB.
+
+    Tests that legitimately drive these paths patch _run_install_cmd (or the
+    calling function) themselves; an inner ``with patch(...)`` takes
+    precedence over this fixture.
+    """
+    import subprocess as _subprocess
+
+    import app.tool_installer as ti
+
+    async def _forbid_async(cmd, *args, **kwargs):
+        raise AssertionError(
+            "test attempted a real package install via _run_install_cmd("
+            f"{cmd!r}); patch app.tool_installer._run_install_cmd in the test "
+            "if this code path is intended"
+        )
+
+    class _GuardedSubprocess:
+        """Stand-in for tool_installer's `subprocess`; only .run is blocked."""
+
+        def __getattr__(self, name):
+            return getattr(_subprocess, name)
+
+        def run(self, cmd, *args, **kwargs):
+            raise AssertionError(
+                f"test attempted a real subprocess install via subprocess.run({cmd!r}); "
+                "patch the calling function in the test if this path is intended"
+            )
+
+    with patch.object(ti, "_run_install_cmd", _forbid_async), \
+         patch.object(ti, "subprocess", _GuardedSubprocess()):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_home(tmp_path_factory, monkeypatch):
     """No test may see the real HOME directory.
 
@@ -83,8 +140,30 @@ def storage_dir(tmp_path):
         old_settings = sm._cached_settings
         sm._cached_settings = None
 
+        # tool_installer resolves its paths from FABRIC_STORAGE_DIR at MODULE
+        # IMPORT time, so setting the env var above is too late: the constants
+        # still point at the production default /home/fabric/work. A test that
+        # reaches the install path then calls os.makedirs on the real path --
+        # which fails on a bare CI runner (PermissionError: '/home/fabric')
+        # and would write outside tmp_path anywhere it succeeds. Redirect the
+        # constants into this test's storage, like the caches above.
+        import app.tool_installer as ti
+        ai_tools = storage / ".ai-tools"
+        old_ti = {name: getattr(ti, name) for name in (
+            "_STORAGE_DIR", "AI_TOOLS_DIR", "_VENV_DIR", "_NPM_DIR",
+            "_MANIFEST_PATH", "_LOCK_DIR",
+        )}
+        ti._STORAGE_DIR = str(storage)
+        ti.AI_TOOLS_DIR = str(ai_tools)
+        ti._VENV_DIR = str(ai_tools / "venv")
+        ti._NPM_DIR = str(ai_tools / "npm")
+        ti._MANIFEST_PATH = str(ai_tools / ".installed.json")
+        ti._LOCK_DIR = str(ai_tools / ".locks")
+
         yield storage
 
+        for name, value in old_ti.items():
+            setattr(ti, name, value)
         uc._BASE_STORAGE = old_base
         sm._cached_settings = old_settings
 

@@ -11,6 +11,9 @@ data:
   COOKIE_MAX_AGE: {{ .Values.hub.cookie.maxAge | quote }}
   COOKIE_SECURE: {{ .Values.hub.cookie.secure | quote }}
   HUB_DB_TYPE: {{ .Values.hub.db.type | quote }}
+  {{- if eq ((.Values.hub.db).type | default "sqlite") "sqlite" }}
+  DATABASE_URL: "sqlite+aiosqlite:///{{ include "loomai.hub.dbMountPath" . }}/hub.db"
+  {{- end }}
 
   # CILogon / OAuth
   CILOGON_SCOPES: {{ .Values.auth.cilogon.scopes | quote }}

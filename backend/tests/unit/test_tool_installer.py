@@ -815,3 +815,25 @@ class TestToolRegistry:
 
     def test_claude_registry_installs_pinned_cli(self):
         assert ti.TOOL_REGISTRY["claude"]["packages"] == ["@anthropic-ai/claude-code@2.1.202"]
+
+
+def test_tool_installer_paths_are_isolated_by_storage_dir(storage_dir):
+    """tool_installer must never touch the production storage path in tests.
+
+    Its path constants are resolved at module import time, and this module
+    imports app.tool_installer at module scope -- so pytest freezes them at
+    COLLECTION, before any fixture sets FABRIC_STORAGE_DIR. Without the
+    redirect in the storage_dir fixture they stay at /home/fabric/work, and
+    any test reaching the install path calls os.makedirs on it: that fails
+    outright on a bare CI runner (PermissionError: '/home/fabric') and writes
+    outside tmp_path anywhere it succeeds.
+    """
+    from app import tool_installer as ti
+
+    for name in ("AI_TOOLS_DIR", "_VENV_DIR", "_NPM_DIR", "_MANIFEST_PATH", "_LOCK_DIR"):
+        value = getattr(ti, name)
+        assert str(storage_dir) in value, f"{name} leaked outside tmp storage: {value}"
+
+    ti._ensure_dirs()
+    assert os.path.isdir(ti.AI_TOOLS_DIR)
+    assert os.path.isdir(ti._LOCK_DIR)

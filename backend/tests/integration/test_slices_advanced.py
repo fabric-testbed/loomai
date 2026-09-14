@@ -736,8 +736,9 @@ class TestRenewSlice:
 
         assert resp.status_code == 200
         slice_obj = mock_fablib.get_slice(name="renew-hours")
-        assert slice_obj.renew_kwargs["end_date"]
-        assert slice_obj.renew_kwargs["days"] is None
+        # Sub-day renewals bypass FABlib's whole-day renew() truncation.
+        assert slice_obj.submitted_kwargs["lease_in_hours"] == 6
+        assert slice_obj.renew_kwargs == {}
 
     def test_renew_accepts_legacy_days(self, client, mock_fablib):
         _set_max_lease_hours(0)
@@ -757,8 +758,19 @@ class TestRenewSlice:
 
         assert resp.status_code == 200
         slice_obj = mock_fablib.get_slice(name="renew-policy")
-        assert slice_obj.renew_kwargs["end_date"]
-        assert slice_obj.renew_kwargs["days"] is None
+        assert slice_obj.submitted_kwargs["lease_in_hours"] == 6
+        assert slice_obj.renew_kwargs == {}
+
+    def test_renew_keeps_full_days_when_under_policy_cap(self, client, mock_fablib):
+        """A days request that fits the cap must reach FABlib as days, not a short lease."""
+        _set_max_lease_hours(48)
+        sid, _ = _create_draft_with_node(client, "renew-days-under-cap")
+
+        resp = client.post(f"/api/slices/{sid}/renew", json={"days": 1})
+
+        assert resp.status_code == 200
+        slice_obj = mock_fablib.get_slice(name="renew-days-under-cap")
+        assert slice_obj.renew_kwargs["days"] == 1
 
     def test_renew_down_returns_explicit_error(self, client, mock_fablib):
         _set_max_lease_hours(6)
@@ -776,6 +788,113 @@ class TestRenewSlice:
         assert detail["current_lease_end"]
         assert detail["requested_lease_end"]
         assert slice_obj.renew_kwargs == {}
+        assert slice_obj.submitted_kwargs == {}
+
+    def test_renew_extends_lease_past_policy_cap_is_rejected_clearly(self, client, mock_fablib):
+        """A far-future end_date on an over-cap lease must not become a shortening."""
+        _set_max_lease_hours(6)
+        sid, _ = _create_draft_with_node(client, "renew-over-policy")
+        slice_obj = mock_fablib.get_slice(name="renew-over-policy")
+        slice_obj._lease_end = datetime.now(timezone.utc) + timedelta(hours=24)
+
+        far_future = (datetime.now(timezone.utc) + timedelta(days=19)).isoformat()
+        resp = client.post(f"/api/slices/{sid}/renew", json={"end_date": far_future})
+
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert detail["code"] == "LEASE_ALREADY_EXCEEDS_POLICY"
+        assert detail["max_lease_hours"] == 6
+        assert detail["current_lease_end"]
+        assert detail["max_allowed_lease_end"]
+        assert slice_obj.renew_kwargs == {}
+        assert slice_obj.submitted_kwargs == {}
+
+    def test_renew_clamps_to_policy_when_lease_is_under_cap(self, client, mock_fablib):
+        _set_max_lease_hours(6)
+        sid, _ = _create_draft_with_node(client, "renew-under-cap")
+        slice_obj = mock_fablib.get_slice(name="renew-under-cap")
+        slice_obj._lease_end = datetime.now(timezone.utc) + timedelta(hours=2)
+
+        far_future = (datetime.now(timezone.utc) + timedelta(days=19)).isoformat()
+        resp = client.post(f"/api/slices/{sid}/renew", json={"end_date": far_future})
+
+        assert resp.status_code == 200
+        assert slice_obj.submitted_kwargs["lease_in_hours"] == 6
+        codes = [w["code"] for w in resp.json().get("warnings", [])]
+        assert "LEASE_CLAMPED_TO_POLICY" in codes
+
+    def test_renew_explicit_end_date_does_not_overshoot(self, client, mock_fablib):
+        """An explicit end date rounds down so an identical retry still extends."""
+        _set_max_lease_hours(0)
+        sid, _ = _create_draft_with_node(client, "renew-exact-end")
+        slice_obj = mock_fablib.get_slice(name="renew-exact-end")
+        slice_obj._lease_end = datetime.now(timezone.utc) + timedelta(hours=2)
+        target = datetime.now(timezone.utc) + timedelta(hours=5, minutes=45)
+
+        resp = client.post(f"/api/slices/{sid}/renew", json={"end_date": target.isoformat()})
+
+        assert resp.status_code == 200
+        assert slice_obj.submitted_kwargs["lease_in_hours"] == 5
+        assert slice_obj.get_lease_end() <= target
+
+        # The same request again must still read as an extension, not a shortening.
+        resp = client.post(f"/api/slices/{sid}/renew", json={"end_date": target.isoformat()})
+        assert resp.status_code == 200
+
+    def test_renew_rounds_up_rather_than_shortening(self, client, mock_fablib):
+        """Rounding down must not push the new end before the current lease end."""
+        _set_max_lease_hours(0)
+        sid, _ = _create_draft_with_node(client, "renew-round-up")
+        slice_obj = mock_fablib.get_slice(name="renew-round-up")
+        slice_obj._lease_end = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        target = datetime.now(timezone.utc) + timedelta(hours=5, minutes=45)
+
+        resp = client.post(f"/api/slices/{sid}/renew", json={"end_date": target.isoformat()})
+
+        assert resp.status_code == 200
+        # Flooring to 5h would end before the current 5h30m lease, so use 6h.
+        assert slice_obj.submitted_kwargs["lease_in_hours"] == 6
+
+    def test_renew_within_rounding_band_leaves_lease_untouched(self, client, mock_fablib):
+        """Inside the whole-hour rounding band the lease must not move either way."""
+        _set_max_lease_hours(0)
+        sid, _ = _create_draft_with_node(client, "renew-short-by-minutes")
+        slice_obj = mock_fablib.get_slice(name="renew-short-by-minutes")
+        lease_end = datetime.now(timezone.utc) + timedelta(hours=10)
+        slice_obj._lease_end = lease_end
+        target = datetime.now(timezone.utc) + timedelta(hours=9, minutes=30)
+
+        resp = client.post(f"/api/slices/{sid}/renew", json={"end_date": target.isoformat()})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["lease_unchanged"] is True
+        assert "LEASE_ALREADY_COVERS_REQUEST" in [w["code"] for w in body["warnings"]]
+        # Neither extended nor shortened.
+        assert slice_obj.renew_kwargs == {}
+        assert slice_obj.submitted_kwargs == {}
+        assert slice_obj.get_lease_end() == lease_end
+
+    def test_renew_retry_of_successful_renewal_succeeds(self, client, mock_fablib):
+        """Re-sending an end date the previous renewal already covered must not fail."""
+        _set_max_lease_hours(0)
+        sid, _ = _create_draft_with_node(client, "renew-retry")
+        slice_obj = mock_fablib.get_slice(name="renew-retry")
+        slice_obj._lease_end = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        # Needs 6h to cover it, so the granted lease overshoots the request.
+        target = datetime.now(timezone.utc) + timedelta(hours=5, minutes=45)
+        payload = {"end_date": target.isoformat()}
+
+        first = client.post(f"/api/slices/{sid}/renew", json=payload)
+        assert first.status_code == 200
+        assert slice_obj.submitted_kwargs["lease_in_hours"] == 6
+        granted = slice_obj.get_lease_end()
+
+        second = client.post(f"/api/slices/{sid}/renew", json=payload)
+
+        assert second.status_code == 200
+        assert second.json()["lease_unchanged"] is True
+        assert slice_obj.get_lease_end() == granted
 
     def test_renew_nonexistent_slice(self, client):
         resp = client.post("/api/slices/nonexistent/renew",

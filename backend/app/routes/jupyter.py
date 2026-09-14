@@ -10,6 +10,7 @@ import re
 import shutil
 import signal
 import subprocess
+import time
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -69,10 +70,17 @@ def _workdir() -> str:
 
 # Stop JupyterLab when the active user changes so it restarts with
 # the updated symlinks on next access.
-def _on_user_changed() -> None:
+def stop_jupyter_sync(reason: str) -> bool:
+    """Stop the backend-managed JupyterLab process, if running.
+
+    Returns True when a live process was stopped. Externally managed
+    instances (supervisord/hub) are not touched. The frontend restarts
+    JupyterLab on next use, so callers can rely on a seamless relaunch.
+    """
     global _jupyter_proc
+    stopped = False
     if _jupyter_proc and _jupyter_proc.poll() is None:
-        logger.info("User changed — stopping JupyterLab (pid=%d)", _jupyter_proc.pid)
+        logger.info("%s — stopping JupyterLab (pid=%d)", reason, _jupyter_proc.pid)
         try:
             os.killpg(os.getpgid(_jupyter_proc.pid), signal.SIGTERM)
             _jupyter_proc.wait(timeout=5)
@@ -81,7 +89,123 @@ def _on_user_changed() -> None:
                 _jupyter_proc.kill()
             except Exception:
                 pass
+        stopped = True
     _jupyter_proc = None
+    return stopped
+
+
+def _read_proc_cmdline(proc_root: str, pid_dir: str) -> str:
+    try:
+        with open(os.path.join(proc_root, pid_dir, "cmdline"), "rb") as f:
+            return f.read().decode("utf-8", "replace").replace("\x00", " ")
+    except OSError:
+        return ""
+
+
+def _parent_is_supervisord(proc_root: str, pid_dir: str) -> bool:
+    """True when the process's direct parent is supervisord (will respawn it)."""
+    ppid = ""
+    try:
+        with open(os.path.join(proc_root, pid_dir, "status")) as f:
+            for line in f:
+                if line.startswith("PPid:"):
+                    ppid = line.split()[1]
+                    break
+    except (OSError, IndexError):
+        return False
+    if not ppid or not ppid.isdigit() or ppid == "0":
+        return False
+    return "supervisord" in _read_proc_cmdline(proc_root, ppid)
+
+
+def wait_jupyter_port_free(max_wait_seconds: float = 10.0) -> bool:
+    """Poll until nothing listens on the Jupyter port; True when it's free.
+
+    Needed before a takeover start: start_jupyter() treats a listening port
+    as an already-running server, so starting while the old instance is
+    still shutting down would falsely report success without spawning.
+    """
+    for _ in range(int(max_wait_seconds / 0.5)):
+        if not _is_jupyter_listening():
+            return True
+        time.sleep(0.5)
+    return not _is_jupyter_listening()
+
+
+def restart_external_jupyter(proc_root: str = "/proc") -> str:
+    """Bounce an externally launched JupyterLab so it restarts with fresh config.
+
+    Jupyter AI reads its provider config (and API key) only at startup, so
+    after a key change a running server must be bounced. Only the instance
+    serving LoomAI's Jupyter port (or the shipped start-jupyterlab wrapper)
+    is targeted — an unrelated user-launched Jupyter on another port is
+    never touched.
+
+    Returns one of:
+      "supervised"   — signalled a supervisord-managed instance (combined
+                       Docker image, helm/hub); supervisord respawns it with
+                       the regenerated jupyter_server_config.py.
+      "unsupervised" — killed an instance nothing would respawn (split-image
+                       entrypoint starts JupyterLab as a plain background
+                       process) and the port is confirmed free; the caller
+                       must start a managed replacement.
+      "stuck"        — an unsupervised instance was signalled (SIGTERM, then
+                       SIGKILL) but the port never freed; the caller must
+                       NOT report a successful restart.
+      "none"         — nothing listening, /proc unavailable (local macOS
+                       dev, where the backend-managed path applies), or no
+                       matching process found.
+    """
+    if not _is_jupyter_listening() or not os.path.isdir(proc_root):
+        return "none"
+    own_pid = os.getpid()
+    port_arg = f"--port={_jupyter_port()}"
+    outcome = "none"
+    unsupervised_pids: list[int] = []
+    for pid_dir in os.listdir(proc_root):
+        if not pid_dir.isdigit() or int(pid_dir) == own_pid:
+            continue
+        cmdline = _read_proc_cmdline(proc_root, pid_dir)
+        if "jupyter-lab" not in cmdline and "start-jupyterlab" not in cmdline:
+            continue
+        if port_arg not in cmdline and "start-jupyterlab" not in cmdline:
+            continue  # some other Jupyter instance — not ours to manage
+        supervised = _parent_is_supervisord(proc_root, pid_dir)
+        try:
+            os.kill(int(pid_dir), signal.SIGTERM)
+        except OSError as e:
+            logger.warning("Could not signal JupyterLab pid=%s: %s", pid_dir, e)
+            continue
+        if supervised:
+            outcome = "supervised"
+            logger.info("Signalled supervisord-managed JupyterLab (pid=%s); "
+                        "supervisor restarts it with the new config", pid_dir)
+        else:
+            if outcome != "supervised":
+                outcome = "unsupervised"
+            unsupervised_pids.append(int(pid_dir))
+            logger.info("Killed unsupervised JupyterLab (pid=%s); a managed "
+                        "replacement must be started", pid_dir)
+    if outcome == "unsupervised":
+        # The port must be free before a start_jupyter() takeover. Escalate
+        # to SIGKILL if SIGTERM doesn't release it in time.
+        if wait_jupyter_port_free(10.0):
+            return outcome
+        for pid in unsupervised_pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                logger.warning("JupyterLab pid=%d ignored SIGTERM — sent SIGKILL", pid)
+            except OSError:
+                pass
+        if wait_jupyter_port_free(5.0):
+            return outcome
+        logger.error("JupyterLab port still in use after SIGKILL — takeover aborted")
+        return "stuck"
+    return outcome
+
+
+def _on_user_changed() -> None:
+    stop_jupyter_sync("User changed")
 
 register_user_changed_callback(_on_user_changed)
 
@@ -128,17 +252,7 @@ def seed_slice_workdir_from_template(slice_name: str, template_dir: str) -> None
 # ---------------------------------------------------------------------------
 
 async def _stop_jupyter() -> None:
-    global _jupyter_proc
-    if _jupyter_proc and _jupyter_proc.poll() is None:
-        try:
-            os.killpg(os.getpgid(_jupyter_proc.pid), signal.SIGTERM)
-            _jupyter_proc.wait(timeout=5)
-        except Exception:
-            try:
-                _jupyter_proc.kill()
-            except Exception:
-                pass
-    _jupyter_proc = None
+    stop_jupyter_sync("Stop requested")
 
 
 def _configure_jupyter_ai(env: dict) -> None:
@@ -393,12 +507,15 @@ async def start_jupyter():
 
     port = _jupyter_port()
     if _jupyter_proc and _jupyter_proc.poll() is None:
-        return {"port": port, "status": "running"}
+        # ready reflects the actual port state: a process that timed out its
+        # readiness poll on a previous start must not become a verified
+        # success just because it is still alive.
+        return {"port": port, "status": "running", "ready": _is_jupyter_listening(port)}
 
     # JupyterLab may already be running via supervisord — check the port
     if _is_jupyter_listening(port):
         logger.info("JupyterLab already listening on :%d (managed externally)", port)
-        return {"port": port, "status": "running"}
+        return {"port": port, "status": "running", "ready": True}
 
     workdir = _workdir()
 
@@ -463,13 +580,13 @@ async def start_jupyter():
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1):
                 logger.info("JupyterLab ready on :%d after %ds", port, _attempt + 1)
-                return {"port": port, "status": "running"}
+                return {"port": port, "status": "running", "ready": True}
         except (ConnectionRefusedError, OSError, socket.timeout):
             continue
 
     # Timed out waiting — process is running but not accepting connections yet
     logger.warning("JupyterLab started but not responding after 30s")
-    return {"port": port, "status": "running"}
+    return {"port": port, "status": "running", "ready": False}
 
 
 @router.post("/api/jupyter/stop")
@@ -609,8 +726,12 @@ async def launch_notebook(name: str, force_refresh: bool = False):
     else:
         jupyter_path = f"{jbase}lab/tree/notebooks/{safe}"
 
+    # A server that hasn't accepted a connection yet must not be reported
+    # as running — the frontend would open an iframe to a dead server.
+    ready = result.get("ready", True)
     return {
-        "status": "running",
+        "status": "running" if ready else "starting",
+        "ready": ready,
         "port": _jupyter_port(),
         "jupyter_path": jupyter_path,
         "work_dir": f"notebooks/{safe}",

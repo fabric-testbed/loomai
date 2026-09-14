@@ -323,10 +323,14 @@ class TestAppObject:
 
     def test_app_has_routes(self):
         from app.main import app
-        routes = [r.path for r in app.routes if hasattr(r, "path")]
-        # Should have some of our key endpoints
-        assert any("/api/sites" in r for r in routes)
-        assert any("/api/images" in r for r in routes)
+        # FastAPI >= 0.13x keeps an included router as an opaque
+        # _IncludedRouter entry in app.routes instead of flattening its routes
+        # into the parent, so a flat scan of app.routes only sees the endpoints
+        # declared on app itself. The OpenAPI schema is the version-independent
+        # answer to "does the app expose this endpoint".
+        paths = app.openapi()["paths"].keys()
+        assert any("/api/sites" in p for p in paths)
+        assert any("/api/images" in p for p in paths)
 
     def test_cors_middleware_enabled(self):
         from app.main import app

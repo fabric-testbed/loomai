@@ -309,7 +309,11 @@ export default function ArtifactEditorView({
   const handleOpenJupyter = async () => {
     try {
       const result = await api.startJupyter();
-      if (result.status === 'running') {
+      if (result.status === 'running' && result.ready === false) {
+        await alertDialog('JupyterLab is starting but not responding yet — try again in a moment.', {
+          title: 'JupyterLab Starting',
+        });
+      } else if (result.status === 'running') {
         onLaunchJupyter(`/jupyter/lab/tree/my_artifacts/${encodeURIComponent(dirName)}`);
       }
     } catch (e: any) {

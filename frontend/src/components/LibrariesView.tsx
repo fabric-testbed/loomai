@@ -796,6 +796,10 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
       const result = await api.launchNotebook(dirName);
       if (result.status === 'running' && result.jupyter_path) {
         onLaunchNotebook?.(result.jupyter_path);
+      } else if (result.status === 'starting') {
+        await alertDialog('JupyterLab is starting but not responding yet — try again in a moment.', {
+          title: 'JupyterLab Starting',
+        });
       }
     } catch (e: any) {
       await alertDialog(`Failed to open notebook in JupyterLab: ${e.message}`, {
@@ -863,7 +867,11 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
     setLaunchingNotebook(dirName);
     try {
       const result = await api.startJupyter();
-      if (result.status === 'running') {
+      if (result.status === 'running' && result.ready === false) {
+        await alertDialog('JupyterLab is starting but not responding yet — try again in a moment.', {
+          title: 'JupyterLab Starting',
+        });
+      } else if (result.status === 'running') {
         onLaunchNotebook?.(`/jupyter/lab/tree/my_artifacts/${encodeURIComponent(dirName)}`);
       }
     } catch (e: any) {

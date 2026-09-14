@@ -30,6 +30,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     # multiuser_enabled() is gated off inside Kubernetes (LOOMAI_BASE_PATH set).
     monkeypatch.delenv("LOOMAI_BASE_PATH", raising=False)
+    # Swapping ~/.claude & co. on user switch is gated behind
+    # manage_home_ai_paths(), off by default since 849a315 so the backend never
+    # hijacks a developer's REAL dotfiles. HOME is redirected to tmp_path above,
+    # so opting in here is safe and is what the container does.
+    monkeypatch.setenv("LOOMAI_MANAGE_HOME_AI", "1")
 
     # PUT /api/settings kicks off a background AI-config propagation; stub it so
     # the test doesn't crawl tool workspaces.

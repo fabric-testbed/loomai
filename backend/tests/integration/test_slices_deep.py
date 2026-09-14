@@ -219,8 +219,13 @@ class TestValidationEdgeCases:
 
     def test_validate_connected_network(self, client):
         sid = _create_slice(client, "val-net")
+        # Both nodes on one site: an L2Bridge is a single-site service, and
+        # slice_validation has rejected cross-site L2Bridge since 015a3e6
+        # ("Validate FABRIC network service placement"). This test predates
+        # that rule and used RENC + UCSD, which is invalid by design -- use
+        # L2STS for two-site L2, per the validator's own remedy.
         iface1 = _add_node_with_nic(client, sid, "n1")
-        iface2 = _add_node_with_nic(client, sid, "n2", "UCSD")
+        iface2 = _add_node_with_nic(client, sid, "n2")
         client.post(f"/api/slices/{sid}/networks",
                     json={"name": "net1", "type": "L2Bridge",
                           "interfaces": [iface1, iface2]})

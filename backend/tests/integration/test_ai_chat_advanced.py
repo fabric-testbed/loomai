@@ -853,9 +853,6 @@ class TestExecuteTool:
     @pytest.mark.asyncio
     async def test_execute_download_file_bulk_writes_to_user_storage(self, storage_dir):
         """download_file_bulk should download to storage and return a preview."""
-    async def test_execute_package_sphere_experiment(self, storage_dir):
-        """execute_tool('package_sphere_experiment') dispatches to the SPHERE
-        packager route with explicit kwargs (no Body(...) FieldInfo leaks)."""
         from app.routes.ai_chat import execute_tool
 
         captured = {}
@@ -885,6 +882,43 @@ class TestExecuteTool:
         assert (storage_dir / "analysis" / "result.log").is_file()
         assert captured["remote_path"] == "/tmp/result.log"
 
+
+    @pytest.mark.asyncio
+    async def test_execute_package_sphere_experiment(self, storage_dir):
+        """execute_tool('package_sphere_experiment') dispatches to the SPHERE
+        packager route with explicit kwargs (no Body(...) FieldInfo leaks)."""
+        from app.routes.ai_chat import execute_tool
+
+        captured = {}
+
+        async def fake_package(**kwargs):
+            captured.update(kwargs)
+            return {"dir_name": kwargs["name"], "format": "sphere-experiment-v1", "files": ["weave.json"]}
+
+        with patch("app.routes.sphere.sphere_package_experiment",
+                   new=AsyncMock(side_effect=fake_package)):
+            result = await execute_tool("package_sphere_experiment", {
+                "experiment": "netsec1",
+                "name": "netsec1-detector",
+                "realization": "r0",
+                "scripts": [{"name": "detector.py", "target": "gateway", "content": "print('x')"}],
+                "notebook": [{"cell_type": "markdown", "source": "# Analysis"}],
+            })
+        parsed = json.loads(result)
+        assert parsed["format"] == "sphere-experiment-v1"
+        # AI-authored notebook is passed through to the packager.
+        assert captured["notebook"] == [{"cell_type": "markdown", "source": "# Analysis"}]
+        # Every param passed explicitly — defaulted Body params must be real values,
+        # never FieldInfo sentinels.
+        assert captured["experiment"] == "netsec1"
+        assert captured["name"] == "netsec1-detector"
+        assert captured["realization"] == "r0"
+        assert captured["include_notebook"] is True
+        assert captured["description_short"] == ""
+        assert captured["scripts"][0]["name"] == "detector.py"
+        for key in ("description", "description_short", "description_long", "dir_name",
+                    "tags", "project"):
+            assert not isinstance(captured[key], FieldInfo), f"{key} leaked a Body() sentinel"
     @pytest.mark.asyncio
     async def test_create_weave_default_script_honors_lease_policy_env(self, storage_dir):
         """The default create_weave script should submit with the runtime lease cap."""
@@ -979,34 +1013,6 @@ class TestVerificationEvidenceGuard:
         assert evidence_appended is True
         assert "run-iperf" in guarded
         assert "12.7 Gbits/sec" in guarded
-        async def fake_package(**kwargs):
-            captured.update(kwargs)
-            return {"dir_name": kwargs["name"], "format": "sphere-experiment-v1", "files": ["weave.json"]}
-
-        with patch("app.routes.sphere.sphere_package_experiment",
-                   new=AsyncMock(side_effect=fake_package)):
-            result = await execute_tool("package_sphere_experiment", {
-                "experiment": "netsec1",
-                "name": "netsec1-detector",
-                "realization": "r0",
-                "scripts": [{"name": "detector.py", "target": "gateway", "content": "print('x')"}],
-                "notebook": [{"cell_type": "markdown", "source": "# Analysis"}],
-            })
-        parsed = json.loads(result)
-        assert parsed["format"] == "sphere-experiment-v1"
-        # AI-authored notebook is passed through to the packager.
-        assert captured["notebook"] == [{"cell_type": "markdown", "source": "# Analysis"}]
-        # Every param passed explicitly — defaulted Body params must be real values,
-        # never FieldInfo sentinels.
-        assert captured["experiment"] == "netsec1"
-        assert captured["name"] == "netsec1-detector"
-        assert captured["realization"] == "r0"
-        assert captured["include_notebook"] is True
-        assert captured["description_short"] == ""
-        assert captured["scripts"][0]["name"] == "detector.py"
-        for key in ("description", "description_short", "description_long", "dir_name",
-                    "tags", "project"):
-            assert not isinstance(captured[key], FieldInfo), f"{key} leaked a Body() sentinel"
 
 
 # ---------------------------------------------------------------------------

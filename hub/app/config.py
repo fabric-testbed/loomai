@@ -66,6 +66,13 @@ class HubSettings(BaseSettings):
     CULL_EVERY: int = 600
     CULL_MAX_AGE: int = 86400
 
+    # ---------- Proxy route reconciler ----------
+    # CHP keeps its routing table in memory, so a proxy restart drops every
+    # user route while the DB still says those servers are ready. The
+    # reconciler re-adds routes for running pods so the loss self-heals.
+    ROUTE_RECONCILE_ENABLED: bool = True
+    ROUTE_RECONCILE_EVERY: int = 60
+
     # ---------- Admin ----------
     ADMIN_USERS: str = ""
 

@@ -87,9 +87,15 @@ HTTPS is required for production. The proxy (CHP) terminates TLS directly — no
 
 #### Obtain a certificate
 
-Get a TLS certificate for your domain from your institution's CA (e.g., InCommon/Sectigo) or another provider. You need:
+Get a TLS certificate for your domain from your institution's CA (e.g., Sectigo/InCommon) or another provider. You need:
 - **Private key** (PEM format, e.g., `loomai.key`)
 - **Certificate** (PEM format, e.g., `loomai.cer`)
+
+The certificate must cover your hub's hostname, either as the CN or as a SAN. FABRIC's production deployment uses a shared multi-SAN certificate (`fabric-cf-services.fabric-testbed.net`) that lists `loomai.fabric-testbed.net` among its SANs. Confirm your hostname is covered:
+
+```bash
+openssl x509 -in loomai.cer -noout -text | grep -A4 "Subject Alternative Name"
+```
 
 #### Build the full certificate chain
 
@@ -103,9 +109,9 @@ grep -c "BEGIN CERTIFICATE" loomai.cer
 If only 1, download the intermediate and build the chain:
 
 ```bash
-# Example for InCommon RSA Server CA 2
-curl -sO http://crt.sectigo.com/InCommonRSAServerCA2.crt
-openssl x509 -inform DER -in InCommonRSAServerCA2.crt -out intermediate.pem
+# Example for Sectigo Public Server Authentication CA OV R36
+curl -sO http://crt.sectigo.com/SectigoPublicServerAuthenticationCAOVR36.crt
+openssl x509 -inform DER -in SectigoPublicServerAuthenticationCAOVR36.crt -out intermediate.pem
 
 # Build full chain: leaf + intermediate
 cat loomai.cer intermediate.pem > fullchain.pem
@@ -114,7 +120,13 @@ cat loomai.cer intermediate.pem > fullchain.pem
 openssl x509 -in fullchain.pem -noout -modulus | md5
 openssl rsa  -in loomai.key    -noout -modulus | md5
 # Both hashes must match
+
+# Verify the chain links up (a "unable to get issuer certificate" error at the
+# top-level root is expected here — browsers ship that root in their trust store)
+openssl verify -untrusted intermediate.pem fullchain.pem
 ```
+
+Certificates issued before mid-2026 were signed by **InCommon RSA Server CA 2**; newer ones use the Sectigo OV R36 chain above. Check your leaf's issuer with `openssl x509 -in loomai.cer -noout -issuer` and download the matching intermediate.
 
 #### Create the K8s TLS secret
 
@@ -128,6 +140,8 @@ kubectl create secret tls loomai-proxy-manual-tls \
 ```
 
 The Helm chart expects this secret name. If you also provide `proxy.https.manual.cert` and `proxy.https.manual.key` in your values file, the chart will create the secret for you instead — but creating it manually avoids putting private keys in a values file.
+
+Because the production values file leaves `proxy.https.manual.cert`/`.key` empty, `templates/proxy/tls-secret.yaml` renders nothing and the secret stays hand-managed: `helm upgrade` will never clobber it, but it will also never recreate it if the secret is lost. Keep the cert and key somewhere you can re-run the command from.
 
 ### 4. Create Your Values File
 
@@ -575,6 +589,8 @@ helm upgrade loomai ./helm/loomai -f my-values.yaml --namespace loomai
 | Login redirects to non-existent pod | Hub DB still has "ready" state from previous pod | Restart hub to clear stale state |
 | HTTPS connection refused | TLS secret missing or proxy not restarted | Verify: `kubectl get secret loomai-proxy-manual-tls -n loomai` and check proxy logs |
 | Certificate not trusted by browser | Missing intermediate CA in cert chain | Build full chain: `cat leaf.cer intermediate.pem > fullchain.pem` and recreate the secret |
+| Browser shows the *old* cert after updating the secret | Proxy not restarted — the TLS secret has no `checksum/secret` annotation | `kubectl rollout restart deployment loomai-proxy -n loomai` |
+| `ERR_CERT_COMMON_NAME_INVALID` | Hub hostname missing from the cert's SANs | `openssl x509 -in fullchain.pem -noout -text \| grep -A4 "Subject Alternative Name"` |
 | Login fails after switching to HTTPS | CILogon callback URL still uses HTTP | Update callback to `https://...` in both CILogon registration and values file |
 | Cookies not persisting (login loop) | `cookie.secure: true` but using HTTP | Set `cookie.secure: false` for HTTP testing, or enable HTTPS |
 
@@ -615,26 +631,37 @@ curl http://127.0.0.1:3000/user/$(echo $LOOMAI_BASE_PATH | cut -d/ -f3)/api/heal
 When your TLS certificate expires, update it without downtime:
 
 ```bash
-# Build new full chain (leaf + intermediate)
+# 1. Build the new full chain (leaf + intermediate), or use a CA-supplied bundle
 cat new-cert.cer intermediate.pem > fullchain.pem
 
-# Verify key still matches
+# 2. Confirm your hostname is still covered and check the new validity window
+openssl x509 -in fullchain.pem -noout -dates
+openssl x509 -in fullchain.pem -noout -text | grep -A4 "Subject Alternative Name"
+
+# 3. Verify the key still matches the cert (hashes must be identical)
 openssl x509 -in fullchain.pem -noout -modulus | md5
 openssl rsa  -in loomai.key    -noout -modulus | md5
 
-# Replace the K8s secret
-kubectl delete secret loomai-proxy-manual-tls -n loomai
+# 4. Replace the K8s secret in place
 kubectl create secret tls loomai-proxy-manual-tls \
   --cert=fullchain.pem \
   --key=loomai.key \
-  -n loomai
+  -n loomai --dry-run=client -o yaml | kubectl apply -f -
 
-# Restart the proxy to pick up the new cert
+# 5. Restart the proxy to pick up the new cert
 kubectl rollout restart deployment loomai-proxy -n loomai
+kubectl rollout status  deployment loomai-proxy -n loomai --timeout=180s
 
-# Verify
-curl -v https://your-domain.example.com/hub/health 2>&1 | grep "expire date"
+# 6. Verify what is actually served
+echo | openssl s_client -connect your-domain.example.com:443 \
+  -servername your-domain.example.com 2>/dev/null | openssl x509 -noout -subject -issuer -dates
+curl -s -o /dev/null -w "http %{http_code}  ssl_verify=%{ssl_verify_result}\n" \
+  https://your-domain.example.com/hub/health
 ```
+
+**Use `apply`, not `delete` + `create`.** The `--dry-run=client -o yaml | kubectl apply -f -` form swaps the secret's contents atomically; deleting first leaves a window in which the secret is absent, and any proxy pod that restarts during that window will fail to mount it.
+
+**The restart in step 5 is mandatory.** The proxy Deployment carries a `checksum/secret` annotation for the *hub* secret only, not for the TLS secret — so replacing `loomai-proxy-manual-tls` does not trigger a rollout on its own. The rollout uses `maxUnavailable: 0`, so the restart itself is zero-downtime.
 
 If using a new key (not just a renewed cert), also update `proxy.https.manual.key` in your values file if you embedded it there.
 

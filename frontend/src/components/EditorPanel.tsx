@@ -893,7 +893,10 @@ function LeaseRenewSection({ sliceName, leaseEnd, onSliceUpdated }: { sliceName:
     try {
       const d = new Date(leaseEnd);
       d.setDate(d.getDate() + 1);
-      return d.toISOString().slice(0, 16);
+      // datetime-local renders the value as local wall-clock time, so build
+      // the string from local fields rather than from the UTC ISO form.
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
     } catch {
       return '';
     }
@@ -909,9 +912,15 @@ function LeaseRenewSection({ sliceName, leaseEnd, onSliceUpdated }: { sliceName:
     setRenewError('');
     setRenewSuccess('');
     try {
-      const result = await api.renewLease(sliceName, renewDate);
+      // renewDate is local wall-clock time; send an absolute UTC instant.
+      const result = await api.renewLease(sliceName, new Date(renewDate).toISOString());
       onSliceUpdated(result);
-      setRenewSuccess('Lease renewed successfully');
+      // FABRIC grants whole-hour leases, so a renewal can already cover the
+      // requested end - say so rather than claiming a renewal that did not happen.
+      const unchanged = result.lease_unchanged
+        ? result.warnings?.find((w) => w.code === 'LEASE_ALREADY_COVERS_REQUEST')
+        : undefined;
+      setRenewSuccess(unchanged ? unchanged.message : 'Lease renewed successfully');
     } catch (e: any) {
       setRenewError(e.message);
     } finally {

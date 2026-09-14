@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -563,6 +564,37 @@ def _current_lease_end(slice_obj: Any) -> datetime | None:
         return None
 
 
+# FABRIC grants leases in whole hours, so honouring a requested end can land
+# up to an hour past it. A later request for that same end then looks like a
+# shortening request even though nothing is wrong - and inside that one-hour
+# band a retry and a deliberate shortening are indistinguishable. Both are
+# answered by leaving the lease alone and saying so.
+_LEASE_ROUNDING_BAND = timedelta(hours=1)
+
+
+def _lease_already_covers_warning(
+    current_end: datetime | None,
+    requested_end: datetime | None,
+) -> dict[str, Any] | None:
+    """Return a warning when the lease already runs to the requested end."""
+    if current_end is None or requested_end is None:
+        return None
+    if requested_end + timedelta(minutes=1) >= current_end:
+        return None  # a real extension - renew it
+    if requested_end < current_end - _LEASE_ROUNDING_BAND:
+        return None  # a real shortening - _raise_if_renew_down() rejects it
+    return {
+        "code": "LEASE_ALREADY_COVERS_REQUEST",
+        "message": (
+            f"The lease already runs to {_lease_datetime_iso(current_end)}, past the "
+            f"requested end {_lease_datetime_iso(requested_end)}; FABRIC grants leases "
+            "in whole hours, so the lease was left unchanged."
+        ),
+        "current_lease_end": _lease_datetime_iso(current_end),
+        "requested_lease_end": _lease_datetime_iso(requested_end),
+    }
+
+
 def _raise_if_renew_down(
     slice_name: str,
     current_end: datetime | None,
@@ -583,6 +615,85 @@ def _raise_if_renew_down(
             "slice_name": slice_name,
             "current_lease_end": _lease_datetime_iso(current_end),
             "requested_lease_end": _lease_datetime_iso(requested_end),
+        },
+    )
+
+
+def _lease_hours_for_end(
+    end_dt: datetime,
+    current_end: datetime | None,
+) -> tuple[int, datetime]:
+    """Convert a requested lease end into whole lease hours.
+
+    FABRIC leases are granted in whole hours, so a requested end rarely lands
+    on an hour boundary. Round down, so the lease never runs past what was
+    asked for — overshooting would make an identical retry look like a request
+    to shorten the lease. The exception is an *extension* whose rounded-down end
+    would fall before the lease the slice already holds: FABRIC cannot shorten a
+    lease, so that case rounds up instead. Rounding up is deliberately withheld
+    from a request that asks for an earlier end than the current one, so a
+    genuine shortening request stays short and is rejected by
+    _raise_if_renew_down() rather than being rounded into an extension.
+    """
+    now = datetime.now(timezone.utc)
+    end_dt = _as_utc_datetime(end_dt)
+    seconds = (end_dt - now).total_seconds()
+    hours = max(1, int(seconds // 3600))
+    if current_end is not None:
+        current_end = _as_utc_datetime(current_end)
+        # The one-minute slack matches _raise_if_renew_down()'s notion of a
+        # request that does not shorten the lease.
+        extends_lease = end_dt + timedelta(minutes=1) >= current_end
+        if extends_lease and now + timedelta(hours=hours) < current_end:
+            hours = max(hours, math.ceil(seconds / 3600))
+    return hours, now + timedelta(hours=hours)
+
+
+def _apply_lease_renewal(
+    slice_obj: Any,
+    *,
+    days: int | None = None,
+    hours: int | None = None,
+) -> None:
+    """Issue the renewal call for a whole-hour (or legacy whole-day) lease.
+
+    FABlib's ``Slice.renew(end_date=...)`` floors the request to whole days
+    (``days = (end - now).days``) before calling ``submit(lease_in_hours=days *
+    24)``, so anything under 24 hours collapses to ``lease_in_hours=0`` — which
+    makes FABlib re-submit the topology instead of renewing the lease. A legacy
+    ``days`` request still goes through ``renew(days=...)`` verbatim; every
+    other request makes the same ``submit()`` call FABlib's renew would, with
+    the requested hours intact.
+    """
+    if days is not None:
+        slice_obj.renew(days=days)
+        return
+    slice_obj.submit(lease_in_hours=hours, post_boot_config=False, wait=False)
+
+
+def _raise_lease_over_policy(
+    slice_name: str,
+    current_end: datetime | None,
+    policy_end: datetime,
+    max_hours: int,
+) -> None:
+    """Reject a renew that policy could only satisfy by shortening the lease."""
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "code": "LEASE_ALREADY_EXCEEDS_POLICY",
+            "message": (
+                f"This slice's lease already runs past the configured "
+                f"max_lease_hours={max_hours}, which would allow renewal only "
+                f"until {_lease_datetime_iso(policy_end)}. FABRIC leases cannot "
+                "be shortened, so there is nothing to renew. Raise "
+                "fabric.slice_policy.max_lease_hours in settings to extend "
+                "this lease further."
+            ),
+            "slice_name": slice_name,
+            "current_lease_end": _lease_datetime_iso(current_end) if current_end else None,
+            "max_lease_hours": max_hours,
+            "max_allowed_lease_end": _lease_datetime_iso(policy_end),
         },
     )
 
@@ -2532,36 +2643,73 @@ async def renew_slice(slice_name: str, body: RenewRequest) -> dict[str, Any]:
     slice_name = _resolve_slice_name(slice_name)
     end_date_value = body.end_date or body.lease_end
     renew_days = body.days
-    renew_hours = _effective_lease_hours(body.lease_hours or body.hours)
+    renew_hours = _coerce_lease_hours(body.lease_hours or body.hours)
     max_lease_hours = _max_lease_hours_policy()
-    end_date_str: str | None = None
+    # The policy cap is applied inside _do(), once the slice's current lease
+    # end is known: clamping to now + max_lease_hours without that check turns
+    # an extension request into a shortening request, which FABRIC rejects.
+    policy_end_dt = _end_date_from_hours(max_lease_hours) if max_lease_hours else None
     requested_end_dt: datetime | None = None
     if renew_hours:
         requested_end_dt = _end_date_from_hours(renew_hours)
-        end_date_str = _format_fablib_end_date(requested_end_dt)
     elif end_date_value:
         try:
-            requested_end_dt = _cap_lease_end_datetime(_parse_lease_datetime(end_date_value))
-            end_date_str = _format_fablib_end_date(requested_end_dt)
+            requested_end_dt = _parse_lease_datetime(end_date_value)
+            if requested_end_dt is None:
+                raise ValueError(end_date_value)
         except Exception:
             raise HTTPException(status_code=400, detail=f"Invalid date format: {end_date_value}")
     elif renew_days is None:
         raise HTTPException(status_code=400, detail="Renew requires end_date, lease_end, hours, lease_hours, or days")
-    elif max_lease_hours and renew_days * 24 > max_lease_hours:
-        requested_end_dt = _end_date_from_hours(max_lease_hours)
-        end_date_str = _format_fablib_end_date(requested_end_dt)
-    elif renew_days is not None:
+    else:
         requested_end_dt = _end_date_from_hours(renew_days * 24)
+    # A legacy days request is passed to FABlib verbatim unless policy clamps it.
+    use_days = renew_hours is None and not end_date_value and renew_days is not None
 
     def _do():
         slice_obj = _resolve_fabric_slice_obj(slice_name)
-        _raise_if_renew_down(slice_name, _current_lease_end(slice_obj), requested_end_dt)
-        if end_date_str is not None:
-            slice_obj.renew(end_date=end_date_str)
-        else:
-            slice_obj.renew(days=renew_days)
+        current_end = _current_lease_end(slice_obj)
+        effective_end = requested_end_dt
+        effective_hours = renew_hours
+        clamp_warning: dict[str, Any] | None = None
+        if (
+            policy_end_dt is not None
+            and effective_end is not None
+            # A one-second slack keeps an exact "hours == max_lease_hours"
+            # request off the clamp path (policy_end_dt is computed first).
+            and effective_end > policy_end_dt + timedelta(seconds=1)
+        ):
+            if current_end is not None and policy_end_dt <= current_end + timedelta(minutes=1):
+                _raise_lease_over_policy(
+                    slice_name, current_end, policy_end_dt, max_lease_hours or 0
+                )
+            clamp_warning = {
+                "code": "LEASE_CLAMPED_TO_POLICY",
+                "message": (
+                    f"Requested lease end {_lease_datetime_iso(effective_end)} exceeds "
+                    f"the configured max_lease_hours={max_lease_hours}; renewed to "
+                    f"{_lease_datetime_iso(policy_end_dt)} instead."
+                ),
+                "requested_lease_end": _lease_datetime_iso(effective_end),
+                "effective_lease_end": _lease_datetime_iso(policy_end_dt),
+                "max_lease_hours": max_lease_hours,
+            }
+            effective_end = policy_end_dt
+            effective_hours = max_lease_hours
+        legacy_days = renew_days if use_days and clamp_warning is None else None
+        if legacy_days is None and effective_hours is None and effective_end is not None:
+            effective_hours, effective_end = _lease_hours_for_end(effective_end, current_end)
+        covered_warning = _lease_already_covers_warning(current_end, effective_end)
+        if covered_warning:
+            payload = _with_lease_policy_warning(_serialize(slice_obj))
+            payload["lease_unchanged"] = True
+            return _with_warnings(payload, covered_warning)
+        _raise_if_renew_down(slice_name, current_end, effective_end)
+        _apply_lease_renewal(slice_obj, days=legacy_days, hours=effective_hours)
         slice_obj.update()
-        return _with_lease_policy_warning(_serialize(slice_obj))
+        return _with_warnings(
+            _with_lease_policy_warning(_serialize(slice_obj)), clamp_warning
+        )
 
     try:
         return await run_in_fablib_pool(_do)

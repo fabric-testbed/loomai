@@ -399,6 +399,7 @@ def get_config_status():
     project_id = settings_manager.get_project_id()
     bastion_username = settings_manager.get_bastion_username()
     ai_api_key = settings_manager.get_fabric_api_key()
+    ai_key_name, ai_key_expires = settings_manager.get_fabric_api_key_meta()
     nrp_api_key = settings_manager.get_nrp_api_key()
 
     # Read public key contents for display
@@ -440,6 +441,8 @@ def get_config_status():
         "default_slice_key": default_key,
         "slice_key_sets": keys_data.get("keys", []),
         "ai_api_key_set": bool(ai_api_key),
+        "ai_api_key_name": ai_key_name,
+        "ai_api_key_expires": ai_key_expires,
         "nrp_api_key_set": bool(nrp_api_key),
     }
 
@@ -696,40 +699,9 @@ def _process_oauth_callback(id_token: str, refresh_token: str = "") -> RedirectR
             existing_ai_key = settings_manager.get_fabric_api_key()
             if not existing_ai_key:
                 try:
-                    cm_host = settings.get("fabric", {}).get("hosts", {}).get("credmgr", "cm.fabric-testbed.net")
-                    auth_headers = {"Authorization": f"Bearer {id_token}"}
-                    # Check for existing keys first
-                    api_key = ""
-                    try:
-                        keys_resp = httpx.get(f"https://{cm_host}/credmgr/tokens/llm_keys",
-                                              headers={**auth_headers, **get_tracking_headers()}, timeout=15)
-                        if keys_resp.status_code == 200:
-                            for k in keys_resp.json().get("data", []):
-                                key_val = k.get("details", {}).get("api_key", "")
-                                if key_val:
-                                    api_key = key_val
-                                    logger.info("oauth_callback: reusing existing LLM key")
-                                    break
-                    except Exception:
-                        pass
-                    if not api_key:
-                        import uuid as _uuid
-                        resp = httpx.post(
-                            f"https://{cm_host}/credmgr/tokens/create_llm",
-                            params={"key_name": f"loomai-{_uuid.uuid4().hex[:8]}",
-                                    "comment": "Auto-created by LoomAI", "duration": 30},
-                            headers={**auth_headers, **get_tracking_headers()}, timeout=15,
-                        )
-                        resp.raise_for_status()
-                        llm_data = resp.json().get("data", [{}])
-                        if llm_data:
-                            api_key = llm_data[0].get("details", {}).get("api_key", "")
-                    if api_key:
-                        settings = settings_manager.load_settings()
-                        settings["ai"]["fabric_api_key"] = api_key
-                        settings_manager.save_settings(settings)
-                        settings_manager.apply_env_vars(settings)
-                        logger.info("oauth_callback: LLM API key saved")
+                    key_info = _create_fabric_llm_key(id_token, comment="Auto-created by LoomAI")
+                    _save_fabric_llm_key(**key_info)
+                    logger.info("oauth_callback: LLM API key saved")
                 except Exception as e:
                     logger.warning("oauth_callback: LLM key creation failed: %s", e)
 
@@ -984,56 +956,10 @@ async def auto_setup(req: AutoSetupRequest):
     existing_ai_key = settings_manager.get_fabric_api_key()
     if not existing_ai_key:
         try:
-            cm_host = settings.get("fabric", {}).get("hosts", {}).get("credmgr", "cm.fabric-testbed.net")
-            auth_headers = {"Authorization": f"Bearer {id_token}", **get_tracking_headers()}
-
-            # Check for existing LLM keys first — reuse if one exists
-            api_key = ""
-            try:
-                keys_resp = httpx.get(
-                    f"https://{cm_host}/credmgr/tokens/llm_keys",
-                    headers=auth_headers,
-                    timeout=15,
-                )
-                if keys_resp.status_code == 200:
-                    existing_keys = keys_resp.json().get("data", [])
-                    for k in existing_keys:
-                        details = k.get("details", {})
-                        key_val = details.get("api_key", "")
-                        if key_val:
-                            api_key = key_val
-                            logger.info("auto-setup: reusing existing FABRIC LLM key '%s'", details.get("key_name", ""))
-                            break
-            except Exception:
-                pass  # Fall through to create
-
-            # Create a new key if none found
-            if not api_key:
-                import uuid as _uuid
-                key_name = f"loomai-{_uuid.uuid4().hex[:8]}"
-                resp = httpx.post(
-                    f"https://{cm_host}/credmgr/tokens/create_llm",
-                    params={
-                        "key_name": key_name,
-                        "comment": "Auto-created by LoomAI login",
-                        "duration": 30,
-                    },
-                    headers=auth_headers,
-                    timeout=15,
-                )
-                resp.raise_for_status()
-                llm_data = resp.json().get("data", [{}])
-                if llm_data:
-                    api_key = llm_data[0].get("details", {}).get("api_key", "")
-
-            if api_key:
-                # Persist the key in settings
-                settings = settings_manager.load_settings()
-                settings["ai"]["fabric_api_key"] = api_key
-                settings_manager.save_settings(settings)
-                settings_manager.apply_env_vars(settings)
-                llm_key_created = True
-                logger.info("auto-setup: FABRIC LLM API key saved")
+            key_info = _create_fabric_llm_key(id_token, comment="Auto-created by LoomAI login")
+            _save_fabric_llm_key(**key_info)
+            llm_key_created = True
+            logger.info("auto-setup: FABRIC LLM API key saved")
         except Exception as e:
             llm_key_error = str(e)
             logger.warning("auto-setup: LLM key creation failed (non-fatal): %s", e)
@@ -1054,12 +980,113 @@ async def auto_setup(req: AutoSetupRequest):
 
 
 # ---------------------------------------------------------------------------
-# POST /api/config/llm-key — standalone LLM key creation
+# POST /api/config/llm-key — standalone LLM key creation / recreation
 # ---------------------------------------------------------------------------
 
+def _llm_cm_host() -> str:
+    from app import settings_manager
+    settings = settings_manager.load_settings()
+    return settings.get("fabric", {}).get("hosts", {}).get("credmgr", "cm.fabric-testbed.net")
+
+
+def _create_fabric_llm_key(id_token: str, comment: str) -> dict:
+    """Create a fresh FABRIC LLM API key via the Credential Manager.
+
+    The CM's llm_keys listing never includes the plaintext api_key (LiteLLM
+    only returns it at generation time), so an existing key can never be
+    reused — a lost or expired key must be recreated.
+
+    Returns {"api_key", "key_name", "expires_at"} (expires_at ISO-8601 or "").
+    Raises RuntimeError with a user-presentable message on failure.
+    """
+    import uuid as _uuid
+    from datetime import datetime
+
+    cm_host = _llm_cm_host()
+    key_name = f"loomai-{_uuid.uuid4().hex[:8]}"
+    resp = httpx.post(
+        f"https://{cm_host}/credmgr/tokens/create_llm",
+        params={"key_name": key_name, "comment": comment, "duration": 30},
+        headers={"Authorization": f"Bearer {id_token}", **get_tracking_headers()},
+        timeout=15,
+    )
+    if resp.status_code >= 400:
+        detail = ""
+        try:
+            errors = resp.json().get("errors") or []
+            if errors:
+                detail = errors[0].get("details") or errors[0].get("message") or ""
+        except Exception:
+            pass
+        raise RuntimeError(detail or f"Credential Manager returned {resp.status_code}")
+    data = resp.json().get("data", [])
+    details = data[0].get("details", {}) if data else {}
+    api_key = details.get("api_key", "")
+    if not api_key:
+        raise RuntimeError("Credential Manager did not return an API key")
+    expires_at = details.get("expires_at") or ""
+    if expires_at:
+        try:
+            expires_at = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S %z").isoformat()
+        except ValueError:
+            pass  # keep the raw CM string
+    return {"api_key": api_key, "key_name": details.get("key_name") or key_name,
+            "expires_at": expires_at}
+
+
+def _save_fabric_llm_key(api_key: str, key_name: str = "", expires_at: str = "") -> None:
+    """Persist a FABRIC LLM key (and its metadata) into settings."""
+    from app import settings_manager
+    settings = settings_manager.load_settings()
+    settings["ai"]["fabric_api_key"] = api_key
+    settings["ai"]["fabric_api_key_name"] = key_name
+    settings["ai"]["fabric_api_key_expires"] = expires_at
+    settings_manager.save_settings(settings)
+    settings_manager.apply_env_vars(settings)
+
+
+def _delete_replaced_llm_key(id_token: str, old_key_name: str) -> None:
+    """Best-effort deletion of the single key this instance just replaced.
+
+    Only the previously stored key is removed — the user may run other
+    LoomAI installations whose loomai-* keys must stay valid. The replaced
+    key is dead quota either way: listed keys can never be reused (no
+    plaintext api_key) and the CM caps each user at 10 active keys.
+    """
+    if not old_key_name:
+        return
+    cm_host = _llm_cm_host()
+    headers = {"Authorization": f"Bearer {id_token}", **get_tracking_headers()}
+    try:
+        resp = httpx.get(f"https://{cm_host}/credmgr/tokens/llm_keys", headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return
+        data = resp.json().get("data", [])
+        keys = data[0].get("details", []) if data else []
+        if not isinstance(keys, list):
+            return
+        for k in keys:
+            if (k.get("key_alias") or "") != old_key_name:
+                continue
+            key_id = k.get("token") or ""
+            if key_id:
+                httpx.delete(f"https://{cm_host}/credmgr/tokens/delete_llm/{key_id}",
+                             headers=headers, timeout=15)
+                logger.info("llm-key: deleted replaced key '%s'", old_key_name)
+            return
+    except Exception as e:
+        logger.warning("llm-key: could not delete replaced key '%s': %s", old_key_name, e)
+
+
 @router.post("/api/config/llm-key")
-async def create_llm_key():
-    """Create or retrieve a FABRIC LLM API key via Credential Manager."""
+async def create_llm_key(background_tasks: BackgroundTasks):
+    """Create (or recreate) a FABRIC LLM API key via Credential Manager.
+
+    Always mints a new key: the CM cannot hand back an existing key's value,
+    so this is also the recovery path when the configured key was deleted or
+    expired outside LoomAI. The new key replaces the stored one, the replaced
+    key is deleted at the CM, and tool workspaces are re-synced.
+    """
     token_data = _read_token()
     if not token_data or "id_token" not in token_data:
         raise HTTPException(status_code=401, detail="Not authenticated. Login first.")
@@ -1076,63 +1103,30 @@ async def create_llm_key():
         raise HTTPException(status_code=401, detail="Token expired. Please re-login.")
 
     from app import settings_manager
-    settings = settings_manager.load_settings()
-    cm_host = settings.get("fabric", {}).get("hosts", {}).get("credmgr", "cm.fabric-testbed.net")
-    auth_headers = {"Authorization": f"Bearer {id_token}", **get_tracking_headers()}
+    old_key_name, _ = settings_manager.get_fabric_api_key_meta()
 
     try:
-        # Check for existing LLM keys first
-        api_key = ""
-        try:
-            keys_resp = httpx.get(
-                f"https://{cm_host}/credmgr/tokens/llm_keys",
-                headers=auth_headers,
-                timeout=15,
-            )
-            if keys_resp.status_code == 200:
-                existing_keys = keys_resp.json().get("data", [])
-                for k in existing_keys:
-                    details = k.get("details", {})
-                    key_val = details.get("api_key", "")
-                    if key_val:
-                        api_key = key_val
-                        logger.info("llm-key: reusing existing FABRIC LLM key '%s'", details.get("key_name", ""))
-                        break
-        except Exception:
-            pass
-
-        created = False
-        if not api_key:
-            import uuid as _uuid
-            key_name = f"loomai-{_uuid.uuid4().hex[:8]}"
-            resp = httpx.post(
-                f"https://{cm_host}/credmgr/tokens/create_llm",
-                params={
-                    "key_name": key_name,
-                    "comment": "Created by LoomAI settings",
-                    "duration": 30,
-                },
-                headers=auth_headers,
-                timeout=15,
-            )
-            resp.raise_for_status()
-            llm_data = resp.json().get("data", [{}])
-            if llm_data:
-                api_key = llm_data[0].get("details", {}).get("api_key", "")
-            created = True
-
-        if api_key:
-            settings = settings_manager.load_settings()
-            settings["ai"]["fabric_api_key"] = api_key
-            settings_manager.save_settings(settings)
-            settings_manager.apply_env_vars(settings)
-            return {"status": "ok", "created": created, "message": "FABRIC LLM key saved"}
-
-        return {"status": "error", "created": False, "message": "No API key returned from Credential Manager"}
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=500, detail=f"Credential Manager error: {e.response.status_code}")
+        key_info = _create_fabric_llm_key(id_token, comment="Created by LoomAI settings")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM key creation failed: {e}")
+
+    _save_fabric_llm_key(**key_info)
+    if old_key_name and old_key_name != key_info["key_name"]:
+        _delete_replaced_llm_key(id_token, old_key_name)
+
+    # Re-sync tool workspaces (same propagation the settings save path uses),
+    # then stop live tool processes that captured the replaced key in their
+    # env at launch — they restart with the new key on next use.
+    from app.routes.ai_terminal import propagate_ai_configs, refresh_live_ai_tools
+    background_tasks.add_task(propagate_ai_configs)
+    background_tasks.add_task(refresh_live_ai_tools)
+    return {
+        "status": "ok",
+        "created": True,
+        "key_name": key_info["key_name"],
+        "expires_at": key_info["expires_at"],
+        "message": "New FABRIC LLM token created and saved — running AI tools are being refreshed to use it",
+    }
 
 
 # ---------------------------------------------------------------------------

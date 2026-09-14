@@ -203,6 +203,15 @@ export interface SliceData {
   port_mirrors: SlicePortMirror[];
   chameleon_nodes?: ChameleonSliceNode[];
   graph: CyGraph;
+  /** Set by renew when the lease already covered the request and was left as-is. */
+  lease_unchanged?: boolean;
+  warnings?: SliceWarning[];
+}
+
+export interface SliceWarning {
+  code: string;
+  message: string;
+  [key: string]: unknown;
 }
 
 export interface ChameleonSliceNode {
@@ -328,6 +337,8 @@ export interface ConfigStatus {
   default_slice_key?: string;
   slice_key_sets?: string[];
   ai_api_key_set?: boolean;
+  ai_api_key_name?: string;
+  ai_api_key_expires?: string;
   nrp_api_key_set?: boolean;
 }
 
@@ -557,6 +568,8 @@ export interface LoomAISettings {
   };
   ai: {
     fabric_api_key: string;
+    fabric_api_key_name?: string;
+    fabric_api_key_expires?: string;
     nrp_api_key: string;
     ai_server_url: string;
     nrp_server_url: string;

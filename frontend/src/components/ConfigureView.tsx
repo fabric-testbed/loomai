@@ -1542,32 +1542,58 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     );
   };
 
-  const renderLLMs = () => (
+  const renderLLMs = () => {
+    const llmProjectMember = (allProjects || []).some(p => /^SERVICE\s*[-\u2013\u2014].*LLM/i.test(p.name));
+    const fabricKeyConfigured = !!status?.ai_api_key_set;
+    const expiryDate = status?.ai_api_key_expires ? new Date(status.ai_api_key_expires) : null;
+    const expiryValid = !!(expiryDate && !isNaN(expiryDate.getTime()));
+    const fabricKeyExpired = expiryValid && expiryDate!.getTime() < Date.now();
+    const expiryLabel = expiryValid
+      ? expiryDate!.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+      : '';
+
+    return (
     <>
       <div className="configure-section" data-tour-id="ai-api-key">
-        <h3>API Keys</h3>
+        <h3>FABRIC AI API Key</h3>
         <p data-help-id="settings.ai-api-key">
-          API key for FABRIC AI services (ai.fabric-testbed.net). Used by Aider, OpenCode, and Crush.
+          Key for FABRIC AI services (ai.fabric-testbed.net), used by LoomAI and all AI tools.
+          Free for FABRIC-LLM project members. Tokens last 30 days \u2014 if yours expired or was
+          deleted outside LoomAI, recreate it here (the old value cannot be recovered).
         </p>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             type="password"
             value={litellmApiKey}
             onChange={(e) => setLitellmApiKey(e.target.value)}
-            placeholder="Enter FABRIC AI API key..."
+            placeholder="Paste a FABRIC AI API key, or use the button..."
             style={{ flex: 1 }}
           />
-          {status?.ai_api_key_set && !litellmApiKey && (
-            <span style={{ fontSize: 12, color: '#008e7a', whiteSpace: 'nowrap' }}>{'\u2713'} Configured</span>
+          {fabricKeyConfigured && !litellmApiKey && (
+            fabricKeyExpired ? (
+              <span style={{ fontSize: 12, color: '#e25241', whiteSpace: 'nowrap' }}
+                    title={`Token${status?.ai_api_key_name ? ` '${status.ai_api_key_name}'` : ''} expired on ${expiryLabel} \u2014 recreate it`}>
+                {'\u26a0'} Expired {expiryLabel}
+              </span>
+            ) : (
+              <span style={{ fontSize: 12, color: '#008e7a', whiteSpace: 'nowrap' }}
+                    title={status?.ai_api_key_name ? `Token '${status.ai_api_key_name}'` : undefined}>
+                {'\u2713'} Configured{expiryLabel ? ` \u00b7 expires ${expiryLabel}` : ''}
+              </span>
+            )
           )}
           <button
-            disabled={creatingLlmKey || !status?.has_token || (status?.ai_api_key_set && !litellmApiKey) || !(allProjects || []).some(p => /^SERVICE\s*[-\u2013\u2014].*LLM/i.test(p.name))}
+            disabled={creatingLlmKey || !status?.has_token || !llmProjectMember}
             onClick={async () => {
               setCreatingLlmKey(true);
               setLlmKeyMessage(null);
               try {
                 const result = await api.createLlmKey();
-                setLlmKeyMessage({ text: result.message, type: 'success' });
+                const expires = result.expires_at ? new Date(result.expires_at) : null;
+                const expiresText = expires && !isNaN(expires.getTime())
+                  ? ` (expires ${expires.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })})`
+                  : '';
+                setLlmKeyMessage({ text: `${result.message}${expiresText}`, type: 'success' });
                 // Refresh config status to update the "Configured" badge
                 const cfg = await api.getConfig();
                 setStatus(cfg);
@@ -1582,23 +1608,34 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
             }}
             title={
               !status?.has_token ? 'Login first to create an LLM key' :
-              (status?.ai_api_key_set && !litellmApiKey) ? 'FABRIC AI key already configured' :
-              !(allProjects || []).some(p => /^SERVICE\s*[-\u2013\u2014].*LLM/i.test(p.name)) ? 'Requires membership in a SERVICE LLM project' :
-              'Create or retrieve a FABRIC LLM API key'
+              !llmProjectMember ? 'Requires membership in a SERVICE LLM project' :
+              fabricKeyConfigured ? 'Mint a fresh FABRIC LLM token and replace the stored one' :
+              'Create a FABRIC LLM API key'
             }
             style={{ whiteSpace: 'nowrap', fontSize: 11, padding: '4px 8px' }}
           >
-            {creatingLlmKey ? 'Creating...' : 'Create FABRIC LLM Token'}
+            {creatingLlmKey
+              ? (fabricKeyConfigured ? 'Recreating...' : 'Creating...')
+              : (fabricKeyConfigured ? 'Recreate LLM Token' : 'Create FABRIC LLM Token')}
           </button>
+          <TestButton testKey="ai_server" label="Test" />
         </div>
         {llmKeyMessage && (
           <p style={{ fontSize: 11, marginTop: 4, color: llmKeyMessage.type === 'success' ? '#008e7a' : '#e25241' }}>
             {llmKeyMessage.text}
           </p>
         )}
+        {fabricKeyExpired && !llmKeyMessage && (
+          <p style={{ fontSize: 11, marginTop: 4, color: '#e25241' }}>
+            Your FABRIC LLM token has expired \u2014 AI models will fail until you recreate it.
+          </p>
+        )}
+      </div>
 
-        <p style={{ marginTop: 10 }} data-help-id="settings.nrp-api-key">
-          API key for NRP LLM services (nrp.ai). Adds additional models to all AI tools.
+      <div className="configure-section">
+        <h3>NRP API Key</h3>
+        <p data-help-id="settings.nrp-api-key">
+          Key for NRP LLM services (nrp.ai). Optional \u2014 adds additional models to all AI tools.
         </p>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
@@ -1624,11 +1661,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           >
             Get NRP Token {'\u2197'}
           </a>
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-          <TestButton testKey="ai_server" label="Test FABRIC AI" />
-          <TestButton testKey="nrp_server" label="Test NRP" />
+          <TestButton testKey="nrp_server" label="Test" />
         </div>
       </div>
 
@@ -1781,7 +1814,8 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
         <input type="number" value={modelProxyPort} onChange={(e) => setModelProxyPort(Number(e.target.value))} />
       </div>
     </>
-  );
+    );
+  };
 
   const openUninstallDialog = (toolId: string) => {
     setRemoveConfigOnUninstall(false);

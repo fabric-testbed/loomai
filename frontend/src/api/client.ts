@@ -1977,7 +1977,7 @@ export function setAiTools(tools: Record<string, boolean>): Promise<Record<strin
 
 // --- JupyterLab ---
 
-export function startJupyter(): Promise<{ port?: number; status: string; error?: string; install_required?: boolean; tool?: string }> {
+export function startJupyter(): Promise<{ port?: number; status: string; ready?: boolean; error?: string; install_required?: boolean; tool?: string }> {
   return fetchJson('/jupyter/start', { method: 'POST' });
 }
 
@@ -2006,6 +2006,7 @@ export function searchPeople(query: string): Promise<{ results: PersonSearchResu
 
 export function launchNotebook(name: string, opts?: { force_refresh?: boolean }): Promise<{
   status: string;
+  ready?: boolean;
   port?: number;
   jupyter_path?: string;
   work_dir?: string;
@@ -2408,7 +2409,9 @@ export function autoSetup(projectId: string): Promise<AutoSetupResponse> {
   });
 }
 
-export function createLlmKey(): Promise<{ status: string; created: boolean; message: string }> {
+export function createLlmKey(): Promise<{
+  status: string; created: boolean; key_name?: string; expires_at?: string; message: string;
+}> {
   return fetchJson('/config/llm-key', { method: 'POST' });
 }
 
