@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
+from app import __version__
 from app.config import settings
 from app.culler.idle_culler import start_culler, stop_culler
 from app.proxy.reconciler import ensure_route, start_reconciler, stop_reconciler
@@ -76,7 +77,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="LoomAI Hub",
     description="Multi-user hub for LoomAI on Kubernetes",
-    version="0.7.13",
+    version=__version__,
     lifespan=lifespan,
 )
 

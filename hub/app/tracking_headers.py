@@ -1,12 +1,14 @@
 """Tracking headers for LoomAI Hub outgoing HTTP requests.
 
-Simpler than the backend module — Hub always identifies as hub-0.2.0
-and passes user identity from session context.
+Simpler than the backend module — Hub identifies itself by version and
+passes user identity from session context.
 """
 
 from __future__ import annotations
 
-_HUB_VERSION = "hub-0.2.0"
+from app import __version__
+
+_HUB_VERSION = f"hub-{__version__}"
 
 
 def get_tracking_headers(username: str = "") -> dict[str, str]:
