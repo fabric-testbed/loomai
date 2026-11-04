@@ -6,6 +6,8 @@
     "hub": {
       "type": "object",
       "properties": {
+        "cullOnUpgrade": { "type": "boolean" },
+        "cullImage": { "type": "string" },
         "image": {
           "type": "object",
           "properties": {

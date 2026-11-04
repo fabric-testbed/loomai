@@ -39,3 +39,25 @@ values-gke-https.yaml
 
 # Local virtualenv for hub development
 .venv/
+
+# Claude Code / Codex session usage logs (per-machine, not shared state)
+cc-usage-log.md
+codex-usage-log.md
+
+# Generated documents and report artifacts
+outputs/
+
+# Office documents produced ad hoc at the repo root (decks, one-pagers)
+/*.pptx
+/*.docx
+/*.pdf
+
+# Operator scripts are tracked; the user data and reports they emit are not.
+# These contain personnel records (names, emails) and must never be pushed.
+scripts/*.csv
+scripts/*.json
+scripts/*.txt
+
+# Python packaging / test caches (cli/loomai_cli.egg-info was once tracked)
+*.egg-info/
+.pytest_cache/

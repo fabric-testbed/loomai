@@ -4,6 +4,8 @@ import json
 import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 
+import pytest
+
 
 def _set_assistant_flags(**flags):
     from app import settings_manager
@@ -2669,3 +2671,98 @@ class TestChatStream:
             resp = client.post("/api/ai/chat/stream", json=body)
             assert resp.status_code == 422
             assert "messages" in resp.json()["detail"]
+
+
+class TestConsentRules:
+    """Word-boundary matching, latest-turn confirmation, pending action."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_pending(self):
+        from app import assistant_consent
+        assistant_consent._pending.clear()
+        yield
+        assistant_consent._pending.clear()
+
+    def _run(self, client, messages, tool_name, tool_args, conversation_id=None):
+        async def fake_execute(name, arguments, request=None):
+            if name == "list_slices":
+                return "[]"
+            return json.dumps({"status": "ok", "tool": name})
+
+        with patch("app.routes.ai_chat._get_ai_api_key", return_value="fake-key"), \
+             patch("app.routes.ai_chat.execute_tool", new_callable=AsyncMock, side_effect=fake_execute) as mock_exec, \
+             patch("app.routes.ai_chat.ai_client") as mock_client:
+            tool_call_resp = _make_llm_response(
+                tool_calls=[{
+                    "id": "call_1",
+                    "function": {"name": tool_name, "arguments": json.dumps(tool_args)},
+                }],
+                finish_reason="tool_calls",
+            )
+            final_resp = _make_llm_response("FINAL ANSWER\nDone.")
+            mock_client.post = AsyncMock(side_effect=[tool_call_resp, final_resp])
+            mock_client.stream = MagicMock(return_value=_make_stream_ctx([
+                'data: {"choices": [{"delta": {"content": "FINAL ANSWER\\nDone."}}]}',
+                "data: [DONE]",
+            ]))
+            body = {"messages": messages, "model": "test-model"}
+            if conversation_id:
+                body["conversation_id"] = conversation_id
+            resp = client.post("/api/ai/chat/stream", json=body)
+        assert resp.status_code == 200
+        executed = any(call.args[0] == tool_name for call in mock_exec.await_args_list)
+        return resp.text, executed
+
+    def test_testbed_wording_does_not_authorize_submit(self, client):
+        # "testbed" used to satisfy the "test" proof term via substring match.
+        text, executed = self._run(
+            client,
+            [{"role": "user", "content": "Set up a slice named bench on the FABRIC testbed with two nodes"}],
+            "submit_slice", {"slice_name": "bench"},
+        )
+        assert "DESTRUCTIVE_ACTION_BLOCKED" in text
+        assert not executed
+
+    def test_look_at_slice_does_not_confirm_delete(self, client):
+        # "look" used to satisfy the "ok" confirmation term via substring match.
+        text, executed = self._run(
+            client,
+            [{"role": "user", "content": "look at slice old-slice and remove it"}],
+            "delete_slice", {"slice_name": "old-slice"},
+        )
+        assert "DESTRUCTIVE_ACTION_BLOCKED" in text
+        assert not executed
+
+    def test_bare_yes_after_block_authorizes_the_pending_delete(self, client):
+        first = [{"role": "user", "content": "delete slice old-slice"}]
+        text, executed = self._run(client, first, "delete_slice", {"slice_name": "old-slice"},
+                                   conversation_id="consent-flow")
+        assert "DESTRUCTIVE_ACTION_BLOCKED" in text and not executed
+        assert "reply 'yes'" in text
+
+        second = first + [
+            {"role": "assistant", "content": "This will delete old-slice. Reply 'yes' to confirm."},
+            {"role": "user", "content": "yes"},
+        ]
+        text, executed = self._run(client, second, "delete_slice", {"slice_name": "old-slice"},
+                                   conversation_id="consent-flow")
+        assert "DESTRUCTIVE_ACTION_BLOCKED" not in text
+        assert executed
+
+    def test_bare_yes_in_another_conversation_does_not_authorize(self, client):
+        first = [{"role": "user", "content": "delete slice old-slice"}]
+        self._run(client, first, "delete_slice", {"slice_name": "old-slice"},
+                  conversation_id="consent-a")
+        second = first + [{"role": "user", "content": "yes"}]
+        text, executed = self._run(client, second, "delete_slice", {"slice_name": "old-slice"},
+                                   conversation_id="consent-b")
+        assert "DESTRUCTIVE_ACTION_BLOCKED" in text and not executed
+
+    def test_old_yes_does_not_confirm_later_delete(self, client):
+        messages = [
+            {"role": "user", "content": "yes, delete slice foo"},
+            {"role": "assistant", "content": "Deleted foo."},
+            {"role": "user", "content": "now also get rid of old-slice"},
+        ]
+        text, executed = self._run(client, messages, "delete_slice", {"slice_name": "old-slice"})
+        assert "DESTRUCTIVE_ACTION_BLOCKED" in text and not executed

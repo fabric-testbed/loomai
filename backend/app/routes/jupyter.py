@@ -211,43 +211,6 @@ register_user_changed_callback(_on_user_changed)
 
 
 # ---------------------------------------------------------------------------
-# Slice working-directory helpers (called from slices.py / templates.py)
-# ---------------------------------------------------------------------------
-
-def ensure_slice_workdir(slice_name: str) -> str:
-    """Create a per-slice working directory if it doesn't exist.
-
-    Returns the absolute path.
-    """
-    d = os.path.join(_workdir(), slice_name)
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-def seed_slice_workdir_from_template(slice_name: str, template_dir: str) -> None:
-    """Copy template artifacts into the slice working directory.
-
-    Skips files that already exist so user edits are never overwritten.
-    """
-    import shutil
-
-    dest = ensure_slice_workdir(slice_name)
-    if not os.path.isdir(template_dir):
-        return
-
-    for item in os.listdir(template_dir):
-        src = os.path.join(template_dir, item)
-        dst = os.path.join(dest, item)
-        if os.path.exists(dst):
-            continue
-        if os.path.isdir(src):
-            shutil.copytree(src, dst)
-        else:
-            shutil.copy2(src, dst)
-    logger.info("Seeded workdir %s from template %s", dest, template_dir)
-
-
-# ---------------------------------------------------------------------------
 # JupyterLab lifecycle
 # ---------------------------------------------------------------------------
 

@@ -316,8 +316,9 @@ def get_default_settings() -> dict:
             "project_id": "",
             "bastion_username": "",
             "slice_policy": {
-                # Container-default resource rail: cap live FABRIC leases at
-                # six hours unless an operator explicitly changes settings.
+                # Lease cap for AI-agent-initiated submits, renews and weave
+                # runs (people are not capped; see app.request_actor). Six
+                # hours unless changed in Configure -> AI -> Agent Lease Limit.
                 # After the one-time legacy seeding migration, set this to 0
                 # to intentionally disable the backend cap.
                 "max_lease_hours": 6,
@@ -882,6 +883,18 @@ def get_max_slice_lease_hours() -> int | None:
     except (TypeError, ValueError):
         return None
     return hours if hours > 0 else None
+
+
+def get_request_lease_cap_hours() -> int | None:
+    """Return the lease cap for the current request, or None when uncapped.
+
+    The configured cap only applies to agent-initiated requests (see
+    ``app.request_actor``); people get FABRIC's normal lease limits.
+    """
+    from app.request_actor import is_agent_request
+    if not is_agent_request():
+        return None
+    return get_max_slice_lease_hours()
 
 
 def get_ai_tools() -> Dict[str, bool]:

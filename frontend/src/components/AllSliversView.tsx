@@ -13,7 +13,8 @@ interface AllSliversViewProps {
   slices: SliceSummary[];
   dark: boolean;
   onSliceSelect: (id: string, data?: SliceData | null) => void;
-  onDeleteSlice: (name: string) => Promise<void>;
+  /** Delete by slice id (FABRIC UUID or draft-*), never by name. */
+  onDeleteSlice: (id: string) => Promise<void>;
   onRefreshSlices: () => void;
   onArchiveSlice?: (name: string) => Promise<void>;
   onArchiveAllTerminal?: () => Promise<void>;
@@ -317,9 +318,10 @@ export default React.memo(function AllSliversView({
     })) return;
     setDeleting(true);
     try {
-      // Delete whole slices
+      // Delete whole slices (rows are keyed by name; resolve to the id)
       for (const name of selectedSliceNames) {
-        await onDeleteSlice(name);
+        const id = slices.find(s => s.name === name)?.id ?? name;
+        await onDeleteSlice(id);
         setSliceCache(prev => { const n = new Map(prev); n.delete(name); return n; });
       }
       // Delete individual nodes
@@ -355,7 +357,7 @@ export default React.memo(function AllSliversView({
     } finally {
       setDeleting(false);
     }
-  }, [totalSelected, selectedSliceNames, selectedNodeKeys, selectedNetKeys, selectedFpKeys, selectedPmKeys, onDeleteSlice, clearSelection, onRefreshSlices]);
+  }, [totalSelected, selectedSliceNames, selectedNodeKeys, selectedNetKeys, selectedFpKeys, selectedPmKeys, onDeleteSlice, clearSelection, onRefreshSlices, slices]);
 
   // --- Filter + sort slices ---
 

@@ -9,6 +9,7 @@ import type {
 import * as api from '../api/client';
 import { alertDialog, confirmDialog, promptDialog } from './AppDialogProvider';
 import '../styles/libraries-view.css';
+import { Modal } from './Modal';
 
 interface LibrariesViewProps {
   onLoadSlice: (data: SliceData) => void;
@@ -2362,8 +2363,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
 
       {/* Create New Artifact Dialog */}
       {showCreateDialog && (
-        <div className="tv-modal-overlay" onClick={() => setShowCreateDialog(false)}>
-          <div className="tv-modal" onClick={(e) => e.stopPropagation()} data-testid="library-create-dialog">
+        <Modal overlayClassName="tv-modal-overlay" className="tv-modal" onClose={() => setShowCreateDialog(false)} data-testid="library-create-dialog">
             <h4>Create New Artifact</h4>
             <input
               type="text"
@@ -2393,8 +2393,7 @@ export default function LibrariesView({ onLoadSlice, onLaunchNotebook, onEditArt
                 {createBusy ? 'Creating...' : 'Create'}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       <div className="tv-tabs">

@@ -55,8 +55,10 @@ All FABlib read calls go through a single `FabricCallManager` singleton (`backen
 - **Caller-specified `max_age`**: Each endpoint declares acceptable staleness. `max_age=0` → always fresh. `max_age=300` → accept 5-min-old data.
 - **Request coalescing**: If a FABlib call is already in-flight for a cache key, concurrent callers `await` the same result via `asyncio.Event`. No duplicate API calls.
 - **Stale-while-revalidate (SWR)**: Return stale data immediately, refresh in background. Used for non-urgent reads.
-- **Mutation invalidation**: `invalidate(key)` sets `timestamp=0` → next read fetches fresh regardless of `max_age`. `invalidate_prefix(prefix)` expires all matching keys.
-- **Stale-on-error fallback**: If a fetch fails but stale data exists, return stale data (prevents blank UI during FABRIC outages).
+- **Mutation invalidation**: `invalidate(key)` marks the entry *invalidated* and bumps its *generation* → the next read fetches fresh regardless of `max_age`, SWR never serves it, and a fetch that was already in flight stores its (pre-mutation) result only as a fallback instead of stamping it fresh. `invalidate_prefix(prefix)` does the same for all matching keys.
+- **Identity change**: `clear_all()` drops every entry (used by `reset_fablib()` and the user-changed callback). Nothing cached for the previous user/token/project may be served, not even as a fallback.
+- **Stale-on-error fallback**: If a fetch fails but stale data exists, return stale data (prevents blank UI during FABRIC outages). This is the only path that can hand out invalidated data, and it logs a warning.
+- **Sync access**: code that cannot `await` (site resolver, pool threads) uses `peek(key, max_age=None)` and `store(key, data)`. Never read or write `mgr._cache` directly — a direct write leaves the `invalidated` flag set and the entry is never served again; a direct read serves invalidated data.
 
 ### Cache keys
 | Key | Default `max_age` | Notes |
@@ -88,9 +90,13 @@ All FABlib read calls go through a single `FabricCallManager` singleton (`backen
 ## Thread Safety
 
 - **`FablibManager`**: Singleton with threading lock for initialization
-- **`FabricCallManager`**: `asyncio.Lock` protects cache dict + decision logic. Sync wrappers (`get_cached_sites()`, `get_fresh_sites()`) read cache directly under GIL for thread pool callers.
+- **`FabricCallManager`**: `asyncio.Lock` protects cache dict + decision logic. Sync wrappers (`get_cached_sites()`, `get_fresh_sites()`) go through `peek()`/`store()`, which are safe under the GIL for thread pool callers.
 - **`_fablib_lock`** (resources.py): Serializes FABlib resource/topology queries — FABlib internal dicts mutate during iteration. Call manager sits above this; fetcher functions acquire the lock internally.
 - **FABlib thread pool**: Dedicated `ThreadPoolExecutor` (4 workers, `"fablib"` prefix) in `fablib_executor.py`
+- **Per-slice locks** (`slices.py`): `_slice_lock(name)` is a `threading.RLock` per slice. The sync mutation routes run on Starlette's thread pool while `get_slice`/`submit` serialize the same FABlib `Slice` on the FABlib pool, and FABlib's topology (NetworkX) cannot be mutated while another thread iterates it. Decorate a sync route that edits topology with `@_slice_mutation` (holds the lock, marks the draft dirty) and other sync slice routes with `@_slice_locked`; hold `_slice_lock(name)` around any other `_serialize(draft)`.
+- **Dirty drafts**: `_draft_dirty` holds names with unsubmitted topology edits. `GET /slices/{name}` serves those from memory (`dirty: true`) instead of refetching from FABRIC; `POST /refresh` and submit clear the flag.
+- **Submit marker**: `_begin_submit()` pops the draft and publishes a `Submitting` snapshot in `_submitting`; `_load_persistent_drafts()` skips those names, `GET`/list serve the snapshot, delete returns 409, and `_end_submit()` runs in the submit's `finally`. `register_slice()` never replaces a FABRIC UUID with a `draft-*` id.
+- **Project switching**: `reconcile_projects` switches only FABlib's project (never `FABRIC_PROJECT_ID` in the environment) and clears `_reconcile_idle` while it scans; `_ensure_project_id()` waits on that event, so other FABRIC calls do not run against the wrong project.
 - **Slice registry**: Thread-safe JSON persistence with atomic writes
 
 ## Serialization Safety

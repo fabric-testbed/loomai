@@ -11,6 +11,15 @@ openai>=1.0
 duckduckgo-search>=7.0
 jupyterlab
 jupyter-ai
+# tornado 6.5.9 (2026-09-14) hardened StaticFileHandler against symlink
+# traversal: validate_absolute_path() now calls _resolve_symlink_target(),
+# which reads self.allowed_symlink_directory — an attribute only tornado's
+# own StaticFileHandler.initialize() sets. jupyter_server's FileFindHandler
+# overrides initialize() without calling super(), so every file it serves
+# (JupyterLab themes, /static/*) 500s with AttributeError and the lab UI
+# renders unstyled. Upstream: tornadoweb/tornado#3724, fix PR #3725 against
+# branch6.5 — lift this pin once the release carrying it (6.5.10) is out.
+tornado<6.5.9
 ipykernel
 pandas
 matplotlib

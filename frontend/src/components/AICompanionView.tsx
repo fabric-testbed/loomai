@@ -14,6 +14,7 @@ import AiderWebView from './AiderWebView';
 import LoomAIChatView from './LoomAIChatView';
 import '../styles/ai-companion.css';
 import { assetUrl } from '../utils/assetUrl';
+import { Modal } from './Modal';
 
 const TERM_THEME = {
   background: '#1a1a2e',
@@ -246,8 +247,7 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
   return (
     <div className="ai-companion">
       {showWarning && (
-        <div className="ai-modal-overlay" onClick={() => setShowWarning(null)}>
-          <div className="ai-modal" onClick={(e) => e.stopPropagation()}>
+        <Modal overlayClassName="ai-modal-overlay" className="ai-modal" onClose={() => setShowWarning(null)}>
             <h3>{'\u26A0'} {showWarning.name}</h3>
             <p>{showWarning.warning}</p>
             <div className="ai-modal-actions">
@@ -256,8 +256,7 @@ export default function AICompanionView({ selectedTool, onToolChange, visible = 
                 Launch Anyway
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {selectedTool ? (

@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import type { SliceSummary } from '../types/fabric';
 import Tooltip from './Tooltip';
 import '../styles/toolbar.css';
+import { Modal } from './Modal';
 
 const TERMINAL_STATES = new Set(['Dead', 'Closing', 'StableError']);
 
@@ -380,8 +381,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
 
       {/* --- Modal: Confirm Delete --- */}
       {confirmingDelete && (
-        <div className="toolbar-modal-overlay" onClick={() => setConfirmingDelete(false)} data-testid="slice-delete-modal">
-          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="slice-delete-modal-title">
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal" onClose={() => setConfirmingDelete(false)} data-testid="slice-delete-modal" aria-labelledby="slice-delete-modal-title">
             <h4 id="slice-delete-modal-title">{isDraft ? 'Discard Draft' : 'Delete Slice'}</h4>
             <p>{isDraft
               ? <>Discard draft <strong>{selectedName}</strong>? This only removes the local draft — nothing has been submitted to FABRIC.</>
@@ -391,14 +391,12 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
               <button onClick={() => setConfirmingDelete(false)} data-testid="slice-delete-cancel">Cancel</button>
               <button className="danger" onClick={handleDeleteConfirm} data-testid="slice-delete-confirm">{isDraft ? 'Discard' : 'Delete'}</button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* --- Modal: Create Slice --- */}
       {creating && (
-        <div className="toolbar-modal-overlay" onClick={() => { setCreating(false); setNewSliceName(''); }} data-testid="slice-create-modal">
-          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="slice-create-modal-title">
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal" onClose={() => { setCreating(false); setNewSliceName(''); }} data-testid="slice-create-modal" aria-labelledby="slice-create-modal-title">
             <h4 id="slice-create-modal-title">Create New Slice</h4>
             <p>Enter a name for the new draft slice.</p>
             <input
@@ -416,14 +414,12 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
               <button onClick={() => { setCreating(false); setNewSliceName(''); }} data-testid="slice-create-cancel">Cancel</button>
               <button className="success" onClick={handleCreate} disabled={!newSliceName.trim()} data-testid="slice-create-confirm">Create</button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* --- Modal: Clone Slice --- */}
       {cloning && (
-        <div className="toolbar-modal-overlay" onClick={() => { setCloning(false); setCloneName(''); }} data-testid="slice-clone-modal">
-          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="slice-clone-modal-title">
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal" onClose={() => { setCloning(false); setCloneName(''); }} data-testid="slice-clone-modal" aria-labelledby="slice-clone-modal-title">
             <h4 id="slice-clone-modal-title">Clone Slice</h4>
             <p>Enter a name for the cloned draft slice.</p>
             <input
@@ -441,8 +437,7 @@ export default React.memo(function Toolbar(props: ToolbarProps) {
               <button onClick={() => { setCloning(false); setCloneName(''); }} data-testid="slice-clone-cancel">Cancel</button>
               <button className="success" onClick={handleClone} disabled={!cloneName.trim()} data-testid="slice-clone-confirm">Clone</button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
     </div>

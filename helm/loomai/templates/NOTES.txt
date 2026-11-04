@@ -112,3 +112,8 @@ LoomAI has been deployed to namespace {{ .Release.Namespace }}.
 {{- end }}
 
 ==========================================================
+
+Upgrades: this chart's pre-upgrade hook deletes every running user pod so
+they respawn with the new singleuser image. That ends active sessions and
+runs on hub-only or values-only upgrades too. For those, pass
+  --set hub.cullOnUpgrade=false

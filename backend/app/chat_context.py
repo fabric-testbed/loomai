@@ -7,6 +7,7 @@ within each model's context limits.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -90,7 +91,7 @@ PROFILE_TIERS = {
         # (create_weave, search_examples, Chameleon, SPHERE, Federated) do not
         # silently fall out of the filtered schema as the tool list grows.
         # Keep this == len(CORE_TOOLS); bump both together when core tools grow.
-        "max_tools": 58,
+        "max_tools": 61,
         "temperature": 0.5,
         "supports_tools": True,
     },
@@ -105,7 +106,7 @@ PROFILE_TIERS = {
         "summarize_at": 0.85,
         # Also == len(CORE_TOOLS): large-tier models have the most headroom,
         # so they must never expose fewer core tools than standard.
-        "max_tools": 58,
+        "max_tools": 61,
         "temperature": 0.5,
         "supports_tools": True,
     },
@@ -489,6 +490,99 @@ def get_system_prompt(variant: str) -> str:
 # Conversation trimming
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Budget: 30% system prompt (+ tool schemas), 50% conversation, 20% tool results
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT_SHARE = 0.30
+
+
+def estimate_tool_schema_tokens(schemas: list[dict] | None) -> int:
+    """Tokens the tool definitions cost on every request.
+
+    They are sent with each call, so trim_conversation() charges them to the
+    conversation budget (the standard tier's 61 schemas are ~9K tokens; the
+    old budget ignored them).
+    """
+    if not schemas:
+        return 0
+    try:
+        return estimate_tokens(json.dumps(schemas, separators=(",", ":")))
+    except (TypeError, ValueError):
+        return sum(estimate_tokens(str(schema)) for schema in schemas)
+
+
+def system_prompt_budget(profile: dict, core_tokens: int = 0) -> int:
+    """Max tokens the system prompt text may use: 30% of the window.
+
+    The core prompt is the floor: on a compact model the compact prompt alone
+    is already ~3K tokens of an 8K window, so the share is applied to the
+    optional blocks (prefetched data, RAG context, skills) rather than to the
+    instructions the assistant cannot work without.
+    """
+    window = int(profile.get("context_window") or 0)
+    # Headroom above the core prompt for the session-state block and the
+    # truncation markers, so fitting never nibbles at the core itself.
+    return max(int(window * SYSTEM_PROMPT_SHARE), int(core_tokens or 0) + 400)
+
+
+_TRUNCATION_MARK = "\n\n[... trimmed to fit the model's context window]"
+
+
+def fit_system_parts(
+    parts: list[str],
+    max_tokens: int,
+    protected: set[int] | None = None,
+) -> tuple[list[str], list[int]]:
+    """Shrink the system prompt's parts until they fit *max_tokens*.
+
+    The largest unprotected part is truncated first (prefetched data, RAG
+    context and skill files are the usual culprits), and it keeps a marker so
+    the model knows the block is incomplete. Protected parts (the core prompt,
+    the session-state block) are only truncated when nothing else is left.
+    Returns the fitted parts and the indices that were truncated.
+    """
+    protected = set(protected or ())
+    parts = list(parts)
+    truncated: list[int] = []
+    if max_tokens <= 0:
+        max_tokens = 1
+
+    def total() -> int:
+        return sum(estimate_tokens(p) for p in parts)
+
+    def shrink_one(candidates: list[int]) -> bool:
+        if not candidates:
+            return False
+        idx = max(candidates, key=lambda i: estimate_tokens(parts[i]))
+        over_tokens = total() - max_tokens
+        if over_tokens <= 0:
+            return False
+        current = parts[idx]
+        # Drop at least the overage (~4 chars per token) plus room for the marker.
+        keep_chars = max(0, len(current) - over_tokens * 4 - len(_TRUNCATION_MARK))
+        if keep_chars < 200:
+            parts[idx] = _TRUNCATION_MARK.strip()
+        else:
+            parts[idx] = current[:keep_chars].rstrip() + _TRUNCATION_MARK
+        if idx not in truncated:
+            truncated.append(idx)
+        return True
+
+    while total() > max_tokens:
+        unprotected = [i for i in range(len(parts)) if i not in protected and estimate_tokens(parts[i]) > 60]
+        if shrink_one(unprotected):
+            continue
+        guarded = [i for i in range(len(parts)) if i in protected and estimate_tokens(parts[i]) > 60]
+        if not shrink_one(guarded):
+            break
+    if truncated:
+        logger.warning(
+            "System prompt over its %d-token share; truncated parts %s", max_tokens, truncated,
+        )
+    return parts, truncated
+
+
 class TrimResult:
     """Result of conversation trimming with context status flags."""
     __slots__ = (
@@ -762,10 +856,26 @@ def _recent_messages_preserving_latest_user(messages: list[dict], keep_last: int
     return recent
 
 
+def _recent_paired_messages(messages: list[dict], keep_last: int) -> list[dict]:
+    """The last *keep_last* non-system messages plus the latest user turn, with
+    every kept tool output's tool_call message (and every kept tool_call's
+    outputs) included, in original order."""
+    keep: set[int] = set(range(max(1, len(messages) - keep_last), len(messages)))
+    latest_user = next(
+        (i for i in range(len(messages) - 1, 0, -1) if _is_user_message(messages[i])), None,
+    )
+    if latest_user is not None:
+        keep.add(latest_user)
+    _add_matching_tool_call_indices(messages, keep)
+    _add_matching_tool_output_indices(messages, keep)
+    return [messages[i] for i in sorted(keep) if i > 0]
+
+
 def trim_conversation(
     messages: list[dict],
     system_tokens: int,
     profile: dict,
+    tool_tokens: int = 0,
 ) -> TrimResult:
     """Trim conversation to fit within context budget.
 
@@ -774,21 +884,25 @@ def trim_conversation(
     - was_trimmed: True if messages were summarized/removed
 
     Strategy:
-    1. Calculate token budget (context_window * summarize_at - system_tokens - max_output)
+    1. Calculate token budget (context_window * summarize_at - system_tokens
+       - tool_tokens - max_output). *tool_tokens* is what the tool schemas
+       cost per request; they used to be ignored, which let a compact model
+       be sent more than its whole window.
     2. If conversation fits, return as-is
-    3. Otherwise, keep system message + the latest user turn + recent messages,
-       summarize the rest
+    3. Otherwise, keep system message + the latest user turn + recent messages
+       (with their tool_call/tool pairs intact), summarize the rest
     """
     context_window = profile["context_window"]
     max_output = profile["max_output"]
     threshold = int(context_window * profile["summarize_at"])
-    budget = threshold - system_tokens - max_output
+    fixed_tokens = system_tokens + int(tool_tokens or 0)
+    budget = threshold - fixed_tokens - max_output
 
     if budget <= 0:
-        logger.warning("System prompt (%d tokens) exceeds budget for %d context",
-                        system_tokens, context_window)
+        logger.warning("System prompt + tools (%d tokens) exceed budget for %d context",
+                        fixed_tokens, context_window)
         if len(messages) > 2:
-            trimmed = [messages[0]] + _recent_messages_preserving_latest_user(messages[1:], 2)
+            trimmed = [messages[0]] + _recent_paired_messages(messages, 2)
         else:
             trimmed = messages
         return TrimResult(trimmed, near_full=True, was_trimmed=True)
@@ -801,19 +915,23 @@ def trim_conversation(
         return compacted
 
     if conv_tokens <= budget:
-        # Check if we're getting close to full (>80% of total context used)
-        total_used = system_tokens + conv_tokens + max_output
+        # Check if we're getting close to full (>90% of total context used)
+        total_used = fixed_tokens + conv_tokens + max_output
         near_full = total_used > context_window * 0.90
         return TrimResult(messages, near_full=near_full)
 
-    # Need to trim — keep system + latest user turn + last 4 messages.
+    # Need to trim — keep system + latest user turn + last 4 messages, plus
+    # whatever tool_call/tool pairs those messages belong to: a `tool` message
+    # whose `tool_calls` was summarized away is rejected by the provider
+    # ("tool message must follow tool_calls"), which then looked like a model
+    # without tool support.
     keep_last = 4
     if len(messages) <= keep_last + 1:
         truncated = _truncate_tool_results(messages, profile["tool_result_max"])
         return TrimResult(truncated, near_full=True, was_trimmed=True)
 
     system_msg = messages[0]
-    recent_messages = _recent_messages_preserving_latest_user(messages[1:], keep_last)
+    recent_messages = _recent_paired_messages(messages, keep_last)
     recent_ids = {id(msg) for msg in recent_messages}
     old_messages = [msg for msg in messages[1:] if id(msg) not in recent_ids]
 
@@ -836,7 +954,7 @@ def trim_conversation(
 
     # Check if still near full after trimming
     trimmed_tokens = sum(estimate_message_tokens(m) for m in trimmed[1:])
-    total_used = system_tokens + trimmed_tokens + max_output
+    total_used = fixed_tokens + trimmed_tokens + max_output
     near_full = total_used > context_window * 0.90
 
     logger.info("Trimmed conversation: %d → %d messages (summarized %d, near_full=%s)",
@@ -900,6 +1018,9 @@ CORE_TOOLS = {
     "list_sphere_xdcs", "create_sphere_xdc", "attach_sphere_xdc",
     # Federated/composite core
     "list_composite_slices", "get_composite_slice",
+    # FABRIC infrastructure metrics (fabric-metrics MCP proxy)
+    "list_metric_topics", "list_metric_param_options",
+    "query_infrastructure_metrics",
 }
 
 

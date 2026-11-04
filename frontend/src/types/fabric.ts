@@ -205,6 +205,8 @@ export interface SliceData {
   graph: CyGraph;
   /** Set by renew when the lease already covered the request and was left as-is. */
   lease_unchanged?: boolean;
+  /** Configured fabric.slice_policy.max_lease_hours; absent when the cap is disabled. */
+  max_lease_hours?: number;
   warnings?: SliceWarning[];
 }
 
@@ -565,6 +567,8 @@ export interface LoomAISettings {
     logging: { level: string };
     avoid_sites: string[];
     ssh_command_line: string;
+    /** Lease cap for agent-initiated actions; 0 disables it. */
+    slice_policy?: { max_lease_hours: number };
   };
   ai: {
     fabric_api_key: string;

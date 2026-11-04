@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -86,14 +87,22 @@ def _under(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
-def _safe_path(base: str, user_path: str) -> str:
+def _safe_path(base: str, user_path: str, *, writable: bool = False) -> str:
     """Resolve *user_path* (absolute or relative to *base*) and confirm it lands
     inside an allowed root, rejecting traversals.
 
-    Allowed roots: *base*, the user storage dir, and the backend install dir
-    (for bundled artifacts/scripts referenced by absolute path). Paths inside the
-    internal ``.loomai`` dir (password hash, signing secret, settings) are always
-    denied — those must never be reachable through the file manager.
+    Allowed roots: *base*, the user storage dir, and — for reads only — the
+    backend install dir (bundled artifacts/scripts referenced by absolute path).
+    Pass ``writable=True`` for anything that creates, modifies or deletes:
+    the install dir is then excluded, otherwise the in-browser editor could
+    rewrite ``app/*.py`` and persist across restarts.
+
+    The internal ``.loomai`` trees are always denied: the user's own
+    (password hash, signing secret, settings.json) and the storage root's,
+    which holds the session secret, the user registry and every other user's
+    storage. In multi-user mode the caller's own storage lives inside the
+    root ``.loomai`` tree (``.loomai/users/<uuid>``), so that one subtree
+    stays allowed.
     """
     if os.path.isabs(user_path):
         resolved = os.path.realpath(user_path)
@@ -104,16 +113,25 @@ def _safe_path(base: str, user_path: str) -> str:
         storage = os.path.realpath(_storage_dir())
     except Exception:
         storage = os.path.realpath(base)
+    try:
+        from app.settings_manager import get_root_storage_dir
+        root = os.path.realpath(get_root_storage_dir())
+    except Exception:
+        root = storage
 
-    # Never expose internal secrets (session_secret, password_hash, settings.json).
-    if _under(resolved, os.path.join(storage, ".loomai")):
+    internal = _under(resolved, os.path.join(storage, ".loomai")) or (
+        _under(resolved, os.path.join(root, ".loomai")) and not _under(resolved, storage)
+    )
+    if internal:
         raise HTTPException(status_code=400, detail=error_detail(
             "FILE_PATH_INVALID",
             "Access to the internal LoomAI settings directory is not allowed.",
             path=user_path,
         ))
 
-    allowed_roots = {os.path.realpath(base), storage, os.path.realpath(_APP_ROOT)}
+    allowed_roots = {os.path.realpath(base), storage}
+    if not writable:
+        allowed_roots.add(os.path.realpath(_APP_ROOT))
     if not any(_under(resolved, r) for r in allowed_roots):
         raise HTTPException(status_code=400, detail=error_detail(
             "FILE_PATH_INVALID",
@@ -140,8 +158,24 @@ def _provisions_dir() -> str:
     return d
 
 
+_PROVISION_KEY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@ -]{0,127}")
+
+
+def _provisions_path(slice_name: str) -> str:
+    """Return the provisions file for *slice_name*, refusing names that would
+    leave ``.provisions/`` (the name comes from the request body, so
+    ``../.loomai/settings`` must not become a write target)."""
+    if not _PROVISION_KEY_RE.fullmatch(slice_name or "") or ".." in slice_name:
+        raise HTTPException(status_code=400, detail=error_detail(
+            "FILE_PATH_INVALID",
+            "Invalid slice name for provisioning rules.",
+            slice_name=slice_name,
+        ))
+    return os.path.join(_provisions_dir(), f"{slice_name}.json")
+
+
 def _load_provisions(slice_name: str) -> list:
-    path = os.path.join(_provisions_dir(), f"{slice_name}.json")
+    path = _provisions_path(slice_name)
     if not os.path.isfile(path):
         return []
     with open(path) as f:
@@ -149,7 +183,7 @@ def _load_provisions(slice_name: str) -> list:
 
 
 def _save_provisions(slice_name: str, rules: list):
-    path = os.path.join(_provisions_dir(), f"{slice_name}.json")
+    path = _provisions_path(slice_name)
     with open(path, "w") as f:
         json.dump(rules, f, indent=2)
 
@@ -252,7 +286,7 @@ async def list_files(path: str = ""):
 @router.post("/api/files/upload")
 async def upload_files(path: str = "", files: List[UploadFile] = File(...)):
     base = _browse_dir()
-    target = _safe_path(base, path)
+    target = _safe_path(base, path, writable=True)
     os.makedirs(target, exist_ok=True)
     saved = []
     for f in files:
@@ -278,9 +312,9 @@ class MkdirRequest(BaseModel):
 @router.post("/api/files/mkdir")
 async def create_folder(body: MkdirRequest, path: str = ""):
     base = _browse_dir()
-    target = _safe_path(base, path)
+    target = _safe_path(base, path, writable=True)
     new_dir = os.path.join(target, body.name)
-    _safe_path(base, os.path.join(path, body.name))
+    _safe_path(base, os.path.join(path, body.name), writable=True)
     os.makedirs(new_dir, exist_ok=True)
     return {"created": body.name}
 
@@ -329,7 +363,7 @@ class FileContentBody(BaseModel):
 async def write_file_content(body: FileContentBody):
     """Write text file content from in-browser editor."""
     base = _browse_dir()
-    target = _safe_path(base, body.path)
+    target = _safe_path(base, body.path, writable=True)
     def _do():
         try:
             with open(target, "w", encoding="utf-8") as f:
@@ -396,7 +430,7 @@ async def delete_file(path: str = ""):
             "Cannot delete the storage root; specify a file or directory inside it.",
             path=path,
         ))
-    target = _safe_path(base, path)
+    target = _safe_path(base, path, writable=True)
     if not os.path.exists(target):
         raise HTTPException(status_code=404, detail=error_detail(
             "FILE_NOT_FOUND",
@@ -450,7 +484,7 @@ async def download_vm_file(slice_name: str, node_name: str, body: VmDownloadRequ
     def _do():
         node_obj = _get_node(slice_name, node_name)
         base = _browse_dir()
-        dest = _safe_path(base, body.dest_dir)
+        dest = _safe_path(base, body.dest_dir, writable=True)
         os.makedirs(dest, exist_ok=True)
         filename = os.path.basename(body.remote_path)
         local_path = os.path.join(dest, filename)
@@ -525,9 +559,20 @@ async def upload_direct_to_vm(
     tmp_dir = tempfile.mkdtemp(prefix="fabric_vm_upload_")
     saved: list[str] = []
     try:
-        # 1. Write uploaded files to temp dir, preserving relative paths
+        # 1. Write uploaded files to temp dir, preserving relative paths.
+        # The filename is client-controlled: an absolute path makes
+        # os.path.join discard tmp_dir and "../" escapes it, so confine every
+        # file to the temp dir (same check as /api/files/upload).
+        tmp_real = os.path.realpath(tmp_dir)
         for f in files:
-            local = os.path.join(tmp_dir, f.filename)
+            local = os.path.join(tmp_dir, f.filename or "")
+            local_real = os.path.realpath(local)
+            if local_real == tmp_real or not _under(local_real, tmp_real):
+                raise HTTPException(status_code=400, detail=error_detail(
+                    "FILE_PATH_INVALID",
+                    "Upload filenames must be relative paths inside the upload.",
+                    path=f.filename,
+                ))
             os.makedirs(os.path.dirname(local), exist_ok=True)
             content = await f.read()
             with open(local, "wb") as out:

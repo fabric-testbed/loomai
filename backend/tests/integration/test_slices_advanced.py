@@ -61,6 +61,12 @@ def _set_max_lease_hours(hours: int):
     settings_manager.save_settings(settings)
 
 
+def _as_agent(client):
+    """Mark the test client's requests as agent-initiated (the cap only applies to agents)."""
+    from app.request_actor import ACTOR_HEADER, AGENT
+    client.headers[ACTOR_HEADER] = AGENT
+
+
 # ===========================================================================
 # POST /slices/{name}/clone
 # ===========================================================================
@@ -416,6 +422,7 @@ class TestSubmitLease:
 
     def test_submit_applies_max_lease_policy_default(self, client, mock_fablib):
         _set_max_lease_hours(6)
+        _as_agent(client)
         sid, _ = _create_draft_with_node(client, "lease-policy-default")
 
         with patch("app.routes.slices.get_fresh_sites", return_value=[]), \
@@ -433,6 +440,7 @@ class TestSubmitLease:
 
     def test_submit_background_reports_policy_default_lease_warning(self, client):
         _set_max_lease_hours(6)
+        _as_agent(client)
         sid, _ = _create_draft_with_node(client, "lease-policy-bg-default")
         captured = {}
 
@@ -461,6 +469,7 @@ class TestSubmitLease:
 
     def test_submit_caps_requested_lease_hours_to_policy(self, client, mock_fablib):
         _set_max_lease_hours(6)
+        _as_agent(client)
         resp = client.post("/api/slices?name=lease-policy-cap&lease_hours=24")
         assert resp.status_code == 200
         sid = resp.json()["id"]
@@ -478,6 +487,7 @@ class TestSubmitLease:
 
     def test_submit_clamps_explicit_over_cap_lease_with_warning(self, client, mock_fablib):
         _set_max_lease_hours(6)
+        _as_agent(client)
         sid, _ = _create_draft_with_node(client, "lease-policy-warning")
 
         with patch("app.routes.slices.get_fresh_sites", return_value=[]), \
@@ -752,6 +762,7 @@ class TestRenewSlice:
 
     def test_renew_caps_days_to_policy_hours(self, client, mock_fablib):
         _set_max_lease_hours(6)
+        _as_agent(client)
         sid, _ = _create_draft_with_node(client, "renew-policy")
 
         resp = client.post(f"/api/slices/{sid}/renew", json={"days": 1})
@@ -793,6 +804,7 @@ class TestRenewSlice:
     def test_renew_extends_lease_past_policy_cap_is_rejected_clearly(self, client, mock_fablib):
         """A far-future end_date on an over-cap lease must not become a shortening."""
         _set_max_lease_hours(6)
+        _as_agent(client)
         sid, _ = _create_draft_with_node(client, "renew-over-policy")
         slice_obj = mock_fablib.get_slice(name="renew-over-policy")
         slice_obj._lease_end = datetime.now(timezone.utc) + timedelta(hours=24)
@@ -811,6 +823,7 @@ class TestRenewSlice:
 
     def test_renew_clamps_to_policy_when_lease_is_under_cap(self, client, mock_fablib):
         _set_max_lease_hours(6)
+        _as_agent(client)
         sid, _ = _create_draft_with_node(client, "renew-under-cap")
         slice_obj = mock_fablib.get_slice(name="renew-under-cap")
         slice_obj._lease_end = datetime.now(timezone.utc) + timedelta(hours=2)
@@ -905,6 +918,7 @@ class TestRenewSlice:
 class TestLeasePolicyWarnings:
     def test_list_slices_surfaces_over_policy_lease_warning(self, client, mock_fablib):
         _set_max_lease_hours(6)
+        _as_agent(client)
         lease_end = datetime.now(timezone.utc) + timedelta(hours=24)
         mock_fablib._slices["over-policy"] = MockSlice(
             name="over-policy",
@@ -922,3 +936,228 @@ class TestLeasePolicyWarnings:
         assert warning["code"] == "LEASE_EXCEEDS_POLICY"
         assert warning["max_lease_hours"] == 6
         assert "delete and recreate" in warning["message"].lower()
+
+    def test_slice_payload_exposes_cap_for_compliant_lease(self, client, mock_fablib):
+        _set_max_lease_hours(6)
+        _as_agent(client)
+        mock_fablib._slices["compliant"] = MockSlice(
+            name="compliant",
+            slice_id="uuid-compliant",
+            state="StableOK",
+            lease_end=datetime.now(timezone.utc) + timedelta(hours=2),
+        )
+
+        resp = client.get("/api/slices?max_age=0")
+
+        assert resp.status_code == 200
+        row = next(item for item in resp.json() if item["name"] == "compliant")
+        assert row["max_lease_hours"] == 6
+        assert "lease_policy_violation" not in row
+
+    def test_slice_payload_omits_cap_when_disabled(self, client, mock_fablib):
+        _set_max_lease_hours(0)
+        mock_fablib._slices["uncapped"] = MockSlice(
+            name="uncapped",
+            slice_id="uuid-uncapped",
+            state="StableOK",
+            lease_end=datetime.now(timezone.utc) + timedelta(hours=48),
+        )
+
+        resp = client.get("/api/slices?max_age=0")
+
+        assert resp.status_code == 200
+        row = next(item for item in resp.json() if item["name"] == "uncapped")
+        assert "max_lease_hours" not in row
+
+
+class TestAgentOnlyLeaseCap:
+    """The lease cap applies to agent-initiated requests only; people use FABRIC's limits."""
+
+    def test_user_submit_is_not_capped(self, client, mock_fablib):
+        _set_max_lease_hours(6)
+        sid, _ = _create_draft_with_node(client, "user-submit-uncapped")
+
+        with patch("app.routes.slices.get_fresh_sites", return_value=[]), \
+             patch("app.routes.slices.resolve_sites", side_effect=lambda nodes, sites: (nodes, {})):
+            submit = client.post(f"/api/slices/{sid}/submit", json={"lease_hours": 24})
+
+        assert submit.status_code == 200
+        slice_obj = mock_fablib.get_slice(name="user-submit-uncapped")
+        assert slice_obj.submitted_kwargs["lease_in_hours"] == 24
+        assert not submit.json().get("warnings")
+
+    def test_user_renew_past_cap_succeeds(self, client, mock_fablib):
+        _set_max_lease_hours(6)
+        sid, _ = _create_draft_with_node(client, "user-renew-uncapped")
+        slice_obj = mock_fablib.get_slice(name="user-renew-uncapped")
+        slice_obj._lease_end = datetime.now(timezone.utc) + timedelta(hours=24)
+
+        target = datetime.now(timezone.utc) + timedelta(hours=48, minutes=30)
+        resp = client.post(f"/api/slices/{sid}/renew", json={"end_date": target.isoformat()})
+
+        assert resp.status_code == 200
+        assert slice_obj.submitted_kwargs["lease_in_hours"] == 48
+        assert "max_lease_hours" not in resp.json()
+
+    def test_user_slice_payload_has_no_cap_fields(self, client, mock_fablib):
+        _set_max_lease_hours(6)
+        mock_fablib._slices["user-long"] = MockSlice(
+            name="user-long",
+            slice_id="uuid-user-long",
+            state="StableOK",
+            lease_end=datetime.now(timezone.utc) + timedelta(hours=24),
+        )
+
+        resp = client.get("/api/slices?max_age=0")
+
+        assert resp.status_code == 200
+        row = next(item for item in resp.json() if item["name"] == "user-long")
+        assert "max_lease_hours" not in row
+        assert "lease_policy_violation" not in row
+
+    def test_chat_tool_renew_is_capped(self, client, mock_fablib):
+        import asyncio
+        from app.routes.ai_chat import execute_tool
+
+        _set_max_lease_hours(6)
+        _create_draft_with_node(client, "chat-renew-capped")
+        slice_obj = mock_fablib.get_slice(name="chat-renew-capped")
+        slice_obj._lease_end = datetime.now(timezone.utc) + timedelta(hours=2)
+
+        result = json.loads(asyncio.run(
+            execute_tool("renew_slice", {"slice_name": "chat-renew-capped", "hours": 24})
+        ))
+
+        assert slice_obj.submitted_kwargs["lease_in_hours"] == 6
+        assert "LEASE_CLAMPED_TO_POLICY" in [w["code"] for w in result.get("warnings", [])]
+
+    def test_cached_slice_list_is_annotated_per_caller(self, client, mock_fablib):
+        """One caller's lease-policy view must not leak to the next via the list cache."""
+        from app.request_actor import ACTOR_HEADER, AGENT
+
+        _set_max_lease_hours(6)
+        mock_fablib._slices["cached-long"] = MockSlice(
+            name="cached-long",
+            slice_id="uuid-cached-long",
+            state="StableOK",
+            lease_end=datetime.now(timezone.utc) + timedelta(hours=24),
+        )
+
+        def row(headers=None, max_age=30):
+            resp = client.get(f"/api/slices?max_age={max_age}", headers=headers or {})
+            assert resp.status_code == 200
+            return next(item for item in resp.json() if item["name"] == "cached-long")
+
+        # Agent populates the cache, then a person reads it.
+        agent_row = row({ACTOR_HEADER: AGENT}, max_age=0)
+        assert agent_row["max_lease_hours"] == 6
+        assert agent_row["lease_policy_violation"] is True
+        user_row = row()
+        assert "max_lease_hours" not in user_row
+        assert "lease_policy_violation" not in user_row
+
+        # Person populates the cache, then an agent reads it.
+        assert "max_lease_hours" not in row(max_age=0)
+        assert row({ACTOR_HEADER: AGENT})["lease_policy_violation"] is True
+
+
+class TestNoSliceWorkdirs:
+    def test_create_and_view_do_not_create_storage_folders(self, client, storage_dir, mock_fablib):
+        sid, _ = _create_draft_with_node(client, "no-workdir-slice")
+        mock_fablib._slices["no-workdir-live"] = MockSlice(
+            name="no-workdir-live", slice_id="uuid-no-workdir", state="StableOK",
+            lease_end=datetime.now(timezone.utc) + timedelta(hours=2),
+        )
+
+        assert client.get(f"/api/slices/{sid}").status_code == 200
+        assert client.get("/api/slices/no-workdir-live?max_age=0").status_code == 200
+
+        assert not (storage_dir / "no-workdir-slice").exists()
+        assert not (storage_dir / "no-workdir-live").exists()
+
+
+class TestSliceConcurrencyGuards:
+    def _live(self, mock_fablib, name, uuid):
+        mock_fablib._slices[name] = MockSlice(
+            name=name, slice_id=uuid, state="StableOK",
+            lease_end=datetime.now(timezone.utc) + timedelta(hours=2),
+        )
+        return mock_fablib._slices[name]
+
+    def test_get_slice_keeps_unsubmitted_edits_on_loaded_slice(self, client, mock_fablib):
+        self._live(mock_fablib, "live-edit", "uuid-live-edit")
+        assert client.get("/api/slices/live-edit").status_code == 200   # loads as draft
+        add = client.post("/api/slices/live-edit/nodes", json={"name": "n-new", "site": "RENC"})
+        assert add.status_code == 200 and add.json()["dirty"] is True
+
+        got = client.get("/api/slices/live-edit")   # used to refetch and drop the edit
+
+        assert got.status_code == 200
+        assert got.json()["dirty"] is True
+        assert "n-new" in [n["name"] for n in got.json()["nodes"]]
+
+    def test_refresh_discards_unsubmitted_edits(self, client, mock_fablib):
+        from app.routes import slices as slices_mod
+        self._live(mock_fablib, "live-refresh", "uuid-live-refresh")
+        client.get("/api/slices/live-refresh")
+        client.post("/api/slices/live-refresh/nodes", json={"name": "tmp", "site": "RENC"})
+        assert "live-refresh" in slices_mod._draft_dirty
+
+        assert client.post("/api/slices/live-refresh/refresh").status_code == 200
+        assert "live-refresh" not in slices_mod._draft_dirty
+
+    def test_delete_uses_fabric_when_registry_has_real_uuid(self, client, mock_fablib):
+        from app.routes import slices as slices_mod
+        from app.slice_registry import register_slice, get_slice_uuid
+        live = self._live(mock_fablib, "live-del", "uuid-live-del")
+        register_slice("live-del", uuid="uuid-live-del", state="StableOK")
+        # A stale "new" draft of the same name (the resurrection bug's residue).
+        slices_mod._store_draft("live-del", MockSlice(name="live-del"), is_new=True)
+
+        resp = client.delete("/api/slices/uuid-live-del")
+
+        assert resp.status_code == 200
+        assert live._state == "Dead"                 # FABRIC delete happened
+        assert get_slice_uuid("live-del") == "uuid-live-del"
+
+    def test_delete_blocked_while_submit_in_progress(self, client):
+        from app.routes import slices as slices_mod
+        with slices_mod._draft_lock:
+            slices_mod._submitting["sub-del"] = {"name": "sub-del", "state": "Submitting"}
+        try:
+            resp = client.delete("/api/slices/sub-del")
+        finally:
+            slices_mod._end_submit("sub-del")
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "SLICE_SUBMIT_IN_PROGRESS"
+
+    def test_get_and_list_show_submitting_snapshot(self, client):
+        from app.routes import slices as slices_mod
+        snap = {"name": "sub-get", "id": "draft-sg", "state": "Submitting", "dirty": False,
+                "nodes": [{"name": "n1"}], "networks": [], "facility_ports": [],
+                "port_mirrors": [], "error_messages": [], "graph": {"nodes": [], "edges": []}}
+        with slices_mod._draft_lock:
+            slices_mod._submitting["sub-get"] = snap
+        try:
+            got = client.get("/api/slices/sub-get")
+            listed = client.get("/api/slices?max_age=0")
+        finally:
+            slices_mod._end_submit("sub-get")
+        assert got.status_code == 200 and got.json()["state"] == "Submitting"
+        row = next(r for r in listed.json() if r["name"] == "sub-get")
+        assert row["state"] == "Submitting"
+
+    def test_reconcile_projects_leaves_env_and_fablib_project_untouched(self, client, mock_fablib):
+        import os
+        from app.routes import slices as slices_mod
+        original = os.environ.get("FABRIC_PROJECT_ID", "")
+        mgr = mock_fablib.get_manager()
+        projects = [{"uuid": "proj-a", "name": "A"}, {"uuid": "proj-b", "name": "B"}]
+        with patch.object(mgr, "get_project_info", return_value=projects, create=True):
+            resp = client.post("/api/slices/reconcile-projects")
+
+        assert resp.status_code == 200
+        assert resp.json()["projects_scanned"] == 2
+        assert os.environ.get("FABRIC_PROJECT_ID", "") == original
+        assert mock_fablib.get_project_id() == original
+        assert slices_mod._reconcile_idle.is_set()

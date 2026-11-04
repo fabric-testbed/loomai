@@ -1,7 +1,6 @@
 'use client';
 import InAppSelect from './InAppSelect';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { createPortal } from 'react-dom';
 import TestbedViewShell, { CHAMELEON_THEME } from './TestbedViewShell';
 import type { Tab } from './TestbedViewShell';
 import * as api from '../api/client';
@@ -11,6 +10,7 @@ import ChameleonCalendar from './ChameleonCalendar';
 import ChameleonEditor from './ChameleonEditor';
 import dynamic from 'next/dynamic';
 import '../styles/chameleon-view.css';
+import { Modal } from './Modal';
 
 const GeoView = dynamic(() => import('./GeoView'), { ssr: false });
 
@@ -860,9 +860,8 @@ export default function ChameleonView({ onError, forcedTab, hideBar, onOpenTermi
       )}
 
       {/* Create Lease Modal */}
-      {showCreateLease && typeof document !== 'undefined' && createPortal(
-        <div className="toolbar-modal-overlay" onClick={() => setShowCreateLease(false)}>
-          <div className="toolbar-modal toolbar-modal-wide" onClick={e => e.stopPropagation()} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+      {showCreateLease && typeof document !== 'undefined' && (
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal toolbar-modal-wide" onClose={() => setShowCreateLease(false)} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
             <h4>Create Chameleon Lease</h4>
             {createError && <div className="chi-error" style={{ marginBottom: 8 }}>{createError}</div>}
 
@@ -972,15 +971,12 @@ export default function ChameleonView({ onError, forcedTab, hideBar, onOpenTermi
                 {createSubmitting ? 'Creating...' : 'Create Lease'}
               </button>
             </div>
-          </div>
-        </div>,
-        document.body,
+        </Modal>
       )}
 
       {/* Confirmation modal — shared by all confirm actions */}
-      {confirmAction && typeof document !== 'undefined' && createPortal(
-        <div className="toolbar-modal-overlay" onClick={() => setConfirmAction(null)}>
-          <div className="toolbar-modal" onClick={e => e.stopPropagation()}>
+      {confirmAction && typeof document !== 'undefined' && (
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal" onClose={() => setConfirmAction(null)}>
             <h4>{confirmAction.title}</h4>
             <p>{confirmAction.message}</p>
             <div className="toolbar-modal-actions">
@@ -989,9 +985,7 @@ export default function ChameleonView({ onError, forcedTab, hideBar, onOpenTermi
                 {confirmAction.danger ? 'Delete' : 'Confirm'}
               </button>
             </div>
-          </div>
-        </div>,
-        document.body,
+        </Modal>
       )}
     </>
   );

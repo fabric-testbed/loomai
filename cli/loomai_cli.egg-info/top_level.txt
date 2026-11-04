@@ -1,1 +1,0 @@
-loomai_cli

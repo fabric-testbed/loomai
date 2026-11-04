@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import secrets
 import logging
 import os
 import time
@@ -141,21 +142,77 @@ def get_server_secret() -> bytes:
     return _get_session_secret()
 
 
+def _revocation_file_path() -> str:
+    storage = os.environ.get("FABRIC_STORAGE_DIR", "/home/fabric/work")
+    return os.path.join(storage, ".loomai", "session_revocation")
+
+
+_revocation_cache: str | None = None
+
+
+def _revocation_marker() -> str:
+    """Opaque marker rewritten on every logout; tokens minted under an older
+    marker are dead. A random value rather than a timestamp: two logouts
+    within the same second must still produce two different generations, or
+    a token minted between them would survive the second logout."""
+    global _revocation_cache
+    if _revocation_cache is None:
+        try:
+            with open(_revocation_file_path()) as f:
+                _revocation_cache = f.read().strip() or "0"
+        except OSError:
+            _revocation_cache = "0"
+    return _revocation_cache
+
+
+def revoke_all_sessions() -> None:
+    """Invalidate every session token issued so far (logout, password change)."""
+    global _revocation_cache
+    marker = secrets.token_hex(16)
+    try:
+        path = _revocation_file_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(marker)
+        os.chmod(path, 0o600)
+    except OSError as e:
+        logger.warning("Could not persist session revocation (%s); in-memory only", e)
+    _revocation_cache = marker
+
+
+def _session_generation() -> str:
+    """Identifies the set of sessions that are currently valid.
+
+    It changes when the password hash changes or revoke_all_sessions() runs,
+    so a token minted earlier stops validating. Before this, a session token
+    was HMAC(timestamp) alone: changing the password or logging out did not
+    invalidate a captured cookie for the remaining 7 days.
+    """
+    digest = hashlib.sha256()
+    digest.update(_get_password_hash() or b"")
+    digest.update(b"|")
+    digest.update(_revocation_marker().encode())
+    return digest.hexdigest()[:16]
+
+
 def _make_session_token() -> str:
     ts = str(int(time.time()))
-    sig = hmac.new(_get_session_secret(), ts.encode(), hashlib.sha256).hexdigest()
-    return f"{ts}.{sig}"
+    gen = _session_generation()
+    sig = hmac.new(_get_session_secret(), f"{ts}.{gen}".encode(), hashlib.sha256).hexdigest()
+    return f"{ts}.{gen}.{sig}"
 
 
 def _validate_session_token(token: str) -> bool:
     try:
-        ts_str, sig = token.split(".", 1)
+        ts_str, gen, sig = token.split(".", 2)
         ts = int(ts_str)
     except (ValueError, AttributeError):
         return False
     if time.time() - ts > _SESSION_MAX_AGE:
         return False
-    expected = hmac.new(_get_session_secret(), ts_str.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(gen, _session_generation()):
+        return False
+    expected = hmac.new(_get_session_secret(), f"{ts_str}.{gen}".encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(sig, expected)
 
 
@@ -191,11 +248,25 @@ _LOGIN_LOCKOUT_BASE = 30      # seconds; doubles past the threshold, capped at 1
 _login_fails: dict[str, dict] = {}
 
 
+_LOOPBACK_PEERS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
 def _client_ip(request: Request) -> str:
+    """Client address for the login lockout.
+
+    ``X-Forwarded-For`` is attacker-controlled, and keying the lockout on
+    its first entry let a brute force rotate it freely. Trust the header
+    only when the immediate peer is our own nginx (loopback) or the
+    deployment opts in with ``LOOMAI_TRUST_PROXY=1``, and then take the
+    *last* entry: a proxy appends the real client to whatever the client
+    sent, so the last entry is the one the proxy added.
+    """
+    peer = request.client.host if request.client else "unknown"
     xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    trusted = os.environ.get("LOOMAI_TRUST_PROXY") == "1" or peer in _LOOPBACK_PEERS
+    if xff and trusted:
+        return xff.split(",")[-1].strip() or peer
+    return peer
 
 
 def _login_lockout_remaining(ip: str) -> float:
@@ -252,7 +323,12 @@ async def auth_login(request: Request):
 
 @router.post("/logout")
 def auth_logout():
-    """Clear session cookie."""
+    """Clear the session cookie and invalidate every issued session token.
+
+    Single-user container: logging out from one browser logs out all of
+    them, which is what "log out" should mean for a captured cookie too.
+    """
+    revoke_all_sessions()
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(key=_COOKIE_NAME, path="/")
     return resp

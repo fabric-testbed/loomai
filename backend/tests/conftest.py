@@ -225,10 +225,8 @@ def client(mock_fablib, storage_dir):
     mgr._cache["sites"] = CacheEntry(data=sites_data, timestamp=time.time())
 
     # Also patch resources.get_cached_sites for routes that use it
-    # and jupyter.ensure_slice_workdir which is called during slice creation
     with patch("app.routes.resources.get_cached_sites", return_value=sites_data), \
-         patch("app.routes.resources.get_fresh_sites", return_value=sites_data), \
-         patch("app.routes.jupyter.ensure_slice_workdir", return_value=None):
+         patch("app.routes.resources.get_fresh_sites", return_value=sites_data):
         with TestClient(main_module.app) as tc:
             yield tc
 

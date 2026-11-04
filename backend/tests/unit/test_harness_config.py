@@ -319,11 +319,12 @@ def test_loomai_harness_mcp_lists_tools() -> None:
     submit_wait_schema = by_name["submit_slice"]["inputSchema"]["properties"]["wait_for_stableok"]
     renew_schema = by_name["renew_slice"]["inputSchema"]["properties"]["lease_hours"]
     weave_schema = by_name["run_weave"]["inputSchema"]["properties"]["lease_hours"]
-    assert submit_schema["maximum"] == 6
-    assert submit_schema["default"] == 6
+    # Leases default to 6 h; the configurable cap is enforced by the backend
+    # (Agent Lease Limit), so the schemas must not hardcode a maximum.
+    for schema in (submit_schema, renew_schema, weave_schema):
+        assert schema["default"] == 6
+        assert "maximum" not in schema
     assert submit_wait_schema["default"] is False
-    assert renew_schema["maximum"] == 6
-    assert weave_schema["maximum"] == 6
 
 
 def test_loomai_harness_mcp_metatools_are_opt_in() -> None:

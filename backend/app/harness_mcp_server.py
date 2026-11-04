@@ -20,6 +20,9 @@ from urllib import parse, request
 
 
 DEFAULT_BACKEND_URL = "http://localhost:8000"
+# Mirrors app.request_actor; kept local so this module stays stdlib-only.
+ACTOR_HEADER = "X-LoomAI-Actor"
+AGENT = "agent"
 SUBMIT_STABLEOK_WAIT_TIMEOUT_SECONDS = 240
 METATOOL_NAMES = {"list-endpoints", "describe-endpoint"}
 
@@ -111,7 +114,8 @@ class LoomAIRestClient:
     def request(self, method: str, path: str, payload: dict[str, Any] | None = None, timeout: int = 300) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
-        req = request.Request(url, data=data, method=method, headers={"Accept": "application/json"})
+        # Mark every harness call as agent-initiated so the agent lease cap applies.
+        req = request.Request(url, data=data, method=method, headers={"Accept": "application/json", ACTOR_HEADER: AGENT})
         if payload is not None:
             req.add_header("Content-Type", "application/json")
         started = time.time()
@@ -296,15 +300,16 @@ def tool_definitions() -> list[dict[str, Any]]:
             "then poll get_slice/list_slices for StableOK before claiming readiness. If wait_for_stableok=true "
             f"the harness HTTP wait is capped at {SUBMIT_STABLEOK_WAIT_TIMEOUT_SECONDS} seconds; on timeout, "
             "continue polling the slice. FABNetv4/v6 services must attach only VMs at one site, up to 255 VMs "
-            "per service; use one FABNet service per site for multi-site L3. Defaults to a 6-hour lease.",
+            "per service; use one FABNet service per site for multi-site L3. Defaults to a 6-hour lease; the backend "
+            "caps agent leases at the user's Agent Lease Limit.",
             {
                 "slice_name": _str_schema(),
-                "lease_hours": _int_schema(1, 6, required=False, default=6),
+                "lease_hours": _int_schema(1, None, required=False, default=6),
                 "wait_for_stableok": _bool_schema(required=False, default=False),
             },
             destructive=True,
         ),
-        _tool("renew_slice", "Renew a slice lease asynchronously with a 6-hour maximum.", {"slice_name": _str_schema(), "lease_hours": _int_schema(1, 6, required=False, default=6)}, destructive=True),
+        _tool("renew_slice", "Renew a slice lease asynchronously, capped at the user's Agent Lease Limit.", {"slice_name": _str_schema(), "lease_hours": _int_schema(1, None, required=False, default=6)}, destructive=True),
         _tool(
             "configure_networking",
             "Configure and verify post-StableOK private/FABNet networking only. It cannot fix an invalid "
@@ -313,7 +318,7 @@ def tool_definitions() -> list[dict[str, Any]]:
             {"slice_name": _str_schema()},
             destructive=True,
         ),
-        _tool("run_weave", "Run a weave script asynchronously with a 6-hour lease default.", {"template": _str_schema(), "script": _str_schema(required=False, default="weave.sh"), "args": _object_schema(), "lease_hours": _int_schema(1, 6, required=False, default=6)}, destructive=True),
+        _tool("run_weave", "Run a weave script asynchronously with a 6-hour lease default.", {"template": _str_schema(), "script": _str_schema(required=False, default="weave.sh"), "args": _object_schema(), "lease_hours": _int_schema(1, None, required=False, default=6)}, destructive=True),
         _tool("get_weave_status", "Read-only local template details/status.", {"template": _str_schema()}, read_only=True),
         _tool("execute_recipe", "Execute a recipe on a node asynchronously.", {"recipe": _str_schema(), "slice_name": _str_schema(), "node_name": _str_schema()}, destructive=True),
         _tool("create_tunnel", "Create a LoomAI web tunnel.", {"slice_name": _str_schema(), "node_name": _str_schema(), "remote_port": _int_schema(1, 65535), "local_port": _int_schema(1, 65535, required=False)}, destructive=True),
@@ -414,8 +419,10 @@ def _str_schema(*, required: bool = True, default: str | None = None) -> dict[st
     return schema
 
 
-def _int_schema(minimum: int, maximum: int, *, required: bool = True, default: int | None = None) -> dict[str, Any]:
-    schema: dict[str, Any] = {"type": "integer", "minimum": minimum, "maximum": maximum, "_required": required}
+def _int_schema(minimum: int, maximum: int | None, *, required: bool = True, default: int | None = None) -> dict[str, Any]:
+    schema: dict[str, Any] = {"type": "integer", "minimum": minimum, "_required": required}
+    if maximum is not None:
+        schema["maximum"] = maximum
     if default is not None:
         schema["default"] = default
     return schema

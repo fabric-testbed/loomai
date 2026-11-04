@@ -185,6 +185,16 @@ declares domains, triggers, source paths, tool targets, and
   regression triage.
 - LoomAI development guidance for agents changing this repo.
 
+A second curated map, `ai-tools/shared/corpus/mcp-servers.md` (mirrored under
+`backend/ai-tools/shared/corpus/`), covers the MCP servers LoomAI talks to:
+the `fabric-metrics` infrastructure-metrics server, `fabric-reports`, and the
+local `loomai-harness`. It carries the routing contract (list topics -> pick a
+topic and variant -> query; never write PromQL), the topic list, worked
+examples for both the assistant tools and the raw harness tool names, and the
+known oversized-bearer-token limitation. Triggers include `infrastructure
+metrics`, `site cpu load`, `node temperature`, `link traffic`, and
+`port traffic`.
+
 ## Observed Gaps
 
 - **Docs drift cleanup**: Current roadmap, architecture, help, tour, and

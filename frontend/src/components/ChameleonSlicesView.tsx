@@ -1,10 +1,10 @@
 'use client';
 import React, { useState, useMemo } from 'react';
-import { createPortal } from 'react-dom';
 import * as api from '../api/client';
 import type { ChameleonDraft, ChameleonLease } from '../types/chameleon';
 import { alertDialog, confirmDialog } from './AppDialogProvider';
 import '../styles/chameleon-slices-view.css';
+import { Modal } from './Modal';
 
 type ChameleonLeaseRow = ChameleonLease & { site?: string };
 
@@ -701,20 +701,15 @@ export default React.memo(function ChameleonSlicesView({
           </tbody>
         </table>
       </div>
-      {leaseDialogSlice && typeof document !== 'undefined' && createPortal(
-        <div
-          className="chi-sv-modal-overlay"
-          onClick={() => setLeaseDialogSliceId(null)}
+      {leaseDialogSlice && typeof document !== 'undefined' && (
+        <Modal
+          overlayClassName="chi-sv-modal-overlay"
+          className="chi-sv-lease-modal"
+          onClose={() => setLeaseDialogSliceId(null)}
           data-testid="chameleon-lease-modal-overlay"
+          boxTestId="chameleon-lease-modal"
+          aria-labelledby="chameleon-lease-modal-title"
         >
-          <div
-            className="chi-sv-lease-modal"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="chameleon-lease-modal-title"
-            data-testid="chameleon-lease-modal"
-          >
             <h4 id="chameleon-lease-modal-title">Add Chameleon Lease</h4>
             <p>
               Attach or remove existing Chameleon leases for <strong>{leaseDialogSlice.name}</strong>.
@@ -818,9 +813,7 @@ export default React.memo(function ChameleonSlicesView({
             <div className="chi-sv-modal-actions">
               <button onClick={() => setLeaseDialogSliceId(null)} data-testid="chameleon-lease-modal-close">Close</button>
             </div>
-          </div>
-        </div>,
-        document.body,
+        </Modal>
       )}
     </div>
   );

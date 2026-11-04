@@ -12,28 +12,13 @@ import threading
 from datetime import datetime, timezone
 from typing import Any
 
-from app.user_context import get_user_storage, get_slices_dir
+from app.user_context import get_slices_dir
 
 logger = logging.getLogger(__name__)
 
 TERMINAL_STATES = {"Dead", "Closing", "StableError"}
 
 _lock = threading.Lock()
-
-
-def _archive_slice_workdir(name: str, uuid: str) -> None:
-    """Rename <name> to <name>-<uuid> on terminal state."""
-    if not uuid:
-        return
-    storage = get_user_storage()
-    src = os.path.join(storage, name)
-    dst = os.path.join(storage, f"{name}-{uuid}")
-    if os.path.isdir(src) and not os.path.exists(dst):
-        try:
-            os.rename(src, dst)
-            logger.info("Archived slice workdir %s -> %s", src, dst)
-        except Exception:
-            logger.warning("Could not archive slice workdir %s", src, exc_info=True)
 
 
 def _registry_path() -> str:
@@ -79,8 +64,20 @@ def register_slice(name: str, uuid: str = "", state: str = "Draft", has_errors: 
         now = _now()
         existing = reg["slices"].get(name)
         pid = project_id or (existing.get("project_id", "") if existing else "") or _current_project_id()
+        existing_uuid = existing.get("uuid", "") if existing else ""
+        if (
+            uuid.startswith("draft-")
+            and existing_uuid
+            and not existing_uuid.startswith("draft-")
+        ):
+            # A real FABRIC UUID is never downgraded to a draft id. This closes
+            # a race where a persistent-draft restore that read the registry
+            # before submit captured the UUID would otherwise overwrite it.
+            logger.info("register_slice: keeping FABRIC uuid %s for '%s' (ignoring %s)",
+                        existing_uuid, name, uuid)
+            uuid = existing_uuid
         entry = {
-            "uuid": uuid or (existing["uuid"] if existing else ""),
+            "uuid": uuid or existing_uuid,
             "name": name,
             "state": state,
             "archived": False,
@@ -110,7 +107,6 @@ def update_slice_state(name: str, state: str, uuid: str = "", has_errors: bool |
                 "updated_at": _now(),
             }
         else:
-            old_state = entry.get("state", "")
             entry["state"] = state
             entry["updated_at"] = _now()
             if uuid:
@@ -127,9 +123,6 @@ def update_slice_state(name: str, state: str, uuid: str = "", has_errors: bool |
                 entry["project_id"] = project_id
             elif not entry.get("project_id"):
                 entry["project_id"] = _current_project_id()
-            # Rename workdir when slice reaches a terminal state
-            if state in TERMINAL_STATES and old_state not in TERMINAL_STATES:
-                _archive_slice_workdir(name, entry.get("uuid", ""))
         reg["slices"][name] = entry
         _save(reg)
 

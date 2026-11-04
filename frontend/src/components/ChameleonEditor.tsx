@@ -1,13 +1,13 @@
 'use client';
 import InAppSelect from './InAppSelect';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import CytoscapeGraph from './CytoscapeGraph';
 import ChameleonNodeTypeComboBox from './editor/ChameleonNodeTypeComboBox';
 import ChameleonImageComboBox from './editor/ChameleonImageComboBox';
 import { CompactResourceTable, FilterBox, InlineActions, matchesFilter } from './editor/ChameleonEditorUi';
 import * as api from '../api/client';
 import type { ChameleonSite, ChameleonImage, ChameleonDraft, ChameleonNodeTypeDetail, ChameleonNetwork, ChameleonSliceResource } from '../types/chameleon';
+import { Modal } from './Modal';
 
 // --- Floating IP helpers (supports old string[] and new {node_id, nic}[] formats) ---
 type FipEntry = string | { node_id: string; nic: number };
@@ -3094,9 +3094,8 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
       </div>
 
       {/* Confirmation modal */}
-      {confirmAction && typeof document !== 'undefined' && createPortal(
-        <div className="toolbar-modal-overlay" onClick={() => setConfirmAction(null)}>
-          <div className="toolbar-modal" onClick={e => e.stopPropagation()}>
+      {confirmAction && typeof document !== 'undefined' && (
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal" onClose={() => setConfirmAction(null)}>
             <h4>{confirmAction.title}</h4>
             <p>{confirmAction.message}</p>
             {confirmAction.details && confirmAction.details.length > 0 && (
@@ -3110,9 +3109,7 @@ export default function ChameleonEditor({ sites, onError, onDeployed, graphOnly,
                 {confirmAction.confirmLabel || (confirmAction.danger ? 'Delete' : 'Confirm')}
               </button>
             </div>
-          </div>
-        </div>,
-        document.body,
+        </Modal>
       )}
     </div>
   );

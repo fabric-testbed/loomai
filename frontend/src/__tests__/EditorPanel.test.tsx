@@ -20,6 +20,7 @@ vi.mock('../api/client', () => ({
   resolveSites: vi.fn(),
   getChameleonNodeTypes: vi.fn().mockResolvedValue({ node_types: [] }),
   getChameleonImages: vi.fn().mockResolvedValue([]),
+  renewLease: vi.fn(),
 }));
 
 const facilityPorts: FacilityPortInfo[] = [
@@ -224,6 +225,88 @@ describe('EditorPanel facility port selector', () => {
       name: 'nic1',
       model: 'NIC_Basic',
     }));
+    expect(onSliceUpdated).toHaveBeenCalled();
+  });
+});
+
+describe('EditorPanel lease renew panel', () => {
+  const HOUR = 3600 * 1000;
+  const activeSlice = (leaseEndOffsetHours: number, maxLeaseHours?: number): SliceData => ({
+    ...sliceData,
+    name: 'active-slice',
+    state: 'StableOK',
+    lease_start: new Date(Date.now() - HOUR).toISOString(),
+    lease_end: new Date(Date.now() + leaseEndOffsetHours * HOUR).toISOString(),
+    ...(maxLeaseHours ? { max_lease_hours: maxLeaseHours } : {}),
+  });
+  const renderActive = (data: SliceData) => renderPanel({ sliceData: data, sliceName: 'active-slice' });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('replaces the picker with an explanation when the lease already exceeds the cap', () => {
+    renderActive(activeSlice(24, 6));
+
+    expect(screen.getByText(/already runs past the 6 h lease policy/)).toBeInTheDocument();
+    expect(screen.getByText(/Renewal opens after/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Renew Lease' })).not.toBeInTheDocument();
+  });
+
+  it('bounds the picker by the cap and defaults to it', () => {
+    const { container } = renderActive(activeSlice(2, 6));
+
+    const input = container.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    expect(input.max).toBeTruthy();
+    expect(input.min).toBeTruthy();
+    // Default is lease_end + 1 day, clamped to the 6 h cap.
+    expect(input.value).toBe(input.max);
+    expect(screen.getByText(/Policy limit: 6 h from now/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Renew Lease' })).toBeEnabled();
+  });
+
+  it('blocks a date past the cap before calling the API', () => {
+    const { container } = renderActive(activeSlice(2, 6));
+
+    const input = container.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '2099-01-01T00:00' } });
+
+    expect(screen.getByText(/Policy allows at most 6 h from now/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Renew Lease' })).toBeDisabled();
+    expect(api.renewLease).not.toHaveBeenCalled();
+  });
+
+  it('leaves the picker unbounded when no cap is configured', () => {
+    const { container } = renderActive(activeSlice(24));
+
+    const input = container.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    expect(input.max).toBe('');
+    expect(screen.queryByText(/Policy limit/)).not.toBeInTheDocument();
+  });
+
+  it('shows the backend detail message instead of raw JSON on failure', async () => {
+    vi.mocked(api.renewLease).mockRejectedValue(new Error(
+      'API error 422: {"detail":{"code":"LEASE_ALREADY_EXCEEDS_POLICY","message":"Nothing to renew."}}',
+    ));
+    renderActive(activeSlice(2, 6));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Renew Lease' }));
+
+    expect(await screen.findByText('Nothing to renew.')).toBeInTheDocument();
+    expect(screen.queryByText(/API error 422/)).not.toBeInTheDocument();
+  });
+
+  it('reports a policy clamp rather than a plain success', async () => {
+    const onSliceUpdated = vi.fn();
+    vi.mocked(api.renewLease).mockResolvedValue({
+      ...activeSlice(6, 6),
+      warnings: [{ code: 'LEASE_CLAMPED_TO_POLICY', message: 'Renewed to the 6 h cap instead.' }],
+    });
+    renderPanel({ sliceData: activeSlice(2, 6), sliceName: 'active-slice', onSliceUpdated });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Renew Lease' }));
+
+    expect(await screen.findByText('Renewed to the 6 h cap instead.')).toBeInTheDocument();
     expect(onSliceUpdated).toHaveBeenCalled();
   });
 });

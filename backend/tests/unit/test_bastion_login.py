@@ -98,10 +98,13 @@ class TestBastionLoginFromUIS:
         )
 
     def test_auto_setup_uses_uis(self):
-        """auto_setup must call _fetch_uis_person for bastion_login."""
-        source = self._get_function_source("auto_setup")
+        """run_auto_setup must call _fetch_uis_person for bastion_login.
+
+        The logic lives in run_auto_setup so the startup auto-provisioner can
+        share it; the /auto-setup route is a thin wrapper around it."""
+        source = self._get_function_source("run_auto_setup")
         assert "_fetch_uis_person" in source, (
-            "auto_setup does not call _fetch_uis_person — "
+            "run_auto_setup does not call _fetch_uis_person — "
             "bastion_login must be fetched from UIS API"
         )
 

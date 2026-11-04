@@ -29,14 +29,16 @@ def chameleon(ctx):
     client = ctx.obj["client"]
     try:
         status = client.get("/chameleon/status")
-        if isinstance(status, dict) and status.get("enabled") is False:
-            if ctx.invoked_subcommand == "status":
-                return
-            raise click.ClickException("Chameleon integration is disabled. Enable it in Settings.")
-    except click.ClickException:
-        raise
     except Exception:
-        pass  # Let individual commands handle errors
+        # Backend unreachable or errored. Don't fail here: the subcommand
+        # reports the real error, and `loomai chameleon <cmd> --help` must
+        # work without a backend. (CliError is a ClickException, so a
+        # blanket re-raise of ClickException used to defeat this.)
+        return
+    if isinstance(status, dict) and status.get("enabled") is False:
+        if ctx.invoked_subcommand == "status":
+            return
+        raise click.ClickException("Chameleon integration is disabled. Enable it in Settings.")
 
 
 @chameleon.command("status")

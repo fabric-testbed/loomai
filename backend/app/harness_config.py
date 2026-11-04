@@ -16,10 +16,13 @@ import shutil
 import tempfile
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from app.ai_assets import parse_markdown_asset
 from app.model_capability_defaults import harness_model_config, harness_models_for_provider
+
+if TYPE_CHECKING:
+    from app.mcp_registry import MCPServer
 
 
 APP_ROOT = Path(__file__).resolve().parent.parent
@@ -99,8 +102,12 @@ HARNESS_METADATA: dict[str, dict[str, str]] = {
 
 _HARNESS_FILE_SPECS: dict[str, dict[str, list[str]]] = {
     "opencode": {
-        "workspace_files": ["opencode.json", "opencode/AGENTS.md", ".opencode/mcp-scripts/fabric-reports.sh"],
-        "workspace_globs": [".opencode/agent-prompts/*.md", ".opencode/skills/*/SKILL.md"],
+        "workspace_files": ["opencode.json", "opencode/AGENTS.md"],
+        "workspace_globs": [
+            ".opencode/mcp-scripts/*.sh",
+            ".opencode/agent-prompts/*.md",
+            ".opencode/skills/*/SKILL.md",
+        ],
         "home_files": [],
         "home_globs": [],
     },
@@ -169,8 +176,10 @@ other external harnesses launched from the LoomAI container.
 - For benchmark or automated validation work, create only resources whose
   names begin with `bench-`.
 - Use 6-hour leases for every create, submit, renew, or weave-run workflow
-  unless the user gives a shorter duration. LoomAI backend defaults enforce a
-  6-hour maximum lease rail for FABRIC slices and weave runs.
+  unless the user gives a different duration. The LoomAI backend caps
+  agent-initiated leases at the user's Agent Lease Limit (default 6 hours);
+  if a renew is refused for exceeding it, tell the user they can renew from
+  the LoomAI UI or raise the limit in Configure.
 - Never use FABRIC sites EDC or EDUKY.
 - When running compound VM commands through `loomai exec` or REST execution,
   wrap them as `bash -lc '<command>'`.
@@ -971,6 +980,7 @@ def _render_opencode(workspace: Path, agents_md: str, agents: list[dict[str, Any
         "permission": _opencode_permissions(),
     }
     _merge_json_file(workspace / "opencode.json", defaults)
+    prune_stale_mcp_entries(workspace / "opencode.json", "mcp")
     _write_managed_text(workspace / "opencode" / "AGENTS.md", agents_md)
 
 
@@ -989,33 +999,148 @@ def _opencode_providers() -> dict[str, Any]:
     return providers
 
 
-def _opencode_mcp(workspace: Path) -> dict[str, Any]:
-    script = workspace / ".opencode" / "mcp-scripts" / "fabric-reports.sh"
-    script.parent.mkdir(parents=True, exist_ok=True)
-    _write_if_missing(
-        script,
-        """#!/usr/bin/env bash
+MANAGED_SCRIPT_MARKER = "# LoomAI-managed MCP wrapper — remove this line to keep local edits."
+
+# Resolve the FABRIC token file the same way `settings_manager.get_token_path()`
+# does: FABRIC_TOKEN_FILE -> ~/.tokens.json -> config_dir/id_token.json. The
+# Python fast-path is exact (it honours the settings `paths.token_file`
+# override); the shell chain is the fallback for when `app` is not importable.
+_RESOLVE_TOKEN_SH = """resolve_token_file() {
+  local resolved
+  resolved="$(python3 -c 'from app.settings_manager import get_token_path; print(get_token_path())' 2>/dev/null || true)"
+  if [ -n "$resolved" ] && [ -f "$resolved" ]; then
+    printf '%s' "$resolved"
+    return 0
+  fi
+  if [ -n "${FABRIC_TOKEN_FILE:-}" ]; then
+    printf '%s' "$FABRIC_TOKEN_FILE"
+  elif [ -f "$HOME/.tokens.json" ]; then
+    printf '%s' "$HOME/.tokens.json"
+  elif [ -n "${FABRIC_TOKEN_LOCATION:-}" ]; then
+    printf '%s' "$FABRIC_TOKEN_LOCATION"
+  else
+    printf '%s' "${FABRIC_CONFIG_DIR:-/home/fabric/work/fabric_config}/id_token.json"
+  fi
+}"""
+
+
+def _mcp_remote_script(server: "MCPServer") -> str:
+    """Bash wrapper that launches `npx mcp-remote` against a remote server."""
+    if server.auth != "fabric_token":
+        return f"""#!/usr/bin/env bash
+{MANAGED_SCRIPT_MARKER}
 set -euo pipefail
-TOKEN_FILE="${FABRIC_TOKEN_LOCATION:-${FABRIC_CONFIG_DIR:-/home/fabric/work/fabric_config}/id_token.json}"
+exec npx -y mcp-remote "{server.url}"
+"""
+    return f"""#!/usr/bin/env bash
+{MANAGED_SCRIPT_MARKER}
+set -euo pipefail
+{_RESOLVE_TOKEN_SH}
+TOKEN_FILE="$(resolve_token_file)"
 TOKEN="$(TOKEN_FILE="$TOKEN_FILE" python3 -c 'import json, os; print(json.load(open(os.environ["TOKEN_FILE"]))["id_token"])')"
-exec npx -y mcp-remote "https://reports.fabric-testbed.net/mcp" --header "Authorization: Bearer ${TOKEN}"
-""",
-        mode=0o755,
+exec npx -y mcp-remote "{server.url}" --header "Authorization: Bearer ${{TOKEN}}"
+"""
+
+
+def _write_managed_script(path: Path, text: str) -> None:
+    """Write a generated script, refreshing it unless the user took it over.
+
+    Unlike :func:`_write_if_missing`, this regenerates on every sync so a
+    changed server URL or auth mode actually reaches the wrapper. A script the
+    user edited (marker line removed) is left untouched.
+    """
+    if path.is_file():
+        current = path.read_text(encoding="utf-8", errors="replace")
+        if MANAGED_SCRIPT_MARKER not in current:
+            return
+        if current == text:
+            path.chmod(0o755)
+            return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def sync_mcp_wrapper_scripts(workspace: Path) -> dict[str, Path]:
+    """Generate one `mcp-remote` wrapper per remote server; drop stale ones.
+
+    Returns ``{server name: script path}``. Both OpenCode and Claude Code point
+    at these same scripts, so the token-resolution logic exists once.
+    """
+    from app.mcp_registry import managed_server_names, remote_harness_servers
+
+    mcp_dir = workspace / ".opencode" / "mcp-scripts"
+    mcp_dir.mkdir(parents=True, exist_ok=True)
+
+    scripts: dict[str, Path] = {}
+    for server in remote_harness_servers():
+        script = mcp_dir / f"{server.name}.sh"
+        _write_managed_script(script, _mcp_remote_script(server))
+        scripts[server.name] = script
+
+    # Remove wrappers for servers LoomAI no longer generates (disabled, or
+    # dropped from ai.mcp_servers). Never touch a user-authored script.
+    for stale in managed_server_names() - set(scripts):
+        path = mcp_dir / f"{stale}.sh"
+        if not path.is_file():
+            continue
+        if MANAGED_SCRIPT_MARKER in path.read_text(encoding="utf-8", errors="replace"):
+            path.unlink()
+    return scripts
+
+
+def prune_stale_mcp_entries(config_path: Path, key: str) -> None:
+    """Drop LoomAI-managed MCP entries that are no longer registered.
+
+    ``_merge_json_file`` preserves every existing key, so disabling a server
+    would otherwise leave it configured forever. Only names the registry owns
+    are removed — servers the user added by hand stay.
+    """
+    from app.mcp_registry import harness_servers, managed_server_names
+
+    if not config_path.is_file():
+        return
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return
+    if not isinstance(config, dict) or not isinstance(config.get(key), dict):
+        return
+
+    desired = {s.name for s in harness_servers()}
+    stale = (managed_server_names() - desired) & set(config[key])
+    if not stale:
+        return
+    for name in stale:
+        config[key].pop(name, None)
+    config_path.write_text(
+        json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    return {
-        "fabric-reports": {
+
+
+def _opencode_mcp(workspace: Path) -> dict[str, Any]:
+    """Wire every registered MCP server into OpenCode's `mcp` block."""
+    from app.mcp_registry import harness_servers
+
+    scripts = sync_mcp_wrapper_scripts(workspace)
+
+    config: dict[str, Any] = {}
+    for server in harness_servers():
+        if server.transport == "stdio":
+            config[server.name] = {
+                "type": "local",
+                "command": list(server.command),
+                "enabled": True,
+                "timeout": 30000,
+            }
+            continue
+        config[server.name] = {
             "type": "local",
-            "command": ["bash", str(script)],
+            "command": ["bash", str(scripts[server.name])],
             "enabled": True,
             "timeout": 15000,
-        },
-        "loomai-harness": {
-            "type": "local",
-            "command": ["python3", "-m", "app.harness_mcp_server"],
-            "enabled": True,
-            "timeout": 30000,
-        },
-    }
+        }
+    return config
 
 
 def _opencode_permissions() -> dict[str, Any]:
@@ -1643,21 +1768,36 @@ def _render_claude(
     claude_dir.mkdir(parents=True, exist_ok=True)
     _write_managed_text(claude_dir / "CLAUDE.md", agents_md)
     _merge_json_file(
-        workspace / ".mcp.json",
-        {
-            "mcpServers": {
-                "loomai-harness": {
-                    "command": "python3",
-                    "args": ["-m", "app.harness_mcp_server"],
-                    "env": {"LOOMAI_URL": "http://127.0.0.1:8000"},
-                },
-            },
-        },
+        workspace / ".mcp.json", {"mcpServers": claude_mcp_servers(workspace)}
     )
+    prune_stale_mcp_entries(workspace / ".mcp.json", "mcpServers")
     for skill in skills:
         _write_if_missing(workspace / ".claude" / "commands" / f"{skill['id']}.md", skill["body"])
     for agent in agents:
         _write_if_missing(workspace / ".claude" / "agents" / f"{agent['id']}.md", agent["text"])
+
+
+def claude_mcp_servers(workspace: Path) -> dict[str, Any]:
+    """`mcpServers` block for Claude Code, built from the MCP registry.
+
+    Remote servers reuse the same generated wrapper scripts OpenCode uses, so
+    token resolution lives in exactly one place.
+    """
+    from app.mcp_registry import harness_servers
+
+    scripts = sync_mcp_wrapper_scripts(workspace)
+
+    servers: dict[str, Any] = {}
+    for server in harness_servers():
+        if server.transport == "stdio":
+            servers[server.name] = {
+                "command": server.command[0],
+                "args": list(server.command[1:]),
+                "env": {"LOOMAI_URL": "http://127.0.0.1:8000"},
+            }
+            continue
+        servers[server.name] = {"command": "bash", "args": [str(scripts[server.name])]}
+    return servers
 
 
 def _render_antigravity(workspace: Path, agents_md: str, agents: list[dict[str, Any]], skills: list[dict[str, Any]]) -> None:
@@ -1697,8 +1837,9 @@ Source root: `/app/ai-tools/shared`
   fall back to safe standard-tier settings instead of being omitted.
 - Config-level campaign blockers are encoded in defaults: ai-renci Kimi uses
   the bare `Kimi-K2.6` provider model id, NRP gemma-class entries mark
-  `omit_tool_choice`, and the local `loomai-harness` MCP schemas cap
-  submit/renew/weave lease inputs at six hours.
+  `omit_tool_choice`, and the local `loomai-harness` MCP schemas default
+  submit/renew/weave leases to six hours; the backend enforces the user's
+  Agent Lease Limit on every agent-initiated lease.
 - The `loomai-harness` MCP server is shipped in the backend image as
   `python3 -m app.harness_mcp_server`; external harnesses launch it over stdio
   and it proxies calls to the local LoomAI backend.

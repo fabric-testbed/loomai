@@ -88,6 +88,26 @@ server {
         proxy_read_timeout 1800s;
     }
 
+    # Server-sent-event streams: LoomAI chat, weave runs and logs, boot-config
+    # and recipe execution, AI-tool installs. These need the response flushed
+    # as it is produced (no buffering) and can legitimately run far longer
+    # than the 300s below; without this block a long tool-calling turn dies at
+    # 300s and streamed output sits in nginx's buffer. frontend/nginx.conf
+    # (split deployment) has the same block; keep the two in step.
+    location ~ ^/api/(ai/chat/stream|ai/tools/[^/]+/install-stream|files/boot-config/[^/]+/(execute-all-stream|log)|recipes/.+/execute/|templates/[^/]+/(run-script/|weave-log)) {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1800s;
+        proxy_send_timeout 1800s;
+        proxy_buffering off;
+        proxy_cache off;
+    }
+
     location /api/ {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
@@ -220,8 +240,9 @@ CONF
 # Copy static assets that change occasionally
 COPY ai-tools/ ai-tools/
 
-# Install loomai CLI (pure Python — no compiled deps)
-COPY cli/ /app/cli/
+# Install loomai CLI (pure Python — no compiled deps). backend/cli/ is the
+# only CLI source tree; backend/Dockerfile installs the same directory.
+COPY backend/cli/ /app/cli/
 RUN pip install --no-cache-dir /app/cli/ && rm -rf /app/cli/
 
 # Copy built frontend (changes on frontend builds)

@@ -202,6 +202,23 @@ def _category_from_tags(tags: list[str]) -> str | None:
     return None
 
 
+def _tar_member_unsafe(member: tarfile.TarInfo) -> bool:
+    """True if extracting *member* could write outside the extraction dir.
+
+    Besides absolute and ``..`` paths, symlinks and hardlinks are rejected:
+    a link member pointing at ``/home/fabric/work/fabric_config`` followed by
+    a regular member under the link name would overwrite credentials.
+    ``extractall(filter="data")`` enforces the same rules; this check runs
+    first so the user gets a clear 400 instead of a tarfile error.
+    """
+    return (
+        member.name.startswith("/")
+        or ".." in member.name
+        or member.issym()
+        or member.islnk()
+    )
+
+
 def _ensure_category_tag(tags: list[str], category: str) -> list[str]:
     """Add the category-specific loomai: tag if not already present."""
     cat_tag = _CATEGORY_TAGS.get(category)
@@ -401,7 +418,9 @@ class UpdateArtifactRequest(BaseModel):
     description: str = ""
     description_long: str = ""
     visibility: str = ""
-    tags: list[str] = []
+    # None means "leave tags unchanged". The Artifact Manager clears tags on
+    # any PUT that omits them, so the route resends the current ones.
+    tags: list[str] | None = None
     project_uuid: str = ""
     authors: list[dict] = []
     category: str = ""
@@ -665,15 +684,15 @@ async def download_artifact(req: DownloadRequest):
         try:
             with tarfile.open(raw_path, "r:*") as tf:
                 for member in tf.getmembers():
-                    if member.name.startswith("/") or ".." in member.name:
+                    if _tar_member_unsafe(member):
                         raise HTTPException(status_code=400, detail=error_detail(
                             "ARTIFACT_ARCHIVE_UNSAFE",
-                            "Artifact archive contains unsafe paths and was rejected.",
+                            "Artifact archive contains unsafe paths or links and was rejected.",
                             uuid=req.uuid,
                         ))
                 extract_dir = os.path.join(tmpdir, "extracted")
                 os.makedirs(extract_dir, exist_ok=True)
-                tf.extractall(extract_dir)
+                tf.extractall(extract_dir, filter="data")
                 extracted = True
         except tarfile.TarError:
             pass
@@ -1565,6 +1584,31 @@ def _is_user_author(remote_artifact: dict, user_email: str, user_name: str = "")
 # Update remote artifact settings
 # ---------------------------------------------------------------------------
 
+async def _current_remote_tags(uuid: str, headers: dict[str, str]) -> list[str]:
+    """Return a remote artifact's current tags, or raise if they can't be read."""
+    try:
+        r = await fabric_client.get(
+            f"{ARTIFACT_API}/artifacts/{uuid}", params={"format": "json"}, headers=headers,
+        )
+        r.raise_for_status()
+        tags = r.json().get("tags")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            "Could not read the artifact's current tags, so the update was not "
+            f"sent (it would have cleared them): {safe_error_detail(e)}.",
+            uuid=uuid,
+        ))
+    if not isinstance(tags, list):
+        raise HTTPException(status_code=502, detail=error_detail(
+            "ARTIFACT_UPSTREAM_ERROR",
+            "The Artifact Manager returned no tag list, so the update was not "
+            "sent (it would have cleared the tags).",
+            uuid=uuid,
+        ))
+    return [t if isinstance(t, str) else str(t.get("tag", t)) for t in tags]
+
+
 @router.put("/remote/{uuid}")
 async def update_remote_artifact(uuid: str, req: UpdateArtifactRequest):
     """Update settings for a remote artifact the user authors."""
@@ -1597,6 +1641,15 @@ async def update_remote_artifact(uuid: str, req: UpdateArtifactRequest):
             "No fields to update were provided.",
             uuid=uuid,
         ))
+
+    if "tags" not in update_body:
+        # The Artifact Manager clears tags on a PUT that omits them, which
+        # would silently drop loomai:<category> and every user tag. Resend the
+        # current tags (plus the category tag, as an explicit tag list gets),
+        # and refuse the update rather than risk wiping them.
+        update_body["tags"] = _ensure_category_tag(
+            await _current_remote_tags(uuid, headers), req.category
+        )
 
     try:
         r = await fabric_client.put(
@@ -1850,16 +1903,16 @@ async def revert_local_artifact(dir_name: str, req: RevertRequest):
         try:
             with tarfile.open(raw_path, "r:*") as tf:
                 for member in tf.getmembers():
-                    if member.name.startswith("/") or ".." in member.name:
+                    if _tar_member_unsafe(member):
                         raise HTTPException(status_code=400, detail=error_detail(
                             "ARTIFACT_ARCHIVE_UNSAFE",
-                            "Artifact archive contains unsafe paths and was rejected.",
+                            "Artifact archive contains unsafe paths or links and was rejected.",
                             uuid=artifact_uuid,
                             dir_name=dir_name,
                         ))
                 extract_dir = os.path.join(tmpdir, "extracted")
                 os.makedirs(extract_dir, exist_ok=True)
-                tf.extractall(extract_dir)
+                tf.extractall(extract_dir, filter="data")
                 extracted = True
         except tarfile.TarError:
             pass

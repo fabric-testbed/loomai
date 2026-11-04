@@ -29,7 +29,7 @@ for _uv_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
     # messages bubble up to root which already has the timestamped formatter.
     _uv_logger.propagate = True
 
-from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, recipes, experiments, http_proxy, tunnels, ai_terminal, ai_chat, ai_agents, ai_rag, jupyter, artifacts, chameleon, chameleon_files, sphere, trovi, schedule, composite, monitoring
+from app.routes import slices, resources, terminal, config, metrics, files, templates, vm_templates, projects, recipes, experiments, http_proxy, tunnels, ai_terminal, ai_chat, ai_agents, ai_rag, ai_mcp, jupyter, artifacts, chameleon, chameleon_files, sphere, trovi, schedule, composite, monitoring
 from app.auth import router as auth_router, AuthMiddleware, is_auth_enabled
 from app.tunnel_manager import get_tunnel_manager
 
@@ -42,6 +42,7 @@ def _startup_storage():
     1. Migrate user artifacts from old per-type dirs to my_artifacts/.
     2. Migrate .artifacts/ → my_artifacts/ (legacy layout).
     3. Re-key .artifact-originals/ from dir_name to UUID.
+    4. Retire the old per-slice working directories (one-time).
     """
     import json
     import shutil
@@ -238,6 +239,13 @@ def _startup_storage():
             except Exception:
                 pass
 
+    # --- 6) Retire the per-slice working directories (one-time) ---
+    try:
+        from app.slice_workdir_cleanup import cleanup_slice_workdirs
+        cleanup_slice_workdirs(storage)
+    except Exception:
+        logger.warning("Per-slice folder cleanup failed", exc_info=True)
+
     # Older startup/settings paths eagerly created an empty shared notebooks
     # workspace. Keep real notebook workspaces, but remove the unused empty dir.
     notebooks_dir = os.path.join(storage, "notebooks")
@@ -408,8 +416,75 @@ async def lifespan(app: FastAPI):
                 logger.warning("Reservation checker failed (non-fatal): %s", e)
             await asyncio.sleep(60)
 
+    # Account provisioning — generate the bastion key, slice keys and FABRIC
+    # LLM key that auto-setup would otherwise create only when the user clicks
+    # Configure. On the hosted hub the token, project and bastion login are
+    # already injected at spawn, so a new user has nothing left to do.
+    # Idempotent: each artifact is created only if missing.
+    _provisioning_done = asyncio.Event()
+
+    async def _auto_provision():
+        from app.routes.config import (
+            AutoSetupUnavailable,
+            provisioning_gaps,
+            resolve_provisioning_project,
+            run_auto_setup,
+        )
+        try:
+            await asyncio.sleep(3)  # let settings + env finish loading
+            # Up to 5 tries over ~2.5 min: on a cold hosted container FABlib may
+            # still be exchanging the injected refresh token for an id_token.
+            for attempt in range(1, 6):
+                try:
+                    gaps = provisioning_gaps()
+                except Exception as e:
+                    logger.warning("Auto-provision: gap check failed (non-fatal): %s", e)
+                    return
+                if not gaps:
+                    logger.debug("Auto-provision: nothing to do")
+                    return
+
+                project_id = resolve_provisioning_project()
+                if not project_id:
+                    logger.info("Auto-provision: no project set yet — leaving setup to the user")
+                    return
+
+                try:
+                    result = await run_auto_setup(project_id)
+                except AutoSetupUnavailable as e:
+                    logger.info("Auto-provision: not ready yet (attempt %d/5): %s", attempt, e)
+                    await asyncio.sleep(30)
+                    continue
+                except Exception as e:
+                    logger.warning("Auto-provision failed (non-fatal): %s", e, exc_info=True)
+                    return
+
+                created = [k for k in ("bastion_key_generated", "slice_keys_generated",
+                                       "llm_key_created") if result.get(k)]
+                errors = {k: result[k] for k in ("bastion_key_error", "llm_key_error")
+                          if result.get(k)}
+                logger.info("Auto-provision complete for project %s (created: %s)",
+                            project_id, ", ".join(created) or "nothing")
+                if errors:
+                    # Non-fatal: the Configure button still works as the manual path.
+                    logger.warning("Auto-provision partial: %s", errors)
+                return
+            logger.warning("Auto-provision: no usable token after 5 attempts — "
+                           "user can still run Configure manually")
+        finally:
+            # Always release model discovery, success or not.
+            _provisioning_done.set()
+
     # Background model discovery — find first healthy LLM and persist as default
     async def _model_discovery():
+        # Wait for provisioning: discovery needs the FABRIC LLM key, and on a
+        # fresh container that key is created by _auto_provision. Bounded so a
+        # stuck provisioner cannot block discovery forever.
+        try:
+            await asyncio.wait_for(_provisioning_done.wait(), timeout=180)
+        except asyncio.TimeoutError:
+            logger.warning("Model discovery: provisioning did not finish in time — "
+                           "discovering with whatever key is configured")
         await asyncio.sleep(5)  # Let the server finish starting
         try:
             from app.routes.ai_terminal import discover_and_persist_default_model
@@ -446,6 +521,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_claude_config_backup_loop()),
             asyncio.create_task(_terminal_cull_loop()),
             asyncio.create_task(_reservation_checker()),
+            asyncio.create_task(_auto_provision()),
             asyncio.create_task(_model_discovery()),
             asyncio.create_task(_rag_index_build()),
         ]
@@ -456,10 +532,18 @@ async def lifespan(app: FastAPI):
 
     # Close shared httpx connection pools
     try:
-        from app.http_pool import fabric_client, ai_client, metrics_client
+        from app.http_pool import fabric_client, ai_client, metrics_client, web_client
         await fabric_client.aclose()
         await ai_client.aclose()
         await metrics_client.aclose()
+        await web_client.aclose()
+    except Exception:
+        pass
+
+    # Close the remote-MCP client pool
+    try:
+        from app import mcp_client
+        await mcp_client.aclose()
     except Exception:
         pass
 
@@ -476,7 +560,7 @@ async def lifespan(app: FastAPI):
 _enable_docs = os.environ.get("LOOMAI_ENABLE_DOCS", "").strip() == "1"
 _docs_kwargs = {} if _enable_docs else {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
-app = FastAPI(title="LoomAI API", version="0.8.4", lifespan=lifespan, **_docs_kwargs)
+app = FastAPI(title="LoomAI API", version="0.9.1", lifespan=lifespan, **_docs_kwargs)
 
 from app.error_handler import install_error_handlers
 install_error_handlers(app)
@@ -500,6 +584,10 @@ app.add_middleware(
 # Auth middleware — added after CORS so preflight requests pass through first
 app.add_middleware(AuthMiddleware)
 
+# Marks agent-initiated requests (X-LoomAI-Actor: agent) for the agent lease cap.
+from app.request_actor import ActorMiddleware
+app.add_middleware(ActorMiddleware)
+
 app.include_router(auth_router)
 app.include_router(slices.router, prefix="/api")
 app.include_router(resources.router, prefix="/api")
@@ -508,6 +596,7 @@ app.include_router(ai_terminal.router)
 app.include_router(ai_chat.router)
 app.include_router(ai_agents.router)
 app.include_router(ai_rag.router)
+app.include_router(ai_mcp.router)
 app.include_router(terminal.router)
 app.include_router(config.router)
 app.include_router(files.router)

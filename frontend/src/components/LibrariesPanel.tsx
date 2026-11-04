@@ -7,6 +7,7 @@ import Tooltip from './Tooltip';
 import { alertDialog } from './AppDialogProvider';
 import '../styles/template-panel.css';
 import '../styles/vm-template-panel.css';
+import { Modal } from './Modal';
 
 interface DragHandleProps {
   draggable: boolean;
@@ -826,8 +827,7 @@ export default React.memo(function LibrariesPanel({
 
           {/* Load Modal */}
           {loadingTemplate && (
-            <div className="template-modal-overlay" onClick={() => setLoadingTemplate(null)}>
-              <div className="template-modal" onClick={(e) => e.stopPropagation()}>
+            <Modal overlayClassName="template-modal-overlay" className="template-modal" onClose={() => setLoadingTemplate(null)}>
                 <h4>Load Weave</h4>
                 <p>Create a new draft slice from weave <strong>{loadingTemplate}</strong>.</p>
                 <input
@@ -843,14 +843,12 @@ export default React.memo(function LibrariesPanel({
                   <button onClick={() => setLoadingTemplate(null)}>Cancel</button>
                   <button className="primary" onClick={() => handleLoadSliceTemplate()}>Load</button>
                 </div>
-              </div>
-            </div>
+            </Modal>
           )}
 
           {/* Deploy / Run Args Modal */}
           {scriptModal && (
-            <div className="template-modal-overlay" onClick={() => setScriptModal(null)}>
-              <div className="template-modal" onClick={(e) => e.stopPropagation()}>
+            <Modal overlayClassName="template-modal-overlay" className="template-modal" onClose={() => setScriptModal(null)}>
                 <h4>{scriptModal.mode === 'deploy' ? 'Deploy Weave' : 'Run Experiment'}</h4>
                 <p>
                   {scriptModal.mode === 'deploy'
@@ -903,14 +901,12 @@ export default React.memo(function LibrariesPanel({
                     {scriptModal.mode === 'deploy' ? 'Deploy' : 'Run'}
                   </button>
                 </div>
-              </div>
-            </div>
+            </Modal>
           )}
 
           {/* Loading Progress Overlay */}
           {loadProgress && (
-            <div className="template-modal-overlay">
-              <div className="template-modal template-loading-modal">
+            <Modal overlayClassName="template-modal-overlay" className="template-modal template-loading-modal">
                 <div className="template-loading-spinner" />
                 <h4>Loading Weave</h4>
                 <div className="template-loading-steps">
@@ -926,8 +922,7 @@ export default React.memo(function LibrariesPanel({
                     </div>
                   ))}
                 </div>
-              </div>
-            </div>
+            </Modal>
           )}
 
         </div>
@@ -1208,8 +1203,7 @@ export default React.memo(function LibrariesPanel({
 
       {/* ─── Delete Confirmation Modal ─── */}
       {deleteConfirm && (
-        <div className="template-modal-overlay" onClick={() => !deleting && setDeleteConfirm(null)}>
-          <div className="template-modal" onClick={(e) => e.stopPropagation()}>
+        <Modal overlayClassName="template-modal-overlay" className="template-modal" onClose={() => !deleting && setDeleteConfirm(null)}>
             <h4>Delete Artifact</h4>
             <p>Are you sure you want to delete <strong>{deleteConfirm.name}</strong>? This cannot be undone.</p>
             <div className="template-modal-actions">
@@ -1218,8 +1212,7 @@ export default React.memo(function LibrariesPanel({
                 {deleting ? 'Deleting...' : 'Delete'}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

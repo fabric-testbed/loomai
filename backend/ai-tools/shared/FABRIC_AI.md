@@ -145,6 +145,11 @@ exact tool names (no `fabric_` prefix). Other AI tools should use the equivalent
 - `get_background_run_output(run_id, offset)` — Get run output
 - `stop_background_run(run_id)` — Stop a running weave
 
+**FABRIC Infrastructure Metrics** (proxied to the `fabric-metrics` MCP server — FABRIC's own infrastructure health, NOT the user's VMs):
+- `list_metric_topics` — **Call this FIRST.** Lists every topic (cpu, memory, disk, filesystem, network, sockets, netstat, system, time, temperature, link_status, link_traffic, port_traffic) with the variants and parameters each accepts
+- `list_metric_param_options(topic, param)` — Resolve live values for a parameter (node names, switch devices, interfaces)
+- `query_infrastructure_metrics(topic, variant, args)` — Run the query. Pick `topic` and `variant` exactly as `list_metric_topics` spells them — never invent one and never write PromQL. Node topics take `args={"node": "<rack code>"}` (e.g. `ncsa` covers every node at that site); link topics take `src_rack`/`dst_rack`. `topic="list_sites"` lists the racks reporting node data.
+
 **Artifacts:**
 - `list_artifacts` — List local artifacts
 - `publish_artifact(dir_name, title, description, category, tags)` — Publish to marketplace. Tags must come from `/api/artifacts/valid-tags`.
@@ -522,10 +527,41 @@ this container. The built-in FABlib tools provide the same functionality with
 better performance and no network overhead. The fabric-api MCP is only useful
 when running outside the container (e.g., from a user's local machine).
 
+## MCP Servers
+
+Three MCP servers are registered (see `backend/app/mcp_registry.py`, the single
+source of truth, and Configure -> MCP Servers in the WebUI):
+
+**fabric-metrics MCP** — `https://infrastructure-metrics-mcp.fabric-testbed.net/mcp`
+Live FABRIC *infrastructure* health straight from the Grafana/Prometheus
+dashboards: node CPU, memory, disk, filesystem, network, sockets, netstat,
+system, time and temperature, plus switch link status, rack-to-rack link
+traffic and per-port traffic. Use it for "is ncsa busy", "are nodes running
+hot", "how much traffic between ncsa and cern", "is this link up".
+
+It does NOT accept PromQL — it runs fixed dashboard queries. Always call
+`fabric_metrics_list_topics` first, then pick a topic tool and a `variant`
+exactly as that listing spells them; never invent a variant or derive a tool
+name from one. `fabric_metrics_list_param_options` resolves live values (node
+names, switch devices, interfaces) and `fabric_metrics_list_sites` lists the
+rack codes that report node data. Node topics take `node` (a rack code such as
+`ncsa` covers every node at that site); link topics take `src_rack`/`dst_rack`.
+
+In the LoomAI assistant panel the same server is exposed as three routing tools
+instead of seventeen: `list_metric_topics`, `list_metric_param_options` and
+`query_infrastructure_metrics(topic, variant, args)`.
+
+This server reports on FABRIC infrastructure, NOT on the user's own VMs. For
+per-VM metrics inside a provisioned slice use LoomAI's monitoring stack
+(`node_exporter` per node), not this server.
+
 **fabric-reports MCP** is available for querying FABRIC usage statistics,
 project data, and resource utilization. However, it requires FABRIC staff/admin
 permissions. Regular users cannot access it. Only use it if the user is known
 to be FABRIC staff or admin, or if they explicitly ask to query reports data.
+
+**loomai-harness MCP** is LoomAI's own REST API over local stdio — slices,
+weaves, recipes and SSH — wired into OpenCode, Claude Code and Pi.
 
 ## External Harness Defaults
 

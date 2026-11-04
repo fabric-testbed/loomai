@@ -115,12 +115,17 @@ def _extract_archive(archive_path: str, dest_dir: str) -> bool:
 
         # Try tar
         try:
+            # Same containment rules as marketplace artifacts: no absolute or
+            # ".." paths, and no symlink/hardlink members (a link to
+            # fabric_config/ followed by a file under the link name would
+            # write outside the extraction dir).
+            from app.routes.artifacts import _tar_member_unsafe
+
             with tarfile.open(archive_path, "r:*") as tf:
-                # Safety: reject paths with .. or absolute paths
                 for member in tf.getmembers():
-                    if member.name.startswith("/") or ".." in member.name:
+                    if _tar_member_unsafe(member):
                         raise ValueError(f"Unsafe path in archive: {member.name}")
-                tf.extractall(tmp_extract)
+                tf.extractall(tmp_extract, filter="data")
                 extracted = True
         except (tarfile.TarError, ValueError):
             pass

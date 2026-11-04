@@ -8,6 +8,7 @@ and other async operations that share Python's default thread pool.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, TypeVar
 
@@ -27,4 +28,7 @@ async def run_in_fablib_pool(fn: Callable[..., T], *args: Any) -> T:
         result = await run_in_fablib_pool(lambda: fablib.get_slice(name="foo"))
     """
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_fablib_pool, fn, *args)
+    # run_in_executor does not copy contextvars (unlike asyncio.to_thread), so
+    # request-scoped state such as the actor would be lost in the pool thread.
+    ctx = contextvars.copy_context()
+    return await loop.run_in_executor(_fablib_pool, lambda: ctx.run(fn, *args))

@@ -145,7 +145,7 @@ def _ensure_user_symlinks(uuid: str) -> None:
 # Read version from frontend/src/version.ts (single source of truth)
 def _read_version() -> str:
     for candidate in [
-        os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'src', 'version.ts'),  # dev (backend/)
+        os.path.join(os.path.dirname(__file__), '..', '..', '..', 'frontend', 'src', 'version.ts'),  # dev (repo checkout)
         '/app/VERSION',  # Docker image
     ]:
         try:
@@ -519,15 +519,29 @@ def get_login_url(origin: str = Query(None)):
 
 
 def _verify_oauth_state(request: Request, state: str) -> None:
-    """Reject a forged callback. Non-breaking: only fails on an explicit
-    state mismatch. If CM doesn't echo state, or there's no cookie (e.g. the
-    paste flow), we log and proceed rather than block login."""
+    """Reject a token delivery that this browser did not start.
+
+    Fails closed: the state cookie set by ``GET /api/config/login`` and the
+    ``state`` echoed in the callback URL must both be present and match.
+    Previously a missing cookie or state was logged and let through, which
+    meant a crafted link ``/api/config/callback?id_token=<attacker token>``
+    silently replaced the user's FABRIC identity (login CSRF). The state is
+    embedded in the ``redirect_uri`` we hand to CM, so a genuine login always
+    echoes it; the paste flow has its own endpoint and never comes here.
+    """
     cookie = request.cookies.get(_OAUTH_STATE_COOKIE, "")
-    if cookie and state:
-        if not secrets.compare_digest(cookie, state):
-            raise HTTPException(status_code=403, detail="Invalid OAuth state")
-    elif cookie and not state:
-        logger.warning("oauth_callback: state cookie present but no state echoed by CM — CSRF check skipped")
+    if not cookie or not state:
+        logger.warning(
+            "oauth_callback: rejected token delivery without OAuth state (cookie=%s, state=%s)",
+            bool(cookie), bool(state),
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="OAuth state missing. Start the login from LoomAI's Login button "
+                   "in this browser and try again.",
+        )
+    if not secrets.compare_digest(cookie, state):
+        raise HTTPException(status_code=403, detail="Invalid OAuth state")
 
 
 # ---------------------------------------------------------------------------
@@ -726,11 +740,18 @@ def oauth_callback_get(request: Request, id_token: str, refresh_token: str = "",
 
 
 @router.post("/api/config/callback")
-def oauth_callback_post(id_token: str = "", refresh_token: str = ""):
-    """Accept token via POST (some CM flows use form submission)."""
+def oauth_callback_post(request: Request, id_token: str = "", refresh_token: str = "", state: str = ""):
+    """Accept token via POST (some CM flows use form submission).
+
+    The ``state`` arrives in the query string because it is part of the
+    ``redirect_uri`` CM posts to; it is verified exactly like the GET path.
+    """
     if not id_token:
         raise HTTPException(status_code=400, detail="Missing id_token")
-    return _process_oauth_callback(id_token, refresh_token)
+    _verify_oauth_state(request, state)
+    resp = _process_oauth_callback(id_token, refresh_token)
+    resp.delete_cookie(_OAUTH_STATE_COOKIE, path="/")
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -802,18 +823,39 @@ class AutoSetupRequest(BaseModel):
     project_id: str
 
 
-@router.post("/api/config/auto-setup")
-async def auto_setup(req: AutoSetupRequest):
+def _load_any_private_key(path: str):
+    """Load an SSH private key of any supported type, or None if unreadable.
+
+    Returning None (rather than raising) lets callers skip a key they cannot
+    parse instead of replacing it — overwriting a private key that is already
+    authorized on running VMs is unrecoverable.
+    """
+    for key_cls in (paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey):
+        try:
+            return key_cls.from_private_key_file(path)
+        except Exception:
+            continue
+    return None
+
+
+class AutoSetupUnavailable(RuntimeError):
+    """Provisioning cannot run yet — there is no usable FABRIC token.
+
+    Raised instead of HTTPException so non-HTTP callers (the startup
+    auto-provisioner) can retry rather than translate a web error."""
+
+
+async def run_auto_setup(project_id: str) -> dict:
     """One-call post-login setup: set project, derive bastion username, save config, generate keys."""
     token_data = _read_token()
     if not token_data or "id_token" not in token_data:
-        raise HTTPException(status_code=400, detail="No token available. Login first.")
+        raise AutoSetupUnavailable("No token available. Login first.")
 
     id_token = token_data["id_token"]
     try:
         payload = _decode_jwt_payload(id_token)
     except Exception:
-        raise HTTPException(status_code=400, detail="Could not decode token")
+        raise AutoSetupUnavailable("Could not decode token")
 
     user_email = payload.get("email", "")
     user_name = payload.get("name", "")
@@ -839,7 +881,7 @@ async def auto_setup(req: AutoSetupRequest):
     # Update settings with project_id and bastion_username, then save (generates fabric_rc + ssh_config)
     from app import settings_manager
     settings = settings_manager.load_settings()
-    settings["fabric"]["project_id"] = req.project_id
+    settings["fabric"]["project_id"] = project_id
     if bastion_login:
         settings["fabric"]["bastion_username"] = bastion_login
     settings_manager.save_settings(settings)
@@ -852,11 +894,11 @@ async def auto_setup(req: AutoSetupRequest):
     try:
         fablib = get_fablib()
         mgr = fablib.get_manager()
-        mgr.project_id = req.project_id
+        mgr.project_id = project_id
         refresh_token = mgr.get_refresh_token()
         if refresh_token:
             mgr.refresh_tokens(refresh_token=refresh_token)
-            logger.info("auto-setup: token refreshed for project %s", req.project_id)
+            logger.info("auto-setup: token refreshed for project %s", project_id)
     except Exception as e:
         logger.warning("auto-setup: token refresh for project failed (non-fatal): %s", e)
 
@@ -928,27 +970,48 @@ async def auto_setup(req: AutoSetupRequest):
     else:
         logger.info("auto-setup: bastion key already exists at %s", bastion_priv_path)
 
-    # Generate slice keys if none exist
+    # Generate slice keys if none exist.
+    #
+    # An existing private key is NEVER regenerated. It may already be
+    # authorized on running VMs, and overwriting it would lock the user out of
+    # their own live slices with no way back. So a missing .pub is rederived
+    # from the private key rather than triggering a fresh keypair — the old
+    # "priv OR pub missing -> generate" test did overwrite, which only stayed
+    # latent because it took a manual Configure click to reach.
     slice_keys_generated = False
     _migrate_legacy_keys(config_dir)
     priv_path, pub_path = get_default_slice_key_path(config_dir)
-    if not os.path.isfile(priv_path) or not os.path.isfile(pub_path):
-        key = paramiko.RSAKey.generate(2048)
+    have_priv = os.path.isfile(priv_path)
+    have_pub = os.path.isfile(pub_path)
+    if not have_priv or not have_pub:
         key_dir = os.path.dirname(priv_path)
         os.makedirs(key_dir, exist_ok=True)
-        key.write_private_key_file(priv_path)
-        os.chmod(priv_path, stat.S_IRUSR | stat.S_IWUSR)
-        pub_key_str = f"{key.get_name()} {key.get_base64()} fabric-webgui-generated"
-        with open(pub_path, "w") as f:
-            f.write(pub_key_str + "\n")
-        os.chmod(pub_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
-        # Register in keys.json
-        data = _load_keys_json(config_dir)
-        if "default" not in data.get("keys", []):
-            data.setdefault("keys", []).append("default")
-        _save_keys_json(config_dir, data)
-        _sync_default_flat_copies(config_dir, "default")
-        slice_keys_generated = True
+        key = None
+        if have_priv:
+            key = _load_any_private_key(priv_path)
+            if key is None:
+                # Unreadable or passphrase-protected. Leave it strictly alone:
+                # a wrong guess here destroys access to running slices.
+                logger.warning(
+                    "auto-setup: %s exists but could not be read; leaving it "
+                    "untouched and skipping slice key setup", priv_path)
+        else:
+            key = paramiko.RSAKey.generate(2048)
+            key.write_private_key_file(priv_path)
+            os.chmod(priv_path, stat.S_IRUSR | stat.S_IWUSR)
+            slice_keys_generated = True
+
+        if key is not None:
+            pub_key_str = f"{key.get_name()} {key.get_base64()} fabric-webgui-generated"
+            with open(pub_path, "w") as f:
+                f.write(pub_key_str + "\n")
+            os.chmod(pub_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+            # Register in keys.json
+            data = _load_keys_json(config_dir)
+            if "default" not in data.get("keys", []):
+                data.setdefault("keys", []).append("default")
+            _save_keys_json(config_dir, data)
+            _sync_default_flat_copies(config_dir, "default")
 
     # Create FABRIC LLM API key via Credential Manager if none configured
     llm_key_created = False
@@ -969,7 +1032,7 @@ async def auto_setup(req: AutoSetupRequest):
         "email": user_email,
         "name": user_name,
         "uuid": user_uuid,
-        "project_id": req.project_id,
+        "project_id": project_id,
         "bastion_username": bastion_login,
         "bastion_key_generated": bastion_key_generated,
         "bastion_key_error": bastion_key_error,
@@ -977,6 +1040,57 @@ async def auto_setup(req: AutoSetupRequest):
         "llm_key_created": llm_key_created,
         "llm_key_error": llm_key_error,
     }
+
+
+@router.post("/api/config/auto-setup")
+async def auto_setup(req: AutoSetupRequest):
+    """One-call post-login setup — see :func:`run_auto_setup`."""
+    try:
+        return await run_auto_setup(req.project_id)
+    except AutoSetupUnavailable as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def provisioning_gaps() -> list[str]:
+    """Names of the account artifacts auto-setup would still have to create.
+
+    Empty means everything is already in place, so the startup
+    auto-provisioner can skip without touching the Core API or the
+    Credential Manager. Mirrors the "if missing" guards in
+    :func:`run_auto_setup` — keep the two in step.
+    """
+    from app import settings_manager
+
+    gaps: list[str] = []
+    config_dir = _ensure_config_dir()
+
+    if not os.path.isfile(os.path.join(config_dir, "fabric_bastion_key")):
+        gaps.append("bastion_key")
+
+    priv_path, pub_path = get_default_slice_key_path(config_dir)
+    if not os.path.isfile(priv_path) or not os.path.isfile(pub_path):
+        gaps.append("slice_keys")
+
+    if not settings_manager.get_fabric_api_key():
+        gaps.append("llm_key")
+
+    return gaps
+
+
+def resolve_provisioning_project() -> str:
+    """Project id to provision against, or "" if none is known yet.
+
+    Settings win over the environment: the hub injects FABRIC_PROJECT_ID at
+    spawn, but a user who later switches project must not be silently pulled
+    back to the injected one.
+    """
+    from app import settings_manager
+
+    try:
+        settings = settings_manager.load_settings()
+    except Exception:
+        return os.environ.get("FABRIC_PROJECT_ID", "")
+    return settings.get("fabric", {}).get("project_id", "") or os.environ.get("FABRIC_PROJECT_ID", "")
 
 
 # ---------------------------------------------------------------------------

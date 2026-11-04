@@ -1,5 +1,7 @@
 # Testing
 
+> Size as of 2026-10-13: backend 115 files / ~2,070 tests (plus 16 CLI test files, run from `backend/cli/`), frontend 20 files / 118 cases, Playwright mock + contract projects. Prose counts elsewhere in `docs/` are dated phase notes, not current numbers.
+
 Test infrastructure for the fabric-webgui project.
 
 ## Help Documentation Validation
@@ -308,7 +310,7 @@ pytest tests/assistant/test_assistant_knowledge.py -v -s -m llm -k test_fabric_n
 ## CLI Tests
 
 **Framework**: pytest with Click's `CliRunner`
-**Location**: `cli/tests/` and mirrored `backend/cli/tests/`
+**Location**: `backend/cli/tests/` (the only CLI tree; run from `backend/cli/`, not from `backend/`, because the two `conftest.py` files clash)
 **Pattern**: Mock tests run without backend; integration tests need `--integration` flag
 
 ### CLI Test Files
@@ -325,13 +327,9 @@ pytest tests/assistant/test_assistant_knowledge.py -v -s -m llm -k test_fabric_n
 ### Running CLI Tests
 
 ```bash
-cd cli
+cd backend/cli
 
 # All mock tests (no backend needed)
-python -m pytest tests -q
-
-# Run the backend mirror after syncing CLI changes
-cd ../backend/cli
 python -m pytest tests -q
 
 # Run tests for a specific CLI area
@@ -352,11 +350,19 @@ pytest tests/test_cli_federated.py::TestFederatedMockCRUD -v
 
 ## Coverage
 
-Not configured for either backend or frontend. No coverage thresholds or reporting.
+The backend CI job runs with `--cov=app` and uploads `coverage.xml` as an artifact. No coverage thresholds are enforced for backend or frontend.
 
 ## CI/CD
 
-No automated test pipeline. The only GitHub Actions workflow is `publish-to-public.yml` for mirroring to a public repository. Tests are run locally.
+`.github/workflows/test.yml` runs on every push and pull request:
+
+| Job | What it runs | Notes |
+|-----|--------------|-------|
+| `backend-tests` | `pytest` in `backend/` (unit + integration, with coverage), then the CLI suite from `backend/cli/` | Python 3.11. Live FABRIC/Chameleon e2e dirs are deselected by `pytest.ini`. |
+| `frontend-build` | `npm ci`, `npm run build`, `npm test` in `frontend/` | Node 22 (matches `.nvmrc`). |
+| Playwright | mock/contract projects | Live and provisioning specs run only locally. |
+
+`hub/tests/` is not run in CI yet. `publish-to-public.yml` mirrors the repo to the public repository on merge to `main`.
 
 ## Known Gaps
 

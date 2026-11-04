@@ -257,3 +257,13 @@ class TestAIIntegration:
         ])
         if r.exit_code == 0 and "Cannot connect" not in r.output:
             assert len(r.output.strip()) > 0
+
+
+def test_client_sends_agent_actor_header_only_in_ai_tool_sessions(monkeypatch):
+    from loomai_cli.client import Client
+
+    monkeypatch.delenv("LOOMAI_ACTOR", raising=False)
+    assert "X-LoomAI-Actor" not in Client("http://localhost:8000")._http.headers
+
+    monkeypatch.setenv("LOOMAI_ACTOR", "agent")
+    assert Client("http://localhost:8000")._http.headers["X-LoomAI-Actor"] == "agent"

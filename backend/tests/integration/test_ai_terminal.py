@@ -24,6 +24,8 @@ class TestToolSync:
         assert data["workspace"] == str(storage_dir)
         assert data["managed_service"]["name"] == "loomai-harness"
         assert data["managed_service"]["command"] == "python3 -m app.harness_mcp_server"
+        # Every server in app.mcp_registry must reach the harness configs.
+        assert "fabric-metrics" in data["mcp_servers"]
         assert "fabric-reports" in data["mcp_servers"]
         assert "loomai-harness" in data["mcp_servers"]
         assert (storage_dir / "opencode.json").is_file()

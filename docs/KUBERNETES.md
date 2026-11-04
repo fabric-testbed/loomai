@@ -369,6 +369,24 @@ cull:
   maxAge: 86400     # 24 hour max lifetime
 ```
 
+### Pre-upgrade cull (`hub.cullOnUpgrade`)
+
+Every `helm upgrade` runs a `pre-upgrade` hook Job (`templates/hub/pre-upgrade-cull.yaml`) that deletes all running singleuser pods, so users pick up the new singleuser image on their next login. It is idle-blind: active sessions are ended too, and it fires on hub-only or values-only upgrades as well.
+
+```yaml
+hub:
+  cullOnUpgrade: true            # only an explicit false disables the hook
+  cullImage: registry.k8s.io/kubectl:v1.31.4
+```
+
+For an upgrade that does not change the singleuser image:
+
+```bash
+helm upgrade loomai ./helm/loomai -n loomai --reuse-values --set hub.cullOnUpgrade=false
+```
+
+Check `kubectl get pods -n loomai -l component=singleuser` before a culling upgrade and warn users.
+
 ### Ingress (alternative to LoadBalancer)
 
 ```yaml

@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch, AsyncMock, MagicMock
 
 import httpx
+import pytest
 
 
 class TestListLocalArtifacts:
@@ -663,3 +664,124 @@ class TestErrorEnvelopes:
         assert resp.status_code == 400
         detail = resp.json()["detail"]
         assert detail["error"] == "ARTIFACT_ARCHIVE_UNSAFE"
+
+
+class TestUpdateRemoteArtifactTags:
+    """The Artifact Manager clears tags on a PUT that omits them; updates must not."""
+
+    def _put_resp(self):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value={"uuid": "art-1", "title": "T", "tags": []})
+        return resp
+
+    def _get_resp(self, tags):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value={"uuid": "art-1", "tags": tags})
+        return resp
+
+    def _update(self, client, body, *, current_tags=None, get_error=None):
+        with patch("app.routes.artifacts._get_auth_headers",
+                   return_value={"Authorization": "Bearer fake"}), \
+             patch("app.routes.artifacts.fabric_client") as mock_client:
+            if get_error is not None:
+                mock_client.get = AsyncMock(side_effect=get_error)
+            else:
+                mock_client.get = AsyncMock(return_value=self._get_resp(current_tags))
+            mock_client.put = AsyncMock(return_value=self._put_resp())
+            resp = client.put("/api/artifacts/remote/art-1", json=body)
+        return resp, mock_client
+
+    def test_update_without_tags_resends_current_tags(self, client):
+        resp, mc = self._update(client, {"title": "New title"},
+                                current_tags=["loomai:weave", "gpu"])
+
+        assert resp.status_code == 200
+        sent = mc.put.call_args.kwargs["json"]
+        assert sent["title"] == "New title"
+        assert sent["tags"] == ["loomai:weave", "gpu"]
+
+    def test_category_without_tags_adds_category_tag_to_current(self, client):
+        resp, mc = self._update(client, {"title": "T", "category": "weave"},
+                                current_tags=["gpu"])
+
+        assert resp.status_code == 200
+        assert mc.put.call_args.kwargs["json"]["tags"] == ["gpu", "loomai:weave"]
+
+    def test_category_tag_not_duplicated(self, client):
+        resp, mc = self._update(client, {"title": "T", "category": "weave"},
+                                current_tags=["loomai:weave"])
+
+        assert resp.status_code == 200
+        assert mc.put.call_args.kwargs["json"]["tags"] == ["loomai:weave"]
+
+    def test_explicit_tags_are_sent_without_reading_current(self, client):
+        resp, mc = self._update(client, {"tags": ["gpu"], "category": "weave"},
+                                current_tags=["old"])
+
+        assert resp.status_code == 200
+        assert mc.get.await_count == 0
+        assert set(mc.put.call_args.kwargs["json"]["tags"]) == {"gpu", "loomai:weave"}
+
+    def test_explicit_empty_tags_still_clear_them(self, client):
+        resp, mc = self._update(client, {"tags": []}, current_tags=["old"])
+
+        assert resp.status_code == 200
+        assert mc.get.await_count == 0
+        assert mc.put.call_args.kwargs["json"]["tags"] == []
+
+    def test_unreadable_current_tags_block_the_update(self, client):
+        resp, mc = self._update(client, {"title": "New title"},
+                                get_error=httpx.ConnectError("down"))
+
+        assert resp.status_code == 502
+        assert "would have cleared" in json.dumps(resp.json())
+        assert mc.put.await_count == 0
+
+
+class TestArchiveLinkMembers:
+    def _download(self, client, archive_bytes):
+        art = {
+            "uuid": "link-uuid",
+            "title": "Linky",
+            "tags": [{"tag": "fabric"}],
+            "description_short": "s",
+            "description_long": "d",
+            "versions": [{"uuid": "v1", "active": True, "urn": "urn:x"}],
+        }
+        content_resp = MagicMock()
+        content_resp.content = archive_bytes
+        content_resp.raise_for_status = MagicMock()
+        with patch("app.routes.artifacts._fetch_artifact",
+                   new_callable=AsyncMock, return_value=art), \
+             patch("app.routes.artifacts._get_auth_headers",
+                   return_value={"Authorization": "Bearer fake"}), \
+             patch("app.routes.artifacts.ai_client.get",
+                   new=AsyncMock(return_value=content_resp)):
+            return client.post("/api/artifacts/download", json={"uuid": "link-uuid"})
+
+    @pytest.mark.parametrize("linktype", ["sym", "hard"])
+    def test_link_members_rejected(self, client, storage_dir, linktype):
+        """A symlink/hardlink to a path outside the archive, followed by a file
+        under the link name, would overwrite the target (zip-slip); reject it."""
+        import io
+        import tarfile
+
+        (storage_dir / "my_artifacts").mkdir(parents=True, exist_ok=True)
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tf:
+            link = tarfile.TarInfo(name="cfg")
+            link.type = tarfile.SYMTYPE if linktype == "sym" else tarfile.LNKTYPE
+            link.linkname = "/home/fabric/work/fabric_config" if linktype == "sym" else "README.md"
+            tf.addfile(link)
+            data = b"evil"
+            info = tarfile.TarInfo(name="cfg/id_token.json")
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+
+        resp = self._download(client, buf.getvalue())
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"] == "ARTIFACT_ARCHIVE_UNSAFE"

@@ -18,8 +18,40 @@ import hmac
 import os
 import time
 
+from urllib.parse import urlsplit
+
 from app import auth as _auth
 from app.auth import get_server_secret
+
+# Same defaults as main.py's CORS allowlist; CORS_ORIGINS overrides both.
+_DEFAULT_ORIGINS = ("http://localhost:3000", "http://localhost:5173", "https://cm.fabric-testbed.net")
+
+
+def _allowed_origins() -> frozenset[str]:
+    env = os.environ.get("CORS_ORIGINS", "")
+    if env:
+        return frozenset(o.strip().rstrip("/").lower() for o in env.split(",") if o.strip())
+    return frozenset(o.lower() for o in _DEFAULT_ORIGINS)
+
+
+def origin_allowed(headers) -> bool:
+    """Reject a WebSocket handshake from a foreign page.
+
+    Browsers always send ``Origin`` on WebSocket upgrades and the
+    ``loomai_session`` cookie rides along (SameSite=Lax does not cover
+    WebSockets), so without this any site could open a terminal shell in the
+    user's container. Same-origin (``Origin`` host == ``Host``) or a CORS
+    allowlist entry passes; a missing ``Origin`` (non-browser client, which
+    still needs the cookie or a ticket) passes. Applied in every auth mode.
+    """
+    origin = (headers.get("origin") or "").strip()
+    if not origin:
+        return True
+    parts = urlsplit(origin)
+    host = (headers.get("host") or "").strip().lower()
+    if parts.netloc and host and parts.netloc.lower() == host:
+        return True
+    return origin.rstrip("/").lower() in _allowed_origins()
 
 # Default lifetime of an attach ticket, in seconds.
 TICKET_TTL = 60
@@ -99,6 +131,8 @@ def ws_authorized(websocket, session_id: str = "", ticket: str = "") -> bool:
     (bound to *session_id*) or the same-origin ``loomai_session`` cookie. When
     auth is disabled (dev / K8s-hub mode) it is a no-op pass.
     """
+    if not origin_allowed(websocket.headers):
+        return False
     if not _auth.is_auth_enabled():
         return True
     if ticket and verify_ticket(ticket, session_id):

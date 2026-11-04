@@ -4,14 +4,13 @@ from __future__ import annotations
 import ast
 import logging
 import threading
-import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
 from app.fablib_manager import get_fablib
 from app.fablib_executor import run_in_fablib_pool
-from app.fabric_call_manager import get_call_manager, CacheEntry
+from app.fabric_call_manager import get_call_manager
 
 logger = logging.getLogger(__name__)
 
@@ -288,20 +287,17 @@ def get_cached_sites() -> list[dict[str, Any]]:
     This is used by the site resolver so it doesn't duplicate FABlib calls.
     Safe to call from a synchronous context (e.g. inside asyncio.to_thread).
 
-    Reads directly from the call manager cache (safe under GIL).
-    Falls back to a locked fetch if no cached data exists.
+    Reads the call manager cache without awaiting (safe under GIL); an entry
+    that was invalidated (user/token change, forced refresh) is not used.
+    Falls back to a locked fetch when there is no usable cached data.
     """
     mgr = get_call_manager()
-    entry = mgr._cache.get("sites")
-    if entry is not None and entry.data is not None:
-        return entry.data
-    # No cache — must block and fetch
+    cached = mgr.peek("sites")
+    if cached is not None:
+        return cached
+    # No usable cache — must block and fetch
     result = _fetch_sites_locked()
-    # Store in call manager cache for future use
-    if "sites" not in mgr._cache:
-        mgr._cache["sites"] = CacheEntry()
-    mgr._cache["sites"].data = result
-    mgr._cache["sites"].timestamp = time.time()
+    mgr.store("sites", result)
     return result
 
 
@@ -315,11 +311,9 @@ def get_fresh_sites() -> list[dict[str, Any]]:
     mgr = get_call_manager()
     mgr.invalidate("sites")
     result = _fetch_sites_locked()
-    # Update call manager cache
-    if "sites" not in mgr._cache:
-        mgr._cache["sites"] = CacheEntry()
-    mgr._cache["sites"].data = result
-    mgr._cache["sites"].timestamp = time.time()
+    # store() clears the invalidated flag; writing the entry fields directly
+    # would leave it marked invalidated and never served.
+    mgr.store("sites", result)
     return result
 
 
@@ -390,11 +384,10 @@ async def list_links(max_age: float = Query(_RESOURCE_TTL, ge=0)) -> list[dict[s
 @router.get("/sites/{site_name}/hosts")
 async def list_site_hosts(site_name: str) -> list[dict[str, Any]]:
     """Get per-host resource availability for a site."""
-    # Try cached data first (from call manager)
-    mgr = get_call_manager()
-    entry = mgr._cache.get("sites")
-    if entry is not None and entry.data is not None:
-        for site in entry.data:
+    # Try cached data first (from call manager); invalidated data is skipped.
+    cached_sites = get_call_manager().peek("sites")
+    if cached_sites:
+        for site in cached_sites:
             if site.get("name") == site_name:
                 return site.get("hosts_detail", [])
 

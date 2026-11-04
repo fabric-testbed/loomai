@@ -1,7 +1,15 @@
 {{- /*
   Pre-upgrade hook: delete all running user (singleuser) pods so they
   respawn with the new image after the upgrade completes.
+
+  This fires on EVERY `helm upgrade`, including hub-only or values-only
+  changes, and takes active sessions with it. Set hub.cullOnUpgrade=false
+  (or --set hub.cullOnUpgrade=false) for an upgrade that does not change the
+  singleuser image. The value is read with printf so a release upgraded with
+  --reuse-values (which does not pick up keys added to values.yaml later)
+  keeps the historical behaviour: cull unless explicitly disabled.
 */ -}}
+{{- if ne (printf "%v" .Values.hub.cullOnUpgrade) "false" }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -26,11 +34,18 @@ spec:
       serviceAccountName: {{ include "loomai.hub.serviceAccountName" . }}
       containers:
         - name: cull
-          image: bitnami/kubectl:latest
+          # Pinned official image (registry.k8s.io ships versioned tags;
+          # Bitnami dropped its versioned Docker Hub tags, so bitnami/kubectl:1.31
+          # never resolved). It has no shell, so kubectl runs directly.
+          # Override with hub.cullImage; any image with kubectl on PATH works.
+          image: {{ .Values.hub.cullImage | default "registry.k8s.io/kubectl:v1.31.4" | quote }}
           command:
-            - /bin/sh
-            - -c
-            - |
-              echo "Culling all singleuser pods before upgrade..."
-              kubectl delete pods -n {{ .Release.Namespace }} -l app=loomai,component=singleuser --ignore-not-found
-              echo "Done."
+            - kubectl
+            - delete
+            - pods
+            - -n
+            - {{ .Release.Namespace | quote }}
+            - -l
+            - app=loomai,component=singleuser
+            - --ignore-not-found
+{{- end }}

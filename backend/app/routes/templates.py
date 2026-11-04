@@ -164,10 +164,13 @@ def _list_tools(tmpl_dir: str) -> list[dict[str, str]]:
 
 
 def _max_lease_hours_policy() -> int | None:
-    """Return configured max lease hours, or None when policy is disabled."""
+    """Return the lease cap for this request, or None when uncapped.
+
+    Only agent-initiated requests are capped; see ``app.request_actor``.
+    """
     try:
-        from app.settings_manager import get_max_slice_lease_hours
-        return get_max_slice_lease_hours()
+        from app.settings_manager import get_request_lease_cap_hours
+        return get_request_lease_cap_hours()
     except Exception:
         logger.debug("Could not read max slice lease policy", exc_info=True)
         return None
@@ -907,10 +910,6 @@ def load_template(name: str, req: LoadTemplateRequest) -> dict[str, Any]:
 
     model = SliceModelImport(**model_data)
     result = import_slice(model)
-
-    # Seed the slice working directory with template artifacts
-    from app.routes.jupyter import seed_slice_workdir_from_template
-    seed_slice_workdir_from_template(slice_name, tmpl_dir)
 
     # Store template directory info so boot config can find weave scripts
     _store_boot_info(slice_name, tmpl_dir)

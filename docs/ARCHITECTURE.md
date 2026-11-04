@@ -323,12 +323,43 @@ viewable in the console via "View Log".
 | POST | `/api/ai/chat/stop` | Stop active chat stream by request ID |
 | GET | `/api/ai/chat/agents` | List available AI agent personas |
 
+#### MCP Servers (`routes/ai_mcp.py` → `/api/ai/mcp`)
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/ai/mcp/servers` | Registered MCP servers + live health (`?probe=false` to skip probing) |
+| GET | `/api/ai/mcp/servers/{name}` | One server with its full tool list and input schemas |
+| POST | `/api/ai/mcp/servers/{name}/probe` | Force a fresh connection and `tools/list` |
+| POST | `/api/ai/mcp/servers/{name}/call` | Invoke one tool (try-it panel) |
+
+Servers come from `app/mcp_registry.py` — three built-ins (`fabric-metrics`,
+`fabric-reports`, `loomai-harness`) plus anything in the `ai.mcp_servers`
+settings key. The registry also drives the generated harness configs, so a new
+server reaches OpenCode and Claude Code without touching the generators.
+`app/mcp_client.py` speaks streamable HTTP over `httpx` (no MCP SDK) with
+per-server session caching and a 5-minute `tools/list` cache keyed by
+`name:auth`.
+
+Harness configs are **reconciled** on every sync, not merely merged:
+`sync_mcp_wrapper_scripts()` generates one `npx mcp-remote` wrapper per remote
+server — shared by OpenCode and Claude Code, so FABRIC-token resolution follows
+`settings_manager.get_token_path()`'s order in one place — regenerating it when
+a URL or auth mode changes and deleting wrappers for servers that are gone.
+`prune_stale_mcp_entries()` removes registry-owned entries from `opencode.json`
+and `.mcp.json` that are no longer registered, leaving user-added servers
+alone.
+
 #### Metrics (`routes/metrics.py` → `/api/metrics`)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/site/{site}` | CPU load + dataplane traffic for a site |
 | GET | `/link/{siteA}/{siteB}` | Traffic between two sites |
+
+These two are LoomAI's own lightweight Prometheus proxy. The `fabric-metrics`
+MCP server covers far more (per-node CPU/memory/disk/filesystem/network/
+temperature, switch link status and port traffic) and is what the LoomAI
+assistant reaches for via `query_infrastructure_metrics`.
 
 #### Terminal (`routes/terminal.py` → WebSocket)
 
@@ -556,7 +587,7 @@ Rendered graph with layout algorithm (dagre/cola/breadthfirst/grid/concentric/co
 
 ```
 FABRIC_STORAGE_DIR/
-├── .artifacts/{name}/          # Unified artifact storage (user-created)
+├── my_artifacts/{name}/        # Unified artifact storage (user-created)
 │   ├── weave.json              # → weave (+ weave.sh → runnable weave)
 │   ├── vm-template.json        # → VM template
 │   ├── recipe.json             # → recipe
@@ -641,15 +672,34 @@ FABRIC_STORAGE_DIR (/home/fabric/work)
 │       └── {name}/
 │           ├── slice_key
 │           └── slice_key.pub
-├── .drafts/                     Unsaved draft slice state
-├── .artifacts/                  Unified artifact storage (weaves, VM templates, recipes, notebooks)
-├── .all_slices/
-│   └── registry.json            Slice name→UUID→state registry
+├── my_artifacts/                Weaves, VM templates, recipes, notebooks (one dir each)
+├── my_slices/                   Draft slices + registry
+│   ├── registry.json            Slice name→UUID→state registry (slice_registry.py)
+│   └── {name}/                  One new (never-submitted) draft, keyed by name
+│       ├── topology.graphml     FABlib topology (deleted on submit/discard)
+│       └── meta.json            Site groups, IP hints, L3 config, project, lease hours
+├── notebooks/                   JupyterLab notebook workspaces
+├── .loomai/                     Internal state — never reachable through the file manager
+│   ├── settings.json            All settings (settings_manager.py)
+│   ├── session_secret           Terminal-ticket / cookie signing secret (0600)
+│   ├── password_hash            Standalone-auth password
+│   ├── user_registry.json       Multi-user mode only
+│   ├── users/{uuid}/            Multi-user mode: that user's fabric_config/, my_artifacts/, my_slices/, .loomai/
+│   └── migrations/              One-time migration markers
+├── .artifact-originals/{uuid}/  Pristine copy of each marketplace artifact for diffing
 ├── .slice-keys/                 Per-slice key assignments
-├── .monitoring/                 Monitoring state persistence
-│   └── {slice_name}.json
+├── .boot-config/                Per-node boot config
+├── .boot_info/                  Weave directory a draft was loaded from (boot scripts)
+├── .provisions/{slice}.json     File-manager provisioning rules
+├── .monitoring/{slice}.json     Monitoring state persistence
+├── .ai-tools/                   Installed AI-tool binaries/venvs (lazy install)
+├── archived_slice_folders/      Non-empty legacy per-slice folders moved here once on startup
+│                                (the per-slice folder feature was removed; empty ones were deleted)
+├── codex/ opencode/ pi/ ...     AI-tool workspaces seeded by ai_terminal.py
 └── (user files)                 Container storage (visible in file browser)
 ```
+
+The legacy `.drafts/`, `.artifacts/`, `.all_slices/` and `work/my_slices/` layouts are migrated to the above by `_startup_storage()` in `main.py` on first start.
 
 ## Build & Deploy
 
@@ -717,12 +767,9 @@ Hub mode restrictions: installable AI tools (Antigravity, Codex, Aider, OpenCode
 
 ## CLI Tool (`loomai`)
 
-A Click-based Python CLI providing full FABRIC, Chameleon, federated, file, artifact, monitoring, and AI-tool management from the terminal. Pre-installed in the Docker container at `/usr/local/bin/loomai`. Source: `cli/loomai_cli/`; mirrored copy for Docker/backend packaging: `backend/cli/loomai_cli/`.
+A Click-based Python CLI providing full FABRIC, Chameleon, federated, file, artifact, monitoring, and AI-tool management from the terminal. Pre-installed in the Docker container at `/usr/local/bin/loomai`. Source: `backend/cli/loomai_cli/` — the single CLI tree. Both the combined `Dockerfile` (`COPY backend/cli/`) and `backend/Dockerfile` (`COPY cli/` with context `backend/`) install it, and CI runs `backend/cli/tests/`.
 
-The `cli/loomai_cli/` tree is the canonical edit target. After CLI edits, mirror
-`cli/loomai_cli/` and `cli/tests/` into `backend/cli/` and keep both
-`pyproject.toml` files aligned. Both mirrors currently declare
-`loomai-cli` `0.7.2` and Python `>=3.11`.
+There used to be a second copy at the repo root (`cli/`) that had to be mirrored by hand; it drifted in both directions and shipped a stale CLI in the combined image, so it was removed.
 
 ### Command Groups
 
@@ -810,9 +857,9 @@ Inside the shell, a readline completer function (`_shell_completer`) maps the cu
 
 ### Testing
 
-- Unit tests: `cli/tests/` — 154+ tests using `click.testing.CliRunner` with mocked HTTP
+- Unit tests: `backend/cli/tests/` — `click.testing.CliRunner` with mocked HTTP
 - Integration tests: gated behind `--integration` flag, require running backend
-- Run: `cd cli && python -m pytest tests/ -v`
+- Run: `cd backend/cli && python -m pytest tests/ -v`
 
 ## AI Provider Abstraction Layer
 
@@ -853,7 +900,7 @@ AI-related settings under the `ai` key:
 - `ai.default_model` — Auto-discovered or user-set default LLM model ID
 - `ai.default_model_source` — Source provider: "fabric", "nrp", "custom:<name>", or ""
 - `ai.tools` — per-tool enable/disable toggles
-- `fabric.slice_policy.max_lease_hours` — backend FABRIC lease cap in hours; defaults to `6`.
+- `fabric.slice_policy.max_lease_hours` — lease cap in hours for agent-initiated submits, renews and weave runs (people are not capped; see ADR-017); defaults to `6`, `0` disables it. Editable in Configure → AI Tools → Agent Lease Limit.
   Legacy missing/zero persisted values are seeded to this default once, then `0` is reserved
   as an intentional operator override to disable the cap.
 - `services.model_proxy_port` — local model proxy port

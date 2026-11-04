@@ -97,6 +97,17 @@ _RAW_PATTERNS: list[tuple[str, str, Optional[Callable], str]] = [
     (r"(?:show|get)\s+(?:me\s+)?(?:available\s+)?resources?", "query_sites", None, "high"),
     (r"(?:what|where)\s+(?:can\s+i|has)\s+(?:get\s+)?gpu", "query_sites", None, "high"),
 
+    # FABRIC infrastructure metrics — HIGH.
+    # Prefetching the topic catalog is always safe: it carries no user args and
+    # it is the first step the metrics contract demands (list topics, then pick
+    # a topic + variant). The model runs the actual query itself.
+    (r"(?:cpu|memory|ram|disk|load\s+average|temperatur)\w*\s+(?:usage|load|util\w*|at|on|for)\s+\w+",
+     "list_metric_topics", None, "high"),
+    (r"(?:how\s+)?(?:busy|loaded|hot)\s+(?:is|are)\s+\w+", "list_metric_topics", None, "high"),
+    (r"(?:link|port|dataplane)\s+(?:traffic|throughput|utilization)", "list_metric_topics", None, "high"),
+    (r"(?:infrastructure|rack|switch|node)\s+metrics?", "list_metric_topics", None, "high"),
+    (r"(?:show|get|what)\s+.*\bmetrics?\b.*\b(?:for|at|on)\s+\w+", "list_metric_topics", None, "high"),
+
     # Site hosts — HIGH
     (r"(?:show|get|list)\s+hosts?\s+(?:at|for|on)\s+(\w+)", "get_site_hosts",
      lambda m: {"site_name": m.group(1).upper()}, "high"),
@@ -357,8 +368,17 @@ def detect_multi_step(message: str) -> Optional[dict]:
     return match_template(message)
 
 
-# Destructive operations that need user confirmation
-DESTRUCTIVE_TOOLS = {"delete_slice", "submit_slice"}
+# Destructive operations that need user confirmation (see
+# app.assistant_consent for how consent is established). submit_slice
+# provisions real VMs; the rest delete resources that cannot be recovered.
+DESTRUCTIVE_TOOLS = {
+    "delete_slice",
+    "submit_slice",
+    "delete_path",
+    "delete_chameleon_lease",
+    "delete_chameleon_instance",
+    "delete_sphere_xdc",
+}
 
 def is_destructive(tool_name: str) -> bool:
     """Check if a tool is destructive and needs confirmation."""

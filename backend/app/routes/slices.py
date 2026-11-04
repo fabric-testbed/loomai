@@ -3,6 +3,7 @@
 from __future__ import annotations
 import asyncio
 import json
+import functools
 import logging
 import math
 import os
@@ -20,7 +21,7 @@ from pydantic import BaseModel, Field
 from app.fablib_manager import get_fablib
 from app.fablib_executor import run_in_fablib_pool
 from app.fabric_call_manager import get_call_manager
-from app.user_context import get_user_storage
+from app.user_context import get_user_storage, register_user_changed_callback
 from app.slice_serializer import slice_to_dict, check_has_errors, get_slice_facility_ports, serialize_facility_port
 from app.graph_builder import build_graph, STATE_COLORS, DEFAULT_STATE, STATE_COLORS_DARK, DEFAULT_STATE_DARK
 from app.site_resolver import resolve_sites
@@ -44,6 +45,10 @@ def _ensure_project_id(fablib) -> None:
     After a project switch, the FABlib singleton may still have the old
     project_id cached.  This syncs it before every FABRIC API call.
     """
+    # reconcile_projects temporarily points FABlib at other projects; wait for
+    # it rather than racing it (it never calls this helper itself).
+    if not _reconcile_idle.is_set():
+        _reconcile_idle.wait(timeout=120)
     pid = os.environ.get("FABRIC_PROJECT_ID", "")
     if pid:
         fablib.set_project_id(pid)
@@ -127,6 +132,120 @@ _draft_project_id: dict[str, str] = {}
 # Track an explicit requested lease duration for a draft until submit.
 _draft_lease_hours: dict[str, int] = {}
 
+# ---------------------------------------------------------------------------
+# Concurrency guards
+# ---------------------------------------------------------------------------
+# One re-entrant lock per slice name. The sync mutation routes run on
+# Starlette's thread pool while get_slice/submit serialize the same FABlib
+# Slice object on the FABlib pool. FABlib's topology is a NetworkX graph that
+# must not be mutated while another thread iterates it ("dict changed size
+# during iteration" surfaced as a 404), so every path that reads or edits a
+# draft object holds that slice's lock.
+_slice_locks: dict[str, threading.RLock] = {}
+_slice_locks_guard = threading.Lock()
+# Slices whose topology was edited in memory and not yet submitted. get_slice
+# serves these from memory instead of refetching from FABRIC, which used to
+# replace the edited object and silently drop the edits.
+_draft_dirty: set[str] = set()
+# Slices with a submit in progress: name -> snapshot served to readers while
+# the draft is popped. _load_persistent_drafts must not resurrect them from
+# disk meanwhile (that re-registered them as drafts and, after the real UUID
+# arrived, a later Delete only removed local files).
+_submitting: dict[str, dict[str, Any]] = {}
+# reconcile_projects switches FABlib's project while it scans; other FABRIC
+# calls wait for it instead of racing it (see _ensure_project_id).
+_reconcile_idle = threading.Event()
+_reconcile_idle.set()
+
+
+def _slice_lock(name: str) -> threading.RLock:
+    with _slice_locks_guard:
+        lock = _slice_locks.get(name)
+        if lock is None:
+            lock = _slice_locks[name] = threading.RLock()
+        return lock
+
+
+def _locked_slice_route(mark_dirty: bool):
+    """Decorator for sync slice routes: hold the slice lock around the handler
+    and, for topology mutations, mark the draft dirty on success.
+
+    The wrapper keeps the handler's signature (FastAPI resolves parameters
+    through ``__wrapped__``), so route declarations are unchanged.
+    """
+    def decorate(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            raw_name = kwargs["slice_name"] if "slice_name" in kwargs else args[0]
+            name = _resolve_slice_name(raw_name)
+            with _slice_lock(name):
+                result = fn(*args, **kwargs)
+                if mark_dirty and _is_draft(name):
+                    with _draft_lock:
+                        _draft_dirty.add(name)
+                return result
+        return wrapper
+    return decorate
+
+
+_slice_mutation = _locked_slice_route(mark_dirty=True)
+_slice_locked = _locked_slice_route(mark_dirty=False)
+
+
+def _begin_submit(name: str) -> tuple[Any | None, bool]:
+    """Pop the draft for submission and publish a read-only snapshot.
+
+    Readers (get_slice, list) see the snapshot with state "Submitting" until
+    _end_submit; the persistent-draft scan skips the name.
+    """
+    with _slice_lock(name):
+        draft = _get_draft(name)
+        snapshot: dict[str, Any] | None = None
+        if draft is not None:
+            try:
+                snapshot = _serialize(draft)
+            except Exception:
+                logger.debug("Could not snapshot draft '%s' for submit", name, exc_info=True)
+                snapshot = {"name": name, "id": get_slice_uuid(name), "nodes": [],
+                            "networks": [], "facility_ports": [], "port_mirrors": [],
+                            "error_messages": [], "graph": {"nodes": [], "edges": []}}
+            snapshot["state"] = "Submitting"
+            snapshot["dirty"] = False
+        obj, is_new = _pop_draft(name)
+        if obj is not None and snapshot is not None:
+            with _draft_lock:
+                _submitting[name] = snapshot
+        return obj, is_new
+
+
+def _end_submit(name: str) -> None:
+    with _draft_lock:
+        _submitting.pop(name, None)
+
+
+def _clear_in_memory_drafts() -> None:
+    """Forget every in-memory draft and cached FABlib result.
+
+    Registered for user/token changes: the draft store is process-global and
+    only filtered by project, so without this the next user's slice list
+    would carry the previous user's drafts and, via stale-while-revalidate,
+    their cached FABRIC slices. Persistent drafts are re-read from the new
+    user's storage on the next list.
+    """
+    with _draft_lock:
+        for store in (
+            _draft_slices, _draft_is_new, _draft_site_groups, _draft_ip_hints,
+            _draft_l3_config, _draft_project_id, _draft_lease_hours,
+        ):
+            store.clear()
+    try:
+        get_call_manager().clear_all()
+    except Exception:
+        logger.debug("Call manager clear on user change failed", exc_info=True)
+
+
+register_user_changed_callback(_clear_in_memory_drafts)
+
 
 def _coerce_lease_hours(value: Any) -> int | None:
     """Return a positive lease-hour value or None for absent/invalid input."""
@@ -142,10 +261,13 @@ def _coerce_lease_hours(value: Any) -> int | None:
 
 
 def _max_lease_hours_policy() -> int | None:
-    """Return configured max lease hours, or None when policy is disabled."""
+    """Return the lease cap for this request, or None when uncapped.
+
+    Only agent-initiated requests are capped; see ``app.request_actor``.
+    """
     try:
-        from app.settings_manager import get_max_slice_lease_hours
-        return get_max_slice_lease_hours()
+        from app.settings_manager import get_request_lease_cap_hours
+        return get_request_lease_cap_hours()
     except Exception:
         logger.debug("Could not read max slice lease policy", exc_info=True)
         return None
@@ -385,6 +507,11 @@ def _lease_policy_warning(lease_end: Any) -> dict[str, Any] | None:
 
 
 def _with_lease_policy_warning(payload: dict[str, Any]) -> dict[str, Any]:
+    # Expose the cap even on compliant slices so the renew panel can bound its
+    # date picker instead of discovering the limit from a 422.
+    max_hours = _max_lease_hours_policy()
+    if max_hours:
+        payload["max_lease_hours"] = max_hours
     warning = _lease_policy_warning(payload.get("lease_end"))
     if not warning:
         return payload
@@ -683,12 +810,12 @@ def _raise_lease_over_policy(
         detail={
             "code": "LEASE_ALREADY_EXCEEDS_POLICY",
             "message": (
-                f"This slice's lease already runs past the configured "
-                f"max_lease_hours={max_hours}, which would allow renewal only "
-                f"until {_lease_datetime_iso(policy_end)}. FABRIC leases cannot "
-                "be shortened, so there is nothing to renew. Raise "
-                "fabric.slice_policy.max_lease_hours in settings to extend "
-                "this lease further."
+                f"This slice's lease already runs past the {max_hours}-hour "
+                f"agent lease limit, which would allow renewal only until "
+                f"{_lease_datetime_iso(policy_end)}. FABRIC leases cannot be "
+                "shortened, so there is nothing to renew. Ask the user to renew "
+                "it from the LoomAI UI, or to raise the Agent Lease Limit in "
+                "Configure (fabric.slice_policy.max_lease_hours)."
             ),
             "slice_name": slice_name,
             "current_lease_end": _lease_datetime_iso(current_end) if current_end else None,
@@ -794,9 +921,9 @@ def _load_persistent_drafts() -> None:
                 lease_hours = _coerce_lease_hours(meta.get("lease_hours"))
             except Exception:
                 pass
-        # Skip if already in memory
+        # Skip if already in memory, or popped for a submit that is running
         with _draft_lock:
-            if name in _draft_slices:
+            if name in _draft_slices or name in _submitting:
                 continue
         # Skip if registry has a non-draft UUID — this draft was submitted
         existing_uuid = get_slice_uuid(name)
@@ -851,6 +978,7 @@ def _pop_draft(name: str) -> tuple[Any | None, bool]:
         _draft_l3_config.pop(name, None)
         _draft_project_id.pop(name, None)
         _draft_lease_hours.pop(name, None)
+        _draft_dirty.discard(name)
         return obj, is_new
 
 
@@ -1124,12 +1252,18 @@ async def list_slices(max_age: float = Query(30.0, ge=0)) -> list[dict[str, Any]
     - ``max_age=300``: accept 5-minute-old data (steady-state polling)
     """
     mgr = get_call_manager()
-    return await mgr.get(
+    rows = await mgr.get(
         "slices:list",
         fetcher=_list_slices_sync,
         max_age=max_age,
         stale_while_revalidate=(max_age > 0),
     )
+    # The lease cap depends on who is asking (agents only), so annotate copies
+    # per request rather than baking one caller's view into the shared cache.
+    return [
+        _with_lease_policy_warning(dict(row)) if "lease_end" in row else row
+        for row in rows
+    ]
 
 
 def _list_slices_sync() -> list[dict[str, Any]]:
@@ -1167,13 +1301,15 @@ def _list_slices_sync() -> list[dict[str, Any]]:
     if current_pid:
         dtos = [d for d in dtos if (d.project_id or '') == current_pid]
     # Build summaries directly from DTOs (no topology/sliver fetches)
+    # Lease-policy fields are added per request in list_slices(), not here:
+    # this result is cached and shared between people and agents.
     fabric_results = [
-        _with_lease_policy_warning({
+        {
             "name": d.name or "",
             "id": d.slice_id or "",
             "state": d.state or "",
             "lease_end": d.lease_end_time or "",
-        })
+        }
         for d in dtos
     ]
 
@@ -1288,6 +1424,17 @@ def _list_slices_sync() -> list[dict[str, Any]]:
                     draft_id = f"draft-{_uuid_mod.uuid4()}"
                     register_slice(name, uuid=draft_id, state="Draft", project_id=draft_pid)
                 results.append({"name": name, "id": draft_id, "state": "Draft", "has_errors": False})
+        # Drafts popped for a running submit are neither in FABRIC's list yet
+        # nor in _draft_slices; show them as Submitting rather than vanishing.
+        listed = {r["name"] for r in results}
+        for name, snapshot in list(_submitting.items()):
+            if name not in listed:
+                results.append({
+                    "name": name,
+                    "id": get_slice_uuid(name) or snapshot.get("id", ""),
+                    "state": "Submitting",
+                    "has_errors": False,
+                })
     return results
 
 
@@ -1322,14 +1469,18 @@ async def reconcile_projects() -> dict[str, Any]:
         uuid_to_project: dict[str, str] = {}
         projects_scanned = 0
 
+        # Other FABRIC calls wait in _ensure_project_id while this runs.
+        _reconcile_idle.clear()
         try:
             for proj in projects:
                 pid = proj.get("uuid", "")
                 if not pid:
                     continue
                 try:
+                    # Only FABlib's project is switched; FABRIC_PROJECT_ID in
+                    # the environment stays put so concurrent list/draft code
+                    # keeps tagging with the user's real project.
                     fablib.set_project_id(pid)
-                    os.environ["FABRIC_PROJECT_ID"] = pid
                     # Use lightweight list_slices with graph_format=NONE to
                     # avoid per-slice topology/sliver fetches (O(1) instead
                     # of O(3N) orchestrator calls per project).
@@ -1352,7 +1503,7 @@ async def reconcile_projects() -> dict[str, Any]:
             # Always restore original project, even if an exception occurs
             if original_pid:
                 fablib.set_project_id(original_pid)
-                os.environ["FABRIC_PROJECT_ID"] = original_pid
+            _reconcile_idle.set()
 
         # Bulk-tag the registry
         tagged = bulk_tag_project(uuid_to_project)
@@ -1383,13 +1534,30 @@ async def get_slice(slice_name: str, max_age: float = Query(0, ge=0)) -> dict[st
     """
     slice_name = _resolve_slice_name(slice_name)
     def _do():
+        # A submit is running: the draft is popped and FABRIC may not know
+        # the slice yet. Serve the snapshot instead of re-reading the disk
+        # copy (which resurrected the draft) or 404ing.
+        snapshot = _submitting.get(slice_name)
+        if snapshot is not None:
+            return dict(snapshot)
+
         registry_uuid = get_slice_uuid(slice_name)
         if registry_uuid and registry_uuid.startswith("draft-"):
             if not _is_draft(slice_name):
                 _load_persistent_drafts()
             draft = _get_draft(slice_name)
             if draft is not None:
-                return _serialize(draft)
+                with _slice_lock(slice_name):
+                    return _serialize(draft)
+
+        # A loaded slice with unsubmitted topology edits is served from
+        # memory: refetching from FABRIC would replace the edited object and
+        # drop the edits. POST /refresh discards them explicitly.
+        if _is_draft(slice_name) and slice_name in _draft_dirty:
+            draft = _get_draft(slice_name)
+            if draft is not None:
+                with _slice_lock(slice_name):
+                    return _with_lease_policy_warning(_serialize(draft, dirty=True))
 
         # New drafts (never submitted) — serve from memory.
         # Safety net: if the registry already has a UUID for this name, the
@@ -1400,7 +1568,8 @@ async def get_slice(slice_name: str, max_age: float = Query(0, ge=0)) -> dict[st
             if not existing_uuid or existing_uuid.startswith("draft-"):
                 slice_obj = _get_draft(slice_name)
                 if slice_obj is not None:
-                    return _serialize(slice_obj)
+                    with _slice_lock(slice_name):
+                        return _serialize(slice_obj)
             else:
                 # Draft was submitted externally — clean up
                 _pop_draft(slice_name)
@@ -1421,9 +1590,6 @@ async def get_slice(slice_name: str, max_age: float = Query(0, ge=0)) -> dict[st
             _pop_draft(slice_name)
 
         data = _with_lease_policy_warning(_serialize(slice_obj))
-        # Ensure a working directory exists for this slice
-        from app.routes.jupyter import ensure_slice_workdir
-        ensure_slice_workdir(slice_name)
         # Update registry with fresh state (including has_errors)
         try:
             sid = str(slice_obj.get_slice_id()) if hasattr(slice_obj, 'get_slice_id') else ""
@@ -1472,9 +1638,6 @@ async def create_slice(
         _store_draft(name, slice_obj, is_new=True)
         _store_draft_lease_hours(name, requested_lease_hours)
         register_slice(name, uuid=draft_id, state="Draft")
-        # Create an empty working directory for this slice
-        from app.routes.jupyter import ensure_slice_workdir
-        ensure_slice_workdir(name)
         return _serialize(slice_obj)
     try:
         return await run_in_fablib_pool(_do)
@@ -1603,7 +1766,7 @@ async def submit_slice(
                 "claiming the slice is provisioned."
             ),
         }, lease_warning)
-    draft, is_new = _pop_draft(slice_name)
+    draft, is_new = _begin_submit(slice_name)
     if draft is not None:
         lease_hours = effective_submit_lease_hours
         # Track whether submit() actually succeeded so we know whether
@@ -1717,6 +1880,8 @@ async def submit_slice(
             if site_groups:
                 _store_site_groups(slice_name, site_groups)
             raise _fabric_submit_failure(e)
+        finally:
+            _end_submit(slice_name)
     # Not a draft — nothing to submit
     raise HTTPException(status_code=400, detail="No pending changes to submit")
 
@@ -2601,8 +2766,18 @@ async def delete_slice(slice_name: str) -> dict[str, str]:
     mgr.invalidate("slices:list")
     slice_name = _resolve_slice_name(slice_name)
     mgr.invalidate_prefix(f"slice:{slice_name}")
+    if slice_name in _submitting:
+        raise HTTPException(status_code=409, detail={
+            "code": "SLICE_SUBMIT_IN_PROGRESS",
+            "message": f"'{slice_name}' is being submitted; wait for it to finish, then delete it.",
+            "slice_name": slice_name,
+        })
+    # The registry decides whether FABRIC knows this slice. A stale "new"
+    # draft must not turn a delete of a live slice into a local-only cleanup.
+    registry_uuid = get_slice_uuid(slice_name)
+    on_fabric = bool(registry_uuid and not registry_uuid.startswith("draft-"))
     draft, is_new = _pop_draft(slice_name)
-    if draft is not None and is_new:
+    if draft is not None and is_new and not on_fabric:
         # Just a draft that was never submitted — discard it
         _delete_persistent_draft(slice_name)
         unregister_slice(slice_name)
@@ -2925,6 +3100,7 @@ def _raise_submit_validation_errors(slice_name: str, slice_obj: Any) -> None:
 
 
 @router.get("/slices/{slice_name}/validate")
+@_slice_locked
 def validate_slice(slice_name: str) -> dict[str, Any]:
     """Validate a slice and return any issues."""
     slice_name = _resolve_slice_name(slice_name)
@@ -2938,6 +3114,7 @@ def validate_slice(slice_name: str) -> dict[str, Any]:
 # --- Node operations ---
 
 @router.post("/slices/{slice_name}/nodes")
+@_slice_mutation
 def add_node(slice_name: str, req: CreateNodeRequest) -> dict[str, Any]:
     """Add a node to a slice."""
     slice_name = _resolve_slice_name(slice_name)
@@ -2979,6 +3156,7 @@ def add_node(slice_name: str, req: CreateNodeRequest) -> dict[str, Any]:
 
 
 @router.delete("/slices/{slice_name}/nodes/{node_name}")
+@_slice_mutation
 def remove_node(slice_name: str, node_name: str) -> dict[str, Any]:
     """Remove a node from a slice."""
     slice_name = _resolve_slice_name(slice_name)
@@ -2992,6 +3170,7 @@ def remove_node(slice_name: str, node_name: str) -> dict[str, Any]:
 
 
 @router.put("/slices/{slice_name}/nodes/{node_name}")
+@_slice_mutation
 def update_node(slice_name: str, node_name: str, req: UpdateNodeRequest) -> dict[str, Any]:
     """Update node configuration."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3034,6 +3213,7 @@ def update_node(slice_name: str, node_name: str, req: UpdateNodeRequest) -> dict
 # --- Component operations ---
 
 @router.post("/slices/{slice_name}/nodes/{node_name}/components")
+@_slice_mutation
 def add_component(slice_name: str, node_name: str, req: CreateComponentRequest) -> dict[str, Any]:
     """Add a component to a node."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3050,6 +3230,7 @@ def add_component(slice_name: str, node_name: str, req: CreateComponentRequest) 
 
 
 @router.delete("/slices/{slice_name}/nodes/{node_name}/components/{comp_name}")
+@_slice_mutation
 def remove_component(slice_name: str, node_name: str, comp_name: str) -> dict[str, Any]:
     """Remove a component from a node."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3310,6 +3491,7 @@ def prepare_slice_for_facility_port_l2(
 
 
 @router.post("/slices/{slice_name}/nodes/{node_name}/fabnet")
+@_slice_mutation
 def add_fabnet_to_node(slice_name: str, node_name: str, req: AddFabnetRequest) -> dict[str, Any]:
     """Attach FABNetv4 or FABNetv6 to a single node.
 
@@ -3342,6 +3524,7 @@ def add_fabnet_to_node(slice_name: str, node_name: str, req: AddFabnetRequest) -
 # --- Facility port operations ---
 
 @router.post("/slices/{slice_name}/facility-ports")
+@_slice_mutation
 def add_facility_port(slice_name: str, req: CreateFacilityPortRequest) -> dict[str, Any]:
     """Add a facility port to a slice."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3364,6 +3547,7 @@ def add_facility_port(slice_name: str, req: CreateFacilityPortRequest) -> dict[s
 
 
 @router.put("/slices/{slice_name}/facility-ports/{fp_name}")
+@_slice_mutation
 def update_facility_port(slice_name: str, fp_name: str, req: UpdateFacilityPortRequest) -> dict[str, Any]:
     """Replace a draft facility port while preserving its network attachment."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3413,6 +3597,7 @@ def update_facility_port(slice_name: str, fp_name: str, req: UpdateFacilityPortR
 
 
 @router.delete("/slices/{slice_name}/facility-ports/{fp_name}")
+@_slice_mutation
 def remove_facility_port(slice_name: str, fp_name: str) -> dict[str, Any]:
     """Remove a facility port from a slice."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3435,6 +3620,7 @@ def remove_facility_port(slice_name: str, fp_name: str) -> dict[str, Any]:
 # --- Port mirror operations ---
 
 @router.post("/slices/{slice_name}/port-mirrors")
+@_slice_mutation
 def add_port_mirror(slice_name: str, req: CreatePortMirrorRequest) -> dict[str, Any]:
     """Add a port mirror service to a slice."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3468,6 +3654,7 @@ def add_port_mirror(slice_name: str, req: CreatePortMirrorRequest) -> dict[str, 
 
 
 @router.put("/slices/{slice_name}/port-mirrors/{pm_name}")
+@_slice_mutation
 def update_port_mirror(slice_name: str, pm_name: str, req: UpdatePortMirrorRequest) -> dict[str, Any]:
     """Replace a port mirror service under the same name."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3509,6 +3696,7 @@ def update_port_mirror(slice_name: str, pm_name: str, req: UpdatePortMirrorReque
 
 
 @router.delete("/slices/{slice_name}/port-mirrors/{pm_name}")
+@_slice_mutation
 def remove_port_mirror(slice_name: str, pm_name: str) -> dict[str, Any]:
     """Remove a port mirror service from a slice."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3540,6 +3728,7 @@ def remove_port_mirror(slice_name: str, pm_name: str) -> dict[str, Any]:
 # --- Network operations ---
 
 @router.post("/slices/{slice_name}/networks")
+@_slice_mutation
 def add_network(slice_name: str, req: CreateNetworkRequest) -> dict[str, Any]:
     """Add a network to a slice."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3653,6 +3842,7 @@ def _set_network_interfaces(net, target_ifaces: list) -> None:
 
 
 @router.put("/slices/{slice_name}/networks/{net_name}")
+@_slice_mutation
 def update_network(slice_name: str, net_name: str, req: UpdateNetworkRequest) -> dict[str, Any]:
     """Update membership, IP mode, subnet, and per-interface IPs on a network."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3709,6 +3899,7 @@ def update_network(slice_name: str, net_name: str, req: UpdateNetworkRequest) ->
 
 
 @router.delete("/slices/{slice_name}/networks/{net_name}")
+@_slice_mutation
 def remove_network(slice_name: str, net_name: str) -> dict[str, Any]:
     """Remove a network from a slice."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3728,6 +3919,7 @@ class IpHintsRequest(BaseModel):
 
 
 @router.get("/slices/{slice_name}/networks/{net_name}/ip-hints")
+@_slice_locked
 def get_ip_hints(slice_name: str, net_name: str) -> dict[str, Any]:
     """Get IP hints for a L3 network."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3735,6 +3927,7 @@ def get_ip_hints(slice_name: str, net_name: str) -> dict[str, Any]:
 
 
 @router.put("/slices/{slice_name}/networks/{net_name}/ip-hints")
+@_slice_locked
 def set_ip_hints(slice_name: str, net_name: str, req: IpHintsRequest) -> dict[str, Any]:
     """Save IP hints for a L3 network."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3928,6 +4121,7 @@ class ConfigureNetworkingRequest(BaseModel):
 
 
 @router.get("/slices/{slice_name}/networks/{net_name}/l3-config")
+@_slice_locked
 def get_l3_config_endpoint(slice_name: str, net_name: str) -> dict[str, Any]:
     """Get L3 config for a FABNet network."""
     slice_name = _resolve_slice_name(slice_name)
@@ -3935,6 +4129,7 @@ def get_l3_config_endpoint(slice_name: str, net_name: str) -> dict[str, Any]:
 
 
 @router.put("/slices/{slice_name}/networks/{net_name}/l3-config")
+@_slice_locked
 def set_l3_config_endpoint(slice_name: str, net_name: str, req: L3ConfigRequest) -> dict[str, Any]:
     """Save L3 config for a FABNet network."""
     slice_name = _resolve_slice_name(slice_name)
@@ -4381,6 +4576,7 @@ async def configure_networking(slice_name: str, req: ConfigureNetworkingRequest 
 # --- Post-boot config ---
 
 @router.put("/slices/{slice_name}/nodes/{node_name}/post-boot")
+@_slice_locked
 def set_post_boot_config(slice_name: str, node_name: str, req: PostBootConfigRequest) -> dict[str, Any]:
     """Set a post-boot config script on a node."""
     slice_name = _resolve_slice_name(slice_name)
@@ -5006,6 +5202,7 @@ def build_slice_model(slice_name: str) -> dict:
 
 
 @router.get("/slices/{slice_name}/export")
+@_slice_locked
 def export_slice(slice_name: str):
     """Export a slice definition as a downloadable JSON model file."""
     slice_name = _resolve_slice_name(slice_name)

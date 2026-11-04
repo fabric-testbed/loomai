@@ -3,6 +3,14 @@ hub:
     name: fabrictestbed/loomai-hub
     tag: latest
     pullPolicy: IfNotPresent
+  # Delete every running user pod before each `helm upgrade` so they respawn
+  # with the new singleuser image. This also ends active sessions and fires
+  # on hub-only or values-only upgrades; pass --set hub.cullOnUpgrade=false
+  # for those. Only an explicit false disables it.
+  cullOnUpgrade: true
+  # kubectl image the cull Job runs; pinned, override if your registry
+  # mirror lacks it.
+  cullImage: registry.k8s.io/kubectl:v1.31.4
   resources:
     requests:
       cpu: 200m

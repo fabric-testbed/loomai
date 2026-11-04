@@ -14,6 +14,68 @@ const BASE = (typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH)
   ? `${window.__LOOMAI_BASE_PATH}/api`
   : '/api';
 
+/**
+ * A non-2xx response from the backend.
+ *
+ * `message` is what a person should see: the backend's `detail.message`
+ * (or `detail` when it is a string), never the raw JSON body. The structured
+ * `detail`, its `code` and the HTTP `status` stay available for callers that
+ * branch on them; `body` keeps the raw text for debugging.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: unknown;
+  readonly code: string;
+  readonly body: string;
+
+  constructor(status: number, body: string) {
+    const { message, detail, code } = ApiError.parse(status, body);
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.detail = detail;
+    this.code = code;
+    this.body = body;
+  }
+
+  static parse(status: number, body: string): { message: string; detail: unknown; code: string } {
+    let detail: unknown = undefined;
+    try {
+      const parsed = JSON.parse(body);
+      detail = parsed && typeof parsed === 'object' && 'detail' in parsed ? (parsed as any).detail : parsed;
+    } catch {
+      detail = undefined;
+    }
+    let message = '';
+    let code = '';
+    if (typeof detail === 'string') {
+      message = detail;
+    } else if (Array.isArray(detail)) {
+      // FastAPI validation errors: [{loc, msg, type}, ...]
+      message = detail.map((e: any) => (e && typeof e.msg === 'string' ? e.msg : '')).filter(Boolean).join('; ');
+    } else if (detail && typeof detail === 'object') {
+      const d = detail as Record<string, unknown>;
+      if (typeof d.message === 'string') message = d.message;
+      else if (typeof d.msg === 'string') message = d.msg;
+      if (typeof d.code === 'string') code = d.code;
+      else if (typeof d.error === 'string') code = d.error;
+    }
+    if (!message) message = body.trim() || `Request failed with status ${status}`;
+    return { message, detail, code };
+  }
+}
+
+/** Build the error for a failed `fetch` Response (reads the body once). */
+export async function apiError(res: Response): Promise<ApiError> {
+  let body = '';
+  try {
+    body = await res.text();
+  } catch {
+    body = '';
+  }
+  return new ApiError(res.status, body);
+}
+
 // In-flight GET request deduplication — if the same GET URL is already
 // pending, return the existing promise instead of firing a duplicate request.
 const _inflight = new Map<string, Promise<any>>();
@@ -43,8 +105,7 @@ async function _doFetch<T>(url: string, options?: RequestInit): Promise<T> {
     throw new Error('Authentication required');
   }
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json();
 }
@@ -427,8 +488,7 @@ export function autoConfigureNetworks(sliceName: string): Promise<{ configured: 
 export async function exportSlice(name: string): Promise<void> {
   const res = await fetch(`${BASE}/slices/${encodeURIComponent(name)}/export`);
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -920,7 +980,7 @@ export async function uploadSphereFile(
   if (project) form.append('project', project);
   if (dest) form.append('dest', dest);
   const res = await fetch(`${BASE}/sphere/upload`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await apiError(res);
   return res.json();
 }
 
@@ -1435,8 +1495,7 @@ export async function uploadChameleonKeypairPrivateKey(site: string, name: strin
   form.append('private_key', privateKey);
   const res = await fetch(`${BASE}/chameleon/keypairs/${encodeURIComponent(name)}/private-key?site=${encodeURIComponent(site)}`, { method: 'POST', body: form });
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json();
 }
@@ -2377,8 +2436,7 @@ export async function uploadToken(file: File): Promise<{ status: string; message
   form.append('file', file);
   const res = await fetch(`${BASE}/config/token`, { method: 'POST', body: form });
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json();
 }
@@ -2439,8 +2497,7 @@ export async function uploadBastionKey(file: File): Promise<{ status: string; me
   form.append('file', file);
   const res = await fetch(`${BASE}/config/keys/bastion`, { method: 'POST', body: form });
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json();
 }
@@ -2455,8 +2512,7 @@ export async function uploadSliceKeys(
   form.append('public_key', publicKey);
   const res = await fetch(`${BASE}/config/keys/slice?key_name=${encodeURIComponent(keyName)}`, { method: 'POST', body: form });
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json();
 }
@@ -2481,8 +2537,7 @@ export async function uploadSliceKeysNamed(
   form.append('public_key', publicKey);
   const res = await fetch(`${BASE}/config/keys/slice?key_name=${encodeURIComponent(keyName)}`, { method: 'POST', body: form });
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json();
 }
@@ -2522,8 +2577,7 @@ export async function uploadFiles(path: string, files: FileList | File[]): Promi
     body: form,
   });
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json();
 }
@@ -2539,8 +2593,7 @@ export async function uploadFilesWithPaths(path: string, entries: Array<{ file: 
     body: form,
   });
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json();
 }
@@ -2632,8 +2685,7 @@ export async function uploadDirectToVm(
     { method: 'POST', body: form },
   );
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json();
 }
@@ -2654,8 +2706,7 @@ export async function uploadDirectToVmWithPaths(
     { method: 'POST', body: form },
   );
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json();
 }
@@ -2798,8 +2849,7 @@ export async function uploadDirectToChameleonInstance(
     { method: 'POST', body: form },
   );
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json();
 }
@@ -2820,8 +2870,7 @@ export async function uploadDirectToChameleonInstanceWithPaths(
     { method: 'POST', body: form },
   );
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json();
 }
@@ -2836,8 +2885,7 @@ export async function downloadDirectFromChameleonInstance(
     `${BASE}/files/chameleon/${encodeURIComponent(instanceId)}/download-direct?${sp.toString()}`,
   );
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -2860,8 +2908,7 @@ export async function downloadFolderFromChameleonInstance(
     `${BASE}/files/chameleon/${encodeURIComponent(instanceId)}/download-folder?${sp.toString()}`,
   );
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -3020,8 +3067,7 @@ export async function executeBootConfigStream(
     headers: { 'Content-Type': 'application/json' },
   });
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   const reader = res.body?.getReader();
   if (!reader) throw new Error('No response body');
@@ -3133,8 +3179,7 @@ export async function executeRecipeStream(
     headers: { 'Content-Type': 'application/json' },
   });
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`API error ${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   const reader = res.body?.getReader();
   if (!reader) throw new Error('No response body');
@@ -3450,4 +3495,54 @@ export function testCustomProvider(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ base_url, api_key, endpoint_style, model }),
   });
+}
+
+// --- MCP servers ---
+
+export interface MCPToolInfo {
+  name: string;
+  description: string;
+  input_schema?: Record<string, unknown>;
+}
+
+export interface MCPServerStatus {
+  reachable: boolean;
+  tool_count: number;
+  error: string;
+  auth_warning?: string;
+  latency_ms?: number | null;
+  local?: boolean;
+  server_info?: { name?: string; version?: string };
+  instructions?: string;
+  tools?: MCPToolInfo[];
+}
+
+export interface MCPServerInfo {
+  name: string;
+  label: string;
+  description: string;
+  transport: 'http' | 'stdio';
+  url: string;
+  auth: 'none' | 'fabric_token';
+  harness: boolean;
+  loomai: boolean;
+  requires_staff: boolean;
+  docs_url: string;
+  topics: string[];
+  builtin: boolean;
+  command: string[];
+  harnesses: string[];
+  status?: MCPServerStatus;
+}
+
+export function getMCPServers(probe = true): Promise<{ servers: MCPServerInfo[] }> {
+  return fetchJson(`/ai/mcp/servers?probe=${probe ? 'true' : 'false'}`);
+}
+
+export function getMCPServer(name: string, force = false): Promise<MCPServerInfo> {
+  return fetchJson(`/ai/mcp/servers/${encodeURIComponent(name)}?force=${force ? 'true' : 'false'}`);
+}
+
+export function probeMCPServer(name: string): Promise<MCPServerStatus> {
+  return fetchJson(`/ai/mcp/servers/${encodeURIComponent(name)}/probe`, { method: 'POST' });
 }

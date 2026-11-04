@@ -257,6 +257,30 @@ describe('ConfigureView', () => {
     }));
   });
 
+  it('edits and saves the agent lease limit', async () => {
+    const settings = mockSettings();
+    (settings.fabric as any).slice_policy = { max_lease_hours: 6 };
+    vi.mocked(api.getSettings).mockResolvedValue(settings as any);
+
+    renderConfigure();
+
+    const tabs = await screen.findAllByTestId('configure-section-tab');
+    fireEvent.click(tabs.find(tab => tab.getAttribute('data-section') === 'ai-tools')!);
+
+    const input = await screen.findByTestId('agent-lease-hours-input');
+    await waitFor(() => expect(input).toHaveValue(6));
+    fireEvent.change(input, { target: { value: '24' } });
+
+    const save = await screen.findByTestId('configure-save');
+    await waitFor(() => expect(save).not.toBeDisabled());
+    fireEvent.click(save);
+
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+    expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      fabric: expect.objectContaining({ slice_policy: { max_lease_hours: 24 } }),
+    }));
+  });
+
   it('tests and saves custom provider endpoint style', async () => {
     const settings = mockSettings();
     settings.ai.custom_providers = [{

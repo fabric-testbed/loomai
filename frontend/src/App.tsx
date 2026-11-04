@@ -1,6 +1,5 @@
 'use client';
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import { createPortal } from 'react-dom';
 import dynamic from 'next/dynamic';
 import TitleBar from './components/TitleBar';
 import InAppSelect from './components/InAppSelect';
@@ -50,6 +49,7 @@ import * as api from './api/client';
 import type { SliceSummary, SliceData, ComponentModel, ValidationIssue, ProjectInfo, VMTemplateSummary, BootConfig, RecipeSummary, ExperimentVariable, LoomAISettings } from './types/fabric';
 import type { ChameleonSite, ChameleonInstance, ChameleonDraft, ChameleonSlice } from './types/chameleon';
 import { useInfrastructure } from './hooks/useInfrastructure';
+import { Modal } from './components/Modal';
 
 const AUTH_BASE = (typeof window !== 'undefined' && window.__LOOMAI_BASE_PATH)
   ? `${window.__LOOMAI_BASE_PATH}/api`
@@ -3496,18 +3496,20 @@ export default function App() {
     }
   }, [selectedSliceId, sliceData?.state]);
 
-  // Delete a slice by name (used by AllSliversView)
-  const handleDeleteSliceByName = useCallback(async (name: string) => {
-    const slice = slices.find(s => s.name === name);
+  // Delete a slice by id (used by AllSliversView and the context menu). Names
+  // are display labels and can repeat; the id (FABRIC UUID or draft-*) is the
+  // key, so two slices called "test" cannot both be marked Dead by one delete.
+  const handleDeleteSliceById = useCallback(async (id: string) => {
+    const slice = slicesRef.current.find(s => s.id === id);
     const wasDraft = slice?.state === 'Draft';
     // Register as deleting so polling won't overwrite state back to StableOK
     if (!wasDraft) {
-      deletingSlicesRef.current.set(name, Date.now());
-      if (slice?.id) deletingSlicesRef.current.set(slice.id, Date.now());
+      deletingSlicesRef.current.set(id, Date.now());
+      if (slice?.name) deletingSlicesRef.current.set(slice.name, Date.now());
     }
-    await api.deleteSlice(name);
+    await api.deleteSlice(id);
     // If deleting the currently-selected slice, clear selection
-    if (name === selectedSliceName) {
+    if (id === selectedSliceId) {
       setSliceData(null);
       setSelectedSliceId('');
       setSelectedElement(null);
@@ -3515,11 +3517,11 @@ export default function App() {
       setValidationValid(false);
     }
     if (wasDraft) {
-      setSlices(prev => prev.filter(s => s.name !== name));
+      setSlices(prev => prev.filter(s => s.id !== id));
     } else {
-      setSlices(prev => prev.map(s => s.name === name ? { ...s, state: 'Dead' } : s));
+      setSlices(prev => prev.map(s => s.id === id ? { ...s, state: 'Dead' } : s));
     }
-  }, [slices, selectedSliceId]);
+  }, [selectedSliceId]);
 
 
   const handleArchiveSlice = useCallback(async () => {
@@ -4588,7 +4590,10 @@ export default function App() {
     } else if (action.type === 'delete-slice' && action.sliceNames) {
       (async () => {
         for (const name of action.sliceNames!) {
-          try { await handleDeleteSliceByName(name); } catch (e: any) { addError(e.message); }
+          // The graph context menu only knows names; map to the id when the
+          // slice is loaded (the backend resolves either).
+          const id = slicesRef.current.find(s => s.name === name)?.id ?? name;
+          try { await handleDeleteSliceById(id); } catch (e: any) { addError(e.message); }
         }
         handleRefreshSlices();
       })();
@@ -4666,7 +4671,7 @@ export default function App() {
           setErrors(prev => [...prev, `Boot config failed for ${action.nodeName}: ${e.message}`]);
         });
     }
-  }, [handleOpenTerminals, handleDeleteElements, handleDeleteSliceByName, handleRefreshSlices, handleDeleteComponent, handleDeleteFacilityPort, handleSaveVmTemplate, handleExecuteRecipe, selectedSliceId, handleOpenChameleonTerminal, handleDeleteChameleonInstanceFromTopology, handleRunFullBootConfigPipeline, selectedSliceName, appendBuildLog]);
+  }, [handleOpenTerminals, handleDeleteElements, handleDeleteSliceById, handleRefreshSlices, handleDeleteComponent, handleDeleteFacilityPort, handleSaveVmTemplate, handleExecuteRecipe, selectedSliceId, handleOpenChameleonTerminal, handleDeleteChameleonInstanceFromTopology, handleRunFullBootConfigPipeline, selectedSliceName, appendBuildLog]);
 
   const handleCloseTerminal = useCallback((id: string) => {
     setTerminalTabs((prev) => prev.filter((t) => t.id !== id));
@@ -6230,7 +6235,7 @@ export default function App() {
                   setSelectedSliceId(id);
                   setInfraSubView('topology');
                 }}
-                onDeleteSlice={handleDeleteSliceByName}
+                onDeleteSlice={handleDeleteSliceById}
                 onRefreshSlices={handleRefreshSlices}
                 onArchiveSlice={async (name) => {
                   await api.archiveSlice(name);
@@ -6883,15 +6888,8 @@ export default function App() {
         </div>
       )}
 
-      {showFederatedSubsliceDialog && selectedFederatedSlice && typeof document !== 'undefined' && createPortal(
-        <div
-          className="template-modal-overlay"
-          onClick={() => setShowFederatedSubsliceDialog(false)}
-        >
-          <div
-            className="template-modal federated-subslice-modal"
-            onClick={(e) => e.stopPropagation()}
-          >
+      {showFederatedSubsliceDialog && selectedFederatedSlice && typeof document !== 'undefined' && (
+        <Modal overlayClassName="template-modal-overlay" className="template-modal federated-subslice-modal" onClose={() => setShowFederatedSubsliceDialog(false)}>
             <h4>Add Sub-slice</h4>
             <p>
               Attach an existing FABRIC or Chameleon slice to <strong>{selectedFederatedSlice.name}</strong>.
@@ -6987,15 +6985,12 @@ export default function App() {
             <div className="template-modal-actions">
               <button onClick={() => setShowFederatedSubsliceDialog(false)}>Cancel</button>
             </div>
-          </div>
-        </div>,
-        document.body,
+        </Modal>
       )}
 
       {/* Save Weave / VM Template Modal */}
       {saveTemplateModal && (
-        <div className="toolbar-modal-overlay" onClick={() => setSaveTemplateModal(null)}>
-          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal" onClose={() => setSaveTemplateModal(null)}>
             <h4>{saveTemplateModal.type === 'slice' ? 'Save as Artifact' : 'Save VM Template'}</h4>
             <p>
               {saveTemplateModal.type === 'slice'
@@ -7030,14 +7025,12 @@ export default function App() {
                 {saveTemplateBusy ? 'Saving...' : 'Save'}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Save Experiment Template Modal */}
       {saveExperimentModal && (
-        <div className="toolbar-modal-overlay" onClick={() => setSaveExperimentModal(false)}>
-          <div className="toolbar-modal toolbar-modal-wide" onClick={(e) => e.stopPropagation()}>
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal toolbar-modal-wide" onClose={() => setSaveExperimentModal(false)}>
             <h4>Save as Experiment Template</h4>
             <p>
               Save <strong>{selectedSliceName}</strong> as a cross-testbed experiment template
@@ -7143,14 +7136,12 @@ export default function App() {
                 {saveExpBusy ? 'Saving...' : 'Save Experiment'}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Experiment Variable Substitution Popup */}
       {experimentVarsPopup && (
-        <div className="toolbar-modal-overlay" onClick={() => setExperimentVarsPopup(null)}>
-          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal" onClose={() => setExperimentVarsPopup(null)}>
             <h4>Load Experiment</h4>
             <p>
               Configure variables for <strong>{experimentVarsPopup.templateName}</strong> before loading.
@@ -7180,14 +7171,12 @@ export default function App() {
                 {loading ? 'Loading...' : 'Load'}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Chameleon Lease Creation Dialog */}
-      {showChameleonLeaseDialog && chameleonSliceData && typeof document !== 'undefined' && createPortal(
-        <div className="toolbar-modal-overlay" onClick={() => setShowChameleonLeaseDialog(false)}>
-          <div className="toolbar-modal toolbar-modal-wide" onClick={e => e.stopPropagation()} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+      {showChameleonLeaseDialog && chameleonSliceData && typeof document !== 'undefined' && (
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal toolbar-modal-wide" onClose={() => setShowChameleonLeaseDialog(false)} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
             <h4>Create Lease from Draft</h4>
             {/* Resource summary grouped by site */}
             <div style={{ marginBottom: 12 }}>
@@ -7300,15 +7289,12 @@ export default function App() {
                  'Create Lease & Deploy'}
               </button>
             </div>
-          </div>
-        </div>,
-        document.body,
+        </Modal>
       )}
 
       {/* Chameleon Delete Slice dialog */}
-      {showChameleonDeleteDialog && typeof document !== 'undefined' && createPortal(
-        <div className="toolbar-modal-overlay" onClick={() => setShowChameleonDeleteDialog(false)}>
-          <div className="toolbar-modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
+      {showChameleonDeleteDialog && typeof document !== 'undefined' && (
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal" onClose={() => setShowChameleonDeleteDialog(false)} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
             <h4>Delete Slice</h4>
             <p style={{ fontSize: 12, color: 'var(--fabric-text-muted)', margin: '8px 0 12px' }}>
               Choose how to handle deployed resources:
@@ -7333,9 +7319,7 @@ export default function App() {
                 {chiDeleting ? 'Deleting...' : chiDeleteMode === 'delete-all' ? 'Delete All' : 'Release'}
               </button>
             </div>
-          </div>
-        </div>,
-        document.body,
+        </Modal>
       )}
 
       {/* Guided Tour */}
@@ -7355,11 +7339,8 @@ export default function App() {
       />
 
       {/* Post-login project picker modal */}
-      {availabilityResult && createPortal(
-        <div className="toolbar-modal-overlay"
-          onClick={() => setAvailabilityResult(null)}>
-          <div className="toolbar-modal toolbar-modal-wide availability-modal"
-            onClick={(e) => e.stopPropagation()}>
+      {availabilityResult && (
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal toolbar-modal-wide availability-modal" onClose={() => setAvailabilityResult(null)}>
             <h4>Resource Availability</h4>
             <div className={`availability-result-banner ${availabilityResult.feasible_now ? 'available' : availabilityResult.next_slot ? 'delayed' : 'unavailable'}`}>
               {availabilityResult.message}
@@ -7406,13 +7387,10 @@ export default function App() {
                 Close
               </button>
             </div>
-          </div>
-        </div>,
-        document.body
+        </Modal>
       )}
-      {showPostLoginProjectPicker && createPortal(
-        <div className="toolbar-modal-overlay">
-          <div className="toolbar-modal project-picker-modal">
+      {showPostLoginProjectPicker && (
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal project-picker-modal">
             <h4>Select a Project</h4>
             <p>
               You belong to multiple FABRIC projects. Choose one to get started.
@@ -7436,9 +7414,7 @@ export default function App() {
             >
               Skip — configure manually in Settings
             </button>
-          </div>
-        </div>,
-        document.body
+        </Modal>
       )}
     </>
   );

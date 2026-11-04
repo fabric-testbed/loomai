@@ -168,3 +168,33 @@ class TestMatchTemplate:
     def test_no_match(self):
         result = match_template("tell me about FABRIC")
         assert result is None
+
+
+class TestInfrastructureMetricsIntent:
+    """Metrics questions prefetch the topic catalog, never a guessed query."""
+
+    def test_cpu_load_at_a_site(self):
+        tool, args, conf = detect_intent("what is the cpu load at ncsa")
+        assert tool == "list_metric_topics"
+        assert args == {}
+        assert conf == "high"
+
+    def test_how_busy_is_a_site(self):
+        tool, _, conf = detect_intent("how busy is cern")
+        assert (tool, conf) == ("list_metric_topics", "high")
+
+    def test_link_traffic(self):
+        tool, _, _ = detect_intent("show me link traffic between ncsa and cern")
+        assert tool == "list_metric_topics"
+
+    def test_infrastructure_metrics_phrase(self):
+        tool, _, _ = detect_intent("show node metrics for amst")
+        assert tool == "list_metric_topics"
+
+    def test_site_listing_still_routes_to_query_sites(self):
+        """The metrics patterns must not steal existing site intents."""
+        assert detect_intent("list all fabric sites")[0] == "query_sites"
+        assert detect_intent("find sites with GPU")[0] == "query_sites"
+
+    def test_slice_intents_are_untouched(self):
+        assert detect_intent("my slices")[0] == "list_slices"

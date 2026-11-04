@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import click
 
 from loomai_cli.output import output, output_message
@@ -318,6 +320,61 @@ def dematerialize_cmd(ctx, experiment, realization, project):
     result = ctx.obj["client"].delete(
         f"/sphere/materializations/{experiment}/{realization}", params=params)
     _table_message(ctx, f"Dematerialize requested: {realization}.{experiment}")
+    output(ctx, result)
+
+
+@sphere.command("package")
+@click.argument("experiment")
+@click.option("--name", required=True, help="Weave name (e.g. netsec1-detector).")
+@click.option("--realization", default="r0", help="Realization to package (default r0).")
+@click.option("--description", default="", help="Short description of the experiment.")
+@click.option("--script", "scripts", multiple=True, metavar="TARGET:FILE",
+              help="Per-node setup script as TARGET:FILE (e.g. gateway:detector.py). "
+                   "TARGET is a node name or 'all'. Repeatable.")
+@click.option("--no-notebook", "no_notebook", is_flag=True,
+              help="Skip the starter analysis notebook.")
+@click.option("--notebook", "notebook_file", type=click.Path(exists=True, dir_okay=False),
+              help="Use this .ipynb as the analysis notebook instead of the auto-generated one.")
+@click.option("--project", help="SPHERE project (defaults to configured default).")
+@click.pass_context
+def package_cmd(ctx, experiment, name, realization, description, scripts, no_notebook,
+                notebook_file, project):
+    """Package a SPHERE experiment + realization into a reproducible weave.
+
+    Produces a ``sphere-experiment-v1`` weave (model + starter notebook +
+    per-node setup scripts) under My Artifacts. Requires the experiment to have
+    a realization (preferred) or a pushed model. Use this — NOT ``loomai weaves``
+    — for SPHERE, so the weave can be sent to an XDC.
+
+    Examples:
+
+      loomai sphere package netsec1 --name netsec1-detector --realization r0 \\
+        --script gateway:detector.py
+    """
+    script_list = []
+    for spec in scripts:
+        if ":" not in spec:
+            raise click.BadParameter(
+                f"--script must be TARGET:FILE (e.g. gateway:detector.py), got '{spec}'")
+        target, path = spec.split(":", 1)
+        with open(path) as fh:
+            content = fh.read()
+        script_list.append({"name": os.path.basename(path), "target": target, "content": content})
+    body = {
+        "name": name,
+        "realization": realization,
+        "description": description,
+        "scripts": script_list,
+        "include_notebook": not no_notebook,
+    }
+    if notebook_file:
+        import json as _json
+        with open(notebook_file) as fh:
+            body["notebook"] = _json.load(fh)
+    if project:
+        body["project"] = project
+    result = ctx.obj["client"].post(f"/sphere/experiments/{experiment}/package", json=body)
+    _table_message(ctx, f"Packaged '{name}' from {experiment}/{realization}")
     output(ctx, result)
 
 

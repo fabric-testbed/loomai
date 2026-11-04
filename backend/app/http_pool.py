@@ -32,6 +32,17 @@ ai_client = httpx.AsyncClient(
     event_hooks={"request": [_inject_tracking_headers]},
 )
 
+# For fetching arbitrary web pages on the assistant's behalf (fetch_webpage).
+# No tracking headers — they carry the bastion username and public IP, which
+# must not reach a site the model picked. No automatic redirects: every hop
+# is re-checked against the SSRF guard in ai_chat before it is followed.
+web_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(20.0, connect=10.0),
+    limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+    follow_redirects=False,
+    headers={"User-Agent": "Mozilla/5.0 (compatible; LooMAI/1.0)"},
+)
+
 # For Prometheus metrics queries (verify=False for self-signed certs)
 # Not instrumented — internal localhost scraping only
 metrics_client = httpx.AsyncClient(

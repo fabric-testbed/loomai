@@ -353,3 +353,134 @@ class TestSWR:
 
         # Only one background fetch should have started
         assert fetch_count["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Invalidation generations, SWR vs invalidated data, clear_all, peek/store
+# ---------------------------------------------------------------------------
+
+class TestInvalidationGenerations:
+    @pytest.mark.asyncio
+    async def test_invalidate_during_inflight_fetch_is_not_overwritten(self, mgr):
+        """A delete that lands while a list fetch is running must not be
+        masked by that fetch stamping its pre-delete result as fresh."""
+        fetch_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _slow_run(fn, *args):
+            fetch_started.set()
+            await release.wait()
+            return fn(*args)
+
+        with patch("app.fabric_call_manager.run_in_fablib_pool", side_effect=_slow_run):
+            task = asyncio.create_task(mgr.get("k", _make_fetcher(["alive"]), max_age=30))
+            await fetch_started.wait()
+            mgr.invalidate("k")          # mutation happens mid-fetch
+            release.set()
+            assert await task == ["alive"]  # the in-flight caller gets what it fetched
+
+        # ...but the cache does not treat it as fresh: the next get re-fetches.
+        assert mgr.peek("k") is None
+        fetcher2 = _make_fetcher(["gone"])
+        assert await mgr.get("k", fetcher2, max_age=300) == ["gone"]
+        assert fetcher2.call_count["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_swr_does_not_serve_invalidated_data(self, mgr):
+        """Stale-by-age may be served with SWR; invalidated (known wrong) may not."""
+        await mgr.get("k", _make_fetcher("old"), max_age=30)
+        mgr.invalidate("k")
+
+        fetcher2 = _make_fetcher("new")
+        result = await mgr.get("k", fetcher2, max_age=30, stale_while_revalidate=True)
+        assert result == "new"
+        assert fetcher2.call_count["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_invalidated_data_remains_only_as_error_fallback(self, mgr):
+        await mgr.get("k", _make_fetcher("old"), max_age=30)
+        mgr.invalidate("k")
+        result = await mgr.get("k", _make_failing_fetcher(RuntimeError("down")), max_age=30)
+        assert result == "old"
+
+    @pytest.mark.asyncio
+    async def test_background_refresh_after_invalidation_is_not_marked_fresh(self, mgr):
+        await mgr.get("k", _make_fetcher("v1"), max_age=30)
+        mgr._cache["k"].timestamp = time.time() - 60  # stale by age → SWR path
+
+        bg_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _slow_run(fn, *args):
+            bg_started.set()
+            await release.wait()
+            return fn(*args)
+
+        with patch("app.fabric_call_manager.run_in_fablib_pool", side_effect=_slow_run):
+            assert await mgr.get("k", _make_fetcher("v2"), max_age=30,
+                                 stale_while_revalidate=True) == "v1"
+            await bg_started.wait()
+            mgr.invalidate("k")
+            release.set()
+            await asyncio.sleep(0.05)
+
+        assert mgr.peek("k") is None  # v2 landed after the invalidation
+
+    @pytest.mark.asyncio
+    async def test_coalesced_waiter_refetches_after_invalidation(self, mgr):
+        fetch_started = asyncio.Event()
+        release = asyncio.Event()
+        calls = []
+
+        async def _slow_run(fn, *args):
+            calls.append(fn)
+            if len(calls) == 1:
+                fetch_started.set()
+                await release.wait()
+            return fn(*args)
+
+        with patch("app.fabric_call_manager.run_in_fablib_pool", side_effect=_slow_run):
+            owner = asyncio.create_task(mgr.get("k", _make_fetcher("pre"), max_age=30))
+            await fetch_started.wait()
+            waiter = asyncio.create_task(mgr.get("k", _make_fetcher("post"), max_age=30))
+            await asyncio.sleep(0.01)
+            mgr.invalidate("k")
+            release.set()
+            assert await owner == "pre"
+            assert await waiter == "post"   # did not accept the invalidated result
+
+
+class TestClearPeekStore:
+    @pytest.mark.asyncio
+    async def test_clear_all_drops_fallback_data(self, mgr):
+        await mgr.get("a", _make_fetcher(1), max_age=30)
+        await mgr.get("b", _make_fetcher(2), max_age=30)
+        mgr.clear_all()
+        assert mgr.peek("a") is None and mgr.peek("b") is None
+        with pytest.raises(RuntimeError):
+            await mgr.get("a", _make_failing_fetcher(RuntimeError("down")), max_age=30)
+
+    @pytest.mark.asyncio
+    async def test_peek_respects_invalidation_and_age(self, mgr):
+        await mgr.get("k", _make_fetcher("v"), max_age=30)
+        assert mgr.peek("k") == "v"
+        assert mgr.peek("k", max_age=30) == "v"
+        mgr._cache["k"].timestamp = time.time() - 60
+        assert mgr.peek("k") == "v"            # no age bound
+        assert mgr.peek("k", max_age=30) is None
+        mgr.invalidate("k")
+        assert mgr.peek("k") is None
+
+    @pytest.mark.asyncio
+    async def test_store_makes_data_fresh_and_clears_invalidation(self, mgr):
+        await mgr.get("k", _make_fetcher("v1"), max_age=30)
+        mgr.invalidate("k")
+        mgr.store("k", "v2")
+        assert mgr.peek("k", max_age=30) == "v2"
+        fetcher = _make_fetcher("unused")
+        assert await mgr.get("k", fetcher, max_age=30) == "v2"
+        assert fetcher.call_count["n"] == 0
+
+    def test_store_creates_missing_entry(self, mgr):
+        mgr.store("new", [1, 2])
+        assert mgr.peek("new") == [1, 2]

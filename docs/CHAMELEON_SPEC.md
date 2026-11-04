@@ -432,7 +432,7 @@ Dedicated Chameleon section in Settings with:
 ## Phase 3: CLI
 
 ### 3.1 Chameleon Commands
-**File**: `cli/loomai_cli/commands/chameleon.py` (new)
+**File**: `backend/cli/loomai_cli/commands/chameleon.py` (new)
 
 ```
 loomai chameleon sites                    # List Chameleon sites
@@ -545,8 +545,8 @@ The Chameleon integration is controlled by a single `chameleon.enabled` boolean 
 | `frontend/src/components/GeoView.tsx` | Modified | Chameleon sites on map |
 | `frontend/src/components/ConfigureView.tsx` | Modified | Chameleon credentials UI |
 | `frontend/src/App.tsx` | Modified | Chameleon view + state |
-| `cli/loomai_cli/commands/chameleon.py` | New | CLI command group |
-| `cli/loomai_cli/main.py` | Modified | Register chameleon commands |
+| `backend/cli/loomai_cli/commands/chameleon.py` | New | CLI command group |
+| `backend/cli/loomai_cli/main.py` | Modified | Register chameleon commands |
 | `backend/ai-tools/shared/FABRIC_AI.md` | Modified | Chameleon context |
 | `backend/ai-tools/shared/skills/` | New files | Chameleon skills |
 

@@ -6,6 +6,7 @@ import { getAiModels, getDefaultModel, setDefaultModel as apiSetDefaultModel, re
 import type { AIModelCapabilities, ChatAgent } from '../api/client';
 import '../styles/ai-chat-panel.css';
 import { assetUrl } from '../utils/assetUrl';
+import { Modal } from './Modal';
 
 const VISIBLE_TOOL_COUNT = 3;
 
@@ -1066,8 +1067,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
 
       {/* API key modal — shown when user selects a model from a provider without a key */}
       {showKeyModal && (
-        <div className="ai-chat-key-modal-overlay" onClick={() => setShowKeyModal(null)} data-testid="ai-model-key-modal">
-          <div className="ai-chat-key-modal" onClick={e => e.stopPropagation()}>
+        <Modal overlayClassName="ai-chat-key-modal-overlay" className="ai-chat-key-modal" onClose={() => setShowKeyModal(null)} data-testid="ai-model-key-modal">
             <h3>API Key Required</h3>
             <p>
               {showKeyModal === 'fabric' ? (
@@ -1095,8 +1095,7 @@ export default React.memo(function AIChatPanel({ onCollapse, dragHandleProps, pa
               )}
             </p>
             <button className="ai-chat-key-modal-close" onClick={() => setShowKeyModal(null)}>Close</button>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

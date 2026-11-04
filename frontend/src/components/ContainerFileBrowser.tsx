@@ -4,6 +4,7 @@ import * as api from '../api/client';
 import type { FileEntry } from '../types/fabric';
 import FileEditor, { isTextFile, isLikelyBinary } from './FileEditor';
 import '../styles/file-browser.css';
+import { Modal } from './Modal';
 
 /** Recursively walk FileSystemEntry trees from drag-and-drop. */
 async function walkEntries(
@@ -334,8 +335,7 @@ export default function ContainerFileBrowser({ rootPath, headerLabel }: Containe
       )}
 
       {confirmOpen && (
-        <div className="toolbar-modal-overlay" onClick={() => setConfirmOpen(null)}>
-          <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
+        <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal" onClose={() => setConfirmOpen(null)}>
             <h4>Open file as text?</h4>
             <p>
               <strong>{confirmOpen.split('/').pop()}</strong>
@@ -351,8 +351,7 @@ export default function ContainerFileBrowser({ rootPath, headerLabel }: Containe
                 Open
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

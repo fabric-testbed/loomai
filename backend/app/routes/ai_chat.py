@@ -10,6 +10,7 @@ import re
 import sys
 import traceback
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -33,6 +34,7 @@ def _ai_server_url() -> str:
 def _nrp_server_url() -> str:
     from app.settings_manager import get_nrp_server_url
     return get_nrp_server_url()
+_MAX_TOOL_ERRORS_PER_TURN = 8  # failed tool calls in one turn before we stop and summarize
 _MAX_TOOL_ROUNDS = 100  # emergency backstop; normal stopping comes from
                         # no-progress detection and per-turn budget guards.
 _MIN_PROFILE_INPUT_TOKENS = 8192
@@ -66,6 +68,35 @@ def _load_fablib_ref() -> str:
         except OSError:
             _fablib_ref_cache = ""
     return _fablib_ref_cache
+
+
+def _reprofile_for_model(profile: dict, model_name: str, use_full_llm_mode: bool) -> tuple[dict, list[dict], int]:
+    """Rebuild the context-budget part of *profile* for *model_name*.
+
+    Used when the request falls back to another model mid-turn: the window,
+    output cap, tool budget and tool support are per model, while the user's
+    generation settings (temperature, top_p, reasoning effort) carry over.
+    Returns (profile, tools_for_model, tool_token_estimate).
+    """
+    from app.chat_context import (
+        estimate_tool_schema_tokens, filter_tool_schemas, get_model_profile,
+    )
+    bare = model_name.split(":")[-1] if ":" in model_name else model_name  # same rule as the request path
+    ctx = _FABRIC_CONTEXT_DEFAULTS.get(bare) or _NRP_CONTEXT_DEFAULTS.get(bare)
+    fresh = get_model_profile(model_name, context_length=ctx)
+    merged = dict(profile)
+    for key in ("context_window", "summarize_at", "tier", "system_prompt",
+                "tool_result_max", "max_tools", "supports_tools"):
+        if key in fresh:
+            merged[key] = fresh[key]
+    # Never ask a smaller model for more output than it can produce.
+    merged["max_output"] = min(int(profile.get("max_output") or fresh["max_output"]), int(fresh["max_output"]))
+    max_tools = len(TOOL_SCHEMAS) if use_full_llm_mode else merged["max_tools"]
+    tools = filter_tool_schemas(TOOL_SCHEMAS, max_tools)
+    tool_tokens = estimate_tool_schema_tokens(tools) if merged.get("supports_tools", True) else 0
+    logger.info("Re-profiled for fallback model %s: tier=%s window=%s tools=%d",
+                model_name, merged.get("tier"), merged.get("context_window"), len(tools))
+    return merged, tools, tool_tokens
 
 
 def _get_model_type(model_key: str) -> str:
@@ -2982,6 +3013,84 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
+    # --- FABRIC infrastructure metrics (proxied to the fabric-metrics MCP) ---
+    # Three routing tools instead of the server's 17, so the remote surface
+    # costs three slots against the per-model tool budget. They mirror the
+    # server's own contract: list_metric_topics -> pick a topic + variant ->
+    # query_infrastructure_metrics.
+    {
+        "type": "function",
+        "function": {
+            "name": "list_metric_topics",
+            "description": (
+                "List the FABRIC infrastructure-metrics topics (cpu, memory, disk, "
+                "filesystem, network, sockets, netstat, system, time, temperature, "
+                "link_status, link_traffic, port_traffic) with the variants and "
+                "parameters each accepts. Call this FIRST to route a metrics question, "
+                "then call query_infrastructure_metrics with the topic and variant it "
+                "names. Never invent a topic or variant."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_metric_param_options",
+            "description": (
+                "List the allowed live values for one parameter of a metrics topic — "
+                "e.g. the node names, switch devices, or interfaces that currently "
+                "report data. Use it when you need a concrete value for a "
+                "query_infrastructure_metrics parameter."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "Topic name, e.g. 'cpu' or 'link_traffic'"},
+                    "param": {"type": "string", "description": "Parameter to enumerate, e.g. 'node', 'src_rack', 'interface'"},
+                },
+                "required": ["topic", "param"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_infrastructure_metrics",
+            "description": (
+                "Query live FABRIC infrastructure metrics from the Grafana/Prometheus "
+                "dashboards — node CPU, memory, disk, filesystem, network, sockets, "
+                "system, temperature, and switch link/port traffic. Pick 'topic' and "
+                "'variant' from list_metric_topics; never write PromQL. Use "
+                "topic='list_sites' with no variant to list the FABRIC rack codes that "
+                "have node data. This reports on FABRIC infrastructure health, not on "
+                "the user's own VMs — for in-slice metrics use the monitoring tools."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "Topic from list_metric_topics, e.g. 'cpu', 'temperature', 'link_traffic', 'list_sites'",
+                    },
+                    "variant": {
+                        "type": "string",
+                        "description": "Variant for that topic, exactly as list_metric_topics spells it. Omit only for 'list_sites'/'list_topics'.",
+                    },
+                    "args": {
+                        "type": "object",
+                        "description": (
+                            "Topic parameters, e.g. {\"node\": \"ncsa\"} for node topics or "
+                            "{\"src_rack\": \"ncsa\", \"dst_rack\": \"cern\"} for link traffic. "
+                            "Optional range keys: start, end, step, mode."
+                        ),
+                        "additionalProperties": True,
+                    },
+                },
+                "required": ["topic"],
+            },
+        },
+    },
 ]
 
 
@@ -2997,6 +3106,35 @@ def _run_sync(func, *args, **kwargs) -> Any:
 def _is_transient_provider_status(status_code: int | None) -> bool:
     """Return true for provider statuses worth retrying with backoff."""
     return status_code is not None and 500 <= int(status_code) <= 599
+
+
+_TOOLS_UNSUPPORTED_RE = re.compile(
+    r"(?:tool(?:s|[_ -]choice|[_ -]calling|[_ -]use)?|function(?:s|[_ -]calling|_call)?)"
+    r"[^.\n]{0,40}(?:not supported|unsupported|not available|not allowed|not enabled|"
+    r"does not support|doesn't support|unknown parameter|unrecognized|invalid parameter|requires --)"
+    r"|(?:not support|does not support|doesn't support|unsupported)[^.\n]{0,40}(?:tool|function)"
+    r"|(?:invalid|unknown|unrecognized|unsupported|unexpected) (?:parameter|argument|field|key)s?[^.\n]{0,20}(?:tool|function)",
+    re.IGNORECASE,
+)
+# Message-ordering errors mention tools too but mean "fix the conversation",
+# not "this model cannot call tools".
+_TOOL_SEQUENCE_RE = re.compile(
+    r"must (?:follow|be a response to)|tool_call_id|tool message|preceding message|role 'tool'|"
+    r"messages with role",
+    re.IGNORECASE,
+)
+
+
+def _error_says_tools_unsupported(error_text: str) -> bool:
+    """True when a provider 4xx means the model cannot take a ``tools``
+    parameter at all, as opposed to any error that happens to contain the
+    word "tool" (the old check), which disabled tools for the turn on a
+    tool-message ordering error and told the user the model had no tool
+    support."""
+    text = error_text or ""
+    if _TOOL_SEQUENCE_RE.search(text):
+        return False
+    return bool(_TOOLS_UNSUPPORTED_RE.search(text))
 
 
 def _provider_error_payload(status_code: int, error_text: str, retry_count: int = 0) -> dict[str, Any]:
@@ -3110,6 +3248,33 @@ _NO_PROGRESS_VOLATILE_KEYS = {
 }
 
 
+# Tools that genuinely poll a long-running background job. The exemption below
+# is keyed on the tool NAME, not on a bare "status" field: plenty of unrelated
+# results say status="running" to mean READY -- ai_terminal returns it for a web
+# service that is already serving -- and telling a user to "check back in a few
+# minutes" for something already up is worse than the message being fixed.
+_RUN_POLLING_TOOLS = {"get_background_run_output", "get_job_status"}
+
+
+def _is_still_running_poll(result: Any, tool_name: str = "") -> bool:
+    """True when a run-polling tool reports work still in progress.
+
+    Used to tell a healthy long-running poll apart from a genuinely stuck
+    tool, so the two can be reported differently. Restricted to
+    _RUN_POLLING_TOOLS on purpose -- see the note there.
+    """
+    if tool_name not in _RUN_POLLING_TOOLS:
+        return False
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except (ValueError, TypeError):
+            return False
+    if not isinstance(result, dict):
+        return False
+    return str(result.get("status") or "").lower() in {"running", "pending", "starting"}
+
+
 def _normalize_tool_fingerprint_value(value: Any) -> Any:
     """Return a stable value for repeated-tool/no-progress comparison."""
     if isinstance(value, dict):
@@ -3172,6 +3337,19 @@ def _record_tool_progress(
     }
     if count < max(2, int(limit or 3)):
         return None
+    if _is_still_running_poll(result, tool_name):
+        # Still bounded — the model cannot wait, so more polling is pointless.
+        # But this is a healthy long job, not a stuck tool, and saying
+        # "result did not change" makes users read it as a failed run.
+        return {
+            "reason": "still_running",
+            "tool": tool_name,
+            "repeat_count": count,
+            "message": (
+                f"Stopped polling {tool_name} after {count} calls — the run is "
+                "still in progress, which is expected for a long weave."
+            ),
+        }
     return {
         "reason": "no_progress",
         "tool": tool_name,
@@ -3979,24 +4157,16 @@ def _apply_prompt_lease_duration(tool_name: str, args: dict, user_message: str) 
     return updated
 
 
-_PROVISIONING_VERBS = (
-    "submit", "deploy", "provision", "launch the slice", "start the slice",
-    "go live", "bring up", "stand up",
-)
-_SLICE_BUILD_VERBS = ("create", "build", "make", "set up", "setup")
-_OPERATIONAL_PROOF_TERMS = (
-    "demonstrate", "verify", "validate", "prove", "test", "ping", "curl",
-    "iperf", "iperf3", "ssh", "reachable", "connectivity", "working",
-    "web service", "http", "service", "stableok",
-)
-_DELETE_TERMS = (
-    "delete", "destroy", "tear down", "teardown", "release", "remove",
-    "drop", "kill", "terminate", "recreate",
-)
-_CONFIRMATION_TERMS = (
-    "yes", "confirm", "confirmed", "approve", "approved", "go ahead",
-    "do it", "proceed", "ok", "okay",
-)
+# Consent vocabulary and rules live in app.assistant_consent (word-boundary
+# matching, latest-turn confirmation, per-conversation pending action). The
+# names are kept here for the few call sites that reference them.
+from app import assistant_consent as _consent
+
+_PROVISIONING_VERBS = _consent.PROVISIONING_VERBS
+_SLICE_BUILD_VERBS = _consent.SLICE_BUILD_VERBS
+_OPERATIONAL_PROOF_TERMS = _consent.OPERATIONAL_PROOF_TERMS
+_DELETE_TERMS = _consent.DELETE_TERMS
+_CONFIRMATION_TERMS = _consent.CONFIRMATION_TERMS
 _SLICE_OPERATOR_INTENT_TOOLS = {
     "create_slice",
     "submit_slice",
@@ -4098,18 +4268,7 @@ def _is_slice_operator_intent(intent_tool: str, user_message: str) -> bool:
 
 def _conversation_authorizes_provisioning(messages: list[dict]) -> bool:
     """Return true when any user turn grants provisioning/submission consent."""
-    user_texts = _conversation_user_texts(messages)
-    for text in user_texts:
-        lowered = text.lower()
-        if any(term in lowered for term in _PROVISIONING_VERBS):
-            return True
-        if (
-            "slice" in lowered
-            and any(term in lowered for term in _SLICE_BUILD_VERBS)
-            and any(term in lowered for term in _OPERATIONAL_PROOF_TERMS)
-        ):
-            return True
-    return False
+    return _consent.conversation_authorizes_provisioning(_conversation_user_texts(messages))
 
 
 _SESSION_STATE_MARKER_PREFIX = "[SESSION-STATE] created-slices:"
@@ -4634,18 +4793,8 @@ def _build_create_slice_guidance(
 
 
 def _conversation_confirms_delete(messages: list[dict], slice_name: str) -> bool:
-    target = (slice_name or "").strip().lower()
-    if not target:
-        return False
-    for text in _conversation_user_texts(messages):
-        lowered = text.lower()
-        if target not in lowered:
-            continue
-        if any(term in lowered for term in _DELETE_TERMS) and any(
-            term in lowered for term in _CONFIRMATION_TERMS
-        ):
-            return True
-    return False
+    """The latest user turn confirms deleting *slice_name* by name."""
+    return _consent.text_confirms_destruction(_last_user_text(messages), [slice_name or ""])
 
 
 def _is_destructive_tool_authorized(
@@ -4653,25 +4802,144 @@ def _is_destructive_tool_authorized(
     args: dict[str, Any],
     messages: list[dict],
     created_slices: set[str],
+    conversation_id: str = "",
 ) -> bool:
-    """Apply conversation-scoped authorization for destructive tools."""
-    if tool_name == "submit_slice":
-        slice_name = str((args or {}).get("slice_name") or "").lower()
-        created_here = bool(slice_name and slice_name in created_slices)
-        cold_turn_auth = _conversation_authorizes_provisioning([
-            {"role": "user", "content": _last_user_text(messages)}
-        ])
-        return (
-            (created_here or cold_turn_auth)
-            and _conversation_authorizes_provisioning(messages)
-        )
-    if tool_name == "delete_slice":
-        return _conversation_confirms_delete(messages, str((args or {}).get("slice_name") or ""))
-    return False
+    """Apply conversation-scoped authorization for destructive tools.
+
+    See app.assistant_consent for the rules. *conversation_id* lets a bare
+    "yes" confirm the action that was blocked on the previous turn.
+    """
+    return _consent.is_destructive_tool_authorized(
+        tool_name,
+        args or {},
+        user_texts=_conversation_user_texts(messages),
+        latest_user_text=_last_user_text(messages),
+        created_slices=created_slices,
+        conversation_id=conversation_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# FABRIC infrastructure metrics — proxy to the fabric-metrics MCP server
+# ---------------------------------------------------------------------------
+
+_METRICS_RESULT_MAX = 6000
+
+
+def _metrics_topic_tool(topic: str) -> str:
+    """Normalize a topic name to the server's tool name.
+
+    Accepts either the bare topic ('cpu') or the fully qualified tool name
+    ('fabric_metrics_cpu') — models are inconsistent about which form they
+    echo back from list_metric_topics.
+    """
+    from app.mcp_registry import METRICS_TOOL_PREFIX
+
+    name = (topic or "").strip()
+    if not name:
+        return ""
+    if name.startswith(METRICS_TOOL_PREFIX):
+        return name
+    return f"{METRICS_TOOL_PREFIX}{name.lstrip('_')}"
+
+
+def _compact_metrics_topics(text: str) -> str:
+    """Shrink the topic catalogue to what routing actually needs.
+
+    fabric_metrics_list_topics returns every topic with full variant prose,
+    params and dashboard names — ~13k chars, twice _METRICS_RESULT_MAX. Blind
+    truncation cut the JSON mid-structure and appended "narrow the query",
+    advice that means nothing for a listing call, so the model re-issued the
+    identical call until the repeated-tool guard stopped the turn.
+
+    Keep topic -> short description + variant NAMES + param names. That is
+    enough to pick a (topic, variant) pair; list_metric_param_options still
+    serves the detail for the one topic the model settles on.
+    """
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        return text
+    if not isinstance(data, dict):
+        return text
+
+    compact: dict[str, Any] = {}
+    for tool_name, info in data.items():
+        if not isinstance(info, dict):
+            continue
+        topic = info.get("topic") or tool_name
+        entry: dict[str, Any] = {}
+        desc = info.get("description")
+        if isinstance(desc, str) and desc:
+            entry["description"] = desc
+        variants = info.get("variants")
+        if isinstance(variants, dict):
+            entry["variants"] = sorted(variants)
+        elif isinstance(variants, list):
+            entry["variants"] = [v for v in variants if isinstance(v, str)]
+        params = info.get("params")
+        if isinstance(params, list) and params:
+            entry["params"] = [pm for pm in params if isinstance(pm, str)]
+        compact[topic] = entry
+
+    if not compact:
+        return text
+    return json.dumps(compact)
+
+
+async def _call_metrics_mcp(
+    topic: str,
+    arguments: dict,
+    compact: Callable[[str], str] | None = None,
+) -> str:
+    """Call one tool on the fabric-metrics MCP server and return JSON text."""
+    from app import mcp_client
+    from app.mcp_registry import metrics_server
+
+    server = metrics_server()
+    if server is None:
+        return json.dumps({
+            "error": "The FABRIC infrastructure-metrics MCP server is not enabled.",
+        })
+
+    tool = _metrics_topic_tool(topic)
+    if not tool:
+        return json.dumps({
+            "error": "No topic given. Call list_metric_topics first to pick one.",
+        })
+
+    # Drop null/empty optionals — the server rejects unexpected nulls on some
+    # topics and the models like to send them.
+    clean = {k: v for k, v in (arguments or {}).items() if v not in (None, "")}
+
+    try:
+        result = await mcp_client.call_tool(server, tool, clean)
+    except mcp_client.MCPError as e:
+        return json.dumps({"error": str(e), "tool": tool})
+
+    text = mcp_client.result_to_text(result)
+    # Compact BEFORE the cap. Truncating first would cut the JSON mid-structure
+    # and leave the compactor nothing parseable to work with — the model would
+    # get the same unusable fragment it used to.
+    if compact is not None:
+        text = compact(text)
+    if len(text) > _METRICS_RESULT_MAX:
+        text = text[:_METRICS_RESULT_MAX] + "\n...[truncated — narrow the query]"
+    return text
 
 
 async def execute_tool(name: str, arguments: dict, request: Request | None = None) -> str:
-    """Execute a tool and return the result as a JSON string."""
+    """Execute a tool and return the result as a JSON string.
+
+    Runs as an agent action, so the agent lease cap applies to any slice
+    submit, renew or weave run the tool performs (see ``app.request_actor``).
+    """
+    from app.request_actor import agent_actor
+    with agent_actor():
+        return await _execute_tool(name, arguments, request)
+
+
+async def _execute_tool(name: str, arguments: dict, request: Request | None = None) -> str:
     try:
         if name == "list_slices":
             from app.routes.slices import list_slices
@@ -5523,6 +5791,17 @@ async def execute_tool(name: str, arguments: dict, request: Request | None = Non
             )
             if isinstance(result, dict):
                 result = {"run_id": arguments["run_id"], **result}
+                if result.get("status") == "running":
+                    # A weave provisioning a slice is silent for minutes, so
+                    # identical output is the CORRECT answer here, not a stall.
+                    # Say so, and tell the model to report rather than re-poll —
+                    # it has no way to wait, so polling again just burns the
+                    # repeated-tool budget and ends the turn looking like failure.
+                    result["hint"] = (
+                        "Run is still in progress. Do not call this tool again in "
+                        "this turn — summarize the output so far and tell the user "
+                        "to check back in a few minutes."
+                    )
             return json.dumps(result, default=str)
 
         elif name == "stop_background_run":
@@ -5805,6 +6084,35 @@ async def execute_tool(name: str, arguments: dict, request: Request | None = Non
             q = arguments.get("query") or arguments.get("name") or arguments.get("search") or ""
             return await _search_examples(q)
 
+        elif name == "list_metric_topics":
+            return await _call_metrics_mcp(
+                "list_topics", {}, compact=_compact_metrics_topics)
+
+        elif name == "list_metric_param_options":
+            return await _call_metrics_mcp(
+                "list_param_options",
+                {
+                    "topic": _metrics_topic_tool(arguments.get("topic") or ""),
+                    "param": arguments.get("param") or "",
+                },
+            )
+
+        elif name == "query_infrastructure_metrics":
+            topic = arguments.get("topic") or ""
+            call_args: dict[str, Any] = {}
+            extra = arguments.get("args")
+            if isinstance(extra, dict):
+                call_args.update(extra)
+            # Models occasionally hoist the topic params to the top level.
+            for key in ("node", "src_rack", "dst_rack", "device", "interface",
+                        "start", "end", "step", "mode", "params"):
+                if key in arguments and key not in call_args:
+                    call_args[key] = arguments[key]
+            variant = arguments.get("variant")
+            if variant:
+                call_args["variant"] = variant
+            return await _call_metrics_mcp(topic, call_args)
+
         else:
             return json.dumps({"error": f"Unknown tool: {name}"})
 
@@ -5852,11 +6160,79 @@ async def _execute_web_search(query: str, max_results: int = 5) -> str:
         return json.dumps({"error": f"Search failed: {e}"})
 
 
+_FETCH_BLOCKED_HOSTS = {"localhost", "metadata", "metadata.google.internal"}
+_FETCH_BLOCKED_SUFFIXES = (".localhost", ".local", ".internal", ".cluster.local")
+_FETCH_MAX_REDIRECTS = 3
+
+
+def _fetch_url_problem(url: str) -> str | None:
+    """Return why *url* must not be fetched for the model, or None if it may.
+
+    The URL comes from the model, which may be following injected text, so
+    the fetch must not reach the local backend (auth is off on loopback in
+    hosted mode and it serves ``fabric_config/id_token.json``), the hub,
+    other pods, or cloud metadata. Only public http(s) hosts are allowed and
+    every address the host resolves to is checked, not just the first.
+    Known limit: a host that changes its answer between this check and the
+    connect (DNS rebinding) is not caught.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "malformed URL"
+    if parts.scheme not in ("http", "https"):
+        return "only http(s) URLs can be fetched"
+    if parts.username or parts.password:
+        return "credentials in the URL are not allowed"
+    host = (parts.hostname or "").strip(".").lower()
+    if not host:
+        return "URL has no host"
+    if host in _FETCH_BLOCKED_HOSTS or host.endswith(_FETCH_BLOCKED_SUFFIXES):
+        return f"host '{host}' is not public"
+    try:
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError:
+        return "invalid port"
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return f"could not resolve '{host}'"
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return f"'{host}' resolved to an unparsable address"
+        if not ip.is_global or ip.is_multicast:
+            return f"'{host}' resolves to a non-public address"
+    return None
+
+
+async def _fetch_public_url(url: str) -> "httpx.Response":
+    """GET *url* with the SSRF guard applied to it and to every redirect hop."""
+    from app.http_pool import web_client
+
+    current = url
+    for _ in range(_FETCH_MAX_REDIRECTS + 1):
+        problem = await asyncio.to_thread(_fetch_url_problem, current)
+        if problem:
+            raise ValueError(f"refusing to fetch {current}: {problem}")
+        resp = await web_client.get(current)
+        if resp.is_redirect and resp.headers.get("location"):
+            current = str(resp.url.join(resp.headers["location"]))
+            continue
+        return resp
+    raise ValueError(f"too many redirects fetching {url}")
+
+
 async def _execute_fetch_webpage(url: str, max_length: int = 4000) -> str:
     """Fetch a webpage and return its text content (HTML stripped)."""
     max_length = min(max(500, max_length), 8000)
     try:
-        resp = await ai_client.get(url)
+        resp = await _fetch_public_url(url)
         resp.raise_for_status()
         content_type = resp.headers.get("content-type", "")
         if "text/html" in content_type:
@@ -6040,6 +6416,7 @@ async def chat_stream(request: Request):
     from app.chat_context import (
         get_model_profile, get_system_prompt, trim_conversation,
         filter_tool_schemas, estimate_tokens, estimate_conversation_tokens,
+        estimate_tool_schema_tokens, system_prompt_budget, fit_system_parts,
     )
     from app.chat_intent import detect_intent, detect_multi_step, is_destructive, record_intent_result
     from app.chat_prompt import LOOMAI_MODE_PROMPT, LOOMAI_MODE_EXTENDED
@@ -6292,8 +6669,11 @@ async def chat_stream(request: Request):
                 intent_args,
                 messages,
                 conversation_created_slices,
+                conversation_id,
             ):
                 confirm_needed = True
+                # The user's next bare "yes" authorizes exactly this call.
+                _consent.record_pending(conversation_id, intent_tool, intent_args)
                 logger.info("Destructive intent %s — will ask for confirmation", intent_tool)
             else:
                 try:
@@ -6702,7 +7082,8 @@ async def chat_stream(request: Request):
             f"\n\n## Action Requires Confirmation\n"
             f"The user wants to execute: **{intent_tool}**({json.dumps(intent_args)})\n"
             f"This is a destructive operation. Ask the user to confirm before proceeding.\n"
-            f"If they confirm, tell them to say 'yes, {intent_tool}' to execute."
+            f"{_consent.confirmation_instruction(intent_tool, intent_args)}\n"
+            f"Once they have replied 'yes', call {intent_tool} with the same arguments."
         )
 
     # If template matched and needs confirmation, tell the LLM
@@ -6773,12 +7154,32 @@ async def chat_stream(request: Request):
             system_parts.append("\n\n" + current_session_state_block)
     session_state_injected = bool(current_session_state_block)
 
-    system_message = {"role": "system", "content": "\n".join(system_parts)}
-
     # Filter tools based on model capacity (full set for low-confidence/complex requests)
     max_tools = len(TOOL_SCHEMAS) if use_full_llm_mode else profile["max_tools"]
     tools_for_model = filter_tool_schemas(TOOL_SCHEMAS, max_tools)
+    # Tool schemas ride along on every request; trim_conversation() charges
+    # them to the conversation budget (they were not counted at all before).
+    tool_token_estimate = (
+        estimate_tool_schema_tokens(tools_for_model) if profile.get("supports_tools", True) else 0
+    )
+    # Fit the prompt text to its 30% share (the core prompt is the floor):
+    # prefetched data, RAG context and skill files are trimmed first; the
+    # core prompt and the session-state block only as a last resort.
+    _protected_parts = {0}
+    if session_state_injected and len(system_parts) > 1:
+        _protected_parts.add(len(system_parts) - 1)
+    system_parts, _truncated_parts = fit_system_parts(
+        system_parts,
+        system_prompt_budget(profile, core_tokens=estimate_tokens(system_parts[0]) if system_parts else 0),
+        _protected_parts,
+    )
+    system_message = {"role": "system", "content": "\n".join(system_parts)}
     system_token_estimate = estimate_tokens(system_message["content"])
+    if _truncated_parts:
+        logger.info(
+            "System prompt fitted for %s: %d prompt + %d tool tokens in a %s-token window (parts truncated: %s)",
+            model, system_token_estimate, tool_token_estimate, profile.get("context_window"), _truncated_parts,
+        )
 
     tools_disabled = False  # Set True if model can't do tool calling
     temperature_disabled = bool(profile.get("strip_temperature"))  # Set True if model rejects or should omit temperature
@@ -6799,9 +7200,11 @@ async def chat_stream(request: Request):
         nonlocal tools_disabled, temperature_disabled, reasoning_controls_disabled
         nonlocal model, model_api_type, server_url, api_key
         nonlocal context_compacted, compacted_from_tokens, compacted_to_tokens
+        nonlocal profile, tools_for_model, tool_token_estimate, system_token_estimate
         import time as _time
         _start_time = _time.time()
         _tool_call_count = len(prefetched_tools)
+        near_full_warned = False
 
         def _current_generation_config() -> dict[str, Any]:
             config = {
@@ -6968,6 +7371,11 @@ async def chat_stream(request: Request):
                     **_context_usage_metadata(),
                 }
 
+            # Tool-failure breakers are per turn: a model that makes one failing
+            # call per round used to reset the counter every round and run all
+            # 100 rounds (each up to the per-tool timeout).
+            consecutive_errors = 0
+            total_tool_errors = 0
             while tool_round < _MAX_TOOL_ROUNDS:
                 if await request.is_disconnected():
                     break
@@ -6975,7 +7383,12 @@ async def chat_stream(request: Request):
                     break
 
                 # Trim conversation to fit model's context window
-                trim_result = trim_conversation(conversation, system_token_estimate, profile)
+                trim_result = trim_conversation(
+                    conversation,
+                    system_token_estimate,
+                    profile,
+                    tool_tokens=0 if tools_disabled else tool_token_estimate,
+                )
                 conversation = trim_result.messages
                 if trim_result.was_compacted:
                     context_compacted = True
@@ -6985,8 +7398,9 @@ async def chat_stream(request: Request):
                     )
                     compacted_to_tokens = trim_result.compacted_to_tokens
 
-                # Warn user if context is nearly full (but not on the first message)
-                if trim_result.near_full and tool_round > 0:
+                # Warn the user once per turn when the context is nearly full
+                if trim_result.near_full and not near_full_warned:
+                    near_full_warned = True
                     yield f"data: {json.dumps({'warning': 'Context window is nearly full. The conversation will be automatically compacted to continue.'})}\n\n"
                     # If context is full AND we've been trimming, stop tool calls
                     if trim_result.was_trimmed and tool_round >= 3:
@@ -7098,6 +7512,12 @@ async def chat_stream(request: Request):
                             logger.info("Model %s returned 404, retrying with default %s", model, fallback_model)
                             yield f"data: {json.dumps({'content': f'[Model {model} unavailable, switching to {fallback_model}...] '})}\n\n"
                             model = fallback_model
+                            # The profile (context window, max_output, tool
+                            # budget, tool support) belongs to the model; a
+                            # fallback must not inherit the original's.
+                            profile, tools_for_model, tool_token_estimate = _reprofile_for_model(
+                                profile, fallback_model, use_full_llm_mode,
+                            )
                             # Re-detect API type for fallback model
                             model_api_type = _get_model_type(fallback_model)
                             if model_api_type == "responses":
@@ -7208,7 +7628,7 @@ async def chat_stream(request: Request):
                         reasoning_controls_disabled = True
                         continue  # Retry without reasoning controls
                     # Check if error is due to tools not being supported
-                    if "tool" in _err_lower and not tools_disabled and "tools" in llm_body:
+                    if _error_says_tools_unsupported(error_text) and not tools_disabled and "tools" in llm_body:
                         logger.info("Model %s may not support tools, retrying without", model)
                         tools_disabled = True
                         no_tools_msg = '[This model does not support tool calling. I will suggest loomai CLI commands instead.]\n\n'
@@ -7357,7 +7777,6 @@ async def chat_stream(request: Request):
                         }
                         conversation.append(clean_msg)
 
-                    consecutive_errors = 0
                     executed_round_tool_calls = 0
                     for tc in tool_calls:
                         fn = tc.get("function", {})
@@ -7403,12 +7822,16 @@ async def chat_stream(request: Request):
                                 tc_args,
                                 messages,
                                 conversation_created_slices,
+                                conversation_id,
                             )
                         ):
                             logger.info(
                                 "BLOCKED destructive LLM-initiated tool call: %s (not authorized for this conversation)",
                                 tc_name,
                             )
+                            # Remember exactly what was blocked so the user's
+                            # next bare "yes" authorizes it and nothing else.
+                            _consent.record_pending(conversation_id, tc_name, tc_args)
                             tool_result = json.dumps({
                                 "error": "DESTRUCTIVE_ACTION_BLOCKED",
                                 "tool": tc_name,
@@ -7416,13 +7839,11 @@ async def chat_stream(request: Request):
                                     f"{tc_name} is a destructive action and "
                                     f"this conversation has not authorized it "
                                     f"for the requested resource. DO NOT RETRY "
-                                    f"this tool. Instead, summarize progress "
-                                    f"and ask for one scoped confirmation. "
-                                    f"Submit/provision consent may come from "
-                                    f"an earlier create-and-verify goal for a "
-                                    f"slice created in this chat; delete always "
-                                    f"needs explicit confirmation for the named "
-                                    f"slice."
+                                    f"this tool now. Summarize progress, then: "
+                                    + _consent.confirmation_instruction(tc_name, tc_args)
+                                    + " Submit/provision consent may also come "
+                                    f"from an earlier create-and-verify goal for "
+                                    f"a slice created in this chat."
                                 ),
                             })
                         else:
@@ -7476,6 +7897,7 @@ async def chat_stream(request: Request):
                         # Track consecutive errors to break infinite retry loops
                         if tool_result and '"error"' in tool_result:
                             consecutive_errors += 1
+                            total_tool_errors += 1
                         else:
                             consecutive_errors = 0
 
@@ -7535,13 +7957,21 @@ async def chat_stream(request: Request):
                     _tool_call_count += executed_round_tool_calls
 
                     if tool_loop_stop:
-                        stop_msg = (
-                            "\n\n[Stopped the tool loop because the model repeated "
-                            f"`{tool_loop_stop.get('tool')}` with the same arguments "
-                            f"{tool_loop_stop.get('repeat_count')} times and the tool "
-                            "result did not change. Summarize the last result or "
-                            "adjust the request before continuing.]\n"
-                        )
+                        if tool_loop_stop.get("reason") == "still_running":
+                            stop_msg = (
+                                "\n\n[The run is still in progress — this is normal "
+                                "for a long weave, and it is still going. Stopped "
+                                "polling for now; ask again in a few minutes to see "
+                                "new output.]\n"
+                            )
+                        else:
+                            stop_msg = (
+                                "\n\n[Stopped the tool loop because the model repeated "
+                                f"`{tool_loop_stop.get('tool')}` with the same arguments "
+                                f"{tool_loop_stop.get('repeat_count')} times and the tool "
+                                "result did not change. Summarize the last result or "
+                                "adjust the request before continuing.]\n"
+                            )
                         stop_msg = _finalize_visible_text(stop_msg)
                         yield f"data: {json.dumps({'content': stop_msg})}\n\n"
                         yield f"data: {json.dumps({'tool_loop_stopped': tool_loop_stop})}\n\n"
@@ -7550,8 +7980,9 @@ async def chat_stream(request: Request):
                         yield "data: [DONE]\n\n"
                         return
 
-                    # Break out if too many consecutive errors (model is stuck)
-                    if consecutive_errors >= 3:
+                    # Break out if too many errors: three in a row, or eight in
+                    # the turn (a model alternating one failure per round).
+                    if consecutive_errors >= 3 or total_tool_errors >= _MAX_TOOL_ERRORS_PER_TURN:
                         err_break_msg = "\n\n[Multiple tool calls failed. Please try a different approach.]\n"
                         yield f"data: {json.dumps({'content': err_break_msg})}\n\n"
                         break
@@ -7917,79 +8348,18 @@ async def chat_stream(request: Request):
                     yield "data: [DONE]\n\n"
                     return
 
-                # No operational evidence guard needed; re-do the call with
-                # streaming for smooth output.
-                _stream_endpoint = (
-                    f"{server_url}/v1/responses"
-                    if model_api_type == "responses"
-                    else f"{server_url}/v1/chat/completions"
-                )
-                streamed_final_parts: list[str] = []
-                async with ai_client.stream(
-                    "POST",
-                    _stream_endpoint,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={**llm_body, "stream": True},
-                ) as stream_resp:
-                    if stream_resp.status_code != 200:
-                        error_body = ""
-                        async for chunk in stream_resp.aiter_text():
-                            error_body += chunk
-                        yield f"data: {json.dumps(_provider_error_payload(stream_resp.status_code, error_body[:200], provider_retry_count))}\n\n"
-                        return
-
-                    async for line in stream_resp.aiter_lines():
-                        if await request.is_disconnected():
-                            break
-                        if request_id and request_id in _cancelled_requests:
-                            break
-                        if not line.startswith("data: "):
-                            continue
-                        data = line[6:]
-                        if data == "[DONE]":
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            if model_api_type == "responses":
-                                # Responses API SSE events
-                                event_type = chunk.get("type", "")
-                                if event_type == "response.output_text.delta":
-                                    content = chunk.get("delta", "")
-                                    if content:
-                                        streamed_final_parts.append(content)
-                                        yield f"data: {json.dumps({'content': content})}\n\n"
-                                elif event_type in ("response.completed", "response.done"):
-                                    break
-                                elif event_type == "response.error":
-                                    err = chunk.get("error", {})
-                                    yield f"data: {json.dumps({'error': err.get('message', 'Responses API error')})}\n\n"
-                                    return
-                                elif event_type == "response.function_call_arguments.done":
-                                    # Tool call detected in streaming — break to
-                                    # let the non-streaming loop handle it
-                                    break
-                            else:
-                                chunk_choices = chunk.get("choices") or [{}]
-                                delta = (chunk_choices[0] if chunk_choices else {}).get("delta", {})
-
-                                # Check for tool calls in streaming response too
-                                if delta.get("tool_calls"):
-                                    # Fall back to non-streaming for tool handling
-                                    # This shouldn't normally happen since we already
-                                    # checked non-streaming, but handle gracefully
-                                    break
-
-                                content = delta.get("content")
-                                if content:
-                                    streamed_final_parts.append(content)
-                                    yield f"data: {json.dumps({'content': content})}\n\n"
-                        except json.JSONDecodeError:
-                            continue
-
-                streamed_final_text = "".join(streamed_final_parts) or final_text
+                # Stream the validated final text in chunks. It used to re-run the
+                # completion with stream=True "for smooth output": that doubled the
+                # cost and latency of every final turn, the second answer could
+                # differ from the one the guards had just checked, and it was
+                # missing from the usage figures.
+                streamed_final_text = final_text
+                for start in range(0, len(final_text), 200):
+                    if await request.is_disconnected():
+                        break
+                    if request_id and request_id in _cancelled_requests:
+                        break
+                    yield f"data: {json.dumps({'content': final_text[start:start + 200]})}\n\n"
                 finalized_streamed_text = _finalize_visible_text(streamed_final_text)
                 marker_suffix = finalized_streamed_text[len(streamed_final_text):]
                 if marker_suffix:
@@ -8123,8 +8493,12 @@ async def chat_stream(request: Request):
             _persist_conversation(finalized_summary_text)
             yield "data: [DONE]\n\n"
 
-        except httpx.ReadError:
-            pass
+        except httpx.ReadError as e:
+            # The provider closed the connection mid-read. Ending silently
+            # looked like an empty answer with nothing logged.
+            logger.warning("Chat stream: provider connection dropped mid-read: %s", e)
+            yield f"data: {json.dumps({'error': 'The model connection dropped before the answer finished. Please retry.', 'error_type': 'transient', 'retryable': True})}\n\n"
+            yield "data: [DONE]\n\n"
         except Exception as e:
             logger.exception("Chat stream error")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"

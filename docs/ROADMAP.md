@@ -200,7 +200,7 @@ From the same audit (details in [`SECURITY_AUDIT_2026-06-11.md`](../SECURITY_AUD
 ### Testing
 - ~~No CI/CD test pipeline~~ — Done (Phase 7). `.github/workflows/test.yml` with backend pytest + frontend build/test.
 - ~~No test coverage reporting~~ — Done (Phase 7). `pytest-cov` with XML + terminal reports, 33% overall.
-- ~~No frontend unit tests~~ — Done (Phase 7). Vitest + @testing-library/react, 20 tests across 3 files.
+- ~~No frontend unit tests~~ — Done (Phase 7). Vitest + @testing-library/react; started at 20 tests across 3 files, 118 cases in 20 files as of 2026-10 (see `docs/TESTING.md` for current numbers).
 - ~~Missing WebSocket/SSE/terminal tests~~ — Done (Phase 7). 12 new tests covering container/slice terminals, AI tool WS, chat SSE.
 - ~~End-to-end LLM tests~~ — Done (Phase 7). 4 round-trip tests gated behind `@pytest.mark.llm`.
 - **Testing/tooling overhaul for full WebUI coverage**:
@@ -425,7 +425,7 @@ From the same audit (details in [`SECURITY_AUDIT_2026-06-11.md`](../SECURITY_AUD
   - Tests must clean up all resources after completion (delete instances, delete leases)
   - Tests require Chameleon credentials configured in settings (skip if not configured)
   - Add to CI as an optional job (like LLM tests with `@pytest.mark.chameleon`)
-- ~~**Chameleon CLI commands**~~ — Done. 1,225 lines in `cli/loomai_cli/commands/chameleon.py`: sites, images, leases (list/create/extend/delete), instances (list/create/delete/reboot/stop/start), networks (list/create/delete), keypairs (list/create/delete), ips (list/allocate/associate/disassociate/release), security-groups (list/create/delete/add-rule/remove-rule), slices (list/create/delete/add-resource/remove-resource), drafts (list/create/delete/add-node/remove-node/add-network/remove-network/deploy). All support `--site` and JSON output.
+- ~~**Chameleon CLI commands**~~ — Done. 1,225 lines in `backend/cli/loomai_cli/commands/chameleon.py`: sites, images, leases (list/create/extend/delete), instances (list/create/delete/reboot/stop/start), networks (list/create/delete), keypairs (list/create/delete), ips (list/allocate/associate/disassociate/release), security-groups (list/create/delete/add-rule/remove-rule), slices (list/create/delete/add-resource/remove-resource), drafts (list/create/delete/add-node/remove-node/add-network/remove-network/deploy). All support `--site` and JSON output.
 
 ### Caching/Performance
 - ~~**Cache UIS project/user queries**~~ — Done (2026-03-27)

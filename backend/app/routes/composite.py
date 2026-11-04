@@ -228,8 +228,8 @@ def _get_fabric_slice_summary(slice_id: str) -> dict | None:
         # transitions that federated polling needs.
         from app.fabric_call_manager import get_call_manager
         cm = get_call_manager()
-        _sliver_entry = cm._cache.get(f"slice:{name}:slivers")
-        sliver_cached = _sliver_entry.data if _sliver_entry and _sliver_entry.data else None
+        # peek() skips invalidated entries (deleted/modified slices, user change).
+        sliver_cached = cm.peek(f"slice:{name}:slivers")
         if sliver_cached:
             return {
                 "id": slice_id,
@@ -238,8 +238,7 @@ def _get_fabric_slice_summary(slice_id: str) -> dict | None:
                 "node_count": len(sliver_cached.get("nodes", [])),
             }
         # Check call manager cache for submitted slices
-        _cache_entry = cm._cache.get(f"slice:{name}")
-        cached = _cache_entry.data if _cache_entry and _cache_entry.data else None
+        cached = cm.peek(f"slice:{name}")
         if cached:
             return {
                 "id": cached.get("id", slice_id),
@@ -1359,9 +1358,7 @@ async def get_composite_graph(slice_id: str) -> dict:
             # fetch failed, so the graph can still render last-known topology.
             if not slice_data:
                 from app.fabric_call_manager import get_call_manager
-                cm = get_call_manager()
-                _entry = cm._cache.get(f"slice:{name}")
-                slice_data = _entry.data if _entry and _entry.data else None
+                slice_data = get_call_manager().peek(f"slice:{name}")
             if slice_data:
                 fabric_members.append((slice_data, fid))
             else:
@@ -1469,13 +1466,8 @@ async def submit_composite_slice(slice_id: str, body: dict = Body(default={})) -
             # Cache the submit result so the federated graph can find this slice.
             # immediately (before FABlib's next poll makes it available via get_slice).
             try:
-                import time as _time
-                from app.fabric_call_manager import get_call_manager, CacheEntry
-                cm = get_call_manager()
-                entry = CacheEntry()
-                entry.data = result
-                entry.timestamp = _time.time()
-                cm._cache[f"slice:{name}"] = entry
+                from app.fabric_call_manager import get_call_manager
+                get_call_manager().store(f"slice:{name}", result)
                 logger.info("Federated submit: cached slice data for '%s'", name)
             except Exception:
                 pass

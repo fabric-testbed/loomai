@@ -47,6 +47,12 @@ def _set_max_lease_hours(hours: int):
     settings_manager.save_settings(settings)
 
 
+def _as_agent(client):
+    """Mark the test client's requests as agent-initiated (the cap only applies to agents)."""
+    from app.request_actor import ACTOR_HEADER, AGENT
+    client.headers[ACTOR_HEADER] = AGENT
+
+
 # ---------------------------------------------------------------------------
 # Get template detail
 # ---------------------------------------------------------------------------
@@ -287,6 +293,7 @@ class TestBackgroundRuns:
 
     def test_start_run_passes_max_lease_policy_to_child_args(self, client, storage_dir):
         _set_max_lease_hours(6)
+        _as_agent(client)
         _make_template(storage_dir, "lease_tmpl", weave_sh=True)
 
         captured = {}
@@ -321,8 +328,30 @@ class TestBackgroundRuns:
         assert weave_json["active_run"]["args"]["FABRIC_MAX_LEASE_HOURS"] == "6"
         assert weave_json["active_run"]["args"]["SLICE_NAME"] == "lease-slice"
 
+    def test_user_start_run_has_no_lease_cap(self, client, storage_dir):
+        _set_max_lease_hours(6)
+        _make_template(storage_dir, "user_lease_tmpl", weave_sh=True)
+        captured = {}
+
+        def fake_start_run(**kwargs):
+            captured.update(kwargs)
+            return "run-user123"
+
+        run_meta = {"run_id": "run-user123", "pid": 321, "pgid": 321, "started_at": "2026-07-07T00:00:00Z"}
+        with patch("app.run_manager.start_run", side_effect=fake_start_run), \
+             patch("app.run_manager.get_run", return_value=run_meta):
+            resp = client.post(
+                "/api/templates/user_lease_tmpl/start-run/weave.sh",
+                json={"slice_name": "user-lease-slice", "args": {"lease_hours": "24"}},
+            )
+
+        assert resp.status_code == 200
+        assert "FABRIC_MAX_LEASE_HOURS" not in captured["script_args"]
+        assert captured["script_args"]["FABRIC_LEASE_HOURS"] == "24"
+
     def test_start_run_passes_requested_lease_hours_to_child_args(self, client, storage_dir):
         _set_max_lease_hours(6)
+        _as_agent(client)
         _make_template(storage_dir, "lease_requested_tmpl", weave_sh=True)
 
         captured = {}

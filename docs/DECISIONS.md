@@ -261,3 +261,18 @@ Key architectural decisions for the fabric-webgui project.
 - (+) No change to standalone Docker — all tools remain available locally
 - (+) LoomAI provides full AI assistant capabilities without installation
 - (-) Users who want the full tool suite must run LoomAI locally via Docker
+
+---
+
+## ADR-017: Lease Cap Applies to AI Agents Only
+
+**Status**: Accepted
+
+**Context**: `fabric.slice_policy.max_lease_hours` (default 6) was introduced in July 2026 as an opt-in cap for benchmark and shared-resource deployments, then made the default for every container. It capped people and agents alike, so a user running a multi-day experiment from the UI could not get more than 6 hours, and the setting was only reachable by editing `settings.json` or the settings API. The real risk it guards against is agents and automated runs that create slices and forget them.
+
+**Decision**: The cap applies only to agent-initiated requests. `app/request_actor.py` keeps a request-scoped actor (`user` by default). Agent surfaces mark themselves: LoomAI chat tools run inside `agent_actor()`, the `loomai-harness` MCP server always sends `X-LoomAI-Actor: agent`, and the `loomai` CLI sends that header when `LOOMAI_ACTOR=agent`, which the AI-tool launchers set. `settings_manager.get_request_lease_cap_hours()` returns the cap only for agents, and the slice and weave routes use it for submit, renew and weave runs. The value is editable in Configure → AI Tools → Agent Lease Limit (0 = no limit). `run_in_fablib_pool` copies contextvars so the actor reaches FABlib worker threads.
+
+**Consequences**:
+- (+) People get FABRIC's normal lease limits from the UI and their own terminal
+- (+) Agents stay capped by default, and the limit is visible and editable
+- (-) The marker is self-declared: an agent calling FABlib directly, or a tool that strips `LOOMAI_ACTOR`, is not capped. This is a guardrail, not a security boundary; real enforcement is FABRIC's project lease policy

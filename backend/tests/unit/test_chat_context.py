@@ -302,3 +302,106 @@ class TestTrimConversation:
             for m in result.messages
         )
         assert result.messages[-1]["content"] == "Continue and verify ping now."
+
+
+# ---------------------------------------------------------------------------
+# 30/50/20 budget: tool schemas count, prompt fitting, paired trimming
+# ---------------------------------------------------------------------------
+
+from app.chat_context import (  # noqa: E402
+    estimate_tool_schema_tokens,
+    system_prompt_budget,
+    fit_system_parts,
+    _recent_paired_messages,
+)
+
+
+class TestToolTokensInBudget:
+    def _conv(self, n, size):
+        msgs = [{"role": "system", "content": "sys"}]
+        for i in range(n):
+            msgs.append({"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i} " + "x" * size})
+        return msgs
+
+    def test_tool_schema_tokens_are_estimated(self):
+        schemas = [{"type": "function", "function": {"name": f"t{i}", "parameters": {"x": "y" * 200}}} for i in range(20)]
+        assert estimate_tool_schema_tokens(schemas) > 1000
+        assert estimate_tool_schema_tokens([]) == 0
+        assert estimate_tool_schema_tokens(None) == 0
+
+    def test_tool_tokens_shrink_the_conversation_budget(self):
+        profile = dict(PROFILE_TIERS["compact"])  # 8192 window, summarize_at 0.4 → 3276 threshold
+        msgs = self._conv(6, 300)                  # ~500 tokens of conversation
+        assert not trim_conversation(msgs, system_tokens=500, profile=profile).was_trimmed
+        # The same conversation with 2000 tokens of tool schemas no longer fits.
+        result = trim_conversation(msgs, system_tokens=500, profile=profile, tool_tokens=2000)
+        assert result.was_trimmed and result.near_full
+
+    def test_system_prompt_budget_is_30_percent_with_core_floor(self):
+        assert system_prompt_budget({"context_window": 10000}) == 3000
+        assert system_prompt_budget({"context_window": 10000}, core_tokens=1200) == 3000
+        # A compact model's core prompt alone exceeds 30%; it is never cut below
+        # it, and it gets headroom for the session-state block and markers.
+        assert system_prompt_budget({"context_window": 8192}, core_tokens=3011) == 3411
+
+
+class TestFitSystemParts:
+    def test_truncates_largest_unprotected_part_first(self):
+        core = "core prompt " * 50            # ~150 tokens, protected
+        prefetch = "## Current Data\n" + "d" * 8000   # ~2000 tokens
+        rag = "## Context\n" + "r" * 2000             # ~500 tokens
+        state = "## CURRENT SESSION STATE\nbench-a StableOK"
+        parts, truncated = fit_system_parts([core, prefetch, rag, state], max_tokens=1200, protected={0, 3})
+        assert truncated == [1]
+        assert parts[0] == core and parts[3] == state and parts[2] == rag
+        assert "trimmed to fit" in parts[1]
+        assert sum(estimate_tokens(p) for p in parts) <= 1200
+
+    def test_protected_parts_only_as_last_resort(self):
+        core = "c" * 4000
+        state = "s" * 4000
+        parts, truncated = fit_system_parts([core, state], max_tokens=500, protected={0, 1})
+        assert truncated  # had to cut something
+        assert sum(estimate_tokens(p) for p in parts) <= 520
+
+    def test_nothing_to_do_when_it_fits(self):
+        parts, truncated = fit_system_parts(["a", "b"], max_tokens=100)
+        assert parts == ["a", "b"] and truncated == []
+
+
+class TestPairedTrimming:
+    def _tool_turn(self, i):
+        return [
+            {"role": "user", "content": f"q{i}"},
+            {"role": "assistant", "content": None,
+             "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": "get_slice", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": f"c{i}", "name": "get_slice", "content": "r" * 300},
+            {"role": "assistant", "content": f"a{i}"},
+        ]
+
+    def test_recent_window_keeps_tool_call_with_its_output(self):
+        msgs = [{"role": "system", "content": "sys"}]
+        for i in range(5):
+            msgs += self._tool_turn(i)
+        # Last 4 messages end with [assistant(tool_calls c4), tool c4, assistant a4]; make
+        # the window start at the tool output so the pairing logic has to add the call.
+        recent = _recent_paired_messages(msgs, keep_last=2)
+        roles = [(m["role"], m.get("tool_call_id") or (m.get("tool_calls") or [{}])[0].get("id")) for m in recent]
+        assert ("tool", "c4") in roles
+        assert ("assistant", "c4") in roles      # the matching tool_calls message was pulled in
+        assert recent == sorted(recent, key=lambda m: msgs.index(m))
+
+    def test_legacy_trim_never_orphans_a_tool_message(self):
+        msgs = [{"role": "system", "content": "sys"}]
+        for i in range(30):
+            msgs += self._tool_turn(i)
+        profile = dict(PROFILE_TIERS["compact"])
+        profile["context_compaction_enabled"] = False
+        result = trim_conversation(msgs, system_tokens=500, profile=profile)
+        assert result.was_trimmed
+        kept = result.messages
+        for idx, m in enumerate(kept):
+            if m.get("role") == "tool":
+                prior_ids = {c["id"] for p in kept[:idx] for c in (p.get("tool_calls") or [])}
+                assert m["tool_call_id"] in prior_ids, "tool output without its tool_calls message"
+        assert kept[-1]["content"] == "a29"

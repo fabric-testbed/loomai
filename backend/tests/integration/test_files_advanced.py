@@ -602,3 +602,40 @@ class TestStderrSanitization:
         assert "hunter2" not in detail["detail"]
         assert "/var/log" not in detail["detail"]
         assert "password=[redacted]" in detail["detail"]
+
+
+class TestFileManagerHardening:
+    def test_upload_direct_rejects_escaping_filenames(self, client):
+        # Checked before any FABlib/VM access, so no slice needs to exist.
+        for bad in ("../../home/fabric/.ssh/authorized_keys", "/home/fabric/.bashrc"):
+            resp = client.post(
+                "/api/files/vm/some-slice/node1/upload-direct",
+                files=[("files", (bad, b"x", "text/plain"))],
+            )
+            assert resp.status_code == 400, bad
+            assert resp.json()["detail"]["error"] == "FILE_PATH_INVALID"
+
+    def test_write_content_into_app_source_rejected(self, client):
+        from app.routes import files as files_mod
+        target = os.path.join(files_mod._APP_ROOT, "app", "main.py")
+        resp = client.put("/api/files/content", json={"path": target, "content": "pwned"})
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["error"] == "FILE_PATH_INVALID"
+
+    def test_delete_app_source_rejected(self, client):
+        from app.routes import files as files_mod
+        resp = client.delete("/api/files", params={"path": os.path.join(files_mod._APP_ROOT, "app")})
+        assert resp.status_code == 400
+
+    @pytest.mark.parametrize("name", ["../.loomai/settings", "../../etc/x", "a/b", ""])
+    def test_provision_slice_name_cannot_escape(self, client, storage_dir, name):
+        resp = client.post("/api/files/provisions", json={
+            "source": "my_artifacts", "slice_name": name,
+            "node_name": "n1", "dest": "/home/ubuntu",
+        })
+        assert resp.status_code in (400, 422), name
+        # The write target the traversal aimed at must still be a settings
+        # object (or absent), never a provisions list.
+        settings_file = storage_dir / ".loomai" / "settings.json"
+        if settings_file.exists():
+            assert settings_file.read_text().lstrip().startswith("{")

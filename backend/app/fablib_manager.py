@@ -170,13 +170,12 @@ def reset_fablib() -> None:
     priv_path, pub_path = get_default_slice_key_path(config_dir)
     os.environ["FABRIC_SLICE_PRIVATE_KEY_FILE"] = priv_path
     os.environ["FABRIC_SLICE_PUBLIC_KEY_FILE"] = pub_path
-    # Invalidate all cached API call results — the token/project may have
-    # changed, so stale data (e.g. empty slice list) must not be served.
+    # Drop all cached API call results — the token/project may have changed,
+    # so nothing cached for the previous identity may be served, not even as
+    # a stale-while-revalidate or stale-on-error fallback.
     try:
         from app.fabric_call_manager import get_call_manager
-        mgr = get_call_manager()
-        for key in list(mgr._cache.keys()):
-            mgr.invalidate(key)
+        get_call_manager().clear_all()
     except Exception:
         pass
 

@@ -377,7 +377,7 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
 
           {/* Lease renew (active slices) */}
           {isActive && sliceData && (
-            <LeaseRenewSection sliceName={sliceName} leaseEnd={sliceData.lease_end} onSliceUpdated={onSliceUpdated} />
+            <LeaseRenewSection sliceName={sliceName} leaseEnd={sliceData.lease_end} maxLeaseHours={sliceData.max_lease_hours} onSliceUpdated={onSliceUpdated} />
           )}
 
           {/* Run Boot Config (active slices) */}
@@ -888,26 +888,70 @@ export default React.memo(function EditorPanel({ sliceData, sliceName, onSliceUp
 
 
 // --- Lease Renew Section ---
-function LeaseRenewSection({ sliceName, leaseEnd, onSliceUpdated }: { sliceName: string; leaseEnd: string; onSliceUpdated: (data: SliceData) => void }) {
+const HOUR_MS = 3600 * 1000;
+
+// datetime-local renders its value as local wall-clock time, so build the
+// string from local fields rather than from the UTC ISO form.
+function toLocalInputValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// fetchJson throws "API error <status>: <body>"; surface the backend's
+// structured detail.message instead of the raw JSON.
+function renewErrorMessage(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  const match = raw.match(/^API error \d+: ([\s\S]*)$/);
+  if (!match) return raw;
+  try {
+    const detail = JSON.parse(match[1])?.detail;
+    if (typeof detail === 'string') return detail;
+    if (detail && typeof detail.message === 'string') return detail.message;
+  } catch {
+    // Body was not JSON; fall through to the raw text.
+  }
+  return match[1] || raw;
+}
+
+function LeaseRenewSection({ sliceName, leaseEnd, maxLeaseHours, onSliceUpdated }: {
+  sliceName: string;
+  leaseEnd: string;
+  maxLeaseHours?: number;
+  onSliceUpdated: (data: SliceData) => void;
+}) {
+  const leaseEndDate = leaseEnd ? new Date(leaseEnd) : null;
+  const currentEnd = leaseEndDate && !isNaN(leaseEndDate.getTime()) ? leaseEndDate : null;
+  // The cap is measured from now, so recompute it on every render.
+  const policyEnd = maxLeaseHours ? new Date(Date.now() + maxLeaseHours * HOUR_MS) : null;
+  // FABRIC cannot shorten a lease, so once the current end reaches the cap
+  // there is nothing the policy lets us renew until time catches up.
+  const atPolicyLimit = !!(policyEnd && currentEnd && currentEnd.getTime() >= policyEnd.getTime() - 60 * 1000);
+  const renewableAt = atPolicyLimit && currentEnd && maxLeaseHours
+    ? new Date(currentEnd.getTime() - maxLeaseHours * HOUR_MS)
+    : null;
+
   const defaultDate = (() => {
-    try {
-      const d = new Date(leaseEnd);
-      d.setDate(d.getDate() + 1);
-      // datetime-local renders the value as local wall-clock time, so build
-      // the string from local fields rather than from the UTC ISO form.
-      const pad = (n: number) => String(n).padStart(2, '0');
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    } catch {
-      return '';
-    }
+    if (!currentEnd) return '';
+    let d = new Date(currentEnd.getTime() + 24 * HOUR_MS);
+    if (policyEnd && d > policyEnd) d = policyEnd;
+    return toLocalInputValue(d);
   })();
   const [renewDate, setRenewDate] = useState(defaultDate);
   const [renewLoading, setRenewLoading] = useState(false);
   const [renewError, setRenewError] = useState('');
   const [renewSuccess, setRenewSuccess] = useState('');
 
+  const requested = renewDate ? new Date(renewDate) : null;
+  const overPolicy = !!(policyEnd && requested && requested.getTime() > policyEnd.getTime() + 60 * 1000);
+  const beforeCurrent = !!(currentEnd && requested && requested.getTime() < currentEnd.getTime() - 60 * 1000);
+  const inputError = overPolicy && policyEnd
+    ? `Policy allows at most ${maxLeaseHours} h from now (until ${policyEnd.toLocaleString()}).`
+    : beforeCurrent
+      ? 'FABRIC leases cannot be shortened; pick a date after the current expiry.'
+      : '';
+
   const handleRenew = async () => {
-    if (!renewDate) return;
+    if (!renewDate || inputError) return;
     setRenewLoading(true);
     setRenewError('');
     setRenewSuccess('');
@@ -916,17 +960,29 @@ function LeaseRenewSection({ sliceName, leaseEnd, onSliceUpdated }: { sliceName:
       const result = await api.renewLease(sliceName, new Date(renewDate).toISOString());
       onSliceUpdated(result);
       // FABRIC grants whole-hour leases, so a renewal can already cover the
-      // requested end - say so rather than claiming a renewal that did not happen.
-      const unchanged = result.lease_unchanged
-        ? result.warnings?.find((w) => w.code === 'LEASE_ALREADY_COVERS_REQUEST')
-        : undefined;
-      setRenewSuccess(unchanged ? unchanged.message : 'Lease renewed successfully');
-    } catch (e: any) {
-      setRenewError(e.message);
+      // requested end, and the policy can clamp it - say so rather than
+      // claiming a renewal that did not happen as asked.
+      const notice = result.warnings?.find((w) =>
+        (result.lease_unchanged && w.code === 'LEASE_ALREADY_COVERS_REQUEST') || w.code === 'LEASE_CLAMPED_TO_POLICY');
+      setRenewSuccess(notice ? notice.message : 'Lease renewed successfully');
+    } catch (e: unknown) {
+      setRenewError(renewErrorMessage(e));
     } finally {
       setRenewLoading(false);
     }
   };
+
+  if (atPolicyLimit) {
+    return (
+      <div className="lease-renew-section">
+        <div className="editor-section-label">Renew Lease</div>
+        <div style={{ fontSize: 11, color: 'var(--fabric-text-muted)' }}>
+          This lease already runs past the {maxLeaseHours} h lease policy, and FABRIC leases can&apos;t be shortened.
+          {renewableAt && <> Renewal opens after {renewableAt.toLocaleString()}.</>}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="lease-renew-section">
@@ -936,15 +992,23 @@ function LeaseRenewSection({ sliceName, leaseEnd, onSliceUpdated }: { sliceName:
         <input
           type="datetime-local"
           value={renewDate}
+          min={currentEnd ? toLocalInputValue(currentEnd) : undefined}
+          max={policyEnd ? toLocalInputValue(policyEnd) : undefined}
           onChange={(e) => setRenewDate(e.target.value)}
           style={{ width: '100%', fontSize: 12, padding: '4px 6px' }}
         />
+        {policyEnd && !inputError && (
+          <div style={{ fontSize: 10, color: 'var(--fabric-text-muted)', marginTop: 2 }}>
+            Policy limit: {maxLeaseHours} h from now ({policyEnd.toLocaleString()})
+          </div>
+        )}
+        {inputError && <div style={{ color: 'var(--fabric-coral)', fontSize: 11, marginTop: 4 }}>{inputError}</div>}
       </div>
       <button
         className="site-mapping-auto-btn"
         style={{ width: '100%', fontSize: 11, padding: '5px 0' }}
         onClick={handleRenew}
-        disabled={renewLoading || !renewDate}
+        disabled={renewLoading || !renewDate || !!inputError}
       >
         {renewLoading ? 'Renewing...' : 'Renew Lease'}
       </button>

@@ -91,7 +91,7 @@ mrg CLI  ──── token auth ────────┘   (mrg and the web 
 | 2 | `app/sphere_manager.py` | Token session (`get_session`, `is_configured`, `get_configured_sites`, contract-mode session), experiment lifecycle, node listing | `chameleon_manager.py` |
 | 3 | `app/sphere_executor.py` | Provision + per-node command exec (thread-pool offload) | `chameleon_executor.py` |
 | 4 | `app/routes/sphere.py`, `app/routes/sphere_files.py` | REST endpoints; register in `routes/__init__.py` | `routes/chameleon*.py` |
-| 5 | `cli/loomai_cli/commands/sphere.py` | `loomai sphere ...` command group; register in CLI root | `commands/chameleon.py` |
+| 5 | `backend/cli/loomai_cli/commands/sphere.py` | `loomai sphere ...` command group; register in CLI root | `commands/chameleon.py` |
 | 6 | `app/graph_builder.py` | **Generalize the two-way `provider_prefix == "fab" else Chameleon` branches into a provider registry**, add a `sphere` topology serializer (`mergexp` model → LoomAI graph) | existing fab/cham branches (~L1770, 1852, 1861, 2011) |
 | 7 | `app/contract_sphere.py` + fakes | Deterministic SPHERE provider for contract tests | `contract_fabric.py`, `test_contract_provider_fakes.py` |
 | 8 | `app/settings_manager.py` | SPHERE portal URL(s) + token storage/refresh | Chameleon OIDC/app-cred handling |
@@ -218,7 +218,7 @@ live probe with the `mrg` session token:
      blocking gRPC offloaded via `asyncio.to_thread`), registered in `main.py`.
      CLI `loomai sphere {status,projects,realizations,realization,graph,realize,
      relinquish,materialize,materialization,dematerialize}`
-     (`cli/loomai_cli/commands/sphere.py`). `graph_builder.build_sphere_realization_graph`
+     (`backend/cli/loomai_cli/commands/sphere.py`). `graph_builder.build_sphere_realization_graph`
      converts a realization → the standard `{nodes,edges}` Cytoscape envelope
      (`sphere-cluster`/`sphere-node`/`sphere-net`/`sphere-mgmt-net` classes) — a
      dedicated serializer, not a full provider-registry rewrite. Verified live

@@ -52,6 +52,11 @@ class Client:
     def __init__(self, base_url: str, timeout: float = 30.0):
         self.base_url = base_url.rstrip("/")
         cookie_header = _session_cookie_header(self.base_url)
+        headers = dict(cookie_header)
+        # AI-tool sessions export LOOMAI_ACTOR=agent so the backend applies the
+        # agent lease cap; a person's own terminal does not set it.
+        if os.environ.get("LOOMAI_ACTOR", "").strip().lower() == "agent":
+            headers["X-LoomAI-Actor"] = "agent"
         # follow_redirects stays off (httpx default) so the session cookie in
         # the default headers can't be replayed to a redirect Location on
         # another origin. When the cookie is attached (loopback target) we also
@@ -61,7 +66,7 @@ class Client:
         self._http = httpx.Client(base_url=f"{self.base_url}/api", timeout=timeout,
                                   follow_redirects=False,
                                   trust_env=not cookie_header,
-                                  headers=cookie_header)
+                                  headers=headers)
 
     def get(self, path: str, params: Optional[dict] = None) -> Any:
         return self._request("GET", path, params=params)

@@ -17,7 +17,55 @@ AI-assisted browser-based sandbox for designing, deploying, and managing experim
 
 Watch the [LoomAI video tutorials](https://www.youtube.com/playlist?list=PL64VqyRjOwSEPi1EtjmpKXEk1SzpzSCil) for step-by-step walkthroughs.
 
-## Quick Install
+## Hosted LoomAI — no install required
+
+FABRIC runs a hosted LoomAI at **<https://loomai.fabric-testbed.net>**. It is the fastest way to
+start: no Docker, no local install, and no token file to download.
+
+**You need a [FABRIC account](https://portal.fabric-testbed.net/) that belongs to an active
+project before you can sign in.** The hub checks your project membership during sign-in and turns
+away accounts without it ("You don't have a LoomAI account"). Join or create a project in the
+FABRIC Portal first.
+
+1. Open <https://loomai.fabric-testbed.net>.
+2. Click **Sign in with CILogon** and choose your institution — the same identity you use for the
+   [FABRIC Portal](https://portal.fabric-testbed.net/).
+3. Wait a few seconds while your personal LoomAI environment starts.
+
+That is the whole setup. Your FABRIC token, project, bastion username, SSH keys and FABRIC AI key
+are all provisioned for you while the environment starts — there is no `fabric_rc` to write, no
+token to upload, and nothing to click in Settings. Go straight to building a slice.
+
+If provisioning cannot finish (an expired token, or the Core API being unreachable), the
+environment still starts and **Configure → FABRIC Token → Configure** runs the same setup by hand.
+
+### What to expect
+
+- **Private environment per user.** Each sign-in launches your own container with its own
+  persistent storage, so your slices, weaves, templates, and files are there when you come back.
+- **Idle environments are stopped.** Your environment shuts down after 8 hours idle, and is
+  stopped at least once every 24 hours even if busy. Stored files survive; anything still running
+  in a terminal does not — use the boot-config and weave runners for long jobs rather than a
+  foreground shell. Signing in again starts a fresh environment on your existing storage.
+- **Storage is modest** (a few GB per user). Keep large datasets on your VMs, not in the
+  environment.
+
+### Hosted or local?
+
+| | Hosted | Docker (below) |
+|---|---|---|
+| Setup | Sign in, nothing to install | Install Docker, run one command |
+| FABRIC token | Provisioned from your CILogon sign-in | You supply it yourself |
+| Project, bastion user, SSH keys, AI key | Provisioned automatically at sign-in | You configure them |
+| Access | Requires active FABRIC project membership | Anyone who can run the image |
+| Storage | A few GB, managed | Whatever the host has |
+| Long-running processes | Stopped when idle | Run as long as you like |
+| Custom tools / packages | Fixed image | Install anything |
+
+Use the hosted version for getting started, tutorials, and workshops. Run it locally when you need
+more storage, long-lived processes, or your own tooling in the image.
+
+## Install Locally
 
 ### One-Line Install
 
@@ -102,6 +150,8 @@ npm run dev
 ## Configuration
 
 ### Authentication
+
+> Applies to local installs only. On the [hosted LoomAI](https://loomai.fabric-testbed.net/) your CILogon sign-in is the authentication — there is no separate password.
 
 LoomAI protects the web UI with a password. On first startup, a random password is auto-generated and printed to the container logs.
 
@@ -200,6 +250,7 @@ Multi-architecture image supporting:
 
 - [FABRIC Testbed](https://fabric-testbed.net/)
 - [FABRIC Portal](https://portal.fabric-testbed.net/)
+- [Hosted LoomAI](https://loomai.fabric-testbed.net/)
 - [Docker Hub](https://hub.docker.com/r/fabrictestbed/loomai)
 
 ## License

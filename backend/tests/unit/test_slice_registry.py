@@ -252,3 +252,17 @@ class TestBulkTagProject:
         register_slice("s1", uuid="u1", project_id="proj-X")
         count = bulk_tag_project({"u1": "proj-X"})
         assert count == 0
+
+
+class TestRegisterNeverDowngradesUuid:
+    def test_draft_uuid_cannot_replace_fabric_uuid(self):
+        register_slice("s", uuid="real-uuid-1", state="Configuring")
+        # A persistent-draft restore that raced submit tries to re-register
+        # the name as a draft.
+        register_slice("s", uuid="draft-abc", state="Draft")
+        assert get_slice_uuid("s") == "real-uuid-1"
+
+    def test_fabric_uuid_can_replace_draft_uuid(self):
+        register_slice("s", uuid="draft-abc", state="Draft")
+        register_slice("s", uuid="real-uuid-2", state="Configuring")
+        assert get_slice_uuid("s") == "real-uuid-2"

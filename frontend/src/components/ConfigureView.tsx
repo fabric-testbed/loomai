@@ -6,11 +6,12 @@ import * as api from '../api/client';
 import type { ConfigStatus, ProjectInfo, SliceKeySet, LoomAISettings, ToolConfigStatus, HarnessConfigStatusEntry, UserInfo } from '../types/fabric';
 import type { SettingTestResult, ToolInstallInfo } from '../api/client';
 import ToolInstallOverlay from './ToolInstallOverlay';
+import MCPServersPanel from './MCPServersPanel';
 import { confirmDialog } from './AppDialogProvider';
 import '../styles/configure.css';
 
 /* ---------- Section definitions ---------- */
-type SectionId = 'profile' | 'ssh' | 'fablib' | 'projects' | 'llms' | 'ai-tools' | 'agents' | 'chameleon' | 'sphere' | 'appearance' | 'storage';
+type SectionId = 'profile' | 'ssh' | 'fablib' | 'projects' | 'llms' | 'ai-tools' | 'mcp' | 'agents' | 'chameleon' | 'sphere' | 'appearance' | 'storage';
 
 interface SectionDef {
   id: SectionId;
@@ -52,6 +53,7 @@ const SECTIONS: SectionDef[] = [
   { id: 'projects',   label: 'Projects',       icon: '\u25A3' },   // ▣
   { id: 'llms',       label: 'LLMs',           icon: '\u25C8' },   // ◈
   { id: 'ai-tools',   label: 'AI Tools',       icon: '\u2692' },   // ⚒
+  { id: 'mcp',        label: 'MCP Servers',    icon: '\u21C4' },   // ⇄
   { id: 'agents',     label: 'Agents & Skills', icon: '\u25C7' },   // ◇
   { id: 'chameleon',  label: 'Chameleon',       icon: '\u2766' },   // ❦
   { id: 'sphere',     label: 'SPHERE',          icon: '\u25C9' },   // SPHERE
@@ -197,6 +199,9 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   // Service settings
   const [aiServerUrl, setAiServerUrl] = useState('https://ai.fabric-testbed.net');
   const [nrpServerUrl, setNrpServerUrl] = useState('https://ellm.nrp-nautilus.io');
+  // fabric.slice_policy.max_lease_hours — caps leases that AI agents create or
+  // renew; 0 disables the cap. People are never capped.
+  const [agentLeaseHours, setAgentLeaseHours] = useState(6);
   const [jupyterPort, setJupyterPort] = useState(8889);
   const [modelProxyPort, setModelProxyPort] = useState(9199);
 
@@ -301,6 +306,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
       setAiTools(s.ai.tools);
       setAiServerUrl(s.ai.ai_server_url);
       setNrpServerUrl(s.ai.nrp_server_url);
+      setAgentLeaseHours(s.fabric.slice_policy?.max_lease_hours ?? 6);
       setCustomProviders((s.ai.custom_providers || []).map((cp) => ({
         ...cp,
         endpoint_style: cp.endpoint_style || 'auto',
@@ -664,6 +670,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
           logging: { level: logLevel },
           avoid_sites: Array.from(avoidSet),
           ssh_command_line: sshCommandLine,
+          slice_policy: { max_lease_hours: agentLeaseHours },
         },
         ai: {
           fabric_api_key: litellmApiKey || settings?.ai.fabric_api_key || '',
@@ -823,6 +830,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
     if (sshCommandLine !== settings.fabric.ssh_command_line) return true;
     if (aiServerUrl !== settings.ai.ai_server_url) return true;
     if (nrpServerUrl !== settings.ai.nrp_server_url) return true;
+    if (agentLeaseHours !== (settings.fabric.slice_policy?.max_lease_hours ?? 6)) return true;
     if (federatedViewEnabled !== !!(settings.views?.federated_enabled ?? settings.views?.composite_enabled)) return true;
     if (chameleonEnabled !== !!settings.chameleon?.enabled) return true;
     if (chameleonSshKey !== (settings.chameleon?.ssh_key_file || '')) return true;
@@ -848,7 +856,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
   }, [
     settings, selectedProject, bastionLogin,
     credmgrHost, orchestratorHost, coreApiHost, bastionHost, amHost,
-    logLevel, sshCommandLine, aiServerUrl, nrpServerUrl,
+    logLevel, sshCommandLine, aiServerUrl, nrpServerUrl, agentLeaseHours,
     federatedViewEnabled, chameleonEnabled, chameleonSshKey, chameleonPasswordUsername,
     chameleonPassword, chameleonSites, avoidSet,
     sphereEnabled, sphereGrpcEndpoint, sphereDefaultProject, sphereUsername, spherePassword,
@@ -1924,6 +1932,25 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
         />
       )}
       <div className="configure-section">
+        <h3>Agent Lease Limit</h3>
+        <p>
+          Maximum lease, in hours, for slices that AI agents (LoomAI assistant, AI tools, the loomai-harness MCP)
+          submit, renew, or create through weave runs. Leases you create or renew yourself are not capped.
+          Set to 0 for no limit.
+        </p>
+        <input
+          type="number"
+          min={0}
+          step={1}
+          aria-label="Agent lease limit (hours)"
+          data-testid="agent-lease-hours-input"
+          value={agentLeaseHours}
+          onChange={(e) => setAgentLeaseHours(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+          style={{ width: 120 }}
+        />
+      </div>
+
+      <div className="configure-section">
         <h3 data-help-id="settings.ai-tools">Enabled Tools</h3>
         <p>Choose which AI tools appear in the AI Companion launcher.</p>
         <div className="ai-tool-toggles">
@@ -2710,6 +2737,7 @@ export default function ConfigureView({ onConfigured, onClose, hiddenProjects, o
       case 'projects':   return renderProjects();
       case 'llms':       return renderLLMs();
       case 'ai-tools':   return renderAITools();
+      case 'mcp':        return <MCPServersPanel />;
       case 'agents':     return renderAgentsAndSkills();
       case 'chameleon':  return renderChameleon();
       case 'sphere':     return renderSphere();

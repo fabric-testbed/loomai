@@ -6,6 +6,7 @@ import type { FileEntry, SliceData } from '../types/fabric';
 import FileEditor, { isTextFile, isLikelyBinary } from './FileEditor';
 import '../styles/file-browser.css';
 import '../styles/file-transfer.css';
+import { Modal } from './Modal';
 
 /** Recursively walk FileSystemEntry trees from drag-and-drop, collecting all files with relative paths. */
 async function walkEntries(
@@ -863,8 +864,7 @@ export default function FileTransferView({ sliceName, sliceData, fabricSlices, c
 
     {/* Confirm-open dialog for unknown file types */}
     {confirmOpen && (
-      <div className="toolbar-modal-overlay" onClick={() => setConfirmOpen(null)}>
-        <div className="toolbar-modal" onClick={(e) => e.stopPropagation()}>
+      <Modal overlayClassName="toolbar-modal-overlay" className="toolbar-modal" onClose={() => setConfirmOpen(null)}>
           <h4>Open file as text?</h4>
           <p>
             <strong>{confirmOpen.path.split('/').pop()}</strong>
@@ -883,8 +883,7 @@ export default function FileTransferView({ sliceName, sliceData, fabricSlices, c
               Open
             </button>
           </div>
-        </div>
-      </div>
+      </Modal>
     )}
     </div>
   );
